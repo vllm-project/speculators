@@ -29,13 +29,7 @@ This geometric decay means deeper predictions train on fewer positions per batch
 
 ## Key Parameters
 
-| Parameter                   | Default | Description                                       |
-| --------------------------- | ------- | ------------------------------------------------- |
-| `--num-layers`              | 4       | Number of draft transformer layers                |
-| `--num-depths`              | 4       | Number of parallel prediction depths              |
-| `--down-sample-ratio`       | 0.7     | Geometric decay ratio for COD sampling            |
-| `--down-sample-ratio-min`   | 0.2     | Minimum retention floor for COD sampling          |
-| `--no-norm-before-residual` | —       | Disable normalization before residual connections |
+| Parameter | Default | Description | | --------------------------- | ------- | ------------------------------------------------- | | `--num-layers` | 4 | Number of draft transformer layers | | `--num-depths` | 4 | Number of parallel prediction depths | | `--down-sample-ratio` | 0.7 | Geometric decay ratio for COD sampling | | `--down-sample-ratio-min` | 0.2 | Minimum retention floor for COD sampling | | `--no-norm-before-residual` | — | Disable normalization before residual connections |
 
 ## Pretrained Models
 

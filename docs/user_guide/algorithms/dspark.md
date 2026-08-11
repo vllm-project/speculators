@@ -24,13 +24,7 @@ DSpark defaults to `sample_from_anchor: True` -- the anchor and all mask positio
 
 ## Key Parameters
 
-| Parameter                       | Default   | Description                                                       |
-| ------------------------------- | --------- | ----------------------------------------------------------------- |
-| `--markov-rank`                 | 256       | Low-rank dimension of the Markov logit bias (0 disables the head) |
-| `--markov-head-type`            | `vanilla` | Sequential head variant: `vanilla`, `gated`, or `rnn`             |
-| `--enable-confidence-head`      | enabled   | Attach the per-position acceptance head                           |
-| `--confidence-head-with-markov` | enabled   | Feed the Markov previous-token embedding into the confidence head |
-| `--confidence-head-alpha`       | 1.0       | Weight of the confidence-head BCE term                            |
+| Parameter | Default | Description | | ------------------------------- | --------- | ----------------------------------------------------------------- | | `--markov-rank` | 256 | Low-rank dimension of the Markov logit bias (0 disables the head) | | `--markov-head-type` | `vanilla` | Sequential head variant: `vanilla`, `gated`, or `rnn` | | `--enable-confidence-head` | enabled | Attach the per-position acceptance head | | `--confidence-head-with-markov` | enabled | Feed the Markov previous-token embedding into the confidence head | | `--confidence-head-alpha` | 1.0 | Weight of the confidence-head BCE term |
 
 All DFlash parameters (`--block-size`, `--max-anchors`, `--num-layers`, ...) apply unchanged.
 
@@ -38,9 +32,7 @@ All DFlash parameters (`--block-size`, `--max-anchors`, `--num-layers`, ...) app
 
 Pretrained DSpark speculator models are available on HuggingFace from the [RedHatAI speculator models collection](https://huggingface.co/collections/RedHatAI/speculator-models):
 
-| Verifier              | Speculator                                                                                                        |
-| --------------------- | ----------------------------------------------------------------------------------------------------------------- |
-| `zai-org/GLM-5.2-FP8` | [`RedHatAI/GLM-5.2-speculator.dspark-preview`](https://huggingface.co/RedHatAI/GLM-5.2-speculator.dspark-preview) |
+| Verifier | Speculator | | --------------------- | ----------------------------------------------------------------------------------------------------------------- | | `zai-org/GLM-5.2-FP8` | [`RedHatAI/GLM-5.2-speculator.dspark-preview`](https://huggingface.co/RedHatAI/GLM-5.2-speculator.dspark-preview) |
 
 To train your own, see `examples/train/dspark_qwen3_0_6b_sharegpt_online.sh`.
 

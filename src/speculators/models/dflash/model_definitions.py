@@ -125,13 +125,12 @@ class Qwen3DFlashAttention(nn.Module):
             cache_kwargs = {"sin": sin, "cos": cos, "cache_position": cache_position}
             k, v = past_key_values.update(k, v, self.layer_idx, cache_kwargs)
         attn_fn: Callable = eager_attention_forward
-        if (
-            self.config._attn_implementation is not None  # noqa: SLF001
-            and self.config._attn_implementation != "eager"  # noqa: SLF001
-        ):
-            attn_fn = ALL_ATTENTION_FUNCTIONS[
-                self.config._attn_implementation  # noqa: SLF001
-            ]
+        attn_impl = (
+            getattr(self, "_attn_impl_override", None)
+            or self.config._attn_implementation  # noqa: SLF001
+        )
+        if attn_impl is not None and attn_impl != "eager":
+            attn_fn = ALL_ATTENTION_FUNCTIONS[attn_impl]
         attn_output, attn_weights = attn_fn(
             self,
             q,

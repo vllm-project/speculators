@@ -752,29 +752,17 @@ These are sanity-check runs, not production numbers. With just 5K samples, model
 
 5K ShareGPT samples, 5 epochs, Qwen3-8B, measured on MT-Bench (80 prompts, 2048 max output tokens):
 
-| Metric            | Value        |
-| ----------------- | ------------ |
-| Acceptance rate   | 5.90%        |
-| Acceptance length | 1.47         |
-| Output throughput | 129.41 tok/s |
+| Metric | Value | | ----------------- | ------------ | | Acceptance rate | 5.90% | | Acceptance length | 1.47 | | Output throughput | 129.41 tok/s |
 
 ### P-EAGLE
 
 5K ShareGPT samples, 5 epochs, Qwen3-8B, measured on SpecBench (80 prompts, 256 output tokens):
 
-| Metric            | Value  |
-| ----------------- | ------ |
-| Acceptance rate   | 13.35% |
-| Acceptance length | 1.53   |
+| Metric | Value | | ----------------- | ------ | | Acceptance rate | 13.35% | | Acceptance length | 1.53 |
 
 Per-position acceptance:
 
-| Position | Acceptance |
-| -------- | ---------- |
-| 0        | 40.84%     |
-| 1        | 10.84%     |
-| 2        | 1.58%      |
-| 3        | 0.15%      |
+| Position | Acceptance | | -------- | ---------- | | 0 | 40.84% | | 1 | 10.84% | | 2 | 1.58% | | 3 | 0.15% |
 
 > **Note:** these numbers were measured with `--total-seq-len 4096`, not the 8192 used throughout this tutorial.
 

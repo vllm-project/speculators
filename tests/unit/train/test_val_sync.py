@@ -95,6 +95,7 @@ def _make_val_trainer(n_batches: int, *, is_distributed: bool) -> "Trainer":
         hidden_states_dtype=torch.float32,
         val_call_kwargs=None,
     )
+    trainer._sp_splits_batch = True
     return trainer
 
 

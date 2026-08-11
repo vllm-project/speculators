@@ -537,11 +537,6 @@ def main(cfg: TrainConfig):  # noqa: C901
                 f"--total-seq-len ({args.total_seq_len}) must be divisible "
                 f"by --sp-size ({args.sp_size})"
             )
-        if num_attention_heads % args.sp_size != 0:
-            raise ValueError(
-                f"num_attention_heads ({num_attention_heads}) must be "
-                f"divisible by --sp-size ({args.sp_size})"
-            )
         if args.speculator_type not in ("eagle3", "dflash", "dspark", "peagle"):
             raise ValueError(
                 f"Sequence parallelism (--sp-size > 1) is currently only "
@@ -621,6 +616,16 @@ def main(cfg: TrainConfig):  # noqa: C901
     model_class = registry[args.speculator_type]
 
     draft_model = build_draft_model(args, model_class, t2d, d2t, draft_vocab_size)
+
+    if args.sp_size > 1:
+        num_attention_heads = (
+            draft_model.config.transformer_layer_config.num_attention_heads
+        )
+        if num_attention_heads % args.sp_size != 0:
+            raise ValueError(
+                f"num_attention_heads ({num_attention_heads}) must be "
+                f"divisible by --sp-size ({args.sp_size})"
+            )
 
     # Get target layer IDs from the model (resolved at model level)
     num_target_layers = len(draft_model.target_layer_ids)  # type: ignore[arg-type]
@@ -734,9 +739,6 @@ def main(cfg: TrainConfig):  # noqa: C901
 
 if __name__ == "__main__":
     main(TrainConfig.resolve())
-
-    print(f"Peak GPU memory: {torch.cuda.max_memory_allocated() / 1e9:.2f} GB")
-
 
 # RUN WITH:
 # torchrun --standalone --nproc_per_node=<num_gpus>  scripts/train.py

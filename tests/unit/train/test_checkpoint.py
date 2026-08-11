@@ -36,6 +36,8 @@ def _make_minimal_trainer(tmp_path: Path, checkpoint_freq: int, save_best: bool)
     trainer.model = cast("SpeculatorModel", object())
     trainer.optimizers = cast("list[torch.optim.Optimizer]", [object()])
     trainer.schedulers = []
+    trainer._sp_grad_hooks = []
+    trainer._sp_splits_batch = True
     return trainer
 
 

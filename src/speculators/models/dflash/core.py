@@ -72,17 +72,7 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
             else create_mask
         )
 
-        from speculators.train.distributed import get_sp_size  # noqa: PLC0415
-
-        # Fix for config, so that the model trained with sp. Reset config before saving
-        orig_attn_impl = config.transformer_layer_config._attn_implementation  # noqa: SLF001
-        if get_sp_size() > 1:
-            config.transformer_layer_config._attn_implementation = (  # noqa: SLF001
-                "dflash_flex_attention"
-            )
-
         super().__init__(config=config)
-        config.transformer_layer_config._attn_implementation = orig_attn_impl  # noqa: SLF001
         self._init_vocab(config)
 
         tl_config = config.transformer_layer_config
@@ -95,6 +85,13 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
                 for layer_idx in range(num_draft_layers)
             ]
         )
+
+        from speculators.train.distributed import get_sp_size  # noqa: PLC0415
+
+        if get_sp_size() > 1:
+            for layer in self.layers:
+                layer.self_attn._attn_impl_override = "dflash_flex_attention"  # noqa: SLF001
+
         self.sliding_window = tl_config.sliding_window
         self.sliding_window_indices = [
             i
