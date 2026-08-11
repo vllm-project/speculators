@@ -184,6 +184,17 @@ def test_dflash_defaults_loss_fn_to_ce(monkeypatch):
     assert args.loss_fn == "ce"
 
 
+def test_dflash_defaults_block_size_to_16(monkeypatch):
+    args = _parse(monkeypatch, ["--speculator-type", "dflash"])
+    assert args.block_size == 16
+
+
+def test_dspark_defaults_block_size_to_8(monkeypatch):
+    # block_size is shared with dspark, which never had block_size=16 validated.
+    args = _parse(monkeypatch, ["--speculator-type", "dspark"])
+    assert args.block_size == 8
+
+
 def test_dflash_explicit_flags_override_new_defaults(monkeypatch):
     args = _parse(
         monkeypatch,
@@ -196,11 +207,14 @@ def test_dflash_explicit_flags_override_new_defaults(monkeypatch):
             "fixed-exp-decay",
             "--loss-fn",
             "kl_div",
+            "--block-size",
+            "8",
         ],
     )
     assert args.num_layers == 3
     assert args.per_position_loss_weight == "fixed-exp-decay"
     assert args.loss_fn == "kl_div"
+    assert args.block_size == 8
 
 
 def test_eagle3_num_layers_and_loss_defaults_unchanged(monkeypatch):
@@ -208,6 +222,7 @@ def test_eagle3_num_layers_and_loss_defaults_unchanged(monkeypatch):
     assert args.num_layers == 1
     assert args.per_position_loss_weight == "fixed-exp-decay"
     assert args.loss_fn == "kl_div"
+    assert args.block_size == 8
 
 
 def test_no_norm_before_fc_flag(monkeypatch):

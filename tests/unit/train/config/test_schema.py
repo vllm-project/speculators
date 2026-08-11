@@ -50,11 +50,13 @@ def test_flatten_resolves_non_eagle3_derived_defaults():
 
 def test_flatten_resolves_dflash_derived_defaults():
     # Best-practices recipe from https://github.com/vllm-project/speculators/issues/979:
-    # dflash gets 5 draft layers, D-PACE weighting, and CE loss out of the box.
+    # dflash gets 5 draft layers, D-PACE weighting, CE loss, and block_size=16
+    # out of the box.
     flat = TrainConfig(speculator_type="dflash").flatten()
     assert flat["num_layers"] == 5
     assert flat["per_position_loss_weight"] == "dpace"
     assert flat["loss_fn"] == "ce"
+    assert flat["block_size"] == 16
 
 
 def test_flatten_leaves_non_dflash_derived_defaults_unchanged():
@@ -65,6 +67,7 @@ def test_flatten_leaves_non_dflash_derived_defaults_unchanged():
         assert flat["num_layers"] == 1
         assert flat["per_position_loss_weight"] == "fixed-exp-decay"
         assert flat["loss_fn"] == "kl_div"
+        assert flat["block_size"] == 8
 
 
 def test_dflash_derived_defaults_do_not_override_explicit_values():
@@ -72,11 +75,12 @@ def test_dflash_derived_defaults_do_not_override_explicit_values():
         speculator_type="dflash",
         draft=DraftArgs(num_layers=3),
         loss=LossArgs(loss_fn="kl_div"),
-        dflash=DFlashArgs(per_position_loss_weight="fixed-exp-decay"),
+        dflash=DFlashArgs(per_position_loss_weight="fixed-exp-decay", block_size=8),
     )
     assert cfg.draft.num_layers == 3
     assert cfg.loss.loss_fn == "kl_div"
     assert cfg.dflash.per_position_loss_weight == "fixed-exp-decay"
+    assert cfg.dflash.block_size == 8
 
 
 def test_from_flat_inverts_flatten():

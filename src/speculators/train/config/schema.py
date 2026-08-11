@@ -439,8 +439,10 @@ class LoggingArgs(_Group):
 class DFlashArgs(_Group):
     """DFlash-family backbone knobs (also used by DSpark, which is-a DFlash)."""
 
-    block_size: int = Field(
-        default=8, description="Block size for DFlash model (default: 8)."
+    block_size: int | None = Field(
+        default=None,
+        description="Block size for DFlash model (default: 16 for dflash, 8 "
+        "otherwise).",
     )
     sample_from_anchor: bool | None = Field(
         default=None,
@@ -645,15 +647,17 @@ class TrainConfig(BaseSettings):
         else ``False``; unset ``muon_lr`` -> ``10 * lr``; unset ``num_layers`` -> ``5``
         for dflash else ``1``; unset ``per_position_loss_weight`` -> ``dpace`` for
         dflash else ``fixed-exp-decay``; unset ``loss_fn`` -> ``ce`` for dflash else
-        ``kl_div``.
+        ``kl_div``; unset ``block_size`` -> ``16`` for dflash else ``8``.
 
         The dflash-conditional defaults reflect the recipe from
         https://github.com/vllm-project/speculators/issues/979: this combination
-        (5 layers, D-PACE, cross-entropy) consistently outperformed the prior
-        defaults (1 layer, fixed-exp-decay, kl_div) across every DFlash
-        configuration tested, and is now the out-of-the-box behavior for
-        ``--speculator-type dflash`` rather than something users need to
-        separately discover and opt into. ``--muon-lr`` / ``--lr`` are
+        (5 layers, D-PACE, cross-entropy, block_size=16) consistently
+        outperformed the prior defaults (1 layer, fixed-exp-decay, kl_div,
+        block_size=8) across every DFlash configuration tested, and is now the
+        out-of-the-box behavior for ``--speculator-type dflash`` rather than
+        something users need to separately discover and opt into. DSpark
+        (which shares the ``dflash`` group) keeps ``block_size=8``, since that
+        combination was never tested there. ``--muon-lr`` / ``--lr`` are
         deliberately left as-is: the right learning rate depends on effective
         batch size (anchor count, sequence length, GPU count), which varies by
         setup, so we did not want to bake in a single "recommended" value.
@@ -679,6 +683,8 @@ class TrainConfig(BaseSettings):
             )
         if self.loss.loss_fn is None:
             self.loss.loss_fn = "ce" if is_dflash else "kl_div"
+        if self.dflash.block_size is None:
+            self.dflash.block_size = 16 if is_dflash else 8
         return self
 
     @model_validator(mode="after")
