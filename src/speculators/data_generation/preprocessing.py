@@ -284,13 +284,42 @@ def _render_boundary_rows(
     return rows
 
 
+# Field order of the OpenAI tool params, which is how vLLM's request models
+# re-serialize tools before rendering the chat template. Templates that dump a
+# tool with ``tojson`` put that order straight into the prompt, so tokenizing
+# with the source's key order yields a prompt the server cannot reproduce.
+_TOOL_KEY_ORDER = ("type", "function", "custom")
+_TOOL_FUNCTION_KEY_ORDER = ("name", "description", "parameters", "strict")
+
+
+def _reorder_keys(mapping: dict, order: tuple[str, ...]) -> dict:
+    """Copy of ``mapping`` with ``order``'s keys first; the rest keep their
+    relative order."""
+    ordered = {key: mapping[key] for key in order if key in mapping}
+    return ordered | {k: v for k, v in mapping.items() if k not in ordered}
+
+
+def _canonicalize_tools(tools: list) -> list:
+    canonical = []
+    for tool in tools:
+        if not isinstance(tool, dict):
+            canonical.append(tool)
+            continue
+        adapted = _reorder_keys(tool, _TOOL_KEY_ORDER)
+        function = adapted.get("function")
+        if isinstance(function, dict):
+            adapted["function"] = _reorder_keys(function, _TOOL_FUNCTION_KEY_ORDER)
+        canonical.append(adapted)
+    return canonical
+
+
 def _parse_conv_tools(conv_tools: object, idx: int) -> list | None:
     """Parse the tools JSON string for one conversation; warn and return None
     on invalid JSON or unexpected types."""
     if not conv_tools:
         return None
     if isinstance(conv_tools, list):
-        return conv_tools
+        return _canonicalize_tools(conv_tools)
     if not isinstance(conv_tools, str):
         log.warning(
             f"Non-string value in tools column for conversation {idx}: "
@@ -298,7 +327,7 @@ def _parse_conv_tools(conv_tools: object, idx: int) -> list | None:
         )
         return None
     try:
-        return json.loads(conv_tools)
+        return _canonicalize_tools(json.loads(conv_tools))
     except json.JSONDecodeError as e:
         log.warning(
             f"Invalid JSON in tools column for conversation {idx}: {e}, "

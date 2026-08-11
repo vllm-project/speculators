@@ -210,6 +210,43 @@ def test_pretokenized_dataset_skips_render():
 
 
 # --------------------------------------------------------------------------- #
+# _parse_conv_tools -- canonical tool key order                                 #
+# --------------------------------------------------------------------------- #
+class TestParseConvTools:
+    """Tools are canonicalized to the key order vLLM re-serializes them with,
+    so templates that ``tojson`` a tool render the same prompt on both sides."""
+
+    def test_reorders_tool_keys(self):
+        tools = [
+            {
+                "function": {"parameters": {}, "name": "click", "description": "d"},
+                "type": "function",
+            }
+        ]
+
+        parsed = preprocessing._parse_conv_tools(json.dumps(tools), 0)
+
+        assert parsed is not None
+        assert list(parsed[0]) == ["type", "function"]
+        assert list(parsed[0]["function"]) == ["name", "description", "parameters"]
+
+    def test_preserves_values_and_unknown_keys(self):
+        tools = [{"function": {"name": "click", "extra": 1}, "type": "function"}]
+
+        parsed = preprocessing._parse_conv_tools(tools, 0)
+
+        assert parsed == [
+            {"type": "function", "function": {"name": "click", "extra": 1}}
+        ]
+
+    def test_missing_and_invalid_tools(self):
+        assert preprocessing._parse_conv_tools(None, 0) is None
+        assert preprocessing._parse_conv_tools("", 0) is None
+        assert preprocessing._parse_conv_tools("{not json", 0) is None
+        assert preprocessing._parse_conv_tools(123, 0) is None
+
+
+# --------------------------------------------------------------------------- #
 # multiproc map -- Arrow schema alignment of the stored messages column        #
 # --------------------------------------------------------------------------- #
 class _FakeMMProcessor(ProcessorMixin):
