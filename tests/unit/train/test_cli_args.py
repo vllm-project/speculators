@@ -163,6 +163,53 @@ def test_dflash_defaults_norm_output_false(monkeypatch):
     assert args.norm_output is False
 
 
+# ---------------------------------------------------------------------------
+# Per-speculator-type defaults for num_layers, per_position_loss_weight, loss_fn
+# (best-practices recipe from https://github.com/vllm-project/speculators/issues/979)
+# ---------------------------------------------------------------------------
+
+
+def test_dflash_defaults_num_layers_to_5(monkeypatch):
+    args = _parse(monkeypatch, ["--speculator-type", "dflash"])
+    assert args.num_layers == 5
+
+
+def test_dflash_defaults_per_position_loss_weight_to_dpace(monkeypatch):
+    args = _parse(monkeypatch, ["--speculator-type", "dflash"])
+    assert args.per_position_loss_weight == "dpace"
+
+
+def test_dflash_defaults_loss_fn_to_ce(monkeypatch):
+    args = _parse(monkeypatch, ["--speculator-type", "dflash"])
+    assert args.loss_fn == "ce"
+
+
+def test_dflash_explicit_flags_override_new_defaults(monkeypatch):
+    args = _parse(
+        monkeypatch,
+        [
+            "--speculator-type",
+            "dflash",
+            "--num-layers",
+            "3",
+            "--per-position-loss-weight",
+            "fixed-exp-decay",
+            "--loss-fn",
+            "kl_div",
+        ],
+    )
+    assert args.num_layers == 3
+    assert args.per_position_loss_weight == "fixed-exp-decay"
+    assert args.loss_fn == "kl_div"
+
+
+def test_eagle3_num_layers_and_loss_defaults_unchanged(monkeypatch):
+    args = _parse(monkeypatch, [])
+    assert args.num_layers == 1
+    assert args.per_position_loss_weight == "fixed-exp-decay"
+    assert args.loss_fn == "kl_div"
+
+
 def test_no_norm_before_fc_flag(monkeypatch):
     args = _parse(monkeypatch, ["--no-norm-before-fc"])
     assert args.norm_before_fc is False
