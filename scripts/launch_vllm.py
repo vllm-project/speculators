@@ -251,21 +251,15 @@ def _save_vllm_provenance(
     writers = [
         (
             "vllm_command.txt",
-            lambda: _save_vllm_command(
-                prov_dir, cmd, sha, diff, vllm_ver
-            ),
+            lambda: _save_vllm_command(prov_dir, cmd, sha, diff, vllm_ver),
         ),
         (
             "vllm.patch",
-            lambda: _save_vllm_patch(
-                prov_dir, vllm_repo, sha, diff, vllm_ver
-            ),
+            lambda: _save_vllm_patch(prov_dir, vllm_repo, sha, diff, vllm_ver),
         ),
         (
             "checkpoint_sha256.txt",
-            lambda: _save_checkpoint_sha256(
-                prov_dir, model, skip_hash=skip_hash
-            ),
+            lambda: _save_checkpoint_sha256(prov_dir, model, skip_hash=skip_hash),
         ),
     ]
     for artifact, write in writers:
