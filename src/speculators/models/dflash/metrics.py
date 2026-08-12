@@ -5,14 +5,14 @@ from typing import Any
 
 import torch
 
-from speculators.models.metrics import (
+from speculators.losses import (
     LossConfig,
     compound_loss,
-    compute_accuracy_multi_step,
     dflash_loss_decay,
     dpace_loss_decay,
     kl_div_loss_fused_or_eager,
 )
+from speculators.models.metrics import compute_accuracy_multi_step
 
 _DEFAULT_LOSS_CONFIG: LossConfig = {"kl_div": (kl_div_loss_fused_or_eager, 1.0)}
 

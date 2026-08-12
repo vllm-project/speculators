@@ -5,13 +5,10 @@ from functools import partial
 import pytest
 import torch
 
+from speculators.losses import dflash_loss_decay, loss_function
+from speculators.losses.eager import ce_loss
 from speculators.models.dflash.metrics import compute_metrics
-from speculators.models.metrics import (
-    ce_loss,
-    compute_accuracy_multi_step,
-    dflash_loss_decay,
-    loss_function,
-)
+from speculators.models.metrics import compute_accuracy_multi_step
 
 
 def _ids_to_logits(ids: torch.Tensor, vocab_size: int) -> torch.Tensor:

@@ -28,7 +28,7 @@ from speculators.data_generation.vllm_client import (
     DEFAULT_MAX_RETRIES,
     DEFAULT_REQUEST_TIMEOUT,
 )
-from speculators.models.metrics import resolve_loss_config
+from speculators.losses import resolve_loss_config
 
 # A bool that must render as an argparse ``--x/--no-x`` (``BooleanOptionalAction``)
 # even though it defaults to False. Bools defaulting to True or None get that form

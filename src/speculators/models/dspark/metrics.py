@@ -13,14 +13,14 @@ from typing import Any
 import torch
 from torch.nn.functional import binary_cross_entropy_with_logits
 
-from speculators.models.metrics import (
+from speculators.losses import (
     LossConfig,
     compound_loss,
-    compute_accuracy_multi_step,
     dflash_loss_decay,
     dpace_loss_decay,
     tv_loss_fused_or_eager,
 )
+from speculators.models.metrics import compute_accuracy_multi_step
 
 __all__ = [
     "compute_metrics",

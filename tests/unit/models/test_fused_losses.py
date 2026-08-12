@@ -1,4 +1,4 @@
-"""Fused Triton losses vs their eager references (speculators.models.fused_losses).
+"""Fused Triton losses vs their eager references (speculators.losses.fused).
 
 One test per loss, comparing loss value and logits-gradient against eager in
 the three regimes that catch distinct bugs: fp32 with saturated point-mass
@@ -11,7 +11,7 @@ kernel's early-out and must return exact zeros from an uninitialized buffer.
 import pytest
 import torch
 
-from speculators.models import metrics
+from speculators.losses import eager, resolve_loss_config
 
 requires_cuda = pytest.mark.skipif(
     not torch.cuda.is_available(), reason="fused Triton losses require CUDA"
@@ -20,13 +20,13 @@ requires_cuda = pytest.mark.skipif(
 # (name, eager fn, fused fn name); fused resolved lazily so this file
 # collects on machines without Triton
 CASES = [
-    ("kl_div", metrics.kl_div_loss, "fused_kl_div_loss"),
-    ("rkl", metrics.reverse_kl_div_loss, "fused_reverse_kl_div_loss"),
-    ("jsd", metrics.js_div_loss, "fused_js_div_loss"),
-    ("ce", metrics.ce_loss, "fused_ce_loss"),
-    ("tv", metrics.tv_loss, "fused_tv_loss"),
-    ("nla", metrics.neg_log_acceptance_loss, "fused_nla_loss"),
-    ("lk_hybrid", metrics.lk_hybrid_loss, "fused_lk_hybrid_loss"),
+    ("kl_div", eager.kl_div_loss, "fused_kl_div_loss"),
+    ("rkl", eager.reverse_kl_div_loss, "fused_reverse_kl_div_loss"),
+    ("jsd", eager.js_div_loss, "fused_js_div_loss"),
+    ("ce", eager.ce_loss, "fused_ce_loss"),
+    ("tv", eager.tv_loss, "fused_tv_loss"),
+    ("nla", eager.neg_log_acceptance_loss, "fused_nla_loss"),
+    ("lk_hybrid", eager.lk_hybrid_loss, "fused_lk_hybrid_loss"),
 ]
 
 # Loss values are fp32 on both paths; gradients allow bf16 1-ulp rounding
@@ -65,7 +65,7 @@ def _assert_fused_matches_eager(
 )
 def test_fused_matches_eager(name, eager_fn, fused_name):
     """Fused == eager (value + gradient) across the three failure-mode regimes."""
-    fused_losses = pytest.importorskip("speculators.models.fused_losses")
+    fused_losses = pytest.importorskip("speculators.losses.fused")
     fused_fn = getattr(fused_losses, fused_name)
 
     # fp32, with saturated +-30 point-mass rows (one agreeing, one disagreeing)
@@ -79,7 +79,7 @@ def test_fused_matches_eager(name, eager_fn, fused_name):
     targets[0, -1, 7] = 30.0
     _assert_fused_matches_eager(eager_fn, fused_fn, logits, targets, LOSS_TOL, GRAD_TOL)
     # the map dispatcher is bitwise-equal to fused -> the fused path really ran
-    dispatcher = metrics.resolve_loss_config(name)[name][0]
+    dispatcher = resolve_loss_config(name)[name][0]
     assert torch.equal(dispatcher(logits, targets), fused_fn(logits, targets))
 
     # bf16, the training dtype
@@ -115,7 +115,7 @@ def test_compiles_fullgraph(name, eager_fn, fused_name):
     fails under fullgraph). Model forwards are wrapped in torch.compile, so
     this guards the compiled training path.
     """
-    fused_losses = pytest.importorskip("speculators.models.fused_losses")
+    fused_losses = pytest.importorskip("speculators.losses.fused")
     fused_fn = getattr(fused_losses, fused_name)
     logits = torch.randn(1, 8, 512, device="cuda", requires_grad=True)
     targets = torch.randn(1, 8, 512, device="cuda")
@@ -136,6 +136,6 @@ def test_dispatcher_falls_back_to_eager_for_differentiable_targets():
     for name in ("kl_div", "rkl", "jsd", "tv", "nla", "lk_hybrid"):
         logits = torch.randn(1, 4, 64, device=device, requires_grad=True)
         targets = torch.randn(1, 4, 64, device=device, requires_grad=True)
-        metrics.resolve_loss_config(name)[name][0](logits, targets).sum().backward()
+        resolve_loss_config(name)[name][0](logits, targets).sum().backward()
         assert logits.grad is not None, name
         assert targets.grad is not None, name  # only the eager path produces this

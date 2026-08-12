@@ -5,25 +5,27 @@ from functools import partial
 import pytest
 import torch
 
-from speculators.models.metrics import (
-    ce_loss,
-    compute_accuracy_single_step,
+from speculators.losses import (
     dflash_loss_decay,
     exp_loss_decay,
-    js_div_loss,
     js_div_loss_fused_or_eager,
-    kl_div_loss,
-    lk_hybrid_loss,
     lk_hybrid_loss_fused_or_eager,
     loss_function,
-    neg_log_acceptance_loss,
     nla_loss_fused_or_eager,
     resolve_loss_config,
-    reverse_kl_div_loss,
     reverse_kl_div_loss_fused_or_eager,
-    tv_loss,
     tv_loss_fused_or_eager,
 )
+from speculators.losses.eager import (
+    ce_loss,
+    js_div_loss,
+    kl_div_loss,
+    lk_hybrid_loss,
+    neg_log_acceptance_loss,
+    reverse_kl_div_loss,
+    tv_loss,
+)
+from speculators.models.metrics import compute_accuracy_single_step
 
 
 class TestLossFunction:

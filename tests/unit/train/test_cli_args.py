@@ -4,14 +4,14 @@ import argparse
 
 import pytest
 
-from speculators.models.dflash.core import DFlashDraftModel
-from speculators.models.dspark.core import DSparkDraftModel
-from speculators.models.eagle3.core import Eagle3DraftModel
-from speculators.models.metrics import (
+from speculators.losses import (
     ce_loss_fused_or_eager,
     kl_div_loss_fused_or_eager,
     tv_loss_fused_or_eager,
 )
+from speculators.models.dflash.core import DFlashDraftModel
+from speculators.models.dspark.core import DSparkDraftModel
+from speculators.models.eagle3.core import Eagle3DraftModel
 from speculators.models.peagle.core import PEagleDraftModel
 from speculators.train.config import TrainConfig
 

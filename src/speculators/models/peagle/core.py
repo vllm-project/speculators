@@ -6,9 +6,9 @@ import torch
 from transformers import PretrainedConfig
 
 from speculators.config import SpeculatorsConfig, VerifierConfig
+from speculators.losses import LossConfig, resolve_loss_config
 from speculators.model import SpeculatorModel
 from speculators.models.eagle3.core import Eagle3DraftModel
-from speculators.models.metrics import LossConfig, resolve_loss_config
 from speculators.models.peagle.attention import create_peagle_mask_mod
 from speculators.models.peagle.config import PEagleSpeculatorConfig
 from speculators.models.peagle.data import generate_cod_sample_indices

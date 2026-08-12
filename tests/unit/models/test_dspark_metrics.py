@@ -2,8 +2,8 @@
 
 import torch
 
+from speculators.losses import resolve_loss_config
 from speculators.models.dspark.metrics import compute_metrics
-from speculators.models.metrics import resolve_loss_config
 
 _DEFAULT_LOSS = resolve_loss_config('{"ce": 0.1, "tv": 0.9}')
 

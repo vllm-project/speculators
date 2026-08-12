@@ -1,6 +1,6 @@
 """Fused Triton kernels for the dense draft/target logit losses.
 
-One kernel pair serves every loss in ``metrics._LOSS_FN_MAP``: forward
+One kernel pair serves every loss in ``losses.utils._LOSS_FN_MAP``: forward
 streams the selected reduction from online-softmax statistics; backward
 recomputes probabilities from five saved scalars per row and applies the
 closed-form gradient. No ``[T, V]`` intermediate is ever materialized or

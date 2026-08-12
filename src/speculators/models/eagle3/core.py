@@ -6,6 +6,7 @@ from torch.nn.attention.flex_attention import create_block_mask, create_mask
 from transformers import AutoConfig, DynamicCache, PretrainedConfig
 
 from speculators.config import SpeculatorsConfig, VerifierConfig
+from speculators.losses import LossConfig, resolve_loss_config
 from speculators.model import DraftVocabMixin, SpeculatorModel
 from speculators.models.attention import create_float_mask
 from speculators.models.eagle3 import Eagle3SpeculatorConfig
@@ -16,7 +17,6 @@ from speculators.models.eagle3.attention import (
 )
 from speculators.models.eagle3.metrics import compute_metrics
 from speculators.models.eagle3.model_definitions import model_classes
-from speculators.models.metrics import LossConfig, resolve_loss_config
 from speculators.models.utils import conditional_torch_compile, resolve_target_layer_ids
 from speculators.proposals.greedy import GreedyTokenProposalConfig
 
