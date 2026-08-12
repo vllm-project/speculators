@@ -1,4 +1,5 @@
 import os
+from typing import Any
 
 import pytest
 import torch
@@ -30,7 +31,7 @@ def _ddp_local_empty_worker(rank, world_size, init_file, output_dir):
 
 
 def test_locally_empty_batch_does_not_mask_other_ranks_or_skip_step():
-    batch = {
+    batch: dict[str, Any] = {
         "loss_mask": torch.zeros(1, 8),
         "input_ids": torch.zeros(1, 8, dtype=torch.long),
         "__locally_empty_batch__": True,
@@ -60,7 +61,7 @@ def test_remote_circuit_breaker_stops_this_rank_at_status_collective(monkeypatch
 
     with pytest.raises(RuntimeError, match="circuit breaker tripped on 1 rank"):
         # Explicit CPU device: the real default is this rank's accelerator.
-        consume_recovery_metadata(batch, phase="training", device="cpu")
+        consume_recovery_metadata(batch, phase="training", device=torch.device("cpu"))
 
 
 def test_unknown_metadata_key_fails_before_reaching_the_model():
