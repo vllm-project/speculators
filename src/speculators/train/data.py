@@ -38,7 +38,6 @@ class GenerationFailure:
     fatal: bool = False
 
 
-
 def create_empty_sample(
     hidden_size: int, num_target_layers: int = 3, dtype: torch.dtype = torch.bfloat16
 ):
@@ -369,6 +368,7 @@ class ArrowDataset(BaseDataset):
 
     def _get_raw_data(self, index):
         file_idx = self._map_to_file_idx(index)
+        loaded_hs: dict[str, torch.Tensor] | GenerationFailure | None
         loaded_hs = self.transfer.get_cached(file_idx)
 
         if loaded_hs is None:
