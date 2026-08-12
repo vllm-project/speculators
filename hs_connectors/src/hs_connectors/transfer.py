@@ -270,12 +270,6 @@ class MooncakeBackend(HiddenStatesBackend):
             default=2.0,
             help="Mooncake client's local staging buffer, in GiB.",
         )
-        parser.add_argument(
-            "--mooncake-writer-threads",
-            type=int,
-            default=4,
-            help="Number of asynchronous Mooncake writer threads in the vLLM client.",
-        )
 
     @staticmethod
     def add_train_args(parser: argparse.ArgumentParser) -> None:
@@ -284,6 +278,12 @@ class MooncakeBackend(HiddenStatesBackend):
     @staticmethod
     def add_launch_args(parser: argparse.ArgumentParser) -> None:
         MooncakeBackend._add_mooncake_args(parser)
+        parser.add_argument(
+            "--mooncake-writer-threads",
+            type=int,
+            default=4,
+            help="Number of asynchronous Mooncake writer threads in the vLLM client.",
+        )
 
     @staticmethod
     def from_train_args(
@@ -299,10 +299,9 @@ class MooncakeBackend(HiddenStatesBackend):
                 local_hostname=local_hostname,
                 metadata_server=args.mooncake_metadata_server,
                 master_server_address=args.mooncake_master,
-                global_segment_size=int(args.mooncake_global_segment_gib * 1024**3),
-                local_buffer_size=int(args.mooncake_local_buffer_gib * 1024**3),
+                global_segment_size=round(args.mooncake_global_segment_gib * 1024**3),
+                local_buffer_size=round(args.mooncake_local_buffer_gib * 1024**3),
                 protocol=args.mooncake_protocol,
-                num_writer_threads=args.mooncake_writer_threads,
             )
         )
         return MooncakeTransfer(store)
@@ -317,8 +316,8 @@ class MooncakeBackend(HiddenStatesBackend):
             local_hostname=local_hostname,
             metadata_server=args.mooncake_metadata_server,
             master_server_address=args.mooncake_master,
-            global_segment_size=int(args.mooncake_global_segment_gib * 1024**3),
-            local_buffer_size=int(args.mooncake_local_buffer_gib * 1024**3),
+            global_segment_size=round(args.mooncake_global_segment_gib * 1024**3),
+            local_buffer_size=round(args.mooncake_local_buffer_gib * 1024**3),
             protocol=args.mooncake_protocol,
             num_writer_threads=args.mooncake_writer_threads,
         )

@@ -29,6 +29,8 @@ def test_mooncake_defaults_backfilled_for_selected_backend():
     assert flat["mooncake_master"] == "127.0.0.1:50051"
     assert flat["mooncake_metadata_server"] == "P2PHANDSHAKE"
     assert flat["mooncake_protocol"] == "tcp"
+    assert flat["mooncake_global_segment_gib"] == 4.0
+    assert flat["mooncake_local_buffer_gib"] == 2.0
 
 
 def test_file_backend_defaults_backfilled():
