@@ -1,15 +1,22 @@
 import argparse
 import datetime
 import hashlib
-import importlib.metadata
-import importlib.util
 import json
 import os
 import shlex
-import subprocess
 import sys
-import tempfile
 import warnings
+from pathlib import Path
+
+from speculators.provenance import (
+    atomic_write,
+    find_package_repo,
+    git_diff,
+    pkg_version,
+)
+from speculators.provenance import (
+    git_sha as _git_sha,
+)
 
 try:
     from hs_connectors import HiddenStatesBackend
@@ -124,63 +131,11 @@ def _warn(msg: str) -> None:
     print(f"Warning: {msg}", file=sys.stderr)
 
 
-def _atomic_write(path: str, content: str) -> None:
-    fd, tmp = tempfile.mkstemp(
-        dir=os.path.dirname(path),
-        prefix=f".{os.path.basename(path)}_",
-        suffix=".tmp",
-    )
-    try:
-        with os.fdopen(fd, "w") as f:
-            f.write(content)
-        os.replace(tmp, path)
-    finally:
-        if os.path.exists(tmp):
-            os.unlink(tmp)
-
-
-def _run_git(args: list[str], cwd: str, timeout: int = 5) -> str:
-    """Run a git command and return stdout, or empty string on failure."""
-    try:
-        result = subprocess.run(  # noqa: S603
-            args,
-            capture_output=True,
-            text=True,
-            cwd=cwd,
-            timeout=timeout,
-            check=False,
-        )
-        return result.stdout.strip() if result.returncode == 0 else ""
-    except OSError:
-        return ""
-
-
-def _pkg_version(name: str) -> str:
-    try:
-        return importlib.metadata.version(name)
-    except importlib.metadata.PackageNotFoundError:
-        return "unknown"
-
-
-def _is_vllm_repo(path: str) -> bool:
-    """Check that *path* looks like the vllm source tree, not an unrelated repo."""
-    return os.path.exists(os.path.join(path, ".git")) and os.path.isfile(
-        os.path.join(path, "vllm", "__init__.py")
-    )
-
-
 def _find_vllm_repo() -> str | None:
     """Find the vllm git checkout by walking up from the installed package."""
-    try:
-        spec = importlib.util.find_spec("vllm")
-        if spec and spec.origin:
-            d = os.path.realpath(os.path.dirname(spec.origin))
-            while d != os.path.dirname(d):
-                if _is_vllm_repo(d):
-                    return d
-                d = os.path.dirname(d)
-    except (ModuleNotFoundError, ValueError):
-        pass
+    repo = find_package_repo("vllm")
+    if repo and (repo / "vllm" / "__init__.py").is_file():
+        return str(repo)
     return None
 
 
@@ -198,13 +153,13 @@ def _sha256_file(path: str) -> str:
 
 
 def _save_vllm_command(
-    provenance_dir: str,
+    prov_dir: Path,
     cmd: list[str],
-    git_sha: str,
+    sha: str,
     diff: str,
     vllm_ver: str,
 ) -> None:
-    sha_label = f"{git_sha} (dirty)" if diff else git_sha
+    sha_label = f"{sha} (dirty)" if diff else sha
     ts = datetime.datetime.now(tz=datetime.timezone.utc).isoformat()
     header = "\n".join(
         [
@@ -214,39 +169,39 @@ def _save_vllm_command(
             f"# vllm: {vllm_ver}",
         ]
     )
-    _atomic_write(
-        os.path.join(provenance_dir, "vllm_command.txt"),
+    atomic_write(
+        prov_dir / "vllm_command.txt",
         f"{header}\n{shlex.join(cmd)}\n",
     )
 
 
 def _save_vllm_patch(
-    provenance_dir: str,
+    prov_dir: Path,
     vllm_repo: str | None,
-    git_sha: str,
+    sha: str,
     diff: str,
     vllm_ver: str,
 ) -> None:
     if vllm_repo:
-        content = f"# repo: {vllm_repo} ({git_sha})\n{diff}"
+        content = f"# repo: {vllm_repo} ({sha})\n{diff}"
     else:
         content = f"# vllm {vllm_ver} (wheel install, no git repo found)\n"
-    _atomic_write(os.path.join(provenance_dir, "vllm.patch"), content)
+    atomic_write(prov_dir / "vllm.patch", content)
 
 
 def _save_checkpoint_sha256(
-    provenance_dir: str, model: str, *, skip_hash: bool = False
+    prov_dir: Path, model: str, *, skip_hash: bool = False
 ) -> None:
-    dest = os.path.join(provenance_dir, "checkpoint_sha256.txt")
+    dest = prov_dir / "checkpoint_sha256.txt"
     model_path = os.path.expanduser(model)
     if not os.path.isdir(model_path):
-        _atomic_write(dest, f"# model: {model} (not a local path)\n")
+        atomic_write(dest, f"# model: {model} (not a local path)\n")
         return
     safetensors = sorted(
         f for f in os.listdir(model_path) if f.endswith(".safetensors")
     )
     if not safetensors:
-        _atomic_write(dest, f"# no .safetensors files in {model_path}\n")
+        atomic_write(dest, f"# no .safetensors files in {model_path}\n")
         return
     if skip_hash:
         lines = []
@@ -255,13 +210,13 @@ def _save_checkpoint_sha256(
             st = os.stat(fp)
             lines.append(f"size={st.st_size}  mtime={st.st_mtime}  {name}")
         header = "# hashing skipped (--no-hash-checkpoints)\n"
-        _atomic_write(dest, header + "\n".join(lines) + "\n")
+        atomic_write(dest, header + "\n".join(lines) + "\n")
     else:
         lines = [
             f"{_sha256_file(os.path.join(model_path, name))}  {name}"
             for name in safetensors
         ]
-        _atomic_write(dest, "\n".join(lines) + "\n")
+        atomic_write(dest, "\n".join(lines) + "\n")
 
 
 # ---------------------------------------------------------------------------
@@ -280,52 +235,36 @@ def _save_vllm_provenance(
 
     Best-effort — failures warn but never block the vLLM launch.
     """
+    prov_dir = Path(provenance_dir)
     try:
-        os.makedirs(provenance_dir, exist_ok=True)
+        prov_dir.mkdir(parents=True, exist_ok=True)
     except OSError as exc:
         _warn(f"could not create provenance dir: {exc}")
         return
 
     vllm_repo = _find_vllm_repo()
-    git_sha = _run_git(["git", "rev-parse", "HEAD"], vllm_repo or ".") or "unknown"
-    diff = (
-        _run_git(
-            ["git", "diff", "HEAD"],
-            vllm_repo or ".",
-            timeout=30,
-        )
-        if vllm_repo
-        else ""
-    )
-    vllm_ver = _pkg_version("vllm")
+    vllm_root = Path(vllm_repo) if vllm_repo else None
+    sha = _git_sha(vllm_root)
+    diff = git_diff(vllm_root)
+    vllm_ver = pkg_version("vllm")
 
     writers = [
         (
             "vllm_command.txt",
             lambda: _save_vllm_command(
-                provenance_dir,
-                cmd,
-                git_sha,
-                diff,
-                vllm_ver,
+                prov_dir, cmd, sha, diff, vllm_ver
             ),
         ),
         (
             "vllm.patch",
             lambda: _save_vllm_patch(
-                provenance_dir,
-                vllm_repo,
-                git_sha,
-                diff,
-                vllm_ver,
+                prov_dir, vllm_repo, sha, diff, vllm_ver
             ),
         ),
         (
             "checkpoint_sha256.txt",
             lambda: _save_checkpoint_sha256(
-                provenance_dir,
-                model,
-                skip_hash=skip_hash,
+                prov_dir, model, skip_hash=skip_hash
             ),
         ),
     ]
