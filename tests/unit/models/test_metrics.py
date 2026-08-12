@@ -5,16 +5,12 @@ from functools import partial
 import pytest
 import torch
 
+from speculators import losses
 from speculators.losses import (
     dflash_loss_decay,
     exp_loss_decay,
-    js_div_loss_fused_or_eager,
-    lk_hybrid_loss_fused_or_eager,
     loss_function,
-    nla_loss_fused_or_eager,
     resolve_loss_config,
-    reverse_kl_div_loss_fused_or_eager,
-    tv_loss_fused_or_eager,
 )
 from speculators.losses.eager import (
     ce_loss,
@@ -26,6 +22,22 @@ from speculators.losses.eager import (
     tv_loss,
 )
 from speculators.models.metrics import compute_accuracy_single_step
+
+
+@pytest.mark.parametrize(
+    ("name", "eager_fn"),
+    [
+        ("kl_div", kl_div_loss),
+        ("rkl", reverse_kl_div_loss),
+        ("jsd", js_div_loss),
+        ("ce", ce_loss),
+        ("tv", tv_loss),
+        ("nla", neg_log_acceptance_loss),
+        ("lk_hybrid", lk_hybrid_loss),
+    ],
+)
+def test_resolve_eager_implementation(name, eager_fn):
+    assert resolve_loss_config(name, "eager")[name][0] is eager_fn
 
 
 class TestLossFunction:
@@ -72,7 +84,7 @@ class TestLossFunction:
         loss_mask = torch.zeros(1, 8)
         pos_idx = torch.zeros(1, 8, dtype=torch.long)
 
-        loss = loss_function(logits, targets, loss_mask, pos_idx)
+        loss = loss_function(logits, targets, loss_mask, pos_idx, loss_fn=kl_div_loss)
         assert loss.item() == pytest.approx(0.0, abs=1e-4)
 
     def test_no_decay_equals_masked_mean(self):
@@ -125,10 +137,8 @@ class TestReverseKLDivLoss:
         )
 
     def test_resolve_rkl(self):
-        """resolve_loss_config wires 'rkl' to the fused-or-eager dispatcher."""
-        assert (
-            resolve_loss_config("rkl")["rkl"][0] is reverse_kl_div_loss_fused_or_eager
-        )
+        """resolve_loss_config wires 'rkl' to the fused implementation."""
+        assert resolve_loss_config("rkl")["rkl"][0] is losses.reverse_kl_div_loss
 
 
 class TestJSDivLoss:
@@ -178,8 +188,8 @@ class TestJSDivLoss:
         assert torch.allclose(out, expected, atol=1e-5)
 
     def test_resolve_jsd(self):
-        """resolve_loss_config wires 'jsd' to the fused-or-eager dispatcher."""
-        assert resolve_loss_config("jsd")["jsd"][0] is js_div_loss_fused_or_eager
+        """resolve_loss_config wires 'jsd' to the fused implementation."""
+        assert resolve_loss_config("jsd")["jsd"][0] is losses.js_div_loss
 
 
 class TestTVLoss:
@@ -206,11 +216,8 @@ class TestTVLoss:
         assert (out <= 1).all()
 
     def test_resolve_tv(self):
-        """resolve_loss_config wires 'tv' to the fused-or-eager dispatcher.
-
-        Fused-vs-eager equivalence for every loss lives in test_fused_losses.py.
-        """
-        assert resolve_loss_config("tv")["tv"][0] is tv_loss_fused_or_eager
+        """resolve_loss_config wires 'tv' to the fused implementation."""
+        assert resolve_loss_config("tv")["tv"][0] is losses.tv_loss
 
 
 class TestNegLogAcceptanceLoss:
@@ -253,8 +260,8 @@ class TestNegLogAcceptanceLoss:
         assert torch.isfinite(neg_log_acceptance_loss(logits, targets)).all()
 
     def test_resolve_nla(self):
-        """resolve_loss_config wires 'nla' to the fused-or-eager dispatcher."""
-        assert resolve_loss_config("nla")["nla"][0] is nla_loss_fused_or_eager
+        """resolve_loss_config wires 'nla' to the fused implementation."""
+        assert resolve_loss_config("nla")["nla"][0] is losses.neg_log_acceptance_loss
 
 
 class TestLKHybridLoss:
@@ -312,11 +319,8 @@ class TestLKHybridLoss:
         assert not torch.allclose(g_detached, g_nodetach, atol=1e-4)
 
     def test_resolve_lk_hybrid(self):
-        """resolve_loss_config wires 'lk_hybrid' to the fused-or-eager dispatcher."""
-        assert (
-            resolve_loss_config("lk_hybrid")["lk_hybrid"][0]
-            is lk_hybrid_loss_fused_or_eager
-        )
+        """resolve_loss_config wires 'lk_hybrid' to the fused implementation."""
+        assert resolve_loss_config("lk_hybrid")["lk_hybrid"][0] is losses.lk_hybrid_loss
 
 
 class TestComputeAccuracySingleStep:

@@ -1,6 +1,6 @@
 """Fused Triton kernels for the dense draft/target logit losses.
 
-One kernel pair serves every loss in ``losses.utils._LOSS_FN_MAP``: forward
+One kernel pair serves every fused loss configured in ``losses.utils``: forward
 streams the selected reduction from online-softmax statistics; backward
 recomputes probabilities from five saved scalars per row and applies the
 closed-form gradient. No ``[T, V]`` intermediate is ever materialized or
@@ -162,7 +162,7 @@ def loss_forward_kernel(  # noqa: C901 -- constexpr OP branches, pruned per inst
                 acc += tl.sum(tl.where(mask, tl.minimum(dp, tp), 0.0))
                 extra += tl.sum(tl.where(mask & (dp <= tp), dp, 0.0))
 
-        # noqa-ed: `in`/merged compares aren't constexpr-foldable Triton syntax
+        # Lint exemptions: `in`/merged compares aren't constexpr-foldable here.
         if OP == _OP_KL or OP == _OP_RKL:  # noqa: PLR1714, SIM109
             tl.store(loss_ptr + pid, acc)
             tl.store(stats_ptr + 4 * stats_row + pid, acc)

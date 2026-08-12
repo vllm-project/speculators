@@ -277,7 +277,9 @@ class PEagleDraftModel(Eagle3DraftModel):
         Returns:
             Tuple of (train_call_kwargs, val_call_kwargs)
         """
-        loss_config = resolve_loss_config(kwargs["loss_fn"])
+        loss_config = resolve_loss_config(
+            kwargs["loss_fn"], kwargs.get("loss_implementation", "fused")
+        )
         max_anchors = kwargs.get("max_anchors")
         num_depths = kwargs.get("num_depths", 8)
         down_sample_ratio = kwargs.get("down_sample_ratio", 0.7)

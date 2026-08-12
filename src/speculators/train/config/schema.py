@@ -295,6 +295,11 @@ class GenerationArgs(_Group):
 
 
 class LossArgs(_Group):
+    loss_implementation: Literal["fused", "eager"] = Field(
+        default="fused",
+        description="Loss implementation to use; eager is for compatibility and "
+        "numerical validation and may OOM with DFlash or DSpark.",
+    )
     loss_fn: str | None = Field(
         default=None,
         description="Loss function specification. A name (kl_div, rkl, jsd, ce, tv, "

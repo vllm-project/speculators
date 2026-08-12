@@ -7,11 +7,11 @@ import torch
 from speculators.losses import (
     LossConfig,
     compound_loss,
-    kl_div_loss_fused_or_eager,
+    kl_div_loss,
 )
 from speculators.models.metrics import compute_accuracy_multi_step
 
-_DEFAULT_LOSS_CONFIG: LossConfig = {"kl_div": (kl_div_loss_fused_or_eager, 1.0)}
+_DEFAULT_LOSS_CONFIG: LossConfig = {"kl_div": (kl_div_loss, 1.0)}
 
 
 def compute_metrics(

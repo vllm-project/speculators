@@ -113,84 +113,99 @@ def dpace_loss_decay(
     return weight.reshape(1, -1)
 
 
-# Fused Triton losses run on CUDA/ROCm (a few scalars per row instead of fp32
-# [T, V] intermediates; see losses/fused.py); everything else -- CPU,
-# NPUs without a Triton backend -- falls back to the eager losses above. The
-# import is lazy so this module works without Triton installed.
-
-
 @cache
 def _fused_kernel(name: str):
-    """Import and cache a fused loss by name; ``None`` if Triton is unavailable."""
+    """Import and cache a fused loss by name."""
     try:
         from speculators.losses import fused as mod  # noqa: PLC0415
-    except ImportError:
-        return None
+    except ImportError as error:
+        raise RuntimeError(
+            "Fused losses require Triton; use --loss-implementation eager for "
+            "compatibility testing."
+        ) from error
     return getattr(mod, name)
 
 
-def _fused_or_eager(
-    fused_name: str,
-    eager_fn: Callable[[torch.Tensor, torch.Tensor], torch.Tensor],
-) -> Callable[[torch.Tensor, torch.Tensor], torch.Tensor]:
-    """Dispatch to the fused Triton twin on CUDA/ROCm, else run *eager_fn*.
-
-    Fused backward returns no target gradient, so differentiable targets also
-    fall back to eager (training targets come from a no-grad verifier).
-    """
-
-    def loss_fn(logits: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
-        if logits.is_cuda and not targets.requires_grad:
-            fused = _fused_kernel(fused_name)
-            if fused is not None:
-                return fused(logits, targets)
-        return eager_fn(logits, targets)
-
-    loss_fn.__name__ = f"{eager_fn.__name__}_fused_or_eager"
-    return loss_fn
+def kl_div_loss(logits: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
+    return _fused_kernel("fused_kl_div_loss")(logits, targets)
 
 
-kl_div_loss_fused_or_eager = _fused_or_eager("fused_kl_div_loss", eager.kl_div_loss)
-reverse_kl_div_loss_fused_or_eager = _fused_or_eager(
-    "fused_reverse_kl_div_loss", eager.reverse_kl_div_loss
-)
-js_div_loss_fused_or_eager = _fused_or_eager("fused_js_div_loss", eager.js_div_loss)
-ce_loss_fused_or_eager = _fused_or_eager("fused_ce_loss", eager.ce_loss)
-tv_loss_fused_or_eager = _fused_or_eager("fused_tv_loss", eager.tv_loss)
-nla_loss_fused_or_eager = _fused_or_eager(
-    "fused_nla_loss", eager.neg_log_acceptance_loss
-)
-lk_hybrid_loss_fused_or_eager = _fused_or_eager(
-    "fused_lk_hybrid_loss", eager.lk_hybrid_loss
-)
+def reverse_kl_div_loss(logits: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
+    return _fused_kernel("fused_reverse_kl_div_loss")(logits, targets)
 
 
-_LOSS_FN_MAP: dict[str, Callable[[torch.Tensor, torch.Tensor], torch.Tensor]] = {
-    "kl_div": kl_div_loss_fused_or_eager,
-    "rkl": reverse_kl_div_loss_fused_or_eager,
-    "jsd": js_div_loss_fused_or_eager,
-    "ce": ce_loss_fused_or_eager,
-    "tv": tv_loss_fused_or_eager,
-    "nla": nla_loss_fused_or_eager,
-    "lk_hybrid": lk_hybrid_loss_fused_or_eager,
+def js_div_loss(logits: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
+    return _fused_kernel("fused_js_div_loss")(logits, targets)
+
+
+def ce_loss(logits: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
+    return _fused_kernel("fused_ce_loss")(logits, targets)
+
+
+def tv_loss(logits: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
+    return _fused_kernel("fused_tv_loss")(logits, targets)
+
+
+def neg_log_acceptance_loss(
+    logits: torch.Tensor, targets: torch.Tensor
+) -> torch.Tensor:
+    return _fused_kernel("fused_nla_loss")(logits, targets)
+
+
+def lk_hybrid_loss(
+    logits: torch.Tensor, targets: torch.Tensor, eta: float = 3.0
+) -> torch.Tensor:
+    return _fused_kernel("fused_lk_hybrid_loss")(logits, targets, eta=eta)
+
+
+_FUSED_LOSS_FN_MAP: dict[str, Callable[[torch.Tensor, torch.Tensor], torch.Tensor]] = {
+    "kl_div": kl_div_loss,
+    "rkl": reverse_kl_div_loss,
+    "jsd": js_div_loss,
+    "ce": ce_loss,
+    "tv": tv_loss,
+    "nla": neg_log_acceptance_loss,
+    "lk_hybrid": lk_hybrid_loss,
 }
 
 
-def resolve_loss_config(spec: str) -> LossConfig:
+_EAGER_LOSS_FN_MAP: dict[str, Callable[[torch.Tensor, torch.Tensor], torch.Tensor]] = {
+    "kl_div": eager.kl_div_loss,
+    "rkl": eager.reverse_kl_div_loss,
+    "jsd": eager.js_div_loss,
+    "ce": eager.ce_loss,
+    "tv": eager.tv_loss,
+    "nla": eager.neg_log_acceptance_loss,
+    "lk_hybrid": eager.lk_hybrid_loss,
+}
+
+
+_LOSS_FN_MAPS = {"fused": _FUSED_LOSS_FN_MAP, "eager": _EAGER_LOSS_FN_MAP}
+
+
+def resolve_loss_config(spec: str, implementation: str = "fused") -> LossConfig:
     """Parse a loss spec into ``{name: (loss_fn, weight)}``.
 
     Accepts either a plain loss name (``"kl_div"``) or a JSON dict mapping
     loss names to weights (``'{"ce": 0.1, "tv": 0.9}'``).
     """
-    if spec in _LOSS_FN_MAP:
-        return {spec: (_LOSS_FN_MAP[spec], 1.0)}
+    try:
+        loss_fn_map = _LOSS_FN_MAPS[implementation]
+    except KeyError:
+        raise ValueError(
+            f"Unknown loss implementation '{implementation}'. Choose from: "
+            f"{sorted(_LOSS_FN_MAPS)}"
+        ) from None
+
+    if spec in loss_fn_map:
+        return {spec: (loss_fn_map[spec], 1.0)}
 
     try:
         parsed = json.loads(spec)
     except json.JSONDecodeError:
         raise ValueError(
             f"Unknown loss function '{spec}'. Pass a known name "
-            f"({sorted(_LOSS_FN_MAP.keys())}) or a JSON dict, "
+            f"({sorted(loss_fn_map)}) or a JSON dict, "
             f'e.g. \'{{"ce": 0.1, "tv": 0.9}}\'.'
         ) from None
 
@@ -202,17 +217,17 @@ def resolve_loss_config(spec: str) -> LossConfig:
 
     config: LossConfig = {}
     for name, weight in parsed.items():
-        if name not in _LOSS_FN_MAP:
+        if name not in loss_fn_map:
             raise ValueError(
                 f"Unknown loss function '{name}' in loss config. "
-                f"Choose from: {sorted(_LOSS_FN_MAP.keys())}"
+                f"Choose from: {sorted(loss_fn_map)}"
             )
         if not isinstance(weight, (int, float)):
             raise ValueError(
                 f"Loss weight for '{name}' must be a number, "
                 f"got {type(weight).__name__}"
             )
-        config[name] = (_LOSS_FN_MAP[name], float(weight))
+        config[name] = (loss_fn_map[name], float(weight))
 
     return config
 
@@ -258,7 +273,7 @@ def loss_function(
     targets: torch.Tensor,  # shape: [1, seq_len, draft_vocab_size]
     loss_mask: torch.Tensor,  # shape: [1, seq_len]
     pos_idx: torch.Tensor,  # shape: [1, seq_len]
-    loss_fn: Callable[[torch.Tensor, torch.Tensor], torch.Tensor] = eager.kl_div_loss,
+    loss_fn: Callable[[torch.Tensor, torch.Tensor], torch.Tensor] = kl_div_loss,
     decay_fn: Callable[..., torch.Tensor] | None = None,
 ):
     """Compute masked, optionally position-decayed training loss.

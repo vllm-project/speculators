@@ -8,7 +8,7 @@ from speculators.losses import (
     LossConfig,
     compound_loss,
     exp_loss_decay,
-    kl_div_loss_fused_or_eager,
+    kl_div_loss,
 )
 from speculators.models.metrics import compute_accuracy_single_step
 
@@ -75,7 +75,7 @@ def compute_metrics(
         Loss value and metrics dictionary.
     """
     if loss_config is None:
-        loss_config = {"kl_div": (kl_div_loss_fused_or_eager, 1.0)}
+        loss_config = {"kl_div": (kl_div_loss, 1.0)}
     s_logits, s_targets, s_loss_mask, s_prev_correct = align_for_step(
         logits, targets, loss_mask, prev_correct, ttt_step
     )

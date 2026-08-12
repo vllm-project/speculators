@@ -1,11 +1,15 @@
 """Unit tests for the DSpark loss and metrics."""
 
+from functools import partial
+
 import torch
 
 from speculators.losses import resolve_loss_config
-from speculators.models.dspark.metrics import compute_metrics
+from speculators.losses.eager import tv_loss
+from speculators.models.dspark.metrics import compute_metrics as _compute_metrics
 
-_DEFAULT_LOSS = resolve_loss_config('{"ce": 0.1, "tv": 0.9}')
+compute_metrics = partial(_compute_metrics, tv_loss_fn=tv_loss)
+_DEFAULT_LOSS = resolve_loss_config('{"ce": 0.1, "tv": 0.9}', "eager")
 
 
 def _ids_to_logits(ids: torch.Tensor, vocab_size: int) -> torch.Tensor:
@@ -164,7 +168,7 @@ class TestComputeMetrics:
             None,
             loss_mask,
             block_size=2,
-            loss_config=resolve_loss_config('{"tv": 0.1}'),
+            loss_config=resolve_loss_config('{"tv": 0.1}', "eager"),
         )
         loss_large, _ = compute_metrics(
             logits,
@@ -172,7 +176,7 @@ class TestComputeMetrics:
             None,
             loss_mask,
             block_size=2,
-            loss_config=resolve_loss_config('{"tv": 1.0}'),
+            loss_config=resolve_loss_config('{"tv": 1.0}', "eager"),
         )
         assert float(loss_large) > float(loss_small)
 

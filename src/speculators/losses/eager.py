@@ -1,5 +1,5 @@
-"""Reference losses for validation and compatibility; DFlash and DSpark can
-easily OOM with eager implementations."""
+"""Reference losses for numerical validation and explicit compatibility testing;
+DFlash and DSpark can easily OOM with eager loss implementations."""
 
 import math
 

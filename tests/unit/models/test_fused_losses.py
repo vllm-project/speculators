@@ -126,16 +126,13 @@ def test_compiles_fullgraph(name, eager_fn, fused_name):
     assert torch.isfinite(logits.grad).all()
 
 
-def test_dispatcher_falls_back_to_eager_for_differentiable_targets():
-    """Fused kernels return no target gradient, so the dispatcher must take the
-    eager path when targets require grad. (ce excluded: argmax gives no target
-    gradient on either path.)
-    """
+def test_eager_implementation_supports_differentiable_targets():
+    """The explicit eager implementation preserves target gradients."""
     torch.manual_seed(3)
-    device = "cuda" if torch.cuda.is_available() else "cpu"
     for name in ("kl_div", "rkl", "jsd", "tv", "nla", "lk_hybrid"):
-        logits = torch.randn(1, 4, 64, device=device, requires_grad=True)
-        targets = torch.randn(1, 4, 64, device=device, requires_grad=True)
-        resolve_loss_config(name)[name][0](logits, targets).sum().backward()
+        logits = torch.randn(1, 4, 64, requires_grad=True)
+        targets = torch.randn(1, 4, 64, requires_grad=True)
+        loss_fn = resolve_loss_config(name, "eager")[name][0]
+        loss_fn(logits, targets).sum().backward()
         assert logits.grad is not None, name
-        assert targets.grad is not None, name  # only the eager path produces this
+        assert targets.grad is not None, name
