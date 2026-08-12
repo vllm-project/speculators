@@ -235,8 +235,10 @@ def loss_backward_kernel(
 
 
 class _FusedLoss(torch.autograd.Function):
-    """Shared autograd wrapper; ``op`` picks the kernel reduction. Targets get
-    no gradient -- dispatchers route here only when targets don't require grad.
+    """Shared autograd wrapper; ``op`` selects the loss reduction.
+
+    Targets intentionally receive no gradient; use the eager implementation when
+    target gradients are required.
     """
 
     @staticmethod
@@ -285,7 +287,7 @@ class _FusedLoss(torch.autograd.Function):
         return grad_in.view(B, T, V), None, None
 
 
-_EPS = 1e-5  # matches models/metrics.py neg_log_acceptance_loss
+_NLA_EPS = 1e-5
 
 
 def fused_kl_div_loss(logits, targets):
@@ -315,7 +317,7 @@ def fused_tv_loss(logits, targets):
 
 def fused_nla_loss(logits, targets):
     """Per-position negative-log-acceptance ``[1, T] = -log(alpha)``; composes on TV."""
-    return -torch.log((1.0 - fused_tv_loss(logits, targets)).clamp_min(_EPS))
+    return -torch.log((1.0 - fused_tv_loss(logits, targets)).clamp_min(_NLA_EPS))
 
 
 def fused_lk_hybrid_loss(logits, targets, eta: float = 3.0):

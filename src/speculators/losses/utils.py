@@ -2,13 +2,12 @@
 
 import json
 from collections.abc import Callable
-from functools import cache
 
 import torch
 
 from speculators.losses import eager
 
-_EPS = 1e-5
+_LOSS_REDUCTION_EPS = 1e-5
 
 LossConfig = dict[
     str, tuple[Callable[[torch.Tensor, torch.Tensor], torch.Tensor], float]
@@ -113,9 +112,8 @@ def dpace_loss_decay(
     return weight.reshape(1, -1)
 
 
-@cache
 def _fused_kernel(name: str):
-    """Import and cache a fused loss by name."""
+    """Import a fused loss by name."""
     try:
         from speculators.losses import fused as mod  # noqa: PLC0415
     except ImportError as error:
@@ -300,7 +298,7 @@ def loss_function(
         )
         elementwise_loss = elementwise_loss * decay_mult
 
-    denominator = loss_mask.sum(dim=1) + _EPS
+    denominator = loss_mask.sum(dim=1) + _LOSS_REDUCTION_EPS
 
     batch_loss = torch.sum(elementwise_loss, dim=1) / denominator  # shape: [1]
     return batch_loss.mean()  # shape: []

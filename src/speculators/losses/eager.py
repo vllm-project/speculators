@@ -5,7 +5,7 @@ import math
 
 import torch
 
-_EPS = 1e-5
+_NLA_EPS = 1e-5
 
 
 def kl_div_loss(
@@ -166,7 +166,7 @@ def neg_log_acceptance_loss(
     draft_p = torch.nn.functional.softmax(logits, dim=-1, dtype=torch.float32)
     target_p = torch.nn.functional.softmax(targets, dim=-1, dtype=torch.float32)
     overlap = torch.minimum(draft_p, target_p).sum(dim=-1)  # alpha, shape: [1, seq_len]
-    elementwise_loss = -torch.log(overlap.clamp_min(_EPS))
+    elementwise_loss = -torch.log(overlap.clamp_min(_NLA_EPS))
 
     return elementwise_loss  # noqa: RET504
 
