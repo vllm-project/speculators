@@ -129,16 +129,19 @@ def _atomic_write(dest: Path, content: str) -> None:
 def _save_speculators_patch(save_dir: Path, repo_root: Path | None, sha: str) -> None:
     if repo_root is None:
         return
-    diff = subprocess.run(
-        ["git", "diff", "HEAD"],  # noqa: S607
-        capture_output=True,
-        text=True,
-        cwd=repo_root,
-        timeout=30,
-        check=False,
-    ).stdout.strip()
-    content = f"# repo: {repo_root} ({sha})\n{diff}"
-    _atomic_write(save_dir / "speculators.patch", content)
+    try:
+        diff = subprocess.run(
+            ["git", "diff", "HEAD"],  # noqa: S607
+            capture_output=True,
+            text=True,
+            cwd=repo_root,
+            timeout=30,
+            check=False,
+        ).stdout.strip()
+        content = f"# repo: {repo_root} ({sha})\n{diff}"
+        _atomic_write(save_dir / "speculators.patch", content)
+    except (OSError, subprocess.TimeoutExpired):
+        logger.warning("Failed to save speculators.patch", exc_info=True)
 
 
 def save_train_command(save_path: str, argv: list[str] | None = None) -> None:
