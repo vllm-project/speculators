@@ -1,5 +1,6 @@
 """Unit tests for DFlashConverter config building and weight remapping."""
 
+import logging
 from unittest.mock import patch
 
 import pytest
@@ -186,9 +187,7 @@ class TestRemapWeights:
 
         remapped = DFlashConverter()._remap_weights(weights, config, model)
         assert remapped["fc.weight"].shape[1] == model.fc.in_features
-        assert torch.equal(
-            remapped["fc.weight"], wide_fc[:, : model.fc.in_features]
-        )
+        assert torch.equal(remapped["fc.weight"], wide_fc[:, : model.fc.in_features])
 
     def test_passthrough_when_no_fused_qkv(self):
         config = _tiny_dflash_config()
@@ -204,6 +203,45 @@ class TestRemapWeights:
         remapped = DFlashConverter()._remap_weights(weights, config, model)
         assert "layers.0.self_attn.o_proj.weight" in remapped
         assert "norm.weight" in remapped
+
+    def test_mixed_fused_and_separate_qkv_raises(self):
+        config = _tiny_dflash_config()
+        model = DFlashDraftModel(config=config)
+        weights = self._make_fused_weights()
+        weights["layers.0.self_attn.q_proj.weight"] = torch.randn(_Q_DIM, _HIDDEN)
+        with pytest.raises(ValueError, match="both fused qkv_proj and separate"):
+            DFlashConverter()._remap_weights(weights, config, model)
+
+
+class TestRopeParameters:
+    _ROPE_SLIDING = {
+        "rope_type": "default",
+        "rope_theta": 10000.0,
+    }
+
+    def test_nested_rope_params_warns_with_full_attn(self, caplog):
+        config = _tiny_dflash_config()
+        tl = config.transformer_layer_config
+        tl.layer_types = ["full_attention"]
+        tl.rope_parameters = {
+            "sliding_attention": dict(self._ROPE_SLIDING),
+            "full_attention": {"rope_type": "default", "rope_theta": 1000000.0},
+        }
+        with caplog.at_level(logging.WARNING, logger="speculators.models.dflash.core"):
+            DFlashDraftModel(config=config)
+        assert any("full-attention layer" in r.message for r in caplog.records)
+
+    def test_nested_rope_params_no_warn_all_sliding(self, caplog):
+        config = _tiny_dflash_config()
+        tl = config.transformer_layer_config
+        tl.layer_types = ["sliding_attention"]
+        tl.sliding_window = 512
+        tl.rope_parameters = {
+            "sliding_attention": dict(self._ROPE_SLIDING),
+        }
+        with caplog.at_level(logging.WARNING, logger="speculators.models.dflash.core"):
+            DFlashDraftModel(config=config)
+        assert not any("full-attention layer" in r.message for r in caplog.records)
 
 
 class TestSave:

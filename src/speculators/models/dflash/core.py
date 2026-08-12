@@ -99,7 +99,13 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
         rotary_config = config.transformer_layer_config
         rope_params = getattr(rotary_config, "rope_parameters", None)
         if rope_params and "sliding_attention" in rope_params:
-            # Flatten nested rope_parameters to the sliding_attention variant.
+            if self.uses_full_attn:
+                logger.warning(
+                    "Flattening nested rope_parameters to the sliding_attention "
+                    "variant, but this model has %d full-attention layer(s). "
+                    "Full-attention layers may use incorrect rope scaling.",
+                    num_draft_layers - len(self.sliding_window_indices),
+                )
             rotary_config = deepcopy(rotary_config)
             rotary_config.rope_parameters = rope_params["sliding_attention"]
         self.rotary_emb = Qwen3RotaryEmbedding(rotary_config)  # type: ignore[arg-type]

@@ -173,10 +173,20 @@ class DFlashConverter:
 
         for key, tensor in weights.items():
             if "qkv_proj" in key:
+                projection_keys = [
+                    key.replace("qkv_proj", proj)
+                    for proj in ("q_proj", "k_proj", "v_proj")
+                ]
+                conflicts = [pk for pk in projection_keys if pk in weights]
+                if conflicts:
+                    raise ValueError(
+                        f"Checkpoint contains both fused qkv_proj and separate "
+                        f"projection keys: {conflicts}"
+                    )
                 q, k, v = tensor.split([q_dim, kv_dim, kv_dim], dim=0)
-                remapped[key.replace("qkv_proj", "q_proj")] = q
-                remapped[key.replace("qkv_proj", "k_proj")] = k
-                remapped[key.replace("qkv_proj", "v_proj")] = v
+                remapped[projection_keys[0]] = q
+                remapped[projection_keys[1]] = k
+                remapped[projection_keys[2]] = v
             elif ".g_proj." in key or key.startswith("aux_hidden_norms."):
                 dropped.append(key)
             elif key == "fc.weight":
