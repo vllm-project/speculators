@@ -3,7 +3,7 @@
 # DSpark draft training: 4 DDP ranks on one node, consuming hidden states from
 # the extractor through Mooncake.
 #
-# Required: MOONCAKE_MASTER, VLLM_ENDPOINT
+# Required: MOONCAKE_MASTER, VLLM_ENDPOINT, FABRIC_SUBNET
 
 set -euo pipefail
 
@@ -17,7 +17,8 @@ run_dir="${RUN_DIR:-$repo_root/runs/kimi_k3_dspark/$run_name}"
 mooncake_master="${MOONCAKE_MASTER:?MOONCAKE_MASTER is required}"
 vllm_endpoint="${VLLM_ENDPOINT:?VLLM_ENDPOINT is required}"
 
-fabric_iface="$(ip -o -4 addr show | awk '$4 ~ /^10\.13\.84\./ {print $2; exit}')"
+fabric_subnet="${FABRIC_SUBNET:?FABRIC_SUBNET is required}"
+fabric_iface="$(ip -o -4 addr show | awk -v s="^$fabric_subnet" '$4 ~ s {print $2; exit}')"
 fabric_addr="$(ip -o -4 addr show dev "$fabric_iface" | awk '{sub(/\/.*/, "", $4); print $4; exit}')"
 
 export PYTHONPATH="$repo_root/hs_connectors/src:$repo_root/src${PYTHONPATH:+:$PYTHONPATH}"
