@@ -1,15 +1,19 @@
 import datetime
-import importlib.metadata
 import logging
 import os
 import shlex
-import subprocess
 import sys
-import tempfile
 import warnings
 from pathlib import Path
 
 from speculators.data_generation.preprocessing import get_tokenizer, load_processor
+from speculators.provenance import (
+    atomic_write,
+    find_package_repo,
+    git_diff,
+    git_sha,
+    package_versions,
+)
 
 logger = logging.getLogger("speculators")
 
@@ -100,56 +104,12 @@ def normalize_counted_metrics(
     return metrics
 
 
-def _find_repo_root() -> Path | None:
-    try:
-        d = Path(__file__).resolve().parent
-        while d != d.parent:
-            if (d / ".git").exists():
-                return d
-            d = d.parent
-    except OSError:
-        pass
-    return None
-
-
-def _git_sha(repo_root: Path | None) -> str:
-    try:
-        return subprocess.run(
-            ["git", "rev-parse", "HEAD"],  # noqa: S607
-            capture_output=True,
-            text=True,
-            cwd=repo_root,
-            check=True,
-        ).stdout.strip()
-    except (OSError, subprocess.CalledProcessError):
-        return "unknown"
-
-
-def _atomic_write(dest: Path, content: str) -> None:
-    fd, tmp = tempfile.mkstemp(dir=dest.parent, prefix=f".{dest.name}_", suffix=".tmp")
-    tmp_path = Path(tmp)
-    try:
-        with os.fdopen(fd, "w") as f:
-            f.write(content)
-        tmp_path.replace(dest)
-    finally:
-        if tmp_path.exists():
-            tmp_path.unlink()
-
-
 def _save_speculators_patch(save_dir: Path, repo_root: Path | None, sha: str) -> None:
     if repo_root is None:
         return
-    diff = subprocess.run(
-        ["git", "diff", "HEAD"],  # noqa: S607
-        capture_output=True,
-        text=True,
-        cwd=repo_root,
-        timeout=30,
-        check=False,
-    ).stdout.strip()
+    diff = git_diff(repo_root)
     content = f"# repo: {repo_root} ({sha})\n{diff}"
-    _atomic_write(save_dir / "speculators.patch", content)
+    atomic_write(save_dir / "speculators.patch", content)
 
 
 def save_train_command(save_path: str, argv: list[str] | None = None) -> None:
@@ -159,23 +119,15 @@ def save_train_command(save_path: str, argv: list[str] | None = None) -> None:
     it during resolution); it falls back to the live ``sys.argv`` when a caller has
     no recorded argv, so a direct call is unchanged.
     """
-    repo_root = _find_repo_root()
-    sha = _git_sha(repo_root)
-
-    pkg_versions: list[str] = []
-    for pkg in ("speculators", "vllm", "transformers", "torch", "compressed-tensors"):
-        try:
-            ver = importlib.metadata.version(pkg)
-        except importlib.metadata.PackageNotFoundError:
-            ver = "not installed"
-        pkg_versions.append(f"# {pkg}: {ver}")
+    repo_root = find_package_repo("speculators")
+    sha = git_sha(repo_root)
 
     header = "\n".join(
         [
             f"# Timestamp: {datetime.datetime.now(datetime.timezone.utc).isoformat()}",
             f"# Git SHA: {sha}",
             f"# World size: {os.environ.get('WORLD_SIZE', '1')}",
-            *pkg_versions,
+            *package_versions(),
         ]
     )
 
@@ -184,5 +136,5 @@ def save_train_command(save_path: str, argv: list[str] | None = None) -> None:
 
     path = Path(save_path)
     path.mkdir(parents=True, exist_ok=True)
-    _atomic_write(path / "train_command.txt", content)
+    atomic_write(path / "train_command.txt", content)
     _save_speculators_patch(path, repo_root, sha)

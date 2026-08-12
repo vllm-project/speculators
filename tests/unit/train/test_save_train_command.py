@@ -1,5 +1,4 @@
 import os
-import subprocess
 import sys
 from pathlib import Path
 from unittest.mock import patch
@@ -62,7 +61,7 @@ class TestSaveTrainCommand:
 
     def test_git_sha_fallback_on_error(self, tmp_path: Path):
         with patch(
-            "speculators.train.utils._git_sha",
+            "speculators.train.utils.git_sha",
             return_value="unknown",
         ):
             save_train_command(str(tmp_path))
@@ -114,26 +113,19 @@ class TestSpeculatorsPatch:
 
     def test_no_patch_when_no_repo(self, tmp_path: Path):
         with patch(
-            "speculators.train.utils._find_repo_root",
+            "speculators.train.utils.find_package_repo",
             return_value=None,
         ):
             save_train_command(str(tmp_path))
         assert not (tmp_path / "speculators.patch").exists()
 
-    def test_patch_failure_raises(self, tmp_path: Path):
-        original_run = subprocess.run
-
-        def _fail_on_diff(*args, **kwargs):
-            if "diff" in args[0]:
-                raise OSError("git broke")
-            return original_run(*args, **kwargs)
-
+    def test_write_failure_raises(self, tmp_path: Path):
         with (
             patch(
-                "speculators.train.utils.subprocess.run",
-                side_effect=_fail_on_diff,
+                "speculators.train.utils.atomic_write",
+                side_effect=OSError("disk full"),
             ),
-            pytest.raises(OSError, match="git broke"),
+            pytest.raises(OSError, match="disk full"),
         ):
             save_train_command(str(tmp_path))
 
