@@ -313,6 +313,25 @@ class TensorBoardHandler(logging.Handler):
         Path.mkdir(self.tboard_init_kwargs["log_dir"], parents=True, exist_ok=True)
         return SummaryWriter(**self.tboard_init_kwargs)
 
+    @staticmethod
+    def _scalarise(d: dict) -> dict:
+        """Convert non-scalar values to JSON strings for TensorBoard compatibility.
+
+        TensorBoard's add_hparams only accepts int, float, str, bool, and torch.Tensor.
+        This method converts lists and dicts to JSON strings so all backends can
+        receive the full config.
+
+        Args:
+            d: Dictionary potentially containing non-scalar values
+
+        Returns:
+            Dictionary with all non-scalar values converted to JSON strings
+        """
+        return {
+            k: (json.dumps(v) if isinstance(v, (list, dict)) else v)
+            for k, v in d.items()
+        }
+
     def emit(self, record: logging.LogRecord):
         """Emit a log record to TensorBoard.
 
@@ -339,8 +358,10 @@ class TensorBoardHandler(logging.Handler):
         flat_dict = _flatten_dict(record.msg)
         step = getattr(record, "step", None)
         if getattr(record, "hparams", None):
+            # Convert non-scalar values to JSON strings for TensorBoard compatibility
+            scalarised_dict = self._scalarise(flat_dict)
             self._tboard_writer.add_hparams(
-                flat_dict, {}, run_name=".", global_step=step
+                scalarised_dict, {}, run_name=".", global_step=step
             )
             return
 
