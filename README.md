@@ -75,7 +75,7 @@ The following table summarizes the models that have been trained end-to-end by o
 </thead>
 <tbody>
 <tr>
-<td rowspan="3">Llama</td>
+<td rowspan="2">Llama</td>
 <td>8B-Instruct</td>
 <td><a href="https://huggingface.co/RedHatAI/Llama-3.1-8B-Instruct-speculator.eagle3">EAGLE-3</a> ✅</td>
 <td>✅</td>
@@ -84,8 +84,6 @@ The following table summarizes the models that have been trained end-to-end by o
 <td>70B-Instruct</td>
 <td><a href="https://huggingface.co/RedHatAI/Llama-3.3-70B-Instruct-speculator.eagle3">EAGLE-3</a> ✅</td>
 <td>✅</td>
-</tr>
-<tr>
 </tr>
 <tr>
 <td rowspan="3">Qwen3</td>
@@ -145,6 +143,7 @@ The following table summarizes the models that have been trained end-to-end by o
     </a> ✅</td>
   <td>✅</td>
 </tr>
+<tr>
 <td>Qwen3-VL</td>
 <td>235B-A22B</td>
 <td><a href="https://huggingface.co/RedHatAI/Qwen3-VL-235B-A22B-Instruct-speculator.eagle3">
