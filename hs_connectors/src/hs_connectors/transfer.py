@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import dataclasses
 import fcntl
 import os
 import shutil
+import socket
 import time
 from abc import ABC, abstractmethod
 from pathlib import Path
@@ -13,13 +15,15 @@ from typing import TYPE_CHECKING, Any, ClassVar
 import torch
 from safetensors.torch import load_file
 
+from hs_connectors.mooncake_store import MooncakeHiddenStatesStore, MooncakeStoreConfig
+
 if TYPE_CHECKING:
     import argparse
     from collections.abc import Callable
 
 
 def wait_for_lock(lock_path: str, timeout: float = 10.0, poll_interval: float = 0.1):
-    fd = os.open(lock_path, os.O_RDONLY)
+    fd = os.open(lock_path, os.O_RDWR)
     try:
         deadline = time.monotonic() + timeout
         while True:
@@ -195,5 +199,110 @@ class FileBackend(HiddenStatesBackend):
             "kv_role": "kv_producer",
             "kv_connector_extra_config": {
                 "shared_storage_path": args.hidden_states_path,
+            },
+        }
+
+
+# ---------------------------------------------------------------------------
+# Mooncake-based backend (distributed store)
+# ---------------------------------------------------------------------------
+
+
+class MooncakeTransfer(HiddenStatesTransfer):
+    """Mooncake distributed store based hidden-states transfer."""
+
+    def __init__(self, store: MooncakeHiddenStatesStore):
+        self.store = store
+
+    def setup(self) -> None:
+        if not self.store.is_setup:
+            self.store.setup()
+
+    def get_cached(self, file_idx: int) -> dict[str, torch.Tensor] | None:  # noqa: ARG002
+        return None
+
+    def get_generated(self, handle: str) -> dict[str, torch.Tensor] | None:
+        return self.store.get_sample(handle)
+
+    def delete(self, handle: str) -> None:
+        self.store.delete_sample(handle)
+
+
+@HiddenStatesBackend.register("mooncake")
+class MooncakeBackend(HiddenStatesBackend):
+    """Mooncake distributed store backend (no shared filesystem required)."""
+
+    @staticmethod
+    def _add_mooncake_args(parser: argparse.ArgumentParser) -> None:
+        parser.add_argument(
+            "--mooncake-master",
+            type=str,
+            default="127.0.0.1:50051",
+            help="Mooncake master server address. Used with backend=mooncake.",
+        )
+        parser.add_argument(
+            "--mooncake-metadata-server",
+            type=str,
+            default="P2PHANDSHAKE",
+            help=(
+                "Mooncake metadata server (or P2PHANDSHAKE). "
+                "Used with backend=mooncake."
+            ),
+        )
+        parser.add_argument(
+            "--mooncake-protocol",
+            choices=["tcp", "rdma"],
+            default="tcp",
+            help="Mooncake transport protocol. Used with backend=mooncake.",
+        )
+
+    @staticmethod
+    def add_train_args(parser: argparse.ArgumentParser) -> None:
+        MooncakeBackend._add_mooncake_args(parser)
+
+    @staticmethod
+    def add_launch_args(parser: argparse.ArgumentParser) -> None:
+        MooncakeBackend._add_mooncake_args(parser)
+
+    @staticmethod
+    def from_train_args(
+        args: argparse.Namespace,
+        data_path: str,  # noqa: ARG004
+    ) -> MooncakeTransfer:
+        local_hostname = os.environ.get(
+            "MOONCAKE_LOCAL_HOSTNAME"
+        ) or socket.gethostbyname(socket.gethostname())
+
+        store = MooncakeHiddenStatesStore(
+            MooncakeStoreConfig(
+                local_hostname=local_hostname,
+                metadata_server=args.mooncake_metadata_server,
+                master_server_address=args.mooncake_master,
+                protocol=args.mooncake_protocol,
+            )
+        )
+        return MooncakeTransfer(store)
+
+    @staticmethod
+    def build_kv_transfer_config(args: argparse.Namespace) -> dict[str, Any]:
+        local_hostname = os.environ.get(
+            "MOONCAKE_LOCAL_HOSTNAME"
+        ) or socket.gethostbyname(socket.gethostname())
+
+        mooncake_cfg = MooncakeStoreConfig(
+            local_hostname=local_hostname,
+            metadata_server=args.mooncake_metadata_server,
+            master_server_address=args.mooncake_master,
+            protocol=args.mooncake_protocol,
+        )
+
+        return {
+            "kv_connector": "MooncakeHiddenStatesConnector",
+            "kv_role": "kv_producer",
+            "kv_connector_module_path": (
+                "hs_connectors.mooncake_hidden_states_connector"
+            ),
+            "kv_connector_extra_config": {
+                "mooncake": dataclasses.asdict(mooncake_cfg),
             },
         }
