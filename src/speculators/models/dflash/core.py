@@ -1,5 +1,4 @@
 import logging
-from copy import deepcopy
 from typing import ClassVar
 
 import torch
@@ -22,7 +21,11 @@ from speculators.models.dflash.utils import (
     select_anchors,
 )
 from speculators.models.metrics import LossConfig, resolve_loss_config
-from speculators.models.utils import conditional_torch_compile, resolve_target_layer_ids
+from speculators.models.utils import (
+    conditional_torch_compile,
+    flatten_rope_parameters,
+    resolve_target_layer_ids,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -96,12 +99,7 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
             config.transformer_layer_config.hidden_size,
             eps=config.transformer_layer_config.rms_norm_eps,  # type: ignore[arg-type]
         )
-        rotary_config = config.transformer_layer_config
-        rope_params = getattr(rotary_config, "rope_parameters", None)
-        if rope_params and "sliding_attention" in rope_params:
-            # Flatten nested rope_parameters to the sliding_attention variant.
-            rotary_config = deepcopy(rotary_config)
-            rotary_config.rope_parameters = rope_params["sliding_attention"]
+        rotary_config = flatten_rope_parameters(config.transformer_layer_config)
         self.rotary_emb = Qwen3RotaryEmbedding(rotary_config)  # type: ignore[arg-type]
 
         self.fc = nn.Linear(
