@@ -171,7 +171,7 @@ def parse_args():
     _add_shared_args(eval_parser)
 
     argv = sys.argv[1:]
-    if argv and argv[0] not in _SUBCOMMANDS and not argv[0].startswith("-"):
+    if not argv or (argv[0] not in _SUBCOMMANDS and not argv[0].startswith("-")):
         argv = ["train", *argv]
     return parser.parse_known_args(argv)
 
