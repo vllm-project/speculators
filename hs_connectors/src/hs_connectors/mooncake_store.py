@@ -204,18 +204,13 @@ class MooncakeHiddenStatesStore:
             return
         try:
             manifest = json.loads(raw)
-            names = (
-                list(manifest)
-                if isinstance(manifest, list)  # legacy manifest
-                else list(manifest.get("tensors", {}))
-            )
+            names = list(manifest.get("tensors", {}))
         except (UnicodeDecodeError, json.JSONDecodeError, AttributeError, TypeError):
-            # The current payload contract has these two tensor names. Removing them
-            # explicitly also lets retry cleanup recover from a corrupt manifest.
             names = ["hidden_states", "token_ids"]
         keys_to_remove = [f"{key}:{name}" for name in names] + [f"{key}:meta"]
-        result = self._store.batch_remove(keys_to_remove, force=True)
-        _check_store_result("batch_remove", key, result)
+        results = self._store.batch_remove(keys_to_remove, force=True)
+        for i, status in enumerate(results):
+            _check_store_result("batch_remove", keys_to_remove[i], status)
 
     def get_sample(
         self, key: str, timeout: float = 120.0, poll_interval: float = 0.05
@@ -237,9 +232,7 @@ class MooncakeHiddenStatesStore:
         return result
 
     @staticmethod
-    def _parse_manifest(
-        key: str, raw_manifest: bytes
-    ) -> dict[str, dict[str, Any] | None]:
+    def _parse_manifest(key: str, raw_manifest: bytes) -> dict[str, dict[str, Any]]:
         try:
             manifest = json.loads(raw_manifest)
         except (UnicodeDecodeError, json.JSONDecodeError) as e:
@@ -247,13 +240,6 @@ class MooncakeHiddenStatesStore:
                 f"Corrupt Mooncake manifest for key={key}: {e}"
             ) from e
 
-        if isinstance(manifest, list):
-            # Backward compatibility with handles produced before checksums were added.
-            if not manifest or not all(isinstance(name, str) for name in manifest):
-                raise MooncakeIntegrityError(
-                    f"Invalid legacy Mooncake manifest for key={key}"
-                )
-            return dict.fromkeys(manifest)
         if not isinstance(manifest, dict):
             raise MooncakeIntegrityError(
                 f"Invalid Mooncake manifest type for key={key}: "
@@ -281,36 +267,32 @@ class MooncakeHiddenStatesStore:
         key: str,
         name: str,
         tensor: torch.Tensor,
-        spec: dict[str, Any] | None,
+        spec: dict[str, Any],
     ) -> None:
-        if spec is not None:
-            if not isinstance(spec, dict):
-                raise MooncakeIntegrityError(
-                    f"Invalid tensor manifest for key={key}:{name}: "
-                    f"expected object, got {type(spec).__name__}"
-                )
-            expected_shape = tuple(spec.get("shape", ()))
-            expected_dtype = spec.get("dtype")
-            if tuple(tensor.shape) != expected_shape:
-                raise MooncakeIntegrityError(
-                    f"Mooncake shape mismatch for key={key}:{name}: "
-                    f"expected={expected_shape}, actual={tuple(tensor.shape)}"
-                )
-            if str(tensor.dtype) != expected_dtype:
-                raise MooncakeIntegrityError(
-                    f"Mooncake dtype mismatch for key={key}:{name}: "
-                    f"expected={expected_dtype}, actual={tensor.dtype}"
-                )
-            expected_checksum = spec.get("checksum")
-            actual_checksum = _tensor_checksum(_cpu_contiguous(tensor))
-            if actual_checksum != expected_checksum:
-                raise MooncakeIntegrityError(
-                    f"Mooncake checksum mismatch for key={key}:{name}: "
-                    f"expected={expected_checksum}, actual={actual_checksum}"
-                )
-        # No finiteness check here: the producer screens on the accelerator and
-        # ``check_hidden_states`` re-checks on the consumer with per-layer
-        # attribution. A pass here would be a third one over the same buffer.
+        if not isinstance(spec, dict):
+            raise MooncakeIntegrityError(
+                f"Invalid tensor manifest for key={key}:{name}: "
+                f"expected object, got {type(spec).__name__}"
+            )
+        expected_shape = tuple(spec.get("shape", ()))
+        expected_dtype = spec.get("dtype")
+        if tuple(tensor.shape) != expected_shape:
+            raise MooncakeIntegrityError(
+                f"Mooncake shape mismatch for key={key}:{name}: "
+                f"expected={expected_shape}, actual={tuple(tensor.shape)}"
+            )
+        if str(tensor.dtype) != expected_dtype:
+            raise MooncakeIntegrityError(
+                f"Mooncake dtype mismatch for key={key}:{name}: "
+                f"expected={expected_dtype}, actual={tensor.dtype}"
+            )
+        expected_checksum = spec.get("checksum")
+        actual_checksum = _tensor_checksum(_cpu_contiguous(tensor))
+        if actual_checksum != expected_checksum:
+            raise MooncakeIntegrityError(
+                f"Mooncake checksum mismatch for key={key}:{name}: "
+                f"expected={expected_checksum}, actual={actual_checksum}"
+            )
 
     def _wait_for(self, key: str, timeout: float, poll_interval: float) -> bytes:
         if self._store is None:
