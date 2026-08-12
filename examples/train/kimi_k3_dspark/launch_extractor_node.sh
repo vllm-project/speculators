@@ -3,7 +3,8 @@
 # One Kimi-K3 extraction node. Run this on both nodes of the TP8 pair, with
 # NODE_RANK=0 on the head and NODE_RANK=1 on the other.
 #
-# Required: NODE_RANK, EXTRACT_ADDR (head node's fabric IP), MOONCAKE_MASTER
+# Required: NODE_RANK, EXTRACT_ADDR (head node's fabric IP), MOONCAKE_MASTER,
+#           FABRIC_SUBNET (prefix of the fast-fabric IPv4 subnet)
 
 set -euo pipefail
 
@@ -18,7 +19,8 @@ mooncake_master="${MOONCAKE_MASTER:?MOONCAKE_MASTER is required}"
 
 # Every rank must bind to the fast fabric, not the management NIC. Different
 # ranks picking different interfaces hang at rendezvous with no error.
-fabric_iface="$(ip -o -4 addr show | awk '$4 ~ /^10\.13\.84\./ {print $2; exit}')"
+fabric_subnet="${FABRIC_SUBNET:?FABRIC_SUBNET is required}"
+fabric_iface="$(ip -o -4 addr show | awk -v s="^$fabric_subnet" '$4 ~ s {print $2; exit}')"
 fabric_addr="$(ip -o -4 addr show dev "$fabric_iface" | awk '{sub(/\/.*/, "", $4); print $4; exit}')"
 
 export PYTHONPATH="$repo_root/hs_connectors/src:$repo_root/src${PYTHONPATH:+:$PYTHONPATH}"

@@ -35,9 +35,11 @@ train_node="${nodes[2]}"
 
 # The extractor head's address on the fast fabric: vLLM's rendezvous point and
 # the host for both the Mooncake master and the HTTP endpoint.
+fabric_subnet="${FABRIC_SUBNET:?FABRIC_SUBNET is required}"
 extract_addr="$(srun --overlap --nodes=1 --ntasks=1 --nodelist="${nodes[0]}" \
-  bash -c "ip -o -4 addr show | awk '\$4 ~ /^10\.13\.84\./ {sub(/\/.*/, \"\", \$4); print \$4; exit}'")"
+  bash -c "ip -o -4 addr show | awk -v s='^$fabric_subnet' '\$4 ~ s {sub(/\/.*/, \"\", \$4); print \$4; exit}'")"
 export EXTRACT_ADDR="$extract_addr"
+export FABRIC_SUBNET="$fabric_subnet"
 export MOONCAKE_MASTER="$extract_addr:50051"
 export VLLM_ENDPOINT="http://$extract_addr:8000/v1"
 export DATA_DIR="$data_dir"

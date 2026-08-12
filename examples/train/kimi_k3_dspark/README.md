@@ -42,6 +42,7 @@ mooncake_master --rpc_port 50051 --metrics_port 9003 \
 
 ```bash
 NODE_RANK=0 EXTRACT_ADDR=<head-fabric-ip> MOONCAKE_MASTER=<host>:50051 \
+  FABRIC_SUBNET=<subnet-prefix> \
   bash examples/train/kimi_k3_dspark/launch_extractor_node.sh
 ```
 
@@ -51,17 +52,18 @@ NODE_RANK=0 EXTRACT_ADDR=<head-fabric-ip> MOONCAKE_MASTER=<host>:50051 \
 
 ```bash
 MOONCAKE_MASTER=<host>:50051 VLLM_ENDPOINT=http://<head-fabric-ip>:8000/v1 \
+  FABRIC_SUBNET=<subnet-prefix> \
   bash examples/train/kimi_k3_dspark/launch_train_node.sh
 ```
 
-Add `MAX_STEPS=20` for a smoke run. Other useful overrides: `MODEL_PATH`, `DATA_DIR`, `RUN_NAME`, `TRAIN_LOGGER=''` to disable W&B.
+Add `MAX_STEPS=20` for a smoke run. Other useful overrides: `MODEL_PATH`, `DATA_DIR`, `RUN_NAME`.
 
 ## Running all four under Slurm
 
 `run.sbatch` does exactly the above on a 3-node allocation: nodes 0-1 extract, node 2 trains, the Mooncake master shares node 0. It resolves the extractor head's fabric address, waits for `/health`, then launches training, and stops the extractors and master when training exits.
 
 ```bash
-sbatch examples/train/kimi_k3_dspark/run.sbatch
+FABRIC_SUBNET=<subnet-prefix> sbatch --export=ALL examples/train/kimi_k3_dspark/run.sbatch
 ```
 
 Logs and checkpoints land in `runs/kimi_k3_dspark/<run-name>/`.
