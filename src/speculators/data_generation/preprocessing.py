@@ -17,6 +17,7 @@ from speculators.data_generation.configs import DATASET_CONFIGS
 from speculators.data_generation.logging_utils import PipelineLogger
 from speculators.data_generation.render_client import render_conversation
 from speculators.data_generation.torch_utils import set_default_torch_num_threads
+from speculators.data_generation.vllm_client import stringify_tool_call_arguments
 from speculators.train.vocab_mapping import save_token_frequency_distribution
 
 __all__ = [
@@ -166,7 +167,11 @@ def _adapt_turn_for_vllm(turn: dict):
 
 
 def _adapt_conv_for_vllm(normalized_conv: list[dict]):
-    return [_adapt_turn_for_vllm(turn) for turn in normalized_conv]
+    # HF templates iterate tool-call arguments as dicts; the OpenAI schema the
+    # stored messages are replayed against requires JSON strings.
+    return stringify_tool_call_arguments(
+        [_adapt_turn_for_vllm(turn) for turn in normalized_conv]
+    )
 
 
 class BoundaryUnstableError(ValueError):
@@ -418,25 +423,18 @@ def _append_boundary_rows(
         if status == "kept":
             num_kept += 1
             if "messages" in results:
-                # Serialized to JSON: conversations are heterogeneous (optional
-                # tool_calls, str vs typed-part-list content), so storing them
-                # structured lets each `map` shard infer a different Arrow
-                # schema and the final concatenation fails with "The features
-                # can't be aligned". A string column is deterministic
-                # regardless of sharding. Decoded in `build_client_item`.
+                # JSON strings: structured rows are heterogeneous (optional
+                # tool_calls, str vs part-list content), so `map` shards would
+                # infer differing Arrow schemas and concatenation would fail
+                # with "The features can't be aligned". Decoded in
+                # `build_client_item`.
                 results["messages"].append(
                     json.dumps(_adapt_conv_for_vllm(row["conv"]))
                 )
-                # Kept next to the messages (JSON string, same reason): the
-                # chat template renders tool definitions into the prompt, so
-                # the vLLM request has to carry them for its re-render to
-                # reproduce ``input_ids``.
-                #
-                # Deliberately NOT named ``tools``: that is an *input* column,
-                # and `map` cannot type an output column for a shard that emits
-                # no rows (every sample filtered), so the input column survives
-                # there with its own type while other shards hold strings --
-                # misaligned again.
+                # Not named ``tools``: `map` cannot type an output column on a
+                # shard that emits no rows, so the *input* column of that name
+                # would survive there with its own type and misalign the
+                # schemas.
                 results["tools_json"].append(
                     json.dumps(row["tools"]) if row["tools"] else ""
                 )

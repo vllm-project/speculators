@@ -261,125 +261,12 @@ def test_arrow_dataset_on_generate_cache_creates_hidden_states_dir(tmp_path: Pat
     assert (arrow_ds.transfer.hidden_states_path / "hs_0.safetensors").exists()
 
 
-def test_build_client_item_decodes_json_serialized_messages():
-    """Multimodal messages stored as a JSON string are decoded and forwarded."""
-    messages = [
-        {
-            "role": "user",
-            "content": [
-                {"type": "text", "text": "Describe this image."},
-                {"type": "image_url", "image_url": {"url": "file:///img.png"}},
-            ],
-        },
-        {"role": "assistant", "content": "It is blank."},
-    ]
-    item = {
-        "input_ids": torch.tensor([1, 2, 3], dtype=torch.long),
-        "messages": json.dumps(messages),
-    }
-
-    client_item = build_client_item(item)
-
-    assert client_item["input_ids"] == [1, 2, 3]
-    assert client_item["messages"] == messages
-
-
-def test_build_client_item_omits_text_only_json_messages():
-    """Text-only conversations must not forward messages (input_ids wins)."""
-    messages = [
-        {"role": "user", "content": "Hello"},
-        {"role": "assistant", "content": "Hi!"},
-    ]
-    item = {
-        "input_ids": torch.tensor([1, 2], dtype=torch.long),
-        "messages": json.dumps(messages),
-    }
-
-    assert "messages" not in build_client_item(item)
-
-
-def test_build_client_item_accepts_structured_messages():
-    """Datasets prepared before messages were JSON-serialized store structured
-    rows; they must keep working."""
-    messages = [
-        {
-            "role": "user",
-            "content": [{"type": "image_url", "image_url": {"url": "file:///i.png"}}],
-        },
-    ]
-    item = {"input_ids": torch.tensor([7], dtype=torch.long), "messages": messages}
-
-    assert build_client_item(item)["messages"] == messages
-
-
-def test_build_client_item_stringifies_dict_tool_call_arguments():
-    """HF chat templates need dict tool-call arguments, but the OpenAI Chat
-    Completions schema vLLM validates against requires a JSON string."""
-    arguments = {"element": "Submit button", "x": 772, "y": 512}
-    messages = [
-        {
-            "role": "user",
-            "content": [{"type": "image_url", "image_url": {"url": "file:///i.png"}}],
-        },
-        {
-            "role": "assistant",
-            "content": "Clicking.",
-            "tool_calls": [
-                {
-                    "id": "call_1",
-                    "type": "function",
-                    "function": {"name": "click_web", "arguments": arguments},
-                }
-            ],
-        },
-    ]
-    item = {
-        "input_ids": torch.tensor([1], dtype=torch.long),
-        "messages": json.dumps(messages),
-    }
-
-    sent = build_client_item(item)["messages"]
-
-    sent_arguments = sent[1]["tool_calls"][0]["function"]["arguments"]
-    assert isinstance(sent_arguments, str)
-    assert json.loads(sent_arguments) == arguments
-    # The rest of the payload is untouched
-    assert sent[0] == messages[0]
-    assert sent[1]["tool_calls"][0]["function"]["name"] == "click_web"
-
-
-def test_build_client_item_keeps_string_tool_call_arguments():
-    """Arguments already serialized as JSON strings pass through unchanged."""
-    messages = [
-        {
-            "role": "user",
-            "content": [{"type": "image_url", "image_url": {"url": "file:///i.png"}}],
-        },
-        {
-            "role": "assistant",
-            "content": "Clicking.",
-            "tool_calls": [
-                {
-                    "id": "call_1",
-                    "type": "function",
-                    "function": {"name": "click", "arguments": '{"x": 65, "y": 105}'},
-                }
-            ],
-        },
-    ]
-    item = {
-        "input_ids": torch.tensor([1], dtype=torch.long),
-        "messages": json.dumps(messages),
-    }
-
-    assert build_client_item(item)["messages"] == messages
-
-
 MM_MESSAGES = [
     {
         "role": "user",
         "content": [{"type": "image_url", "image_url": {"url": "file:///i.png"}}],
     },
+    {"role": "assistant", "content": "It is blank."},
 ]
 TOOLS = [
     {
@@ -393,25 +280,80 @@ TOOLS = [
 ]
 
 
-def test_build_client_item_forwards_tools():
-    """Tools are rendered into the prompt by the chat template, so they must be
-    sent with the request for vLLM's re-render to reproduce input_ids."""
-    item = {
-        "input_ids": torch.tensor([1], dtype=torch.long),
-        "messages": json.dumps(MM_MESSAGES),
-        "tools_json": json.dumps(TOOLS),
+def _item(messages, **extra):
+    return {
+        "input_ids": torch.tensor([1, 2, 3], dtype=torch.long),
+        "messages": json.dumps(messages),
+        **extra,
     }
+
+
+def test_build_client_item_decodes_json_serialized_messages():
+    """Multimodal messages stored as a JSON string are decoded and forwarded."""
+    client_item = build_client_item(_item(MM_MESSAGES))
+
+    assert client_item["input_ids"] == [1, 2, 3]
+    assert client_item["messages"] == MM_MESSAGES
+
+
+def test_build_client_item_omits_text_only_json_messages():
+    """Text-only conversations must not forward messages (input_ids wins)."""
+    messages = [
+        {"role": "user", "content": "Hello"},
+        {"role": "assistant", "content": "Hi!"},
+    ]
+
+    assert "messages" not in build_client_item(_item(messages))
+
+
+def test_build_client_item_accepts_structured_messages():
+    """Datasets prepared before messages were JSON-serialized store structured
+    rows; they must keep working."""
+    item = {
+        "input_ids": torch.tensor([7], dtype=torch.long),
+        "messages": MM_MESSAGES,
+    }
+
+    assert build_client_item(item)["messages"] == MM_MESSAGES
+
+
+def test_build_client_item_stringifies_dict_tool_call_arguments():
+    """Datasets generated before arguments were stringified at store time hold
+    dicts; the request must still carry JSON strings."""
+    arguments = {"element": "Submit button", "x": 772, "y": 512}
+    messages = MM_MESSAGES + [
+        {
+            "role": "assistant",
+            "content": "Clicking.",
+            "tool_calls": [
+                {
+                    "id": "call_1",
+                    "type": "function",
+                    "function": {"name": "click_web", "arguments": arguments},
+                }
+            ],
+        },
+    ]
+
+    sent = build_client_item(_item(messages))["messages"]
+
+    sent_arguments = sent[-1]["tool_calls"][0]["function"]["arguments"]
+    assert isinstance(sent_arguments, str)
+    assert json.loads(sent_arguments) == arguments
+    assert sent[:-1] == messages[:-1]
+
+
+def test_build_client_item_forwards_tools():
+    """Tools travel with the messages so vLLM's re-render can reproduce
+    input_ids."""
+    item = _item(MM_MESSAGES, tools_json=json.dumps(TOOLS))
 
     assert build_client_item(item)["tools"] == TOOLS
 
 
 def test_build_client_item_omits_empty_tools():
     """Conversations tokenized without tools keep the key out of the request."""
-    item = {
-        "input_ids": torch.tensor([1], dtype=torch.long),
-        "messages": json.dumps(MM_MESSAGES),
-        "tools_json": "",
-    }
+    item = _item(MM_MESSAGES, tools_json="")
 
     assert "tools" not in build_client_item(item)
 
@@ -419,11 +361,7 @@ def test_build_client_item_omits_empty_tools():
 def test_build_client_item_omits_tools_for_text_only_messages():
     """Text-only conversations go through the Completions API, so neither
     messages nor tools may be forwarded."""
-    item = {
-        "input_ids": torch.tensor([1], dtype=torch.long),
-        "messages": json.dumps([{"role": "user", "content": "Hi"}]),
-        "tools_json": json.dumps(TOOLS),
-    }
+    item = _item([{"role": "user", "content": "Hi"}], tools_json=json.dumps(TOOLS))
 
     client_item = build_client_item(item)
 

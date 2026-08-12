@@ -17,6 +17,7 @@ from speculators.data_generation.vllm_client import (
     DEFAULT_REQUEST_TIMEOUT,
     ClientItem,
     generate_hidden_states,
+    stringify_tool_call_arguments,
 )
 from speculators.train.noise_transforms import TransformTensors
 
@@ -59,35 +60,6 @@ def _has_multimodal_content(messages: list[dict]) -> bool:
     return any(isinstance(m.get("content"), list) for m in messages)
 
 
-def _stringify_tool_call_arguments(messages: list[dict]) -> list[dict]:
-    """Re-encode assistant ``tool_calls[].function.arguments`` as JSON strings.
-
-    HF chat templates iterate tool-call arguments as a mapping, so
-    conversations are stored with dict arguments.  The OpenAI Chat Completions
-    schema that vLLM validates requests against requires ``arguments`` to be a
-    JSON *string* instead; vLLM decodes it back to a dict server-side before
-    rendering its chat template.  String arguments pass through unchanged.
-    """
-    out = []
-    for turn in messages:
-        tool_calls = turn.get("tool_calls")
-        if not tool_calls:
-            out.append(turn)
-            continue
-        adapted_calls = []
-        for call in tool_calls:
-            function = call.get("function")
-            if function and not isinstance(function.get("arguments", ""), str):
-                arguments = json.dumps(function["arguments"])
-                adapted_calls.append(
-                    call | {"function": function | {"arguments": arguments}}
-                )
-            else:
-                adapted_calls.append(call)
-        out.append(turn | {"tool_calls": adapted_calls})
-    return out
-
-
 def build_client_item(dataset_item: dict) -> ClientItem:
     """Build a request payload for vLLM hidden-state extraction.
 
@@ -114,16 +86,17 @@ def build_client_item(dataset_item: dict) -> ClientItem:
 
     if "messages" in dataset_item:
         messages = dataset_item["messages"]
-        # ``_preprocess_batch`` stores messages as a JSON string so the Arrow
-        # schema stays deterministic across preprocessing shards. Datasets
-        # prepared before that change hold structured rows; accept both.
+        # Stored as a JSON string to keep Arrow schemas aligned across
+        # preprocessing shards; older datasets hold structured rows.
         if isinstance(messages, str):
             messages = json.loads(messages)
         if _has_multimodal_content(messages):
-            out_dict["messages"] = _stringify_tool_call_arguments(messages)
-            tools = dataset_item.get("tools_json")
-            if isinstance(tools, str) and tools:
-                out_dict["tools"] = json.loads(tools)
+            # Idempotent; datasets generated before arguments were
+            # stringified at store time still hold dicts.
+            out_dict["messages"] = stringify_tool_call_arguments(messages)
+            tools_json = dataset_item.get("tools_json")
+            if isinstance(tools_json, str) and tools_json:
+                out_dict["tools"] = json.loads(tools_json)
 
     return cast("ClientItem", out_dict)
 
