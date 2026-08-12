@@ -431,7 +431,13 @@ def _append_boundary_rows(
                 # chat template renders tool definitions into the prompt, so
                 # the vLLM request has to carry them for its re-render to
                 # reproduce ``input_ids``.
-                results["tools"].append(
+                #
+                # Deliberately NOT named ``tools``: that is an *input* column,
+                # and `map` cannot type an output column for a shard that emits
+                # no rows (every sample filtered), so the input column survives
+                # there with its own type while other shards hold strings --
+                # misaligned again.
+                results["tools_json"].append(
                     json.dumps(row["tools"]) if row["tools"] else ""
                 )
 
@@ -511,7 +517,7 @@ def _preprocess_batch(
     # original messages -- token ids alone cannot carry the images.
     if is_multimodal:
         results["messages"] = []
-        results["tools"] = []
+        results["tools_json"] = []
 
     if not conversations:
         log.warning(f"No conversations key found. Keys: {list(examples.keys())}")

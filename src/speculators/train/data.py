@@ -121,11 +121,9 @@ def build_client_item(dataset_item: dict) -> ClientItem:
             messages = json.loads(messages)
         if _has_multimodal_content(messages):
             out_dict["messages"] = _stringify_tool_call_arguments(messages)
-            tools = dataset_item.get("tools")
-            if isinstance(tools, str):
-                tools = json.loads(tools) if tools else None
-            if tools:
-                out_dict["tools"] = tools
+            tools = dataset_item.get("tools_json")
+            if isinstance(tools, str) and tools:
+                out_dict["tools"] = json.loads(tools)
 
     return cast("ClientItem", out_dict)
 

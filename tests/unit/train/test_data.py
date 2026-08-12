@@ -399,7 +399,7 @@ def test_build_client_item_forwards_tools():
     item = {
         "input_ids": torch.tensor([1], dtype=torch.long),
         "messages": json.dumps(MM_MESSAGES),
-        "tools": json.dumps(TOOLS),
+        "tools_json": json.dumps(TOOLS),
     }
 
     assert build_client_item(item)["tools"] == TOOLS
@@ -410,7 +410,7 @@ def test_build_client_item_omits_empty_tools():
     item = {
         "input_ids": torch.tensor([1], dtype=torch.long),
         "messages": json.dumps(MM_MESSAGES),
-        "tools": "",
+        "tools_json": "",
     }
 
     assert "tools" not in build_client_item(item)
@@ -422,7 +422,7 @@ def test_build_client_item_omits_tools_for_text_only_messages():
     item = {
         "input_ids": torch.tensor([1], dtype=torch.long),
         "messages": json.dumps([{"role": "user", "content": "Hi"}]),
-        "tools": json.dumps(TOOLS),
+        "tools_json": json.dumps(TOOLS),
     }
 
     client_item = build_client_item(item)
