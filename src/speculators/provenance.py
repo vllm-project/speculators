@@ -24,9 +24,7 @@ TRACKED_PACKAGES = (
 
 def atomic_write(path: Path, content: str) -> None:
     """Write *content* to *path* atomically via tempfile + rename."""
-    fd, tmp = tempfile.mkstemp(
-        dir=path.parent, prefix=f".{path.name}_", suffix=".tmp"
-    )
+    fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}_", suffix=".tmp")
     tmp_path = Path(tmp)
     try:
         with os.fdopen(fd, "w") as f:
@@ -107,9 +105,7 @@ def git_diff(repo_root: Path | None, *, timeout: int = 30) -> str:
         return ""
 
 
-def run_git(
-    args: list[str], cwd: str | Path, *, timeout: int = 5
-) -> str:
+def run_git(args: list[str], cwd: str | Path, *, timeout: int = 5) -> str:
     """Run a git command and return stdout, or empty string on failure."""
     try:
         result = subprocess.run(  # noqa: S603
