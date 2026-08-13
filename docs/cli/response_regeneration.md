@@ -4,7 +4,10 @@ Regenerates assistant responses in existing datasets using a vLLM-served model. 
 
 The pipeline consists of two scripts:
 
-| Script | Purpose | | ------------ | -------------------------------------------------------------- | | `run_all.sh` | End-to-end pipeline: starts vLLM, regenerates responses, stops | | `script.py` | Standalone response regeneration against a running vLLM server |
+| Script       | Purpose                                                        |
+| ------------ | -------------------------------------------------------------- |
+| `run_all.sh` | End-to-end pipeline: starts vLLM, regenerates responses, stops |
+| `script.py`  | Standalone response regeneration against a running vLLM server |
 
 ## run_all.sh
 
@@ -123,7 +126,15 @@ python scripts/response_regeneration/script.py \
 
 The text presets from the shared dataset registry (`DATASET_CONFIGS` in `speculators/data_generation/configs.py`) — the same ones `prepare-data` accepts:
 
-| Dataset | HuggingFace ID | Default Split | | ------------------- | ------------------------------------------------- | ------------- | | `sharegpt` | `Aeala/ShareGPT_Vicuna_unfiltered` | `train` | | `ultrachat` | `HuggingFaceH4/ultrachat_200k` | `train_sft` | | `gsm8k` | `openai/gsm8k` | `train` | | `magpie` | `Magpie-Align/Magpie-Llama-3.1-Pro-300K-Filtered` | `train` | | `nemotron` | `nvidia/Llama-Nemotron-Post-Training-Dataset` | `chat` | | `open-perfectblend` | `mlabonne/open-perfectblend` | `train` | | `hermes-fc` | `NousResearch/hermes-function-calling-v1` | `train` |
+| Dataset             | HuggingFace ID                                    | Default Split |
+| ------------------- | ------------------------------------------------- | ------------- |
+| `sharegpt`          | `Aeala/ShareGPT_Vicuna_unfiltered`                | `train`       |
+| `ultrachat`         | `HuggingFaceH4/ultrachat_200k`                    | `train_sft`   |
+| `gsm8k`             | `openai/gsm8k`                                    | `train`       |
+| `magpie`            | `Magpie-Align/Magpie-Llama-3.1-Pro-300K-Filtered` | `train`       |
+| `nemotron`          | `nvidia/Llama-Nemotron-Post-Training-Dataset`     | `chat`        |
+| `open-perfectblend` | `mlabonne/open-perfectblend`                      | `train`       |
+| `hermes-fc`         | `NousResearch/hermes-function-calling-v1`         | `train`       |
 
 The registry's multimodal preset, `sharegpt4v_coco`, is **off-policy only** and `--dataset` rejects it. Its turns carry image content parts, which the Chat Completions API rejects, and the pre-tokenized output row has nowhere to keep pixel data. Use it with `prepare-data`.
 

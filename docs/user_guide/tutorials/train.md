@@ -752,17 +752,29 @@ These are sanity-check runs, not production numbers. With just 5K samples, model
 
 5K ShareGPT samples, 5 epochs, Qwen3-8B, measured on MT-Bench (80 prompts, 2048 max output tokens):
 
-| Metric | Value | | ----------------- | ------------ | | Acceptance rate | 5.90% | | Acceptance length | 1.47 | | Output throughput | 129.41 tok/s |
+| Metric            | Value        |
+| ----------------- | ------------ |
+| Acceptance rate   | 5.90%        |
+| Acceptance length | 1.47         |
+| Output throughput | 129.41 tok/s |
 
 ### P-EAGLE
 
 5K ShareGPT samples, 5 epochs, Qwen3-8B, measured on SpecBench (80 prompts, 256 output tokens):
 
-| Metric | Value | | ----------------- | ------ | | Acceptance rate | 13.35% | | Acceptance length | 1.53 |
+| Metric            | Value  |
+| ----------------- | ------ |
+| Acceptance rate   | 13.35% |
+| Acceptance length | 1.53   |
 
 Per-position acceptance:
 
-| Position | Acceptance | | -------- | ---------- | | 0 | 40.84% | | 1 | 10.84% | | 2 | 1.58% | | 3 | 0.15% |
+| Position | Acceptance |
+| -------- | ---------- |
+| 0        | 40.84%     |
+| 1        | 10.84%     |
+| 2        | 1.58%      |
+| 3        | 0.15%      |
 
 > **Note:** these numbers were measured with `--total-seq-len 4096`, not the 8192 used throughout this tutorial.
 
@@ -866,6 +878,7 @@ Each of these runs the full pipeline end to end:
 - [`eagle3_llama3_8b_ultrachat_offline_5k.sh`](https://github.com/vllm-project/speculators/blob/main/examples/train/eagle3_llama3_8b_ultrachat_offline_5k.sh) -- Eagle-3, offline
 - [`peagle_qwen3_8b_sharegpt_online_5k.sh`](https://github.com/vllm-project/speculators/blob/main/examples/train/peagle_qwen3_8b_sharegpt_online_5k.sh) -- P-EAGLE
 - [`dflash_qwen3_8b_sharegpt_online_5k.sh`](https://github.com/vllm-project/speculators/blob/main/examples/train/dflash_qwen3_8b_sharegpt_online_5k.sh) -- DFlash, online
+- [`dflash_qwen3_8b_ultrachat_online_5k_bestpractices.sh`](https://github.com/vllm-project/speculators/blob/main/examples/train/dflash_qwen3_8b_ultrachat_online_5k_bestpractices.sh) -- DFlash, online, with the [best-practices recipe](https://github.com/vllm-project/speculators/issues/979) (D-PACE, block_size=16)
 - [`dspark_qwen3_0_6b_sharegpt_online.sh`](https://github.com/vllm-project/speculators/blob/main/examples/train/dspark_qwen3_0_6b_sharegpt_online.sh) -- DSpark, online (targets Qwen3-0.6B)
 - [`mtp_qwen3_5_9b_gsm8k_online.sh`](https://github.com/vllm-project/speculators/blob/main/examples/train/mtp_qwen3_5_9b_gsm8k_online.sh) -- MTP, online
 

@@ -2,6 +2,8 @@
 
 The training loss controls what the draft model is optimized for. Select it with `--loss-fn` in [`train.py`](../cli/train.md), which accepts either a single loss name or a JSON dict for a weighted combination. It applies to Eagle-3, P-EAGLE, DFlash, and DSpark. MTP uses its own multi-step cross-entropy loss and ignores this flag.
 
+The fused Triton implementation is the default. Use `--loss-implementation eager` for compatibility or numerical validation; eager losses may OOM with DFlash or DSpark.
+
 ```bash
 python scripts/train.py ... --loss-fn kl_div
 ```
@@ -10,9 +12,17 @@ python scripts/train.py ... --loss-fn kl_div
 
 `p` is the target distribution, `q` the draft distribution, and `alpha = sum_v min(p_v, q_v)` the distributional overlap, which equals the acceptance rate of speculative decoding.
 
-| Name | Objective | Notes | | ----------- | -------------------------------------- | ------------------------------------------------------------------------------ | | `kl_div` | Forward KL, target to draft | Default. Mass-covering: penalizes the draft for missing target mass. | | `rkl` | Reverse KL, draft to target | Mode-seeking: the draft concentrates on the target's dominant modes. | | `jsd` | Jensen-Shannon divergence | Symmetric, bounded by `log 2`. Balances forward and reverse KL. | | `ce` | Cross-entropy against `argmax p` | Hard labels from the target. Required by `--per-position-loss-weight dpace`. | | `tv` | Total variation, `1 - alpha` | Optimizes the acceptance rate directly. Gradients vanish when overlap is low. | | `nla` | Negative log-acceptance, `-log(alpha)` | TV's target with a `1 / alpha` gradient boost, so it trains from a cold start. | | `lk_hybrid` | Adaptive KL/TV blend | `lambda * KL + (1 - lambda) * TV` with `lambda = exp(-3 * alpha)`, detached. |
+| Name        | Objective                              | Notes                                                                          |
+| ----------- | -------------------------------------- | ------------------------------------------------------------------------------ |
+| `kl_div`    | Forward KL, target to draft            | Default. Mass-covering: penalizes the draft for missing target mass.           |
+| `rkl`       | Reverse KL, draft to target            | Mode-seeking: the draft concentrates on the target's dominant modes.           |
+| `jsd`       | Jensen-Shannon divergence              | Symmetric, bounded by `log 2`. Balances forward and reverse KL.                |
+| `ce`        | Cross-entropy against `argmax p`       | Hard labels from the target. Required by `--per-position-loss-weight dpace`.   |
+| `tv`        | Total variation, `1 - alpha`           | Optimizes the acceptance rate directly. Gradients vanish when overlap is low.  |
+| `nla`       | Negative log-acceptance, `-log(alpha)` | TV's target with a `1 / alpha` gradient boost, so it trains from a cold start. |
+| `lk_hybrid` | Adaptive KL/TV blend                   | `lambda * KL + (1 - lambda) * TV` with `lambda = exp(-3 * alpha)`, detached.   |
 
-`tv` and `nla` use a fused Triton kernel on CUDA devices when it is available, and fall back to eager PyTorch otherwise.
+All losses use the selected implementation; there is no automatic fallback.
 
 ## Choosing a Loss
 
