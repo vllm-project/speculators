@@ -10,6 +10,7 @@ import sys
 import time
 from collections import deque
 from collections.abc import Callable
+from pathlib import Path
 from typing import Any, cast
 
 import aiohttp
@@ -42,6 +43,18 @@ def _dataset_choice(name: str) -> str:
     return name
 
 
+def _dataset_file(path: str) -> str:
+    """Validate a local JSON/JSONL dataset path for argparse."""
+    dataset_path = Path(path)
+    if dataset_path.suffix.lower() not in {".json", ".jsonl"}:
+        raise argparse.ArgumentTypeError(
+            "--dataset-file must be a .json or .jsonl file"
+        )
+    if not dataset_path.is_file():
+        raise argparse.ArgumentTypeError(f"dataset file does not exist: {path}")
+    return str(dataset_path)
+
+
 # ---------------------------------------------------------------------------
 # CLI & run configuration
 # ---------------------------------------------------------------------------
@@ -72,12 +85,18 @@ def parse_args():
         default=None,
         help="Model name exposed by vLLM (auto-detected if not specified)",
     )
-    parser.add_argument(
+    dataset_group = parser.add_mutually_exclusive_group()
+    dataset_group.add_argument(
         "--dataset",
-        default="ultrachat",
+        default=None,
         type=_dataset_choice,
         choices=REGEN_DATASETS,
         help="Dataset to process",
+    )
+    dataset_group.add_argument(
+        "--dataset-file",
+        type=_dataset_file,
+        help="Local JSON/JSONL file with messages, conversations, or prompt rows",
     )
     parser.add_argument(
         "--split",
@@ -138,6 +157,13 @@ def parse_args():
         ),
     )
     args = parser.parse_args()
+    if args.dataset is None and args.dataset_file is None:
+        args.dataset = "ultrachat"
+    if args.dataset_file is not None and (
+        args.split is not None or args.subset is not None
+    ):
+        parser.error("--split and --subset only apply to --dataset presets")
+
     if args.max_retries < 0:
         parser.error("--max-retries must be >= 0")
     try:
@@ -164,10 +190,12 @@ def sanitize_filename(name: str) -> str:
 
 
 def _conversation_messages(row: dict[str, Any]) -> list:
-    """The ``messages`` or ``conversations`` list from a row, else []."""
+    """The ``messages``, ``conversations``, or message-list ``prompt``, else []."""
     convs = row.get("messages")
     if not (isinstance(convs, list) and convs):
         convs = row.get("conversations")
+    if not (isinstance(convs, list) and convs):
+        convs = row.get("prompt")
     return convs if isinstance(convs, list) else []
 
 
@@ -744,6 +772,29 @@ async def worker(
             queue.task_done()
 
 
+def load_input_dataset(args: argparse.Namespace) -> tuple[DatasetConfig, Any, str]:
+    """Load either a registered Hugging Face preset or a local JSON/JSONL file."""
+    if args.dataset_file is not None:
+        config = DatasetConfig(
+            name=Path(args.dataset_file).stem,
+            hf_path=args.dataset_file,
+            split="train",
+            prompt_field="prompt",
+        )
+        dataset = load_dataset(
+            "json", data_files=args.dataset_file, split="train", streaming=True
+        )
+        return config, dataset, "train"
+
+    if args.dataset is None:
+        raise ValueError("dataset is required when dataset_file is not set")
+    config = DATASET_CONFIGS[args.dataset]
+    split = args.split if args.split is not None else config.split
+    subset = args.subset if args.subset is not None else config.subset
+    dataset = load_dataset(config.hf_path, name=subset, split=split, streaming=True)
+    return config, dataset, split
+
+
 async def main():
     """Main async function to process dataset through vLLM endpoints."""
     args = parse_args()
@@ -760,20 +811,16 @@ async def main():
     # Decoder for the review-only `text` twin; see build_detokenizer.
     detokenize = build_detokenizer(args.model)
 
-    # Get dataset configuration
-    dataset_config = DATASET_CONFIGS[args.dataset]
+    dataset_config, dataset, split = load_input_dataset(args)
     dataset_id = dataset_config.hf_path
-
-    # Use dataset-specific defaults if not provided
-    split = args.split if args.split is not None else dataset_config.split
-    subset = args.subset if args.subset is not None else dataset_config.subset
 
     # Generate output filename if not specified
     if args.outfile is None:
         # Extract simple model name from full path
         model_name = args.model.split("/")[-1] if "/" in args.model else args.model
         model_name = sanitize_filename(model_name)
-        args.outfile = f"{args.dataset}_{model_name}.jsonl"
+        source_name = sanitize_filename(dataset_config.name)
+        args.outfile = f"{source_name}_{model_name}.jsonl"
 
     # Failed / partial conversations are written here instead of the training file.
     base, ext = os.path.splitext(args.outfile)
@@ -787,8 +834,6 @@ async def main():
     print()
 
     seen_ids = load_seen(args.outfile) if args.resume else set()
-    dataset = load_dataset(dataset_id, name=subset, split=split, streaming=True)
-
     queue: asyncio.Queue = asyncio.Queue(maxsize=args.concurrency * 4)
 
     ensure_parent_dirs(args.outfile, error_outfile)
