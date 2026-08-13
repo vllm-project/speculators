@@ -9,29 +9,11 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "scripts"))
 
 from launch_vllm import (  # type: ignore[import-not-found]
     _find_vllm_repo,
-    _is_vllm_repo,
     _save_checkpoint_sha256,
     _save_vllm_command,
     _save_vllm_patch,
     _save_vllm_provenance,
 )
-
-
-class TestIsVllmRepo:
-    def test_returns_true_for_valid_repo(self, tmp_path: Path):
-        (tmp_path / ".git").mkdir()
-        (tmp_path / "vllm").mkdir()
-        (tmp_path / "vllm" / "__init__.py").touch()
-        assert _is_vllm_repo(str(tmp_path))
-
-    def test_returns_false_without_git(self, tmp_path: Path):
-        (tmp_path / "vllm").mkdir()
-        (tmp_path / "vllm" / "__init__.py").touch()
-        assert not _is_vllm_repo(str(tmp_path))
-
-    def test_returns_false_without_vllm_package(self, tmp_path: Path):
-        (tmp_path / ".git").mkdir()
-        assert not _is_vllm_repo(str(tmp_path))
 
 
 class TestFindVllmRepo:
@@ -40,14 +22,14 @@ class TestFindVllmRepo:
         assert result is None or isinstance(result, str)
 
     def test_returns_none_when_vllm_not_importable(self):
-        with patch("launch_vllm.importlib.util.find_spec", return_value=None):
+        with patch("launch_vllm.find_package_repo", return_value=None):
             assert _find_vllm_repo() is None
 
 
 class TestSaveVllmCommand:
     def test_creates_file(self, tmp_path: Path):
         _save_vllm_command(
-            str(tmp_path),
+            tmp_path,
             ["python", "-m", "vllm", "serve", "model"],
             "abc123",
             "",
@@ -57,7 +39,7 @@ class TestSaveVllmCommand:
 
     def test_contains_metadata(self, tmp_path: Path):
         _save_vllm_command(
-            str(tmp_path),
+            tmp_path,
             ["python", "-m", "vllm", "serve", "model"],
             "abc123",
             "",
@@ -71,32 +53,30 @@ class TestSaveVllmCommand:
         assert "python -m vllm serve model" in content
 
     def test_dirty_marker_when_diff_present(self, tmp_path: Path):
-        _save_vllm_command(str(tmp_path), ["cmd"], "abc123", "some diff", "0.1.0")
+        _save_vllm_command(tmp_path, ["cmd"], "abc123", "some diff", "0.1.0")
         content = (tmp_path / "vllm_command.txt").read_text()
         assert "abc123 (dirty)" in content
 
     def test_no_dirty_marker_when_clean(self, tmp_path: Path):
-        _save_vllm_command(str(tmp_path), ["cmd"], "abc123", "", "0.1.0")
+        _save_vllm_command(tmp_path, ["cmd"], "abc123", "", "0.1.0")
         content = (tmp_path / "vllm_command.txt").read_text()
         assert "(dirty)" not in content
 
 
 class TestSaveVllmPatch:
     def test_records_repo_and_diff(self, tmp_path: Path):
-        _save_vllm_patch(
-            str(tmp_path), "/path/to/vllm", "abc123", "diff content", "0.1.0"
-        )
+        _save_vllm_patch(tmp_path, "/path/to/vllm", "abc123", "diff content", "0.1.0")
         content = (tmp_path / "vllm.patch").read_text()
         assert "# repo: /path/to/vllm (abc123)" in content
         assert "diff content" in content
 
     def test_header_only_for_clean_checkout(self, tmp_path: Path):
-        _save_vllm_patch(str(tmp_path), "/path/to/vllm", "abc123", "", "0.1.0")
+        _save_vllm_patch(tmp_path, "/path/to/vllm", "abc123", "", "0.1.0")
         content = (tmp_path / "vllm.patch").read_text()
         assert "# repo: /path/to/vllm (abc123)" in content
 
     def test_wheel_install_fallback(self, tmp_path: Path):
-        _save_vllm_patch(str(tmp_path), None, "unknown", "", "0.5.0")
+        _save_vllm_patch(tmp_path, None, "unknown", "", "0.5.0")
         content = (tmp_path / "vllm.patch").read_text()
         assert "wheel install" in content
         assert "0.5.0" in content
@@ -104,7 +84,7 @@ class TestSaveVllmPatch:
 
 class TestSaveCheckpointSha256:
     def test_remote_model(self, tmp_path: Path):
-        _save_checkpoint_sha256(str(tmp_path), "org/model-name")
+        _save_checkpoint_sha256(tmp_path, "org/model-name")
         content = (tmp_path / "checkpoint_sha256.txt").read_text()
         assert "not a local path" in content
 
@@ -112,7 +92,7 @@ class TestSaveCheckpointSha256:
         model_dir = tmp_path / "model"
         model_dir.mkdir()
         (model_dir / "model.safetensors").write_bytes(b"fake weights")
-        _save_checkpoint_sha256(str(tmp_path), str(model_dir))
+        _save_checkpoint_sha256(tmp_path, str(model_dir))
         content = (tmp_path / "checkpoint_sha256.txt").read_text()
         assert "model.safetensors" in content
         assert len(content.split("  ")[0]) == 64  # SHA256 hex length
@@ -121,7 +101,7 @@ class TestSaveCheckpointSha256:
         model_dir = tmp_path / "model"
         model_dir.mkdir()
         (model_dir / "config.json").write_text("{}")
-        _save_checkpoint_sha256(str(tmp_path), str(model_dir))
+        _save_checkpoint_sha256(tmp_path, str(model_dir))
         content = (tmp_path / "checkpoint_sha256.txt").read_text()
         assert "no .safetensors files" in content
 
@@ -129,7 +109,7 @@ class TestSaveCheckpointSha256:
         model_dir = tmp_path / "model"
         model_dir.mkdir()
         (model_dir / "model.safetensors").write_bytes(b"fake weights")
-        _save_checkpoint_sha256(str(tmp_path), str(model_dir), skip_hash=True)
+        _save_checkpoint_sha256(tmp_path, str(model_dir), skip_hash=True)
         content = (tmp_path / "checkpoint_sha256.txt").read_text()
         assert "# hashing skipped (--no-hash-checkpoints)" in content
         assert "size=" in content
@@ -140,7 +120,7 @@ class TestSaveCheckpointSha256:
         model_dir = tmp_path / "model"
         model_dir.mkdir()
         (model_dir / "model.safetensors").write_bytes(b"fake weights")
-        _save_checkpoint_sha256(str(tmp_path), str(model_dir), skip_hash=True)
+        _save_checkpoint_sha256(tmp_path, str(model_dir), skip_hash=True)
         content = (tmp_path / "checkpoint_sha256.txt").read_text()
         data_lines = [line for line in content.splitlines() if not line.startswith("#")]
         for line in data_lines:
@@ -151,7 +131,7 @@ class TestSaveCheckpointSha256:
         model_dir.mkdir()
         for name in ("c.safetensors", "a.safetensors", "b.safetensors"):
             (model_dir / name).write_bytes(b"data")
-        _save_checkpoint_sha256(str(tmp_path), str(model_dir))
+        _save_checkpoint_sha256(tmp_path, str(model_dir))
         content = (tmp_path / "checkpoint_sha256.txt").read_text()
         names = [line.split("  ")[1] for line in content.strip().splitlines()]
         assert names == ["a.safetensors", "b.safetensors", "c.safetensors"]
