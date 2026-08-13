@@ -174,3 +174,7 @@ cython_debug/
 
 # Visual Studio Code
 .vscode/
+
+# hs_connectors build version files
+hs_connectors/src/hs_connectors/version.txt
+hs_connectors/src/hs_connectors/version.py
