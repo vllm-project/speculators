@@ -395,7 +395,6 @@ def main():
     else:
         cmd = _build_eval_cmd(args, vllm_args)
 
-
     print("Running command:")
     print(" ".join(cmd))
 
