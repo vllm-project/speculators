@@ -175,6 +175,23 @@ cython_debug/
 # Visual Studio Code
 .vscode/
 
-# hs_connectors build version files
+# hs_connectors build files
 hs_connectors/src/hs_connectors/version.txt
 hs_connectors/src/hs_connectors/version.py
+hs_connectors/build/
+hs_connectors/develop-eggs/
+hs_connectors/dist/
+hs_connectors/downloads/
+hs_connectors/eggs/
+hs_connectors/.eggs/
+hs_connectors/sdist/
+hs_connectors/wheels/
+share/python-wheels/
+hs_connectors/*.egg-info/
+hs_connectors/.installed.cfg
+hs_connectors/*.egg
+hs_connectors/MANIFEST
+hs_connectors/*.manifest
+hs_connectors/*.spec
+hs_connectors/pip-log.txt
+hs_connectors/pip-delete-this-directory.txt
