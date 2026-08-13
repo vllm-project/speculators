@@ -96,6 +96,12 @@ def parse_args():
     )
     parser.add_argument("--limit", type=int, default=None, help="Stop after N rows")
     parser.add_argument(
+        "--skip",
+        type=int,
+        default=0,
+        help="Skip the first N rows before processing",
+    )
+    parser.add_argument(
         "--concurrency",
         type=int,
         default=64,
@@ -793,6 +799,7 @@ async def main():
 
     seen_ids = load_seen(args.outfile) if args.resume else set()
     dataset = load_dataset(dataset_id, name=subset, split=split, streaming=True)
+    dataset = dataset.skip(args.skip)
 
     queue: asyncio.Queue = asyncio.Queue(maxsize=args.concurrency * 4)
 
