@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools >= 82.0.1"]
+requires = ["setuptools >= 82.0.1", "setuptools-git-versioning>=2.0,<3", "packaging"]
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]
@@ -9,7 +9,7 @@ include = ["*"]
 [project]
 name = "hs-connectors"
 description = "Pluggable backends for transferring hidden states between vLLM and Speculators during online and offline training."
-version = "0.1.0"
+dynamic = ["version"]
 requires-python = ">=3.10"
 keywords = [
     "hidden states",
