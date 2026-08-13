@@ -401,6 +401,12 @@ class TrainerArgs(_Group):
         "parameters are fully replicated (DDP-like). Enable when the model does not "
         "fit in a single GPU's memory.",
     )
+    gradient_checkpointing: bool = Field(
+        default=False,
+        description="Recompute draft-layer activations during the backward pass "
+        "instead of keeping them, trading step time for memory. Only supported by "
+        "DFlash and DSpark.",
+    )
     max_steps: int | None = Field(
         default=None,
         ge=1,

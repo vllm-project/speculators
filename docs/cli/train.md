@@ -128,6 +128,8 @@ torchrun --standalone --nproc_per_node=4 scripts/train.py \
 
 - **`--deterministic-cuda`** (flag) Enable deterministic CUDA operations. May impact performance.
 
+- **`--gradient-checkpointing`** (flag) Recompute draft-layer activations during the backward pass instead of storing them for it. This buys a large reduction in peak memory for a smaller increase in step time — on a DFlash run at default settings with a Qwen3-8B verifier, peak memory roughly halved while the step got about 13% slower. The saved activations are usually the largest single consumer of training memory, and the recompute cost falls entirely on the backward pass, so forward and optimizer time are unchanged. The exact ratio depends on `--num-layers`, `--max-anchors` and `--block-size`, since those set how much activation memory there is to recompute. Reach for it when a run does not fit, or to spend the freed memory on a larger `--max-anchors` or `--total-seq-len`. Only supported by DFlash and DSpark; other speculator types raise an error.
+
 - **`--loss-fn`** (str, default: `"ce"` for dflash, `"kl_div"` otherwise) Loss function specification. Pass a name for a single loss (`kl_div`, `rkl`, `jsd`, `ce`, `tv`, `nla`, `lk_hybrid`) or a JSON dict for a weighted combination, e.g. `'{"ce": 0.1, "tv": 0.9}'`. Required to be `ce` when `--per-position-loss-weight dpace` is used.
 
 ### Optimizer Arguments
