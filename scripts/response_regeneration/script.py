@@ -135,6 +135,11 @@ def parse_args():
             "per conversation, e.g. 'low,high,max'"
         ),
     )
+    parser.add_argument(
+        "--reverse",
+        action="store_true",
+        help="Iterate through the dataset in reverse order (loads into memory)",
+    )
     args = parser.parse_args()
     if args.max_retries < 0:
         parser.error("--max-retries must be >= 0")
@@ -815,7 +820,13 @@ async def main():
     print()
 
     seen_ids = load_seen(args.outfile) if args.resume else set()
-    dataset = load_dataset(dataset_id, name=subset, split=split, streaming=True)
+    if args.reverse:
+        dataset = load_dataset(dataset_id, name=subset, split=split)
+        row_iter = ((i, dataset[i]) for i in range(len(dataset) - 1, -1, -1))
+        print(f"Reverse mode: {len(dataset)} rows, iterating last to first")
+    else:
+        dataset = load_dataset(dataset_id, name=subset, split=split, streaming=True)
+        row_iter = enumerate(dataset)
 
     queue: asyncio.Queue = asyncio.Queue(maxsize=args.concurrency * 4)
 
@@ -868,7 +879,7 @@ async def main():
             ]
 
             processed_count = 0
-            for index, row in enumerate(dataset):
+            for index, row in row_iter:
                 if args.limit is not None and processed_count >= args.limit:
                     break
 
