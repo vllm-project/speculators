@@ -11,15 +11,16 @@ from functools import partial
 from typing import Any
 
 import torch
-from torch.nn.functional import binary_cross_entropy_with_logits, softmax
+from torch.nn.functional import binary_cross_entropy_with_logits
 
-from speculators.models.metrics import (
+from speculators.losses import (
     LossConfig,
     compound_loss,
-    compute_accuracy_multi_step,
     dflash_loss_decay,
     dpace_loss_decay,
+    tv_loss,
 )
+from speculators.models.metrics import compute_accuracy_multi_step
 
 __all__ = [
     "compute_metrics",
@@ -52,6 +53,7 @@ def compute_metrics(
     loss_mask: torch.Tensor,  # [1, T]
     block_size: int,
     loss_config: LossConfig,
+    tv_loss_fn: Callable[[torch.Tensor, torch.Tensor], torch.Tensor] = tv_loss,
     gamma: float = 4.0,
     confidence_head_alpha: float = 1.0,
     per_position_loss_weight: str = "fixed-exp-decay",
@@ -80,11 +82,10 @@ def compute_metrics(
         logits, targets, loss_mask, pos_idx, loss_config=loss_config, decay_fn=decay_fn
     )
 
-    # Analytical per-position acceptance rate = distributional overlap.
+    # Analytical per-position acceptance rate = distributional overlap
+    # = 1 - TV; the fused kernel avoids the two full-vocab fp32 softmaxes.
     with torch.no_grad():
-        draft_p = softmax(logits.float(), dim=-1)
-        target_p = softmax(targets.float(), dim=-1)
-        accept_rate = torch.minimum(draft_p, target_p).sum(dim=-1)  # [1, T]
+        accept_rate = 1.0 - tv_loss_fn(logits, targets)  # [1, T]
         # Per-block cumulative acceptance product over the draft slots (slot 0
         # is the anchor), shared by the accept-length and calibration metrics.
         num_blocks = seq_len // block_size

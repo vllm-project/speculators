@@ -28,7 +28,7 @@ from speculators.data_generation.vllm_client import (
     DEFAULT_MAX_RETRIES,
     DEFAULT_REQUEST_TIMEOUT,
 )
-from speculators.models.metrics import resolve_loss_config
+from speculators.losses import resolve_loss_config
 
 # A bool that must render as an argparse ``--x/--no-x`` (``BooleanOptionalAction``)
 # even though it defaults to False. Bools defaulting to True or None get that form
@@ -295,6 +295,11 @@ class GenerationArgs(_Group):
 
 
 class LossArgs(_Group):
+    loss_implementation: Literal["fused", "eager"] = Field(
+        default="fused",
+        description="Loss implementation to use; eager is for compatibility and "
+        "numerical validation and may OOM with DFlash or DSpark.",
+    )
     loss_fn: str | None = Field(
         default=None,
         description="Loss function specification. A name (kl_div, rkl, jsd, ce, tv, "
