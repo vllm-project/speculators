@@ -24,6 +24,7 @@ from speculators.models.utils import (
     resolve_draft_intermediate_size,
 )
 from speculators.train.config import TrainConfig
+from speculators.train.config.adapters import adapt_draft_config
 from speculators.train.dataloader import create_train_val_loaders
 from speculators.train.distributed import (
     get_rank,
@@ -132,14 +133,10 @@ def create_transformer_layer_config(  # noqa: C901
         )
 
     config_class = DRAFT_ARCH_CONFIGS[draft_arch]
-    verifier_config = AutoConfig.from_pretrained(
+    verifier_config = get_verifier_config(
         verifier_name_or_path,
         trust_remote_code=trust_remote_code,
     )
-
-    # For multimodal models (Qwen3VL, etc.), extract text_config
-    if hasattr(verifier_config, "text_config"):
-        verifier_config = verifier_config.text_config
 
     hidden_act = (
         hidden_act
@@ -274,6 +271,11 @@ def load_draft_transformer_layer_config(
         # A full speculator config was passed; use only the decoder definition.
         config_dict = config_dict["transformer_layer_config"]
 
+    verifier_config = get_verifier_config(
+        verifier_name_or_path,
+        trust_remote_code=trust_remote_code,
+    )
+    config_dict = adapt_draft_config(config_dict, verifier_config)
     model_type = config_dict.get("model_type")
     if not model_type:
         raise ValueError(
@@ -284,10 +286,6 @@ def load_draft_transformer_layer_config(
     config_class: type[PretrainedConfig] = type(AutoConfig.for_model(model_type))
     draft_config_obj = config_class.from_dict(config_dict)
 
-    verifier_config = get_verifier_config(
-        verifier_name_or_path,
-        trust_remote_code=trust_remote_code,
-    )
     if draft_config_obj.hidden_size != verifier_config.hidden_size:
         raise ValueError(
             f"--draft-config hidden_size ({draft_config_obj.hidden_size}) must match "
@@ -375,12 +373,10 @@ def parse_vocab_mappings(args: argparse.Namespace):
         "None. Using full verifier vocab"
     )
     # When vocab mapping is not provided, use the full verifier vocab
-    verifier_config = AutoConfig.from_pretrained(
+    verifier_config = get_verifier_config(
         args.verifier_name_or_path,
         trust_remote_code=args.trust_remote_code,
     )
-    if hasattr(verifier_config, "text_config"):
-        verifier_config = verifier_config.text_config
     return None, None, verifier_config.vocab_size
 
 

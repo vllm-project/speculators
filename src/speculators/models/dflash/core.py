@@ -24,6 +24,7 @@ from speculators.models.dflash.utils import (
 from speculators.models.utils import (
     conditional_torch_compile,
     flatten_rope_parameters,
+    get_verifier_config,
     resolve_target_layer_ids,
 )
 
@@ -193,6 +194,10 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
             kwargs["verifier_name_or_path"],
             trust_remote_code=kwargs.get("trust_remote_code", False),
         )
+        target_config = get_verifier_config(
+            kwargs["verifier_name_or_path"],
+            trust_remote_code=kwargs.get("trust_remote_code", False),
+        )
         verifier_config._attn_implementation = kwargs.get(  # noqa: SLF001
             "draft_attn_impl", "simple_flex_attention"
         )
@@ -217,6 +222,10 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
             "block_size": block_size,
             "aux_hidden_state_layer_ids": target_layer_ids,
             "mask_token_id": kwargs.get("mask_token_id"),
+            "target_logit_scale": getattr(target_config, "output_multiplier", 1.0),
+            "target_logit_softcap": getattr(
+                target_config, "final_logit_softcapping", None
+            ),
             "sliding_window_non_causal": kwargs.get("sliding_window_non_causal", False),
             "sample_from_anchor": sample_from_anchor,
             "speculators_config": SpeculatorsConfig(
@@ -268,6 +277,14 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
                 "was saved with mask_token_id set."
             )
         return self.config.mask_token_id
+
+    def _transform_verifier_logits(self, logits: torch.Tensor) -> torch.Tensor:
+        """Apply verifier output transforms recorded in its public config."""
+        logits = logits * self.config.target_logit_scale
+        if self.config.target_logit_softcap is not None:
+            softcap = self.config.target_logit_softcap
+            logits = softcap * torch.tanh(logits / softcap)
+        return logits
 
     @torch.compiler.disable
     def _create_attention_mask(
@@ -393,8 +410,12 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
                     if self.config.sample_from_anchor
                     else (anchored_block_indices - 1) % total_seq_len
                 )
-                targets = self.verifier_lm_head(
-                    self.verifier_norm(verifier_last_hidden_states[:, target_indices])
+                targets = self._transform_verifier_logits(
+                    self.verifier_lm_head(
+                        self.verifier_norm(
+                            verifier_last_hidden_states[:, target_indices]
+                        )
+                    )
                 )
             else:
                 verifier_logits = self.verifier_lm_head(
@@ -402,7 +423,9 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
                 )
                 if not self.config.sample_from_anchor:
                     verifier_logits = torch.roll(verifier_logits, 1, dims=1)
-                targets = verifier_logits[:, anchored_block_indices]
+                targets = self._transform_verifier_logits(
+                    verifier_logits[:, anchored_block_indices]
+                )
             # shape: [1, num_anchors*block_size, draft_vocab_size]
 
         for layer_idx, layer in enumerate(self.layers):
