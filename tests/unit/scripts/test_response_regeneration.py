@@ -901,6 +901,25 @@ def test_dataset_choice_rejects_multimodal_with_a_reason():
     assert regen._dataset_choice("ultrachat") == "ultrachat"
 
 
+def test_load_input_dataset_from_local_jsonl(tmp_path):
+    path = tmp_path / "prompts.jsonl"
+    path.write_text(
+        json.dumps({"prompt": [{"role": "user", "content": "local prompt"}]})
+    )
+    args = argparse.Namespace(
+        dataset=None,
+        dataset_file=str(path),
+        split=None,
+        subset=None,
+    )
+
+    config, dataset, split = regen.load_input_dataset(args)
+    assert (config.name, config.prompt_field, split) == ("prompts", "prompt", "train")
+    assert regen.prepare_row(next(iter(dataset)), config)[1] == [
+        {"role": "user", "content": "local prompt"}
+    ]
+
+
 def test_tools_and_results_are_read_from_the_normalized_row():
     # Under a normalize_fn preset the conversation only appears in `messages`
     # after normalization; reading tools off the raw row regenerates tool-free.

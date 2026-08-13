@@ -62,6 +62,7 @@ Extracts conversation turns from a dataset, regenerates each assistant response 
 ### Features
 
 - **Multi-turn support** — detects `messages`/`conversations` fields and regenerates each assistant turn against the model's own prior responses
+- **Local file support** for JSON/JSONL prompt datasets
 - **Auto-detects model** from vLLM server (no need to specify `--model`)
 - **Resume capability** to skip already-processed conversations
 - **Async processing** with configurable concurrency
@@ -78,6 +79,8 @@ python scripts/response_regeneration/script.py --dataset magpie
 #### Data Arguments
 
 - **`--dataset`** (str, default: `ultrachat`) Dataset preset to process (see [Supported Datasets](#supported-datasets)).
+
+- **`--dataset-file`** (str) Local JSON/JSONL file to process instead of a preset. Rows may contain `messages`, `conversations`, or `prompt` (a string or message list). Mutually exclusive with `--dataset`; `--split` and `--subset` do not apply.
 
 - **`--split`** (str, default: preset-specific) Dataset split. Defaults to the preset's split.
 
@@ -105,7 +108,7 @@ python scripts/response_regeneration/script.py --dataset magpie
 
 #### Output Arguments
 
-- **`--outfile`** (str, default: auto-generated) Output JSONL path. If not specified, auto-generated as `{dataset}_{model}.jsonl`.
+- **`--outfile`** (str, default: auto-generated) Output JSONL path. If not specified, auto-generated as `{dataset-or-file-stem}_{model}.jsonl`.
 
 - **`--resume`** (flag) Skip conversations already present in the output file (matched by `primary_id`: the row's `id`/`uuid` if it has one, otherwise a content hash).
 
@@ -188,4 +191,4 @@ Tools are **not executed**. The target's *k*-th regenerated call is paired with 
 
 A conversation stops early — keeping the rows completed so far — when the target emits a call that cannot be paired 1:1 with a cached result: it has exhausted the cached results, emitted parallel calls in a single generation, or called a different tool than the next cached result answers. Such conversations are counted under `truncated` in the progress bar.
 
-If `--outfile` is not specified, the filename is auto-generated based on dataset and model (e.g., `magpie_Llama-3.3-70B-Instruct.jsonl`).
+If `--outfile` is not specified, the filename is auto-generated from the preset name or local file stem and model (e.g., `magpie_Llama-3.3-70B-Instruct.jsonl`).
