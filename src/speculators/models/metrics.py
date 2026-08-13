@@ -276,7 +276,13 @@ def lk_hybrid_loss(
     target_p = torch.nn.functional.softmax(targets, dim=-1, dtype=torch.float32)
     overlap = torch.minimum(draft_p, target_p).sum(dim=-1)  # alpha, shape: [1, seq_len]
     tv = 1.0 - overlap
-    kl = kl_div_loss(logits, targets)  # reuse existing KL, shape: [1, seq_len]
+    #kl = kl_div_loss(logits, targets)  # reuse existing KL, shape: [1, seq_len]
+    kl = torch.nn.functional.kl_div(
+        draft_p,
+        target_p,
+        reduction="none",
+        log_target=False,
+    ).sum(dim=-1)  # Already computed softmax
     weight = torch.exp(-eta * overlap.detach())  # lambda = exp(-eta * sg[alpha])
     elementwise_loss = weight * kl + (1.0 - weight) * tv
 
