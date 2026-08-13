@@ -60,6 +60,7 @@ class DFlashSpeculatorConfig(SpeculatorModelConfig):
 
     target_logit_softcap: float | None = Field(
         default=None,
+        gt=0.0,
         description=(
             "Optional tanh softcap applied after target_logit_scale when "
             "reconstructing verifier logits"

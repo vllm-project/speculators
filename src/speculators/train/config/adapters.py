@@ -17,7 +17,7 @@ def _adapt_muse_glimmer_assistant(
         "use_sliding_window",
         "sliding_attention" in config.get("layer_types", []),
     )
-    for key in ("architectures", "block_size", "target_layer_ids"):
+    for key in ("architectures", "block_size", "mask_token_id", "target_layer_ids"):
         config.pop(key, None)
     return config
 
