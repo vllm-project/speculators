@@ -31,9 +31,9 @@ def get_next_version(build_type: str) -> tuple[Version, str | None, int]:
     version, tag, commits_since_last = get_last_version_diff()
 
     print("HERE in NEXT")
-    version=print(f"{version}")
-    tag=print(f"{tag}")
-    commits_since_last=print(f"{commits_since_last}")
+    version=print(f"version={version}")
+    tag=print(f"tag={tag}")
+    commits_since_last=print(f"commits_since_last={commits_since_last}")
     build_type=print(f"build_type={build_type}")
 
     if build_type == "release":
