@@ -8,7 +8,7 @@ from setuptools_git_versioning import count_since, get_branch, get_sha, get_tags
 
 REPO_ROOT = Path(__file__).parent.parent
 LAST_RELEASE_VERSION = Version("0.0.1")
-TAG_VERSION_PATTERN = re.compile(r"^hs_connectors/(\d+\.\d+\.\d+)$")
+TAG_VERSION_PATTERN = re.compile(r"^hsc-v(\d+\.\d+\.\d+)$")
 
 
 def get_last_version_diff() -> tuple[Version, str | None, int]:
@@ -30,9 +30,15 @@ def get_last_version_diff() -> tuple[Version, str | None, int]:
 def get_next_version(build_type: str) -> tuple[Version, str | None, int]:
     version, tag, commits_since_last = get_last_version_diff()
 
+    print("HERE in NEXT")
+    version=print(f"{version}")
+    tag=print(f"{tag}")
+    commits_since_last=print(f"{commits_since_last}")
+    build_type=print(f"build_type={build_type}")
+
     if build_type == "release":
         if not tag:
-            raise ValueError("RELEASE build requires an hs_connectors/X.Y.Z tag")
+            raise ValueError("RELEASE build requires an hsc-vX.Y.Z tag")
         if commits_since_last:
             raise ValueError(
                 f"RELEASE build must be on tag {tag}; "
@@ -50,6 +56,11 @@ def get_next_version(build_type: str) -> tuple[Version, str | None, int]:
 def write_version_files() -> tuple[Path, Path]:
     build_type = os.getenv("HS_CONNECTORS_BUILD_TYPE", "nightly").lower()
     version, tag, build_iteration = get_next_version(build_type)
+
+    print("HERE after NEXT")
+    version=print(f"{version}")
+    tag=print(f"{tag}")
+    build_iteration=print(f"build_iteration={build_iteration}")
 
     module_path = Path(__file__).parent / "src" / "hs_connectors"
     version_txt_path = module_path / "version.txt"
