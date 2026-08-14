@@ -6,9 +6,9 @@ import torch
 from transformers import PretrainedConfig
 
 from speculators.config import SpeculatorsConfig, VerifierConfig
+from speculators.losses import LossConfig, resolve_loss_config
 from speculators.model import SpeculatorModel
 from speculators.models.eagle3.core import Eagle3DraftModel
-from speculators.models.metrics import LossConfig, resolve_loss_config
 from speculators.models.peagle.attention import create_peagle_mask_mod
 from speculators.models.peagle.config import PEagleSpeculatorConfig
 from speculators.models.peagle.data import generate_cod_sample_indices
@@ -277,7 +277,9 @@ class PEagleDraftModel(Eagle3DraftModel):
         Returns:
             Tuple of (train_call_kwargs, val_call_kwargs)
         """
-        loss_config = resolve_loss_config(kwargs["loss_fn"])
+        loss_config = resolve_loss_config(
+            kwargs["loss_fn"], kwargs.get("loss_implementation", "fused")
+        )
         max_anchors = kwargs.get("max_anchors")
         num_depths = kwargs.get("num_depths", 8)
         down_sample_ratio = kwargs.get("down_sample_ratio", 0.7)
