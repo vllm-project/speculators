@@ -246,7 +246,7 @@ def extract_conversation(
 
     # no usable user turn: fall back to the prompt_field
     prompt = row.get(prompt_field) if prompt_field else None
-    if prompt:
+    if isinstance(prompt, str) and prompt:
         return [{"role": "user", "content": prompt}], []
     return [], []
 

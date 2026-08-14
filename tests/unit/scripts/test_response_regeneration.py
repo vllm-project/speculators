@@ -147,6 +147,12 @@ _EXTRACT_CASES = [
         id="empty_messages_falls_back_to_prompt",
     ),
     pytest.param(
+        {"prompt": [{"role": "assistant", "content": "old answer"}]},
+        "prompt",
+        [],
+        id="message_list_prompt_without_user_skipped",
+    ),
+    pytest.param(
         {"messages": ["not-a-dict", {"role": "user", "content": "ok"}]},
         "prompt",
         [{"role": "user", "content": "ok"}],
@@ -901,11 +907,29 @@ def test_dataset_choice_rejects_multimodal_with_a_reason():
     assert regen._dataset_choice("ultrachat") == "ultrachat"
 
 
-def test_load_input_dataset_from_local_jsonl(tmp_path):
-    path = tmp_path / "prompts.jsonl"
-    path.write_text(
-        json.dumps({"prompt": [{"role": "user", "content": "local prompt"}]})
-    )
+@pytest.mark.parametrize(
+    ("filename", "data"),
+    [
+        pytest.param(
+            "prompts.jsonl",
+            {"prompt": [{"role": "user", "content": "local prompt"}]},
+            id="jsonl-message-list-prompt",
+        ),
+        pytest.param(
+            "prompts.jsonl",
+            {"prompt": "local prompt"},
+            id="jsonl-string-prompt",
+        ),
+        pytest.param(
+            "prompts.json",
+            [{"prompt": "local prompt"}],
+            id="json-string-prompt",
+        ),
+    ],
+)
+def test_load_input_dataset_from_local_file(tmp_path, filename, data):
+    path = tmp_path / filename
+    path.write_text(json.dumps(data))
     args = argparse.Namespace(
         dataset=None,
         dataset_file=str(path),
