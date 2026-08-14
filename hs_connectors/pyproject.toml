@@ -25,6 +25,7 @@ keywords = [
     "mooncake",
     "distributed training"
 ]
+authors = [ { name = "Red Hat"} ]
 dependencies = [
     "safetensors",
     "torch",
