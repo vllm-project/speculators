@@ -71,6 +71,7 @@ def write_version_files() -> tuple[Path, Path]:
     module_path = Path(__file__).parent / "src" / "hs_connectors"
 
     existing_version = read_existing_version(module_path)
+    print(f"EXISTING VERSION={existing_version}")
     if existing_version is not None:
         version, tag, build_iteration = existing_version, None, 0
     else:
