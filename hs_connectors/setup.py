@@ -60,9 +60,11 @@ def get_next_version(build_type: str) -> tuple[Version, str | None, int]:
 
 
 def read_existing_version(module_path: Path) -> Version | None:
-    version_txt = module_path / "version.txt"
-    if version_txt.exists():
-        return Version(version_txt.read_text().strip())
+    version_py = module_path / "version.py"
+    if version_py.exists():
+        match = re.search(r'^version\s*=\s*["\']([^"\']+)["\']', version_py.read_text(), re.M)
+        if match:
+            return Version(match.group(1))
     return None
 
 
