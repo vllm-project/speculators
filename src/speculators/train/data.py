@@ -301,9 +301,7 @@ class ArrowDataset(BaseDataset):
                     self.transfer.cache(handle, file_idx)
                 case "delete":
                     self.transfer.delete(handle)
-        except Exception as e:
-            if isinstance(e, ValueError) and "NaN" in str(e):
-                raise
+        except Exception as e:  # noqa: BLE001
             warnings.warn(
                 f"Failed to load/cache hidden states for sample {index}: {e}",
                 stacklevel=1,

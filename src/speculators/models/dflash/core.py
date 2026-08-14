@@ -243,7 +243,7 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
             kwargs["loss_fn"], kwargs.get("loss_implementation", "fused")
         )
         gamma = kwargs.get("dflash_decay_gamma", 4.0)
-        max_anchors = kwargs.get("max_anchors", 3072)
+        max_anchors = kwargs.get("max_anchors", 512)
         per_position_loss_weight = kwargs.get(
             "per_position_loss_weight", "fixed-exp-decay"
         )
@@ -343,7 +343,7 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
         """
         device = hidden_states.device
         total_seq_len = hidden_states.shape[1]
-        num_anchors = kwargs.pop("max_anchors", 3072)
+        num_anchors = kwargs.pop("max_anchors", 512)
 
         if position_ids is None:
             position_ids = torch.arange(
@@ -447,7 +447,7 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
         position_ids: torch.Tensor | None = None,  # shape: [1, total_seq_len]
         loss_config: LossConfig | None = None,
         gamma: float = 4.0,
-        max_anchors: int = 3072,
+        max_anchors: int = 512,
         per_position_loss_weight: str = "fixed-exp-decay",
         dpace_alpha: float = 0.5,
         **kwargs,
