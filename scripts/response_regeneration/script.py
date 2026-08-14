@@ -782,9 +782,9 @@ def load_input_dataset(args: argparse.Namespace) -> tuple[DatasetConfig, Any, st
             prompt_field="prompt",
         )
         dataset = load_dataset(
-            "json", data_files=args.dataset_file, split="train", streaming=True
+            "json", data_files=config.hf_path, split=config.split, streaming=True
         )
-        return config, dataset, "train"
+        return config, dataset, config.split
 
     if args.dataset is None:
         raise ValueError("dataset is required when dataset_file is not set")
@@ -812,7 +812,6 @@ async def main():
     detokenize = build_detokenizer(args.model)
 
     dataset_config, dataset, split = load_input_dataset(args)
-    dataset_id = dataset_config.hf_path
 
     # Generate output filename if not specified
     if args.outfile is None:
@@ -826,7 +825,7 @@ async def main():
     base, ext = os.path.splitext(args.outfile)
     error_outfile = f"{base}.errors{ext or '.jsonl'}"
 
-    print(f"Using dataset: {dataset_id}")
+    print(f"Using dataset: {dataset_config.hf_path}")
     print(f"Split: {split}")
     print(f"Prompt field: {dataset_config.prompt_field}")
     print(f"Output file: {args.outfile}")
