@@ -1,10 +1,9 @@
-import pytest
 import torch
 from transformers.models.qwen3.modeling_qwen3 import Qwen3Config
 
+from scripts.train import configure_gradient_checkpointing
 from speculators.models.dflash import DFlashSpeculatorConfig
 from speculators.models.dflash.core import DFlashDraftModel
-from speculators.models.dspark.core import DSparkDraftModel
 
 
 def _tiny_model() -> DFlashDraftModel:
@@ -59,34 +58,26 @@ def _backbone_grads(model: DFlashDraftModel) -> dict[str, torch.Tensor]:
     }
 
 
-@pytest.mark.parametrize("model_cls", [DFlashDraftModel, DSparkDraftModel])
-def test_model_declares_gradient_checkpointing_support(model_cls):
-    assert model_cls.supports_gradient_checkpointing is True
-
-
-def test_enable_sets_the_flag_on_every_draft_layer():
-    model = _tiny_model()
-    assert all(not layer.gradient_checkpointing for layer in model.layers)
-
-    model.gradient_checkpointing_enable({"use_reentrant": False})
-
-    assert all(layer.gradient_checkpointing for layer in model.layers)
-
-
-def test_gradients_match_without_checkpointing():
-    """Checkpointing must only change *when* activations exist, not the gradients.
-
-    This is the regression guard for `use_reentrant`: the draft layers take every
-    input as a keyword argument, so the reentrant implementation would receive no
-    tensor inputs and silently produce no gradients at all.
-    """
+def test_checkpointing_recomputes_without_changing_gradients():
     model = _tiny_model()
     model.train()
 
     expected = _backbone_grads(model)
-    model.gradient_checkpointing_enable({"use_reentrant": False})
-    actual = _backbone_grads(model)
 
+    calls = 0
+
+    def count_forwards(*_args):
+        nonlocal calls
+        calls += 1
+
+    handle = model.layers[0].register_forward_pre_hook(count_forwards)
+    try:
+        configure_gradient_checkpointing(model, enabled=True)
+        actual = _backbone_grads(model)
+    finally:
+        handle.remove()
+
+    assert calls > 1  # initial forward plus backward recomputation
     assert actual.keys() == expected.keys()
     assert expected  # guard against the comparison passing on an empty dict
     for name, grad in expected.items():

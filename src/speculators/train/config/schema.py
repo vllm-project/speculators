@@ -403,9 +403,8 @@ class TrainerArgs(_Group):
     )
     gradient_checkpointing: bool = Field(
         default=False,
-        description="Recompute draft-layer activations during the backward pass "
-        "instead of keeping them, trading step time for memory. Only supported by "
-        "DFlash and DSpark.",
+        description="Recompute DFlash/DSpark draft-layer activations during backward "
+        "to reduce peak memory at the cost of step time.",
     )
     max_steps: int | None = Field(
         default=None,

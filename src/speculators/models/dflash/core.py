@@ -38,8 +38,7 @@ _compiled_create_block_mask = torch.compile(create_block_mask)
 class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
     config_class: ClassVar[type[DFlashSpeculatorConfig]] = DFlashSpeculatorConfig  # type: ignore[misc]
     _no_split_modules = ["Qwen3DFlashDecoderLayer"]
-    # Qwen3DFlashDecoderLayer already extends GradientCheckpointingLayer; this opts
-    # the model into PreTrainedModel.gradient_checkpointing_enable().
+    # Decoder layers already implement Transformers' checkpointing protocol.
     supports_gradient_checkpointing = True
     _keys_to_ignore_on_load_missing: ClassVar[list[str]] = [  # type: ignore[misc]
         "embed_tokens.weight",

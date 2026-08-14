@@ -532,6 +532,14 @@ def build_draft_model(
     )
 
 
+def configure_gradient_checkpointing(
+    draft_model: SpeculatorModel, enabled: bool
+) -> None:
+    if enabled:
+        # Keyword-only layer inputs require non-reentrant checkpointing.
+        draft_model.gradient_checkpointing_enable({"use_reentrant": False})
+
+
 def main(cfg: TrainConfig):  # noqa: C901
     # Phase-1 adapter: the model layer still consumes a flat vars(args)-shaped
     # dict via **kwargs, so flatten the typed config back into a namespace here.
@@ -607,14 +615,7 @@ def main(cfg: TrainConfig):  # noqa: C901
     model_class = registry[args.speculator_type]
 
     draft_model = build_draft_model(args, model_class, t2d, d2t, draft_vocab_size)
-
-    if args.gradient_checkpointing:
-        # use_reentrant=False is required, not just preferred: the draft layers are
-        # called with every input as a keyword argument, and
-        # GradientCheckpointingLayer forwards only positional args to the checkpoint
-        # function. Under the reentrant implementation no tensor input would reach it
-        # and gradients would silently stop flowing.
-        draft_model.gradient_checkpointing_enable({"use_reentrant": False})
+    configure_gradient_checkpointing(draft_model, cfg.trainer.gradient_checkpointing)
 
     # Get target layer IDs from the model (resolved at model level)
     num_target_layers = len(draft_model.target_layer_ids)  # type: ignore[arg-type]
