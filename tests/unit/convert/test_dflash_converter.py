@@ -219,7 +219,7 @@ class TestRopeParameters:
         "rope_theta": 10000.0,
     }
 
-    def test_nested_rope_params_warns_with_full_attn(self, caplog):
+    def test_nested_rope_params_flattened_with_full_attn(self):
         config = _tiny_dflash_config()
         tl = config.transformer_layer_config
         tl.layer_types = ["full_attention"]
@@ -227,9 +227,8 @@ class TestRopeParameters:
             "sliding_attention": dict(self._ROPE_SLIDING),
             "full_attention": {"rope_type": "default", "rope_theta": 1000000.0},
         }
-        with caplog.at_level(logging.WARNING, logger="speculators.models.dflash.core"):
-            DFlashDraftModel(config=config)
-        assert any("full-attention layer" in r.message for r in caplog.records)
+        model = DFlashDraftModel(config=config)
+        assert model.rotary_emb is not None
 
     def test_nested_rope_params_no_warn_all_sliding(self, caplog):
         config = _tiny_dflash_config()

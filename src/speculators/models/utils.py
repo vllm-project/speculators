@@ -1,8 +1,12 @@
+import logging
 import warnings
+from copy import deepcopy
 from functools import partial
 
 import torch
 from transformers import AutoConfig, PretrainedConfig
+
+logger = logging.getLogger(__name__)
 
 
 def conditional_torch_compile(func=None, *args, **kwargs):
@@ -41,6 +45,23 @@ def resolve_target_layer_ids(
         stacklevel=3,
     )
     return target_layer_ids
+
+
+def flatten_rope_parameters(config: PretrainedConfig) -> PretrainedConfig:
+    """Flatten nested per-layer-type ``rope_parameters`` for rotary embedding init.
+
+    Models like Laguna store separate rope configs per layer type
+    (``sliding_attention``, ``full_attention``). Rotary embedding classes expect
+    a flat dict with ``rope_type``/``rope_theta`` at the top level. This helper
+    selects the ``sliding_attention`` variant when nested parameters are detected
+    and returns a deep-copied config; otherwise returns the original unchanged.
+    """
+    rope_params = getattr(config, "rope_parameters", None)
+    if not rope_params or "sliding_attention" not in rope_params:
+        return config
+    config = deepcopy(config)
+    config.rope_parameters = rope_params["sliding_attention"]
+    return config
 
 
 def resolve_draft_intermediate_size(verifier_config: PretrainedConfig) -> int:
