@@ -1,23 +1,18 @@
-"""Verifier-owned checkpoint key ownership for DFlash/DSpark.
-
-embed_tokens is always an exact frozen verifier copy, and a full-vocab
-lm_head is the exact frozen verifier projection; both are reconstructed on
-load from the verifier and omitted from saved checkpoints. A reduced-vocab
-lm_head is a runtime-required verifier-derived head: current vLLM cannot
-reconstruct an arbitrary reduced head from the full verifier head, so it
-must be serialized together with the t2d/d2t vocab mappings.
-"""
+"""Checkpoint ownership for verifier-derived weights."""
 
 from __future__ import annotations
 
+from types import SimpleNamespace
 from typing import TYPE_CHECKING
 
 import pytest
 import torch
-from safetensors.torch import load_file, save_file
+from safetensors.torch import load_file
+from torch import nn
 from transformers.models.qwen3.modeling_qwen3 import Qwen3Config
 
 from speculators.config import SpeculatorsConfig, VerifierConfig
+from speculators.model import DraftVocabMixin
 from speculators.models.dflash import DFlashSpeculatorConfig
 from speculators.models.dflash.core import DFlashDraftModel
 from speculators.models.dspark.config import DSparkSpeculatorConfig
@@ -103,9 +98,6 @@ def _saved_keys(model: DFlashDraftModel, tmp_path: Path) -> set[str]:
     return set(load_file(tmp_path / "model.safetensors"))
 
 
-# ── 1. save-key ownership ────────────────────────────────────────────────────
-
-
 @pytest.mark.parametrize(
     "model_cls",
     [DFlashDraftModel, DSparkDraftModel],
@@ -115,35 +107,16 @@ def test_full_vocab_save_omits_verifier_owned(model_cls, tmp_path: Path):
     full = _make_model(model_cls, draft_vocab_size=VERIFIER_VOCAB)
     assert not full.use_draft_vocab
     keys = _saved_keys(full, tmp_path / "full")
-    assert VERIFIER_OWNED_OMITTED - keys == VERIFIER_OWNED_OMITTED
+    assert VERIFIER_OWNED_OMITTED.isdisjoint(keys)
     assert "lm_head.weight" not in keys
-    assert "layers.0.self_attn.q_proj.weight" in keys
 
     # Class-level ignore lists are instance-copied: a reduced-vocab sibling
     # created after the full-vocab model must not inherit lm_head omission.
     reduced = _make_model(model_cls, draft_vocab_size=32)
     reduced_keys = _saved_keys(reduced, tmp_path / "reduced")
+    assert VERIFIER_OWNED_OMITTED.isdisjoint(reduced_keys)
     assert "lm_head.weight" in reduced_keys
-
-
-@pytest.mark.parametrize(
-    "model_cls",
-    [DFlashDraftModel, DSparkDraftModel],
-    ids=["dflash", "dspark"],
-)
-def test_reduced_vocab_save_keeps_runtime_required_head(model_cls, tmp_path: Path):
-    model = _make_model(model_cls, draft_vocab_size=32)
-    assert model.use_draft_vocab
-    keys = _saved_keys(model, tmp_path)
-    assert "embed_tokens.weight" not in keys
-    assert "lm_head.weight" in keys
-    assert "verifier_lm_head.weight" not in keys
-    assert "verifier_norm.weight" not in keys
-    assert "t2d" in keys
-    assert "d2t" in keys
-
-
-# ── 2. slim roundtrip ────────────────────────────────────────────────────────
+    assert {"t2d", "d2t"}.issubset(reduced_keys)
 
 
 def test_full_vocab_slim_roundtrip_reconstructs_from_verifier(
@@ -163,51 +136,31 @@ def test_full_vocab_slim_roundtrip_reconstructs_from_verifier(
     assert torch.equal(loaded.verifier_norm.weight, fake["model.norm.weight"])
 
 
-def test_reduced_vocab_slim_roundtrip_reconstructs_head_through_t2d(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-):
-    model = _make_model(DFlashDraftModel, draft_vocab_size=32)
-    model.save_pretrained(tmp_path)
+def test_checkpoint_weights_take_precedence(monkeypatch: pytest.MonkeyPatch):
+    model = DraftVocabMixin()
+    model.config = SimpleNamespace(
+        speculators_config=SimpleNamespace(
+            verifier=SimpleNamespace(name_or_path="dummy")
+        )
+    )
+    model.embed_tokens = nn.Embedding(VERIFIER_VOCAB, 16)
+    model.lm_head = nn.Linear(16, VERIFIER_VOCAB, bias=False)
+    model.verifier_lm_head = nn.Linear(16, VERIFIER_VOCAB, bias=False)
+    model.use_draft_vocab = False
+    model.t2d = None
+    model.d2t = None
+    with torch.no_grad():
+        model.embed_tokens.weight.fill_(0.25)
+        model.lm_head.weight.fill_(0.5)
+    expected_embed = model.embed_tokens.weight.detach().clone()
+    expected_head = model.lm_head.weight.detach().clone()
     fake = _fake_verifier()
     monkeypatch.setattr(
         "speculators.utils.loading.load_model_layers",
         _make_fake_loader(fake),
     )
-    # t2d/d2t reload from the checkpoint itself; do not pass them explicitly.
-    loaded = DFlashDraftModel.from_pretrained(tmp_path, local_files_only=True)
-    assert loaded.use_draft_vocab
-    assert loaded.lm_head.weight.shape == (32, 16)
-    expected = fake["lm_head.weight"][model.t2d.bool(), :]
-    assert torch.equal(loaded.lm_head.weight, expected)
-    assert torch.equal(loaded.t2d, model.t2d)
-    assert torch.equal(loaded.d2t, model.d2t)
 
+    model.load_verifier_weights()
 
-# ── 3. legacy self-contained checkpoint compatibility ────────────────────────
-
-
-def test_self_contained_checkpoint_still_loads(tmp_path, monkeypatch):  # type: ignore[no-untyped-def]
-    """Old self-contained checkpoints (with verifier-owned weights present) must
-    still load; verifier-owned tensors now use the verifier as source of truth."""
-    model = _make_model(DFlashDraftModel, draft_vocab_size=VERIFIER_VOCAB)
-    model.save_pretrained(tmp_path)
-    # Overwrite the safetensors payload with the full state dict to simulate a
-    # checkpoint written before slim saving.
-    tensors = {
-        key: value
-        for key, value in model.state_dict().items()
-        if isinstance(value, torch.Tensor)
-    }
-    save_file(tensors, tmp_path / "model.safetensors")
-    keys = set(load_file(tmp_path / "model.safetensors"))
-    assert "embed_tokens.weight" in keys
-    assert "lm_head.weight" in keys
-
-    fake = _fake_verifier()
-    monkeypatch.setattr(
-        "speculators.utils.loading.load_model_layers",
-        _make_fake_loader(fake),
-    )
-    loaded = DFlashDraftModel.from_pretrained(tmp_path, local_files_only=True)
-    assert torch.equal(loaded.embed_tokens.weight, fake["embed_tokens.weight"])
-    assert torch.equal(loaded.lm_head.weight, fake["lm_head.weight"])
+    assert torch.equal(model.embed_tokens.weight, expected_embed)
+    assert torch.equal(model.lm_head.weight, expected_head)

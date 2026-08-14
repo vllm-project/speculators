@@ -120,13 +120,19 @@ class DraftVocabMixin(nn.Module):
 
         self.load_state_dict({"t2d": t2d, "d2t": d2t}, strict=False)
 
-    def load_verifier_weights(self):  # noqa: C901
+    def load_verifier_weights(  # noqa: C901
+        self,
+        *,
+        overwrite_embed_tokens: bool = False,
+        overwrite_lm_head: bool = False,
+    ):
         """Load verifier model weights (embeddings, lm_head, etc.).
 
         Loads embed_tokens, lm_head, and verifier_lm_head weights from the
         verifier model. Handles draft vocab masking via t2d when use_draft_vocab
         is True. Subclasses can override to load additional weights (e.g. norms,
-        tokenizer) by calling super().load_verifier_weights() first.
+        tokenizer) by calling super().load_verifier_weights() first. Checkpoint
+        weights take precedence unless a subclass explicitly requests overwrite.
         """
         import warnings  # noqa: PLC0415
 
@@ -154,13 +160,9 @@ class DraftVocabMixin(nn.Module):
         embed_tokens_weight = verifier_weights["embed_tokens.weight"]
         lm_head_weight = verifier_weights.get("lm_head.weight", embed_tokens_weight)
 
-        # embed_tokens and lm_head are frozen verifier-derived parameters, so
-        # they are always overwritten from the verifier. The previous NaN guard
-        # is unreliable: transformers re-materializes parameters absent from a
-        # checkpoint with uninitialized storage (see
-        # _move_missing_keys_from_meta_to_device), so NaN no longer means
-        # "uninitialized" and a slim checkpoint would load garbage.
-        self.embed_tokens.load_state_dict({"weight": embed_tokens_weight})
+        # Load embed_tokens if not already loaded (NaN means uninitialized)
+        if overwrite_embed_tokens or self.embed_tokens.weight.isnan().any():
+            self.embed_tokens.load_state_dict({"weight": embed_tokens_weight})
 
         if self.use_draft_vocab:
             if self.t2d is None or not torch.any(self.t2d).item():  # type: ignore[arg-type]
@@ -172,9 +174,10 @@ class DraftVocabMixin(nn.Module):
                 self.t2d.to(device=lm_head_weight.device, dtype=torch.bool), :  # type: ignore[union-attr,index]
             ]
 
-        self.lm_head.load_state_dict(
-            {"weight": lm_head_weight.detach().clone()}, strict=False
-        )
+        if overwrite_lm_head or self.lm_head.weight.isnan().any():
+            self.lm_head.load_state_dict(
+                {"weight": lm_head_weight.detach().clone()}, strict=False
+            )
         self.verifier_lm_head.load_state_dict(
             {"weight": lm_head_weight.detach().clone()}, strict=False
         )

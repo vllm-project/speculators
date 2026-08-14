@@ -145,6 +145,13 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
         """Target layer IDs for auxiliary hidden states."""
         return self.config.aux_hidden_state_layer_ids
 
+    def load_verifier_weights(self):
+        """Reconstruct weights intentionally omitted from DFlash checkpoints."""
+        super().load_verifier_weights(
+            overwrite_embed_tokens=True,
+            overwrite_lm_head=not self.use_draft_vocab,
+        )
+
     @classmethod
     def from_training_args(
         cls,
