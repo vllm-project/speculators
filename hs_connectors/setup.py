@@ -31,10 +31,10 @@ def get_next_version(build_type: str) -> tuple[Version, str | None, int]:
     version, tag, commits_since_last = get_last_version_diff()
 
     print("HERE in NEXT")
-    version=print(f"version={version}")
-    tag=print(f"tag={tag}")
-    commits_since_last=print(f"commits_since_last={commits_since_last}")
-    build_type=print(f"build_type={build_type}")
+    print(f"version={version}")
+    print(f"tag={tag}")
+    print(f"commits_since_last={commits_since_last}")
+    print(f"build_type={build_type}")
 
     if build_type == "release":
         if not tag:
@@ -58,9 +58,9 @@ def write_version_files() -> tuple[Path, Path]:
     version, tag, build_iteration = get_next_version(build_type)
 
     print("HERE after NEXT")
-    version=print(f"{version}")
-    tag=print(f"{tag}")
-    build_iteration=print(f"build_iteration={build_iteration}")
+    print(f"{version}")
+    print(f"{tag}")
+    print(f"build_iteration={build_iteration}")
 
     module_path = Path(__file__).parent / "src" / "hs_connectors"
     version_txt_path = module_path / "version.txt"
