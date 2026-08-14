@@ -2,10 +2,16 @@
 """
 Prepare data for speculator training
 
-This script processes an input dataset and:
-1. Applies chat template + tokenizes each sample
-2. Produces a loss/assistant mask for each sample
+Accepted inputs contain responses produced by the target model, either as
+natural-language conversations or as speculator-format ``input_ids`` and
+``loss_mask`` rows. For natural-language input this script:
+
+1. Uses the target model's vLLM endpoint to render each conversation
+2. Derives a loss mask from each assistant-turn boundary
 3. Records token frequency statistics
+
+Rendering converts an existing on-policy conversation into speculator format.
+It does not generate responses or make an arbitrary conversation on-policy.
 
 The output of this script is:
 1. Processed dataset ready for online training or offline datagen in output_dir
@@ -17,7 +23,8 @@ Token frequencies are saved in the output directory by default.
 Usage:
     python prepare_data.py \
         --model meta-llama/Llama-3.1-8B-Instruct \
-        --data sharegpt \
+        --data ./on_policy_conversations.jsonl \
+        --render-endpoint http://localhost:8000 \
         --output ./training_data \
         --max-samples 5000
 """
@@ -101,7 +108,11 @@ def parse_args():
         type=str,
         action="append",
         required=True,
-        help="Path to training data (same as used in preprocessing)",
+        help=(
+            "On-policy target-model data as natural-language conversations or "
+            "speculator-format input_ids/loss_mask rows. Assistant responses "
+            "must come from the target model; this command does not generate them."
+        ),
     )
     parser.add_argument(
         "--seq-length",
@@ -125,12 +136,19 @@ def parse_args():
         ),
     )
     parser.add_argument(
-        "--assistant-pattern",
+        "--render-endpoint",
         type=str,
         default=None,
         help=(
-            "Custom regex pattern for matching assistant responses. "
-            "If not provided, auto-detected from chat template."
+            "Base URL of a running vLLM server (e.g. http://localhost:8000). "
+            "The instance launched for hidden-state extraction serves this "
+            "too, so no second server is needed. Pass the base URL only: "
+            "/v1/chat/completions/render is appended to it, so the "
+            "/v1-suffixed form that data_generation_offline.py --endpoint "
+            "takes will 404. Conversations are tokenized by that endpoint and "
+            "the loss mask is derived from the render boundary. Rendering does "
+            "not generate responses or make arbitrary data on-policy. Required "
+            "unless every --data input already contains input_ids and loss_mask."
         ),
     )
 
@@ -224,7 +242,7 @@ def main():
         seed=args.seed,
         max_samples=args.max_samples,
         token_freq_path=token_freq_path,
-        assistant_pattern=args.assistant_pattern,
+        render_endpoint=args.render_endpoint,
         minimum_valid_tokens=args.minimum_valid_tokens,
         allow_empty_output=args.allow_empty_output,
         trust_remote_code=args.trust_remote_code,
