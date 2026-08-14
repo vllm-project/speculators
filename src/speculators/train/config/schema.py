@@ -233,9 +233,9 @@ class DataArgs(_Group):
     num_workers: int = Field(default=12, description="Number of dataloader workers.")
     prefetch_factor: int = Field(default=4, description="Dataloader prefetch factor.")
     max_anchors: int = Field(
-        default=3072,
+        default=512,
         description="Maximum anchor positions for DFlash, DSpark, and P-EAGLE training "
-        "(default: 3072).",
+        "(default: 512).",
     )
 
     @field_validator("hidden_states_dtype")
