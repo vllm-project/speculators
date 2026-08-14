@@ -43,13 +43,13 @@ def get_next_version(build_type: str) -> tuple[Version, str | None, int]:
     print(f"build_type={build_type}")
 
     if build_type == "release":
-        #if not tag:
-        #    raise ValueError("RELEASE build requires an hsc-vX.Y.Z tag")
-        #if commits_since_last:
-        #    raise ValueError(
-        #        f"RELEASE build must be on tag {tag}; "
-        #        f"HEAD is {commits_since_last} commit(s) ahead"
-        #    )
+        if not tag:
+            raise ValueError("RELEASE build requires an hsc-vX.Y.Z tag")
+        if commits_since_last:
+            raise ValueError(
+                f"RELEASE build must be on tag {tag}; "
+                f"HEAD is {commits_since_last} commit(s) ahead"
+            )
         return version, tag, 0
 
     if build_type == "nightly":
@@ -59,9 +59,22 @@ def get_next_version(build_type: str) -> tuple[Version, str | None, int]:
     raise ValueError(f"Unsupported HS_CONNECTORS_BUILD_TYPE={build_type!r}")
 
 
+def read_existing_version(module_path: Path) -> Version | None:
+    version_txt = module_path / "version.txt"
+    if version_txt.exists():
+        return Version(version_txt.read_text().strip())
+    return None
+
+
 def write_version_files() -> tuple[Path, Path]:
     build_type = os.getenv("HS_CONNECTORS_BUILD_TYPE", "nightly").lower()
-    version, tag, build_iteration = get_next_version(build_type)
+    module_path = Path(__file__).parent / "src" / "hs_connectors"
+
+    existing_version = read_existing_version(module_path)
+    if existing_version is not None:
+        version, tag, build_iteration = existing_version, None, 0
+    else:
+        version, tag, build_iteration = get_next_version(build_type)
 
     print("IN WRITE")
     print(f"build_type={build_type}")
@@ -69,7 +82,6 @@ def write_version_files() -> tuple[Path, Path]:
     print(f"{tag}")
     print(f"build_iteration={build_iteration}")
 
-    module_path = Path(__file__).parent / "src" / "hs_connectors"
     version_txt_path = module_path / "version.txt"
     version_py_path = module_path / "version.py"
 
