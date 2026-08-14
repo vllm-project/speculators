@@ -74,13 +74,40 @@ Extracts conversation turns from a dataset, regenerates each assistant response 
 python scripts/response_regeneration/script.py --dataset magpie
 ```
 
+### Local Files
+
+Use `--dataset-file` to regenerate responses from a local `.json` or `.jsonl` file. **JSONL is recommended for large datasets** because it can be read one row at a time; a regular JSON file may need to be loaded completely before iteration. Each JSONL line, or each object in a top-level JSON array, must use one of these schemas:
+
+- `prompt`: a non-empty string or a non-empty list of message objects.
+- `messages`: a non-empty list of message objects.
+- `conversations`: a non-empty list of message objects.
+
+Message objects may use OpenAI-style `role`/`content` keys or ShareGPT-style `from`/`value` keys. The recognized input roles are `system`, `user`, and `human`; `human` is normalized to `user`. Existing `assistant`/`gpt` turns are discarded and regenerated. `tool` messages are retained as cached results for tool-call regeneration.
+
+For example, `my_prompts.jsonl` may contain:
+
+```jsonl
+{"id":"prompt-1","prompt":"Explain speculative decoding."}
+{"id":"prompt-2","messages":[{"role":"system","content":"Be concise."},{"role":"user","content":"What is EAGLE?"}]}
+{"id":"prompt-3","conversations":[{"from":"human","value":"Compare EAGLE and DFlash."}]}
+```
+
+Run regeneration with:
+
+```bash
+python scripts/response_regeneration/script.py \
+  --dataset-file ./my_prompts.jsonl
+```
+
+Column names such as `instruction`, `question`, and `text` are not inferred. Convert those rows to one of the schemas above or use a registered dataset preset with a normalization function.
+
 ### Arguments
 
 #### Data Arguments
 
 - **`--dataset`** (str, default: `ultrachat`) Dataset preset to process (see [Supported Datasets](#supported-datasets)).
 
-- **`--dataset-file`** (str) Local JSON/JSONL file to process instead of a preset. Rows may contain `messages`, `conversations`, or `prompt` (a string or message list). Mutually exclusive with `--dataset`; `--split` and `--subset` do not apply.
+- **`--dataset-file`** (str) Local JSON/JSONL file to process instead of a preset (see [Local Files](#local-files)). Mutually exclusive with `--dataset`; `--split` and `--subset` do not apply.
 
 - **`--split`** (str, default: preset-specific) Dataset split. Defaults to the preset's split.
 
