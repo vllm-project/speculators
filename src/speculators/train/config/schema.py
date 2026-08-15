@@ -218,12 +218,6 @@ class DataArgs(_Group):
     noise_std: float = Field(
         default=0.05, description="Standard deviation for noise augmentation."
     )
-    legacy_data: bool = Field(
-        default=False,
-        description="DEPRECATED. Use the old data format which stores hidden states "
-        "alongside token_ids and assistant_masks in data_i.pt files. Will be removed "
-        "soon.",
-    )
     hidden_states_dtype: str = Field(
         default="bfloat16",
         description="Data type for dataloader hidden states and autocast compute. "
