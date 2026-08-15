@@ -30,7 +30,14 @@ import torch
 import triton
 import triton.language as tl
 
+from speculators.utils.util import is_npu_available
+
 MAX_FUSED_SIZE = 131072
+# Ascend NPU's Unified Buffer (~192 KB) cannot fit the double-row load these
+# kernels perform (logits + targets per block) beyond 4096 elements per block;
+# triton-ascend raises "ub overflow" at BLOCK_SIZE >= 8192. CE is single-row
+# but shares the same cap so all _FusedLoss OPs use one path.
+MAX_FUSED_SIZE_NPU = 4096
 
 # tl.constexpr instances: Triton kernels may only read globals wrapped this way.
 _LOG2 = tl.constexpr(0.6931471805599453)
@@ -52,7 +59,8 @@ _N_STATS = 5
 
 
 def _calculate_settings(n):
-    BLOCK_SIZE = min(triton.next_power_of_2(n), MAX_FUSED_SIZE)
+    max_size = MAX_FUSED_SIZE if not is_npu_available() else MAX_FUSED_SIZE_NPU
+    BLOCK_SIZE = min(triton.next_power_of_2(n), max_size)
     num_warps = 4
     if BLOCK_SIZE >= 32768:
         num_warps = 32
