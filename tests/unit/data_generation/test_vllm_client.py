@@ -6,6 +6,7 @@ import pytest
 
 from speculators.data_generation.vllm_client import (
     InvalidResponseError,
+    _continue_final_message_for,
     generate_hidden_states,
     generate_hidden_states_async,
 )
@@ -134,12 +135,18 @@ def test_routes_text_and_multimodal_payloads(mode):
     assert chat_call["tools"] == tools
     assert chat_call["extra_body"] == {
         "add_generation_prompt": False,
-        "continue_final_message": True,
+        "continue_final_message": False,
         "return_token_ids": True,
     }
 
     _generate(mode, client, {"input_ids": [4, 5, 6], "messages": messages})
     assert "tools" not in chat_state.calls[1]
+
+
+def test_continue_final_message_is_model_specific():
+    assert not _continue_final_message_for("dummy-model")
+    assert _continue_final_message_for("mistral-small")
+    assert _continue_final_message_for("mistralai/Mistral-7B-Instruct-v0.3")
 
 
 def test_canonicalizes_local_paths_and_percent_encoded_file_uris(tmp_path):

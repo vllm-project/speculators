@@ -1,3 +1,4 @@
+import json
 import warnings
 from collections.abc import Callable, Sequence
 from os import PathLike
