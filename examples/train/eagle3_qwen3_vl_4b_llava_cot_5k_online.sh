@@ -67,21 +67,12 @@ if [[ ! -s "$DATASET_JSONL" ]]; then
     exit 1
 fi
 
-echo "=== Step 3: Preparing multimodal data ==="
-python scripts/prepare_data.py \
-    --model "$MODEL" \
-    --data "$DATASET_JSONL" \
-    --output "$OUTPUT_DIR" \
-    --max-samples "$MAX_SAMPLES" \
-    --seq-length "$SEQ_LENGTH" \
-    --multimodal
-
 if curl -sf "http://localhost:${VLLM_PORT}/health" >/dev/null 2>&1; then
     echo "Port $VLLM_PORT already has a healthy server." >&2
     exit 1
 fi
 
-echo "=== Step 4: Launching vLLM server ==="
+echo "=== Step 3: Launching vLLM server ==="
 CUDA_VISIBLE_DEVICES="$VLLM_GPUS" python scripts/launch_vllm.py "$MODEL" \
     --hidden-states-path "$HIDDEN_STATES_DIR" \
     -- \
@@ -116,6 +107,16 @@ until curl -sf "http://localhost:${VLLM_PORT}/health" >/dev/null 2>&1; do
     fi
     sleep 2
 done
+
+echo "=== Step 4: Preparing multimodal data ==="
+python scripts/prepare_data.py \
+    --model "$MODEL" \
+    --data "$DATASET_JSONL" \
+    --output "$OUTPUT_DIR" \
+    --max-samples "$MAX_SAMPLES" \
+    --seq-length "$SEQ_LENGTH" \
+    --render-endpoint "http://localhost:${VLLM_PORT}" \
+    --multimodal
 
 echo "=== Step 5: Online training ==="
 CUDA_VISIBLE_DEVICES="$TRAIN_GPUS" torchrun \
