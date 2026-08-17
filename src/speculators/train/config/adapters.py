@@ -29,5 +29,8 @@ _DRAFT_CONFIG_ADAPTERS: dict[str, _DraftConfigAdapter] = {
 
 def adapt_draft_config(config: dict, verifier_config: PretrainedConfig) -> dict:
     """Normalize released draft wrapper configs to supported decoders."""
-    adapter = _DRAFT_CONFIG_ADAPTERS.get(config.get("model_type"))
+    model_type = config.get("model_type")
+    adapter = (
+        _DRAFT_CONFIG_ADAPTERS.get(model_type) if isinstance(model_type, str) else None
+    )
     return adapter(config, verifier_config) if adapter else dict(config)
