@@ -128,13 +128,7 @@ def test_compiles_fullgraph(name, eager_fn, fused_name):
 
 @requires_cuda
 def test_ce_releases_targets_before_backward():
-    """ce must not keep the [B, T, V] targets alive across backward.
-
-    Its gradient is ``dp - onehot(argmax tp)`` and the forward already caches
-    that argmax in ``stats``, so saving the targets would pin a tensor the
-    backward never reads -- 2.9 GiB at DFlash's default anchor count. The
-    distribution losses do read them and must keep holding them.
-    """
+    """CE releases targets after forward; distribution losses retain them."""
     fused_losses = pytest.importorskip("speculators.losses.fused")
 
     def held_vs_target_bytes(fused_fn) -> tuple[int, int]:

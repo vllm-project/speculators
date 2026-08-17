@@ -48,8 +48,6 @@ _OP_TV = tl.constexpr(4)
 # stats [_N_STATS, n_rows]: [0]/[1] draft row max / sum-exp, [2]/[3] same for
 # targets (unused by ce), [4] per-OP -- kl_div/rkl: row loss L | jsd:
 # KL(dp||mix) | tv: s_s | ce: argmax as float32 (exact: vocab < 2**24).
-# ce's [4] is the whole of what its backward needs from the targets, so it
-# alone takes targets_ptr=None there and drops them at the end of the forward.
 _N_STATS = 5
 
 
@@ -206,7 +204,7 @@ def loss_backward_kernel(
     lse_d = m_d + tl.log(z_d)
     extra = tl.load(stats_ptr + 4 * stats_row + pid)
     if OP != _OP_CE:
-        # ce is handed targets_ptr=None, so even the offsetting stays guarded.
+        # CE passes None for targets_ptr.
         targets_ptr += pid * n_cols
         m_t = tl.load(stats_ptr + 2 * stats_row + pid)
         z_t = tl.load(stats_ptr + 3 * stats_row + pid)
@@ -263,9 +261,7 @@ class _FusedLoss(torch.autograd.Function):
             BLOCK_SIZE=BLOCK_SIZE,
             num_warps=num_warps,
         )
-        # Dropping ce's targets frees [B*T, V] for the whole backward -- 2.9 GiB
-        # at DFlash's default anchor count. No win for a compound spec that also
-        # configures a distribution term, which re-pins the same buffer.
+        # CE backward only needs the target argmax cached in stats.
         ctx.save_for_backward(
             logits_flat, None if op == _OP_CE.value else targets_flat, stats
         )
@@ -282,7 +278,7 @@ class _FusedLoss(torch.autograd.Function):
         grad_in = torch.empty_like(logits_flat)
         loss_backward_kernel[(B * T,)](
             logits_flat,
-            targets_flat,  # None for ce; its OP branch never dereferences it
+            targets_flat,
             grad_in,
             grad_output.contiguous().view(-1),
             stats,
