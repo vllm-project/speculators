@@ -24,23 +24,11 @@ def get_last_version_diff() -> tuple[Version, str | None, int]:
     commits_since_last = (
         count_since(f"{last_tag}^{{commit}}", root=REPO_ROOT) if last_tag else 0
     )
-    print("IN LAST")
-    print(f"tagged_versions={tagged_versions}")
-    print(f"last_version={last_version}")
-    print(f"last_tag={last_tag}")
-    print(f"commits_since_last={commits_since_last}")
     return last_version, last_tag, commits_since_last
 
 
 def get_next_version(build_type: str) -> tuple[Version, str | None, int]:
     version, tag, commits_since_last = get_last_version_diff()
-
-    print("HERE in NEXT")
-    print(f"REPO_ROOT={REPO_ROOT}")
-    print(f"version={version}")
-    print(f"tag={tag}")
-    print(f"commits_since_last={commits_since_last}")
-    print(f"build_type={build_type}")
 
     if build_type == "release":
         if not tag:
@@ -59,34 +47,39 @@ def get_next_version(build_type: str) -> tuple[Version, str | None, int]:
     raise ValueError(f"Unsupported HS_CONNECTORS_BUILD_TYPE={build_type!r}")
 
 
-def read_existing_version(module_path: Path) -> Version | None:
-    version_py = module_path / "version.py"
+def read_existing_version(version_py: Path) -> tuple[Version, str | None, int]:
     if version_py.exists():
-        match = re.search(r'^version\s*=\s*["\']([^"\']+)["\']', version_py.read_text(), re.M)
-        if match:
-            return Version(match.group(1))
-    return None
+        match_version = re.search(r'^version\s*=\s*["\']([^"\']+)["\']', version_py.read_text(), re.M)
+        match_tag = re.search(r'^git_last_tag\s*=\s*["\']([^"\']+)["\']', version_py.read_text(), re.M)
+        match_iteration = re.search(r'^build_iteration\s*=\s*["\']([^"\']+)["\']', version_py.read_text(), re.M)
+        if match_version:
+            return Version(match_version.group(1)), match_tag.group(1), int(match_iteration.group(1))
+    return None, None, 0
+
+
+def git_available(root: Path) -> bool:
+    makefile_path = root / "hs_connections" / "Makefile"
+    if makefile_path.exists():
+        return True
+    else:
+        return False
 
 
 def write_version_files() -> tuple[Path, Path]:
     build_type = os.getenv("HS_CONNECTORS_BUILD_TYPE", "nightly").lower()
     module_path = Path(__file__).parent / "src" / "hs_connectors"
 
-    existing_version = read_existing_version(module_path)
-    print(f"EXISTING VERSION={existing_version}")
-    if existing_version is not None:
-        version, tag, build_iteration = existing_version, None, 0
+    version_py = module_path / "version.py"
+    if (not git_available(REPO_ROOT)) and version_py.exists():
+        version, tag, build_iteration = read_existing_version(version_py)
     else:
         version, tag, build_iteration = get_next_version(build_type)
 
-    print("IN WRITE")
-    print(f"build_type={build_type}")
-    print(f"{version}")
-    print(f"{tag}")
-    print(f"build_iteration={build_iteration}")
-
     version_txt_path = module_path / "version.txt"
     version_py_path = module_path / "version.py"
+
+    git_commit = get_sha(root=REPO_ROOT) if git_available(REPO_ROOT) else ""
+    git_branch = get_branch(root=REPO_ROOT) if git_available(REPO_ROOT) else ""
 
     with version_txt_path.open("w") as f:
         f.write(str(version))
@@ -95,8 +88,8 @@ def write_version_files() -> tuple[Path, Path]:
             f'version = "{version}"\n',
             f'build_type = "{build_type}"\n',
             f'build_iteration = "{build_iteration}"\n',
-            f'git_commit = "{get_sha(root=REPO_ROOT)}"\n',
-            f'git_branch = "{get_branch(root=REPO_ROOT)}"\n',
+            f'git_commit = "{git_commit}"\n',
+            f'git_branch = "{git_branch}"\n',
             f'git_last_tag = "{tag or ""}"\n',
         ])
     return version_txt_path, version_py_path
