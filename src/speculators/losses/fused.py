@@ -30,8 +30,6 @@ import torch
 import triton
 import triton.language as tl
 
-from speculators.utils.util import is_npu_available
-
 MAX_FUSED_SIZE = 131072
 # Ascend NPU's Unified Buffer (~192 KB) cannot fit the double-row load these
 # kernels perform (logits + targets per block) beyond 4096 elements per block;
@@ -58,8 +56,8 @@ _OP_TV = tl.constexpr(4)
 _N_STATS = 5
 
 
-def _calculate_settings(n):
-    max_size = MAX_FUSED_SIZE if not is_npu_available() else MAX_FUSED_SIZE_NPU
+def _calculate_settings(n, device):
+    max_size = MAX_FUSED_SIZE_NPU if device.type == "npu" else MAX_FUSED_SIZE
     BLOCK_SIZE = min(triton.next_power_of_2(n), max_size)
     num_warps = 4
     if BLOCK_SIZE >= 32768:
@@ -256,7 +254,7 @@ class _FusedLoss(torch.autograd.Function):
         targets_flat = targets.contiguous().view(B * T, V)
         loss = torch.empty(B * T, device=logits.device, dtype=torch.float32)
         stats = torch.empty(_N_STATS, B * T, device=logits.device, dtype=torch.float32)
-        BLOCK_SIZE, num_warps = _calculate_settings(V)
+        BLOCK_SIZE, num_warps = _calculate_settings(V, logits_flat.device)
         loss_forward_kernel[(B * T,)](
             logits_flat,
             targets_flat,
