@@ -49,28 +49,27 @@ def get_next_version(build_type: str) -> tuple[Version, str | None, int]:
 
 def read_existing_version(version_py: Path) -> tuple[Version, str | None, int]:
     if version_py.exists():
-        match_version = re.search(r'^version\s*=\s*["\']([^"\']+)["\']', version_py.read_text(), re.M)
-        match_tag = re.search(r'^git_last_tag\s*=\s*["\']([^"\']+)["\']', version_py.read_text(), re.M)
-        match_iteration = re.search(r'^build_iteration\s*=\s*["\']([^"\']+)["\']', version_py.read_text(), re.M)
-        if match_version:
-            return Version(match_version.group(1)), match_tag.group(1), int(match_iteration.group(1))
-    return None, None, 0
+        text = version_py.read_text()
+        match_version = re.search(r'^version\s*=\s*["\']([^"\']+)["\']', text, re.M)
+        match_tag = re.search(r'^git_last_tag\s*=\s*["\']([^"\']*)["\']', text, re.M)
+        match_iteration = re.search(r'^build_iteration\s*=\s*["\']([^"\']+)["\']', text, re.M)
+        version = Version(match_version.group(1)) if match_version else None
+        tag = match_tag.group(1) if match_tag and match_tag.group(1) else None
+        build_iteration = int(match_iteration.group(1)) if match_iteration else 0
+    return version, tag, build_iteration
 
 
-def git_available(root: Path) -> bool:
-    makefile_path = root / "hs_connections" / "Makefile"
-    if makefile_path.exists():
-        return True
-    else:
-        return False
+def building_from_sdist() -> bool:
+    # sdist extracts as hs_connectors-<version>/setup.py
+    return Path(__file__).parent.name.startswith("hs_connectors-")
 
 
 def write_version_files() -> tuple[Path, Path]:
     build_type = os.getenv("HS_CONNECTORS_BUILD_TYPE", "nightly").lower()
     module_path = Path(__file__).parent / "src" / "hs_connectors"
-
     version_py = module_path / "version.py"
-    if (not git_available(REPO_ROOT)) and version_py.exists():
+
+    if building_from_sdist() and version_py.exists():
         version, tag, build_iteration = read_existing_version(version_py)
     else:
         version, tag, build_iteration = get_next_version(build_type)
@@ -78,8 +77,8 @@ def write_version_files() -> tuple[Path, Path]:
     version_txt_path = module_path / "version.txt"
     version_py_path = module_path / "version.py"
 
-    git_commit = get_sha(root=REPO_ROOT) if git_available(REPO_ROOT) else ""
-    git_branch = get_branch(root=REPO_ROOT) if git_available(REPO_ROOT) else ""
+    git_commit = get_sha(root=REPO_ROOT) if (not building_from_sdist()) else ""
+    git_branch = get_branch(root=REPO_ROOT) if (not building_from_sdist()) else ""
 
     with version_txt_path.open("w") as f:
         f.write(str(version))
