@@ -90,7 +90,7 @@ def _patch_empty_pipeline(monkeypatch: pytest.MonkeyPatch) -> None:
         lambda _path: (HFDataset.from_dict({"conversations": []}), None),
     )
     monkeypatch.setattr(
-        preprocessing_module, "build_eagle3_dataset", lambda *a, **k: empty
+        preprocessing_module, "build_speculator_training_dataset", lambda *a, **k: empty
     )
     monkeypatch.setattr(
         preprocessing_module, "save_token_frequency_distribution", lambda **k: None

@@ -218,12 +218,6 @@ class DataArgs(_Group):
     noise_std: float = Field(
         default=0.05, description="Standard deviation for noise augmentation."
     )
-    legacy_data: bool = Field(
-        default=False,
-        description="DEPRECATED. Use the old data format which stores hidden states "
-        "alongside token_ids and assistant_masks in data_i.pt files. Will be removed "
-        "soon.",
-    )
     hidden_states_dtype: str = Field(
         default="bfloat16",
         description="Data type for dataloader hidden states and autocast compute. "
@@ -233,9 +227,9 @@ class DataArgs(_Group):
     num_workers: int = Field(default=12, description="Number of dataloader workers.")
     prefetch_factor: int = Field(default=4, description="Dataloader prefetch factor.")
     max_anchors: int = Field(
-        default=3072,
+        default=512,
         description="Maximum anchor positions for DFlash, DSpark, and P-EAGLE training "
-        "(default: 3072).",
+        "(default: 512).",
     )
 
     @field_validator("hidden_states_dtype")

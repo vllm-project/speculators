@@ -17,7 +17,11 @@ from speculators.models.eagle3.attention import (
 )
 from speculators.models.eagle3.metrics import compute_metrics
 from speculators.models.eagle3.model_definitions import model_classes
-from speculators.models.utils import conditional_torch_compile, resolve_target_layer_ids
+from speculators.models.utils import (
+    conditional_torch_compile,
+    flatten_rope_parameters,
+    resolve_target_layer_ids,
+)
 from speculators.proposals.greedy import GreedyTokenProposalConfig
 
 
@@ -102,7 +106,8 @@ class Eagle3DraftModel(DraftVocabMixin, SpeculatorModel):
 
         # ROTARY EMBEDDINGS
         # Create a modified config for the rotary embedding to use 2x the hidden size
-        modified_tl_config = copy.copy(config.transformer_layer_config)
+        modified_tl_config = flatten_rope_parameters(config.transformer_layer_config)
+        modified_tl_config = copy.copy(modified_tl_config)
         modified_tl_config.hidden_size *= 2
         self.rotary_emb = self._model_definitions.rotary_emb_class(modified_tl_config)
 
