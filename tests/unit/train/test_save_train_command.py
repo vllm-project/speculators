@@ -4,8 +4,6 @@ import sys
 from pathlib import Path
 from unittest.mock import patch
 
-import pytest
-
 from speculators.train.checkpointer import SingleGPUCheckpointer
 from speculators.train.utils import save_train_command
 
@@ -120,7 +118,7 @@ class TestSpeculatorsPatch:
             save_train_command(str(tmp_path))
         assert not (tmp_path / "speculators.patch").exists()
 
-    def test_patch_failure_raises(self, tmp_path: Path):
+    def test_patch_failure_does_not_block(self, tmp_path: Path):
         original_run = subprocess.run
 
         def _fail_on_diff(*args, **kwargs):
@@ -128,14 +126,13 @@ class TestSpeculatorsPatch:
                 raise OSError("git broke")
             return original_run(*args, **kwargs)
 
-        with (
-            patch(
-                "speculators.train.utils.subprocess.run",
-                side_effect=_fail_on_diff,
-            ),
-            pytest.raises(OSError, match="git broke"),
+        with patch(
+            "speculators.train.utils.subprocess.run",
+            side_effect=_fail_on_diff,
         ):
             save_train_command(str(tmp_path))
+        assert (tmp_path / "train_command.txt").exists()
+        assert not (tmp_path / "speculators.patch").exists()
 
 
 # ---------------------------------------------------------------------------
