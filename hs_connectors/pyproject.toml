@@ -10,6 +10,7 @@ include = ["*"]
 name = "hs-connectors"
 description = "Pluggable backends for transferring hidden states between vLLM and Speculators during online and offline training."
 dynamic = ["version"]
+readme = { file = "README.md", content-type = "text/markdown" }
 requires-python = ">=3.10"
 keywords = [
     "hidden states",
@@ -25,6 +26,8 @@ keywords = [
     "mooncake",
     "distributed training"
 ]
+license = "Apache-2.0"
+license-files = ["LICENSE"]
 authors = [ { name = "Red Hat"} ]
 dependencies = [
     "safetensors",
