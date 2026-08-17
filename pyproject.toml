@@ -48,6 +48,7 @@ dependencies = [
     "httpx",
     "huggingface-hub",
     "loguru>=0.7.2,<=0.7.3",
+    "mooncake-transfer-engine",
     "numpy>=2.0.0,<=2.4.6",
     "openai>=2.0.0",
     "protobuf",
