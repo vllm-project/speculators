@@ -189,7 +189,7 @@ def test_extract_conversation_no_usable_input_returns_empty():
 
 
 # ---------------------------------------------------------------------------
-# 2. The generation boundary is the loss mask; pre-tokenized rows pass through.
+# 2. The generation boundary is the loss mask; speculator-format rows pass through.
 # ---------------------------------------------------------------------------
 
 
@@ -200,8 +200,9 @@ def test_build_boundary_sample_is_the_mask():
 
 
 def test_pretokenized_rows_pass_through_preprocessing():
-    # A regen row reaches training already masked: no processor, no re-masking,
-    # and the review-only `conversations` field is dropped.
+    # A speculator-format regeneration row reaches training already masked: no
+    # processor, no re-masking, and the review-only `conversations` field is
+    # dropped.
     input_ids, loss_mask = regen.build_boundary_sample([10, 11, 12], [20, 21])
     out = _preprocess_batch(
         {
@@ -209,9 +210,9 @@ def test_pretokenized_rows_pass_through_preprocessing():
             "loss_mask": [loss_mask],
             "conversations": [[{"role": "user", "content": "2+2?"}]],
         },
-        processor=None,  # type: ignore[arg-type]  # passthrough never touches it
+        is_multimodal=False,  # passthrough returns before this is read
         max_length=2048,
-        assistant_pattern=None,
+        render_endpoint=None,
     )
     assert out["input_ids"][0].tolist() == input_ids
     assert out["loss_mask"][0].tolist() == loss_mask
@@ -225,9 +226,9 @@ def test_pretokenized_passthrough_truncates_and_filters():
     cut = regen.build_boundary_sample([1, 2, 3, 4], [5, 6])  # completion truncated off
     out = _preprocess_batch(
         {"input_ids": [kept[0], cut[0]], "loss_mask": [kept[1], cut[1]]},
-        processor=None,  # type: ignore[arg-type]  # passthrough never touches it
+        is_multimodal=False,  # passthrough returns before this is read
         max_length=4,
-        assistant_pattern=None,
+        render_endpoint=None,
         minimum_valid_tokens=1,
     )
     assert [t.tolist() for t in out["input_ids"]] == [[1, 2, 3, 4]]
@@ -241,9 +242,9 @@ def test_pretokenized_passthrough_rejects_length_mismatch():
     with pytest.raises(ValueError, match="shape mismatch"):
         _preprocess_batch(
             {"input_ids": [[1, 2, 3, 4, 5]], "loss_mask": [[0, 0, 1]]},
-            processor=None,  # type: ignore[arg-type]  # passthrough never touches it
+            is_multimodal=False,  # passthrough returns before this is read
             max_length=2048,
-            assistant_pattern=None,
+            render_endpoint=None,
         )
 
 
@@ -854,7 +855,7 @@ def test_regenerate_truncates_on_tool_name_mismatch():
 
 
 # ---------------------------------------------------------------------------
-# 6. Every shared-registry preset works on-policy (off-policy parity).
+# 6. Every text-only shared-registry preset works in on-policy regeneration.
 # ---------------------------------------------------------------------------
 
 

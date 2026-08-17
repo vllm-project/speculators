@@ -28,7 +28,7 @@ from speculators.data_generation.vllm_client import (
     DEFAULT_MAX_RETRIES,
     DEFAULT_REQUEST_TIMEOUT,
 )
-from speculators.models.metrics import resolve_loss_config
+from speculators.losses import resolve_loss_config
 
 # A bool that must render as an argparse ``--x/--no-x`` (``BooleanOptionalAction``)
 # even though it defaults to False. Bools defaulting to True or None get that form
@@ -90,8 +90,10 @@ class DraftArgs(_Group):
         "flags (--num-layers, --draft-arch, --draft-hidden-act, --sliding-window, "
         "--full-attention-indices).",
     )
-    num_layers: int = Field(
-        default=1, description="Number of draft decoder layers to synthesize."
+    num_layers: int | None = Field(
+        default=None,
+        description="Number of draft decoder layers to synthesize. "
+        "(default: 5 for dflash, 1 otherwise).",
     )
     draft_arch: Literal["llama", "qwen3"] | None = Field(
         default=None,
@@ -216,12 +218,6 @@ class DataArgs(_Group):
     noise_std: float = Field(
         default=0.05, description="Standard deviation for noise augmentation."
     )
-    legacy_data: bool = Field(
-        default=False,
-        description="DEPRECATED. Use the old data format which stores hidden states "
-        "alongside token_ids and assistant_masks in data_i.pt files. Will be removed "
-        "soon.",
-    )
     hidden_states_dtype: str = Field(
         default="bfloat16",
         description="Data type for dataloader hidden states and autocast compute. "
@@ -231,9 +227,9 @@ class DataArgs(_Group):
     num_workers: int = Field(default=12, description="Number of dataloader workers.")
     prefetch_factor: int = Field(default=4, description="Dataloader prefetch factor.")
     max_anchors: int = Field(
-        default=3072,
+        default=512,
         description="Maximum anchor positions for DFlash, DSpark, and P-EAGLE training "
-        "(default: 3072).",
+        "(default: 512).",
     )
 
     @field_validator("hidden_states_dtype")
@@ -293,11 +289,16 @@ class GenerationArgs(_Group):
 
 
 class LossArgs(_Group):
-    loss_fn: str = Field(
-        default="kl_div",
+    loss_implementation: Literal["fused", "eager"] = Field(
+        default="fused",
+        description="Loss implementation to use; eager is for compatibility and "
+        "numerical validation and may OOM with DFlash or DSpark.",
+    )
+    loss_fn: str | None = Field(
+        default=None,
         description="Loss function specification. A name (kl_div, rkl, jsd, ce, tv, "
         'nla, lk_hybrid) or a JSON dict for a weighted combination, e.g. \'{"ce": 0.1, '
-        '"tv": 0.9}\'.',
+        '"tv": 0.9}\'. (default: "ce" for dflash, "kl_div" otherwise).',
     )
     ttt_steps: int = Field(
         default=3,
@@ -312,7 +313,11 @@ class LossArgs(_Group):
 
     @field_validator("loss_fn")
     @classmethod
-    def _loss_parseable(cls, v: str) -> str:
+    def _loss_parseable(cls, v: str | None) -> str | None:
+        if v is None:
+            # Unset -> resolved later in TrainConfig._resolve_derived_defaults,
+            # once speculator_type is known.
+            return v
         resolve_loss_config(v)
         return v
 
@@ -433,8 +438,10 @@ class LoggingArgs(_Group):
 class DFlashArgs(_Group):
     """DFlash-family backbone knobs (also used by DSpark, which is-a DFlash)."""
 
-    block_size: int = Field(
-        default=8, description="Block size for DFlash model (default: 8)."
+    block_size: int | None = Field(
+        default=None,
+        description="Block size for DFlash model (default: 16 for dflash, 8 "
+        "otherwise).",
     )
     sample_from_anchor: bool | None = Field(
         default=None,
@@ -444,10 +451,10 @@ class DFlashArgs(_Group):
     dflash_decay_gamma: float = Field(
         default=4.0, description="Decay gamma for DFlash/DSpark loss weighting."
     )
-    per_position_loss_weight: Literal["fixed-exp-decay", "dpace"] = Field(
-        default="fixed-exp-decay",
+    per_position_loss_weight: Literal["fixed-exp-decay", "dpace"] | None = Field(
+        default=None,
         description="Per-position loss weight option for D-PACE support "
-        "(default: fixed-exp-decay).",
+        "(default: dpace for dflash, fixed-exp-decay otherwise).",
     )
     dpace_alpha: float = Field(
         default=0.5,
@@ -636,12 +643,29 @@ class TrainConfig(BaseSettings):
         """Fill defaults that derive from other fields, mirroring the tail of the
         pre-refactor ``parse_args``: unset ``draft_arch`` -> ``llama`` for eagle3 else
         ``qwen3``; unset ``norm_before_fc`` / ``norm_output`` -> ``True`` for eagle3
-        else ``False``; unset ``muon_lr`` -> ``10 * lr``.
+        else ``False``; unset ``muon_lr`` -> ``10 * lr``; unset ``num_layers`` -> ``5``
+        for dflash else ``1``; unset ``per_position_loss_weight`` -> ``dpace`` for
+        dflash else ``fixed-exp-decay``; unset ``loss_fn`` -> ``ce`` for dflash else
+        ``kl_div``; unset ``block_size`` -> ``16`` for dflash else ``8``.
+
+        The dflash-conditional defaults reflect the recipe from
+        https://github.com/vllm-project/speculators/issues/979: this combination
+        (5 layers, D-PACE, cross-entropy, block_size=16) consistently
+        outperformed the prior defaults (1 layer, fixed-exp-decay, kl_div,
+        block_size=8) across every DFlash configuration tested, and is now the
+        out-of-the-box behavior for ``--speculator-type dflash`` rather than
+        something users need to separately discover and opt into. DSpark
+        (which shares the ``dflash`` group) keeps ``block_size=8``, since that
+        combination was never tested there. ``--muon-lr`` / ``--lr`` are
+        deliberately left as-is: the right learning rate depends on effective
+        batch size (anchor count, sequence length, GPU count), which varies by
+        setup, so we did not want to bake in a single "recommended" value.
 
         Idempotent: a concrete value (as produced by :meth:`flatten`) is left
         untouched, so :meth:`from_flat` round-trips.
         """
         is_eagle3 = self.speculator_type == "eagle3"
+        is_dflash = self.speculator_type == "dflash"
         if self.draft.draft_arch is None:
             self.draft.draft_arch = "llama" if is_eagle3 else "qwen3"
         if self.draft.norm_before_fc is None:
@@ -650,6 +674,16 @@ class TrainConfig(BaseSettings):
             self.draft.norm_output = is_eagle3
         if self.optimizer.muon_lr is None:
             self.optimizer.muon_lr = 10 * self.optimizer.lr
+        if self.draft.num_layers is None:
+            self.draft.num_layers = 5 if is_dflash else 1
+        if self.dflash.per_position_loss_weight is None:
+            self.dflash.per_position_loss_weight = (
+                "dpace" if is_dflash else "fixed-exp-decay"
+            )
+        if self.loss.loss_fn is None:
+            self.loss.loss_fn = "ce" if is_dflash else "kl_div"
+        if self.dflash.block_size is None:
+            self.dflash.block_size = 16 if is_dflash else 8
         return self
 
     @model_validator(mode="after")

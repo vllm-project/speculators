@@ -278,6 +278,7 @@ def run_prepare_data(
     max_samples: int = 50,
     seq_length: int = 512,
     timeout: float | None = None,
+    render_endpoint: str | None = None,
 ):
     """Tokenize data using prepare_data.py."""
     cmd = [
@@ -294,6 +295,8 @@ def run_prepare_data(
         "--seq-length",
         str(seq_length),
     ]
+    if render_endpoint is not None:
+        cmd += ["--render-endpoint", render_endpoint]
     logger.info("Preparing data: {}", " ".join(cmd))
     result = subprocess.run(  # noqa: S603
         cmd, check=False, timeout=timeout

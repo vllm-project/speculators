@@ -1,22 +1,34 @@
 # prepare_data.py
 
-Prepares data for speculator training by:
+Converts on-policy target-model data into the format consumed by speculator training. It accepts either:
 
-1. Applying chat template and tokenizing each sample
-2. Producing a loss/assistant mask for each sample
-3. Recording token frequency statistics
+1. Natural-language conversations whose assistant responses were produced by the target model.
+2. Speculator-format rows that already contain `input_ids` and `loss_mask`.
 
-The output is a processed dataset ready for online training or offline hidden states generation.
+For natural-language conversations, `prepare_data.py` asks the target model's vLLM `/render` endpoint to apply the serving chat template, tokenize each assistant turn, and derive its loss mask. Rendering only converts the data's representation: it does not generate responses or turn an arbitrary dataset into on-policy data.
+
+The output is ready for online training or offline hidden-state generation.
 
 ## Basic Usage
+
+Given a natural-language JSONL file such as:
+
+```json
+{"conversations":[{"role":"user","content":"Hello"},{"role":"assistant","content":"Hello! How can I help?"}]}
+```
+
+where the assistant response came from the target model:
 
 ```bash
 python scripts/prepare_data.py \
   --model meta-llama/Llama-3.1-8B-Instruct \
-  --data sharegpt \
+  --data ./on_policy_conversations.jsonl \
+  --render-endpoint http://localhost:8000 \
   --output ./training_data \
   --max-samples 5000
 ```
+
+`--render-endpoint` is not needed when every input row already contains `input_ids` and `loss_mask`.
 
 ## Arguments
 
@@ -30,11 +42,11 @@ python scripts/prepare_data.py \
 
 ### Data Arguments
 
-- **`--data`** (str, required, repeatable) Path to training data. Can be a HuggingFace dataset name or local path. Use multiple times to specify multiple datasets.
+- **`--data`** (str, required, repeatable) On-policy target-model data. Use a local JSON/JSONL file or directory, or an `hf:` dataset spec. Use multiple times to combine datasets.
 
-  Example: `--data sharegpt --data ./custom_data.jsonl`
+  Example: `--data ./target_responses.jsonl --data hf:my-org/more-target-responses`
 
-  The input conversation should be provided in the `conversations` column. Tool-calling datasets that include separate columns for tools are also supported, as demonstrated in [llamafactory/reason-tool-use-demo-1500](https://huggingface.co/datasets/llamafactory/reason-tool-use-demo-1500) and [interstellarninja/hermes_reasoning_tool_use](https://huggingface.co/datasets/interstellarninja/hermes_reasoning_tool_use).
+  Natural-language input uses a `conversations` column and requires `--render-endpoint`. Assistant responses must already have been produced by the target model. Tool-calling datasets may also include a separate `tools` column. Speculator-format input uses `input_ids` and `loss_mask`.
 
 - **`--seq-length`** (int, default: `8192`) Maximum sequence length for each sample. Longer samples will be truncated.
 
@@ -42,7 +54,7 @@ python scripts/prepare_data.py \
 
 - **`--token-freq-path`** (str, default: `{output}/token_freq.pt`) Path to save token frequency distribution. Defaults to `token_freq.pt` in the output directory.
 
-- **`--assistant-pattern`** (str, default: `None`) Custom regex pattern for matching assistant responses. If not provided, auto-detected from chat template.
+- **`--render-endpoint`** (str, default: `None`) Base URL of the target model's running vLLM server (e.g. `http://localhost:8000`). The instance launched for hidden-state extraction ([launch_vllm.py](launch_vllm.md)) serves this too, so no second server is needed. Pass the base URL only: `/v1/chat/completions/render` is appended to it, so the `/v1`-suffixed form that [data_generation_offline.py](data_generation_offline.md) `--endpoint` takes will 404. Required for natural-language conversations; omit it when every input already contains `input_ids` and `loss_mask`.
 
 - **`--minimum-valid-tokens`** (int, default: `None`) Drop samples whose loss mask contains fewer than this many trainable tokens.
 
@@ -63,8 +75,9 @@ python scripts/prepare_data.py \
 ```bash
 python scripts/prepare_data.py \
   --model meta-llama/Llama-3.1-8B-Instruct \
-  --data sharegpt \
-  --data ./custom_conversations.jsonl \
+  --data ./target_responses_part1.jsonl \
+  --data ./target_responses_part2.jsonl \
+  --render-endpoint http://localhost:8000 \
   --output ./prepared_data \
   --seq-length 4096 \
   --max-samples 10000 \
