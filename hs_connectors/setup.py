@@ -7,7 +7,7 @@ from setuptools import setup
 from setuptools_git_versioning import count_since, get_branch, get_sha, get_tags
 
 REPO_ROOT = Path(__file__).parent.parent
-LAST_RELEASE_VERSION = Version("0.0.1")
+INITIAL_RELEASE_VERSION = Version("0.0.1")
 TAG_VERSION_PATTERN = re.compile(r"^hsc-v(\d+\.\d+\.\d+)$")
 
 
@@ -19,7 +19,7 @@ def get_last_version_diff() -> tuple[Version, str | None, int]:
     ]
     tagged_versions.sort(key=lambda tv: tv[0])
     last_version, last_tag = (
-        tagged_versions[-1] if tagged_versions else (LAST_RELEASE_VERSION, None)
+        tagged_versions[-1] if tagged_versions else (INITIAL_RELEASE_VERSION, None)
     )
     commits_since_last = (
         count_since(f"{last_tag}^{{commit}}", root=REPO_ROOT) if last_tag else 0
@@ -42,7 +42,7 @@ def get_next_version(build_type: str) -> tuple[Version, str | None, int]:
 
     if build_type == "nightly":
         # e.g. hs_connectors/0.1.0 + 3 commits -> 0.1.0a3; on tag -> 0.1.0a0
-        return Version(f"{version}.a{commits_since_last}"), tag, commits_since_last
+        return Version(f"{version + 1}.a{commits_since_last}"), tag, commits_since_last
 
     raise ValueError(f"Unsupported HS_CONNECTORS_BUILD_TYPE={build_type!r}")
 
