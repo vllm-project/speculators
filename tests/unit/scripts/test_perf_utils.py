@@ -112,6 +112,8 @@ class TestRunGuidellm:
         assert "kind=huggingface" in data
         assert "source=RedHatAI/speculator_benchmarks" in data
         assert "load_kwargs.data_files=qa.jsonl" in data
+        # Without it guidellm's column mapper gets a DatasetDict and crashes.
+        assert "load_kwargs.split=train" in data
 
     def test_data_local_file_without_subset(self, perf_utils):
         cmd = self._capture_cmd(
@@ -123,6 +125,7 @@ class TestRunGuidellm:
         data = cmd[idx + 1]
         assert "kind=json_file" in data
         assert "path=/tmp/local.jsonl" in data
+        assert "load_kwargs.split=train" in data
 
     def test_profile_sweep(self, perf_utils):
         cmd = self._capture_cmd(perf_utils, profile="sweep", rate=10)
@@ -361,3 +364,31 @@ class TestParseSweepFile:
         fp.write_text(json.dumps(_make_sweep_json()))
         rows = perf_utils.parse_sweep_file(fp)
         assert rows[0]["subset"] == "HumanEval"
+
+
+class TestParseRequestCounts:
+    def test_sums_guidellm_totals_not_sampled_buckets(self, perf_utils):
+        data = {
+            "benchmarks": [
+                {
+                    "metrics": {
+                        "request_totals": {
+                            "successful": 1,
+                            "errored": 3,
+                            "incomplete": 1,
+                            "total": 5,
+                        }
+                    },
+                    # Sampled records, so reading these would undercount.
+                    "requests": {"successful": [{}], "errored": [], "total": None},
+                },
+                # A sweep emits one benchmark per rate point.
+                {"metrics": {"request_totals": {"successful": 2}}},
+                {},
+            ]
+        }
+        assert perf_utils.parse_request_counts(data) == {
+            "requests_successful": 3,
+            "requests_errored": 3,
+            "requests_incomplete": 1,
+        }
