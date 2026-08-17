@@ -128,17 +128,20 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
         # lm_head serialized because current runtimes cannot derive it from the
         # full verifier head.
         #
-        # Copy ClassVar lists before adding per-instance save rules.
-        self._keys_to_ignore_on_save = list(
-            type(self)._keys_to_ignore_on_save  # noqa: SLF001
-        )
-        self._keys_to_ignore_on_load_missing = list(
+        # Shadow the ClassVar lists with per-instance copies so full- and
+        # reduced-vocabulary siblings cannot mutate each other's save rules.
+        keys_to_ignore_on_save = list(type(self)._keys_to_ignore_on_save)  # noqa: SLF001
+        keys_to_ignore_on_load_missing = list(
             type(self)._keys_to_ignore_on_load_missing  # noqa: SLF001
         )
-        self._keys_to_ignore_on_save.append("embed_tokens.weight")
+        keys_to_ignore_on_save.append("embed_tokens.weight")
         if not self.use_draft_vocab:
-            self._keys_to_ignore_on_save.append("lm_head.weight")
-            self._keys_to_ignore_on_load_missing.append("lm_head.weight")
+            keys_to_ignore_on_save.append("lm_head.weight")
+            keys_to_ignore_on_load_missing.append("lm_head.weight")
+        self.__dict__["_keys_to_ignore_on_save"] = keys_to_ignore_on_save
+        self.__dict__["_keys_to_ignore_on_load_missing"] = (
+            keys_to_ignore_on_load_missing
+        )
 
     @property
     def target_layer_ids(self) -> list[int]:
@@ -147,7 +150,7 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
 
     def load_verifier_weights(self):
         """Reconstruct weights intentionally omitted from DFlash checkpoints."""
-        super().load_verifier_weights(
+        self._load_verifier_weights(
             overwrite_embed_tokens=True,
             overwrite_lm_head=not self.use_draft_vocab,
         )

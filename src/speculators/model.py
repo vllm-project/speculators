@@ -120,19 +120,24 @@ class DraftVocabMixin(nn.Module):
 
         self.load_state_dict({"t2d": t2d, "d2t": d2t}, strict=False)
 
-    def load_verifier_weights(  # noqa: C901
+    def load_verifier_weights(self) -> None:
+        """Load verifier-owned weights without replacing checkpoint values."""
+        self._load_verifier_weights()
+
+    def _load_verifier_weights(  # noqa: C901
         self,
         *,
         overwrite_embed_tokens: bool = False,
         overwrite_lm_head: bool = False,
-    ):
+    ) -> None:
         """Load verifier model weights (embeddings, lm_head, etc.).
 
         Loads embed_tokens, lm_head, and verifier_lm_head weights from the
         verifier model. Handles draft vocab masking via t2d when use_draft_vocab
         is True. Subclasses can override to load additional weights (e.g. norms,
         tokenizer) by calling super().load_verifier_weights() first. Checkpoint
-        weights take precedence unless a subclass explicitly requests overwrite.
+        weights take precedence unless an internal caller explicitly requests
+        overwrite.
         """
         import warnings  # noqa: PLC0415
 

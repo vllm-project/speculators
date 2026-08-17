@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from types import SimpleNamespace
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, cast
 
 import pytest
 import torch
@@ -47,7 +47,7 @@ def _make_model(model_cls: type, draft_vocab_size: int) -> DFlashDraftModel:
         default_proposal_method="greedy",
         verifier=VerifierConfig(name_or_path="dummy", architectures=[]),
     )
-    config_kwargs = {
+    config_kwargs: dict[str, Any] = {
         "transformer_layer_config": tl_config,
         "draft_vocab_size": draft_vocab_size,
         "block_size": 4,
@@ -129,7 +129,10 @@ def test_full_vocab_slim_roundtrip_reconstructs_from_verifier(
         "speculators.utils.loading.load_model_layers",
         _make_fake_loader(fake),
     )
-    loaded = DFlashDraftModel.from_pretrained(tmp_path, local_files_only=True)
+    loaded = cast(
+        "DFlashDraftModel",
+        DFlashDraftModel.from_pretrained(tmp_path, local_files_only=True),
+    )
     assert torch.equal(loaded.embed_tokens.weight, fake["embed_tokens.weight"])
     assert torch.equal(loaded.lm_head.weight, fake["lm_head.weight"])
     assert torch.equal(loaded.verifier_lm_head.weight, fake["lm_head.weight"])
@@ -138,10 +141,13 @@ def test_full_vocab_slim_roundtrip_reconstructs_from_verifier(
 
 def test_checkpoint_weights_take_precedence(monkeypatch: pytest.MonkeyPatch):
     model = DraftVocabMixin()
-    model.config = SimpleNamespace(
-        speculators_config=SimpleNamespace(
-            verifier=SimpleNamespace(name_or_path="dummy")
-        )
+    model.config = cast(
+        "Any",
+        SimpleNamespace(
+            speculators_config=SimpleNamespace(
+                verifier=SimpleNamespace(name_or_path="dummy")
+            )
+        ),
     )
     model.embed_tokens = nn.Embedding(VERIFIER_VOCAB, 16)
     model.lm_head = nn.Linear(16, VERIFIER_VOCAB, bias=False)
