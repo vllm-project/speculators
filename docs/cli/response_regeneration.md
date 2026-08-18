@@ -41,7 +41,7 @@ Orchestrates the entire pipeline: starts a vLLM server (with optional data/tenso
 
 - **`--tool-call-parser`** (str) vLLM tool-call parser (e.g. `hermes`, `llama3_json`). Adds `--enable-auto-tool-choice --tool-call-parser` to the server; required for tool-call regeneration, otherwise tool calls arrive as raw text and are not regenerated as tools.
 
-All other arguments are passed through to `script.py`.
+All other arguments are passed through to the regeneration command (see `speculators regenerate-responses`).
 
 ### Full Example
 
@@ -136,7 +136,7 @@ The text presets from the shared dataset registry (`DATASET_CONFIGS` in `specula
 | `open-perfectblend` | `mlabonne/open-perfectblend`                      | `train`       |
 | `hermes-fc`         | `NousResearch/hermes-function-calling-v1`         | `train`       |
 
-The registry's multimodal preset, `sharegpt4v_coco`, is rejected because this regeneration pipeline cannot send its image content or retain it in a speculator-format row. Generate target responses with a multimodal-capable workflow, save the resulting natural-language conversations, and convert them with `prepare_data.py`.
+The registry's multimodal preset, `sharegpt4v_coco`, is rejected because this regeneration pipeline cannot send its image content or retain it in a speculator-format row. Generate target responses with a multimodal-capable workflow, save the resulting natural-language conversations, and convert them with `speculators prepare-data`.
 
 ## Output Format
 
