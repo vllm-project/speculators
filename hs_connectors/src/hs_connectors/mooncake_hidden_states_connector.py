@@ -30,6 +30,7 @@ from vllm.v1.core.sched.output import SchedulerOutput
 from hs_connectors.mooncake_store import (
     MooncakeHiddenStatesStore,
     MooncakeStoreConfig,
+    assert_finite,
 )
 
 if TYPE_CHECKING:
@@ -236,22 +237,36 @@ class MooncakeHiddenStatesConnector(KVConnectorBase_V1, SupportsHMA):
 
         num_tokens = pending.token_ids.shape[0]
 
-        with torch.cuda.stream(copy_stream):
-            slot_mapping = slot_mapping.to(self._kv_cache.device, non_blocking=True)
-            hidden_states = extract_from_kv_cache(
-                self._kv_cache, slot_mapping, num_tokens
+        try:
+            with torch.cuda.stream(copy_stream):
+                slot_mapping = slot_mapping.to(self._kv_cache.device, non_blocking=True)
+                hidden_states = extract_from_kv_cache(
+                    self._kv_cache, slot_mapping, num_tokens
+                )
+                assert_finite("hidden_states", hidden_states)
+                # Async DtoH copy into pinned host memory.
+                pinned_hs = torch.empty_like(
+                    hidden_states, device="cpu", pin_memory=True
+                )
+                pinned_hs.copy_(hidden_states, non_blocking=True)
+
+            # Wait for the DtoH copy to complete before handing data to the store.
+            copy_stream.synchronize()
+
+            self._store.put_sample(
+                pending.mooncake_key,
+                {"hidden_states": pinned_hs, "token_ids": pending.token_ids},
             )
-            # Async DtoH copy into pinned host memory.
-            pinned_hs = torch.empty_like(hidden_states, device="cpu", pin_memory=True)
-            pinned_hs.copy_(hidden_states, non_blocking=True)
-
-        # Wait for the DtoH copy to complete before handing data to the store.
-        copy_stream.synchronize()
-
-        self._store.put_sample(
-            pending.mooncake_key,
-            {"hidden_states": pinned_hs, "token_ids": pending.token_ids},
-        )
+        except Exception as exc:
+            try:
+                # Store error marker instead of the sample, so consumer can re-request
+                self._store.put_error(pending.mooncake_key, str(exc))
+            except Exception:
+                logger.exception(
+                    "Failed to publish Mooncake error marker for %s",
+                    pending.req_id,
+                )
+            raise
 
     def get_finished(
         self, finished_req_ids: set[str]
