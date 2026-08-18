@@ -61,6 +61,9 @@ def get_next_version(
     elif isinstance(build_iteration, str):
         build_iteration = int(build_iteration)
 
+    if version < LAST_RELEASE_VERSION:
+        version = LAST_RELEASE_VERSION
+
     if build_type == "release":
         if not tag:
             raise ValueError("RELEASE build requires a vX.Y.Z tag")
@@ -87,12 +90,15 @@ def get_next_version(
 def read_existing_version(version_py: Path) -> tuple[Version, str | None, int]:
     if version_py.exists():
         text = version_py.read_text()
+
         match_version = re.search(r'^version\s*=\s*["\']([^"\']+)["\']', text, re.M)
         match_tag = re.search(r'^git_last_tag\s*=\s*["\']([^"\']*)["\']', text, re.M)
         match_iteration = re.search(r'^build_iteration\s*=\s*["\']([^"\']+)["\']', text, re.M)
+
         version = Version(match_version.group(1)) if match_version else None
         tag = match_tag.group(1) if match_tag and match_tag.group(1) else None
         build_iteration = int(match_iteration.group(1)) if match_iteration else 0
+
     return version, tag, build_iteration
 
 
@@ -114,15 +120,16 @@ def write_version_files() -> tuple[Path, Path]:
     version_txt_path = module_path / "version.txt"
     version_py_path = module_path / "version.py"
 
+    print("IN write_version_files()")
     if building_from_sdist() and version_py_path.exists():
         version, tag, build_iteration = read_existing_version(version_py_path)
     else:
+        print(f"REPO_ROOT={REPO_ROOT}")
         version, tag, build_iteration = get_next_version(
             build_type=build_type,
             build_iteration=os.getenv("SPECULATORS_BUILD_ITERATION"),
         )
 
-    print("IN write_version_files()")
     print(f"version, tag, build_iteration={version},{tag},{build_iteration}")
 
     with version_txt_path.open("w") as file:
@@ -147,6 +154,9 @@ def get_hs_connectors_requirement() -> str:
     build_type = os.getenv("SPECULATORS_BUILD_TYPE", "dev").lower()
     version_py_path = REPO_ROOT / "src" / "speculators" / "version.py"
 
+    print("IN get_hs_connectors_requirement()")
+    print(f"REPO_ROOT={REPO_ROOT}")
+
     if building_from_sdist() and version_py_path.exists():
         version, tag, build_iteration = read_existing_version(version_py_path)
     else:
@@ -154,6 +164,8 @@ def get_hs_connectors_requirement() -> str:
             build_type=build_type,
             build_iteration=os.getenv("SPECULATORS_BUILD_ITERATION"),
         )
+
+    print(f"version, tag, build_iteration={version},{tag},{build_iteration}")
 
     if build_type == "dev":
         # Source install: path dep for pip; uv workspace overrides anyway
