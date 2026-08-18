@@ -245,6 +245,17 @@ def test_no_norm_output_flag(monkeypatch):
     assert args.norm_output is False
 
 
+def test_liger_kernel_flag_parses_for_dflash(monkeypatch):
+    args = _parse(monkeypatch, ["--speculator-type", "dflash", "--use-liger-kernel"])
+
+    assert args.use_liger_kernel is True
+
+
+def test_liger_kernel_flag_rejects_non_dflash(monkeypatch):
+    with pytest.raises(SystemExit):
+        _parse(monkeypatch, ["--speculator-type", "eagle3", "--use-liger-kernel"])
+
+
 # ---------------------------------------------------------------------------
 # --max-steps
 # ---------------------------------------------------------------------------
