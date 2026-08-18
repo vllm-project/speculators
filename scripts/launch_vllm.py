@@ -319,13 +319,17 @@ def _save_vllm_provenance(
     ]
     if spec_model is not None:
         drafter_dest = "drafter_checkpoint_sha256.txt"
-        writers.append((
-            drafter_dest,
-            lambda: _save_checkpoint_sha256(
-                prov_dir, spec_model,
-                skip_hash=skip_hash, dest_name=drafter_dest,
-            ),
-        ))
+        writers.append(
+            (
+                drafter_dest,
+                lambda: _save_checkpoint_sha256(
+                    prov_dir,
+                    spec_model,
+                    skip_hash=skip_hash,
+                    dest_name=drafter_dest,
+                ),
+            )
+        )
     for artifact, write in writers:
         try:
             write()

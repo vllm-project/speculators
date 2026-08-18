@@ -149,7 +149,9 @@ class TestSaveVllmProvenance:
     def test_creates_drafter_checkpoint_in_eval_mode(self, tmp_path: Path):
         prov_dir = tmp_path / "provenance"
         _save_vllm_provenance(
-            ["python", "serve"], str(prov_dir), "org/model",
+            ["python", "serve"],
+            str(prov_dir),
+            "org/model",
             spec_model="org/drafter",
         )
         assert (prov_dir / "checkpoint_sha256.txt").exists()

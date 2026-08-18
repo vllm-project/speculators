@@ -104,7 +104,6 @@ class TestLaunchVllmProvenance:
         content = (provenance_dir / "vllm_command.txt").read_text()
         assert "extract_hidden_states" in content
 
-
     def test_flags_only_falls_back_to_train(self):
         """Unknown flags without explicit subcommand fall back to train."""
         result = subprocess.run(  # noqa: S603
