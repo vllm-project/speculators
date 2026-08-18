@@ -31,7 +31,11 @@ from speculators.train.distributed import (
     maybe_destroy_distributed,
     maybe_setup_distributed,
 )
-from speculators.train.logger import setup_metric_logger, setup_root_logger
+from speculators.train.logger import (
+    log_run_config,
+    setup_metric_logger,
+    setup_root_logger,
+)
 from speculators.train.trainer import Trainer, TrainerConfig
 from speculators.train.utils import resolve_mask_token_id
 from speculators.train.vocab_mapping import (
@@ -41,7 +45,6 @@ from speculators.train.vocab_mapping import (
 from speculators.utils.loading import is_config_only_dir
 
 logger = logging.getLogger(__name__)
-metric_logger = logging.getLogger("speculators.metrics")
 
 DRAFT_ARCH_CONFIGS: dict[str, type] = {
     "llama": LlamaConfig,
@@ -549,10 +552,7 @@ def main(cfg: TrainConfig):  # noqa: C901
     maybe_setup_distributed()
 
     # Publish train config to metric backends that support hyperparameter logging
-    resolved_config = cfg.model_dump(mode="json")
-    if cfg.backend_args:
-        resolved_config["hidden_states_backend_args"] = dict(cfg.backend_args)
-    metric_logger.info(resolved_config, extra={"hparams": True})
+    log_run_config(cfg)
 
     if args.fsdp_shard and not is_distributed():
         raise ValueError(

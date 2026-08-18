@@ -260,6 +260,9 @@ class FormatDictFilter(logging.Filter):
 
 
 ### Handlers
+TB_SUPPORTED_TYPES = (int, float, str, bool, torch.Tensor, type(None))
+
+
 class TensorBoardHandler(logging.Handler):
     """Logger that writes metrics to TensorBoard.
 
@@ -328,7 +331,7 @@ class TensorBoardHandler(logging.Handler):
             Dictionary with all non-scalar values converted to JSON strings
         """
         return {
-            k: (json.dumps(v) if isinstance(v, (list, dict)) else v)
+            k: (v if isinstance(v, TB_SUPPORTED_TYPES) else json.dumps(v))
             for k, v in d.items()
         }
 
@@ -724,3 +727,12 @@ def setup_metric_logger(loggers, run_name, output_dir):
         },
     }
     dictConfig(logging_config)
+
+
+def log_run_config(cfg) -> None:
+    resolved_config = cfg.model_dump(mode="json")
+    if cfg.backend_args:
+        resolved_config["hidden_states_backend_args"] = dict(cfg.backend_args)
+    logging.getLogger("speculators.metrics").info(
+        resolved_config, extra={"hparams": True}
+    )
