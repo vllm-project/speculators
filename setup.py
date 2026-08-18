@@ -128,7 +128,7 @@ def get_hs_connectors_requirement() -> str:
         # Source install: path dep for pip; uv workspace overrides anyway
         local = (Path(__file__).parent / "hs_connectors").resolve()
         return f"hs-connectors @ file://{local.as_posix()}"
-    else if: build_type == "release":
+    elif build_type == "release":
         # Install release version: hs_connectors has the same release version as speculators
         return f"hs-connectors=={version}"
     else:
