@@ -1,4 +1,33 @@
-"""Prepare-data command — tokenize, mask, and compute token frequency statistics."""
+"""
+Prepare data for speculator training
+
+Accepted inputs contain responses produced by the target model, either as
+natural-language conversations or as speculator-format ``input_ids`` and
+``loss_mask`` rows. For natural-language input this command:
+
+1. Uses the target model's vLLM endpoint to render each conversation
+2. Derives a loss mask from each assistant-turn boundary
+3. Records token frequency statistics
+
+Rendering converts an existing on-policy conversation into speculator format.
+It does not generate responses or make an arbitrary conversation on-policy.
+
+The output of this command is:
+1. Processed dataset ready for online training or offline datagen in output_dir
+2. Token frequency statistics file at token_freq_path
+
+Preprocessing will be skipped if the dataset already exists at the output directory.
+Token frequencies are saved in the output directory by default.
+
+Usage::
+
+    speculators prepare-data \\
+        --model meta-llama/Llama-3.1-8B-Instruct \\
+        --data ./on_policy_conversations.jsonl \\
+        --render-endpoint http://localhost:8000 \\
+        --output ./training_data \\
+        --max-samples 5000
+"""
 
 import logging
 import shutil
@@ -27,7 +56,7 @@ def assert_safe_to_overwrite(output: Path, token_freq_path: Path) -> None:
     """Refuse to ``--overwrite`` a directory holding non-artifact files.
 
     Guards against pointing ``--output`` at a directory with unrelated user files
-    and wiping it: only prepare_data.py's own outputs (``.arrow`` shards, dataset
+    and wiping it: only prepare-data's own outputs (``.arrow`` shards, dataset
     metadata, and the token frequency file) may be deleted.
     """
     unexpected_paths = []
@@ -44,7 +73,7 @@ def assert_safe_to_overwrite(output: Path, token_freq_path: Path) -> None:
     if unexpected_paths:
         formatted_paths = ", ".join(str(path) for path in unexpected_paths)
         raise ValueError(
-            "--overwrite would delete files that do not look like prepare_data.py "
+            "--overwrite would delete files that do not look like prepare-data "
             f"artifacts: {formatted_paths}. Remove them manually or choose a "
             "different --output directory."
         )
@@ -77,12 +106,13 @@ def prepare_data(
             help="Path to save token frequency distribution",
         ),
     ] = None,
-    assistant_pattern: Annotated[
+    render_endpoint: Annotated[
         str | None,
         typer.Option(
             help=(
-                "Custom regex pattern for matching assistant responses. "
-                "If not provided, auto-detected from chat template."
+                "Base URL of a running vLLM server (e.g. http://localhost:8000). "
+                "Required unless every --data input already contains input_ids "
+                "and loss_mask."
             ),
         ),
     ] = None,
@@ -180,7 +210,7 @@ def prepare_data(
         seed=seed,
         max_samples=max_samples,
         token_freq_path=resolved_token_freq_path,
-        assistant_pattern=assistant_pattern,
+        render_endpoint=render_endpoint,
         minimum_valid_tokens=minimum_valid_tokens,
         allow_empty_output=allow_empty_output,
         trust_remote_code=trust_remote_code,
