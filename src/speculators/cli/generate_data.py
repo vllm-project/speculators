@@ -1,7 +1,20 @@
-"""Generate-data command — offline hidden states generation via vLLM server."""
+"""
+Offline Hidden States Generation Pipeline
+
+This module generates hidden states and saves them to disk for offline training.
+
+Usage::
+
+    speculators generate-data \
+        --model meta-llama/Llama-3.1-8B-Instruct \
+        --preprocessed-data sharegpt \
+        --output ./training_data \
+        --max-samples 5000
+"""
 
 import asyncio
 import logging
+import os
 import shutil
 import sys
 import time
@@ -120,8 +133,8 @@ async def _worker(  # noqa: C901
                 logger.exception(
                     "Fatal: sample %d aborted with --fail-on-error: %s", idx, e
                 )
-                cancel_event.set()
-                raise
+                logging.shutdown()
+                os._exit(1)
             logger.warning("Skipping sample %d due to error: %s", idx, e)
             skipped_indices.append(idx)
             stats["errors"] += 1

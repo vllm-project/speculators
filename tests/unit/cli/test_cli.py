@@ -59,8 +59,19 @@ class TestGenerateDataCommand:
         assert "--preprocessed-data" in result.output
         assert "--concurrency" in result.output
 
+    def test_fail_on_error_in_help(self):
+        result = runner.invoke(app, ["generate-data", "--help"])
+        assert result.exit_code == 0
+        assert "--fail-on-error" in result.output
+        assert "--max-retries" in result.output
+        assert "--validate-outputs" in result.output
+
     def test_invalid_rank(self):
         result = runner.invoke(
             app, ["generate-data", "--rank", "5", "--world-size", "2"]
         )
+        assert result.exit_code != 0
+
+    def test_invalid_concurrency(self):
+        result = runner.invoke(app, ["generate-data", "--concurrency", "0"])
         assert result.exit_code != 0
