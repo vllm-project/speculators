@@ -141,8 +141,8 @@ def write_version_files() -> tuple[Path, Path]:
                 f'version = "{version}"\n',
                 f'build_type = "{build_type}"\n',
                 f'build_iteration = "{build_iteration}"\n',
-                f'git_commit = "{get_commit}"\n',
-                f'git_branch = "{get_branch}"\n',
+                f'git_commit = "{git_commit}"\n',
+                f'git_branch = "{git_branch}"\n',
                 f'git_last_tag = "{tag or ""}"\n',
             ]
         )
