@@ -126,6 +126,30 @@ def test_compiles_fullgraph(name, eager_fn, fused_name):
     assert torch.isfinite(logits.grad).all()
 
 
+@requires_cuda
+def test_ce_releases_targets_before_backward():
+    """CE releases targets after forward; distribution losses retain them."""
+    fused_losses = pytest.importorskip("speculators.losses.fused")
+
+    def held_vs_target_bytes(fused_fn) -> tuple[int, int]:
+        """(bytes the graph still holds after the forward, size of targets)."""
+        logits = torch.randn(1, 1024, 4096, device="cuda", requires_grad=True)
+        torch.cuda.synchronize()
+        base = torch.cuda.memory_allocated()
+        targets = torch.randn_like(logits)
+        loss = fused_fn(logits, targets).sum()
+        nbytes = targets.nbytes
+        del targets
+        held = torch.cuda.memory_allocated() - base
+        loss.backward()  # backward must still run without the targets
+        return held, nbytes
+
+    held, nbytes = held_vs_target_bytes(fused_losses.fused_ce_loss)
+    assert held < nbytes // 2
+    held, nbytes = held_vs_target_bytes(fused_losses.fused_kl_div_loss)
+    assert held >= nbytes
+
+
 def test_eager_implementation_supports_differentiable_targets():
     """The explicit eager implementation preserves target gradients."""
     torch.manual_seed(3)

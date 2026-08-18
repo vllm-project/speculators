@@ -189,7 +189,6 @@ def loss_backward_kernel(
     """Recompute probabilities from the saved stats and apply the OP gradient."""
     pid = tl.program_id(0).to(tl.int64)
     logits_ptr += pid * n_cols
-    targets_ptr += pid * n_cols
     grad_in_ptr += pid * n_cols
 
     go = tl.load(grad_out_ptr + pid).cast(tl.float32)
@@ -205,6 +204,8 @@ def loss_backward_kernel(
     lse_d = m_d + tl.log(z_d)
     extra = tl.load(stats_ptr + 4 * stats_row + pid)
     if OP != _OP_CE:
+        # CE passes None for targets_ptr.
+        targets_ptr += pid * n_cols
         m_t = tl.load(stats_ptr + 2 * stats_row + pid)
         z_t = tl.load(stats_ptr + 3 * stats_row + pid)
         lse_t = m_t + tl.log(z_t)
@@ -260,7 +261,10 @@ class _FusedLoss(torch.autograd.Function):
             BLOCK_SIZE=BLOCK_SIZE,
             num_warps=num_warps,
         )
-        ctx.save_for_backward(logits_flat, targets_flat, stats)
+        # CE backward only needs the target argmax cached in stats.
+        ctx.save_for_backward(
+            logits_flat, None if op == _OP_CE.value else targets_flat, stats
+        )
         ctx.op = op
         ctx.shape = (B, T, V)
         ctx.settings = (BLOCK_SIZE, num_warps)
