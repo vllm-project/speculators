@@ -2,7 +2,8 @@ import json
 from collections.abc import Callable
 from contextlib import nullcontext
 from pathlib import Path
-from typing import Literal, TypedDict
+from typing import Any, Literal, TypedDict, cast
+from urllib.parse import unquote, urlparse
 
 import torch
 from datasets import Dataset as HFDataset
@@ -15,6 +16,7 @@ from transformers import (
 
 from speculators.data_generation.configs import DATASET_CONFIGS
 from speculators.data_generation.logging_utils import PipelineLogger
+from speculators.data_generation.media import get_image_ref
 from speculators.data_generation.render_client import render_conversation
 from speculators.data_generation.torch_utils import set_default_torch_num_threads
 from speculators.train.vocab_mapping import save_token_frequency_distribution
@@ -119,6 +121,30 @@ def _normalize_conversation(
     return normalized
 
 
+def _get_conversations_from_examples(examples: dict) -> list:
+    """Extract conversations/messages from a batched dataset example."""
+    if "conversations" in examples:
+        return examples.get("conversations", [])
+    if "messages" in examples:
+        return examples.get("messages", [])
+    return []
+
+
+def _local_media_path_to_uri(media_path: str | Path) -> str:
+    """Return a canonical, percent-encoded file URI for a local media path."""
+    media_text = str(media_path)
+    parsed = urlparse(media_text)
+    if parsed.scheme == "file":
+        if parsed.netloc not in ("", "localhost"):
+            raise ValueError(f"Unsupported file URI host: {parsed.netloc}")
+        if parsed.query or parsed.fragment:
+            raise ValueError("Local file URIs must not contain query/fragment")
+        media_text = unquote(parsed.path)
+    elif parsed.scheme:
+        raise ValueError(f"Unsupported local media URI scheme: {parsed.scheme}")
+    return Path(media_text).expanduser().resolve().as_uri()
+
+
 def _adapt_part_for_vllm(part: str | dict):
     if isinstance(part, str):
         return {"type": "text", "text": part}
@@ -128,13 +154,28 @@ def _adapt_part_for_vllm(part: str | dict):
     if part_type == "text":
         return {"type": "text", "text": part["text"]}
 
+    image_ref = get_image_ref(part)
+    if image_ref is not None:
+        image_text = str(image_ref)
+        if image_text.startswith(("http://", "https://", "data:")):
+            file_url = image_text
+        else:
+            file_url = _local_media_path_to_uri(image_text)
+        return {"type": "image_url", "image_url": {"url": file_url}}
+
     for modality in ("image", "video", "audio"):
         if part_type == modality:
             if local_path := part.get("path"):
-                file_url = f"file://{Path(local_path).absolute()}"
+                file_url = _local_media_path_to_uri(local_path)
                 return {"type": f"{modality}_url", f"{modality}_url": {"url": file_url}}
             if url := part.get("url"):
-                return {"type": f"{modality}_url", f"{modality}_url": {"url": url}}
+                url_text = str(url)
+                if not url_text.startswith(("http://", "https://", "data:")):
+                    url_text = _local_media_path_to_uri(url_text)
+                return {
+                    "type": f"{modality}_url",
+                    f"{modality}_url": {"url": url_text},
+                }
 
             if part.get("base64"):
                 expr = {"type": modality, "base64": "..."}
@@ -282,27 +323,53 @@ def _render_boundary_rows(
     return rows
 
 
-def _parse_conv_tools(conv_tools: object, idx: int) -> list | None:
+def _parse_conv_tools(conv_tools: object, idx: int) -> list[dict] | None:
     """Parse the tools JSON string for one conversation; warn and return None
     on invalid JSON or unexpected types."""
     if not conv_tools:
         return None
+
+    parsed_tools: object
     if isinstance(conv_tools, list):
-        return conv_tools
-    if not isinstance(conv_tools, str):
+        parsed_tools = conv_tools
+    elif not isinstance(conv_tools, str):
         log.warning(
             f"Non-string value in tools column for conversation {idx}: "
             f"{type(conv_tools).__name__}, proceeding without tools"
         )
         return None
-    try:
-        return json.loads(conv_tools)
-    except json.JSONDecodeError as e:
+    else:
+        try:
+            parsed_tools = json.loads(conv_tools)
+        except json.JSONDecodeError as e:
+            log.warning(
+                f"Invalid JSON in tools column for conversation {idx}: {e}, "
+                "proceeding without tools"
+            )
+            return None
+
+    if not isinstance(parsed_tools, list) or not all(
+        isinstance(tool, dict) for tool in parsed_tools
+    ):
         log.warning(
-            f"Invalid JSON in tools column for conversation {idx}: {e}, "
-            "proceeding without tools"
+            f"Invalid tools schema for conversation {idx}: expected a list of "
+            "objects, proceeding without tools"
         )
         return None
+
+    return cast("list[dict]", parsed_tools)
+
+
+def _canonicalize_conv_tools(
+    conv_tools: object, idx: int
+) -> tuple[list[dict] | None, str]:
+    """Return template tools plus a stable JSON representation for persistence."""
+    parsed_tools = _parse_conv_tools(conv_tools, idx)
+    canonical_json = json.dumps(
+        parsed_tools or [], ensure_ascii=False, sort_keys=True, separators=(",", ":")
+    )
+    canonical_tools = cast("list[dict]", json.loads(canonical_json))
+    return (canonical_tools or None), canonical_json
 
 
 def _render_conversation_rows(
@@ -311,7 +378,7 @@ def _render_conversation_rows(
     idx: int,
     render_endpoint: str,
     max_length: int,
-) -> list[BoundaryRow] | None:
+) -> tuple[list[BoundaryRow], str] | None:
     """Render one valid conversation; return ``None`` when it is unusable."""
     if not conv or not isinstance(conv, list):
         return None
@@ -320,20 +387,18 @@ def _render_conversation_rows(
     if not normalized_conv:
         return None
 
-    parsed_tools = _parse_conv_tools(conv_tools, idx)
+    parsed_tools, canonical_tools_json = _canonicalize_conv_tools(conv_tools, idx)
     try:
-        return _render_boundary_rows(
-            normalized_conv,
-            render_endpoint,
-            max_length,
-            tools=parsed_tools,
+        rows = _render_boundary_rows(
+            normalized_conv, render_endpoint, max_length, tools=parsed_tools
         )
+        return rows, canonical_tools_json
     # One row the render endpoint or boundary derivation can't handle must
     # not kill the run. The failure modes can't be enumerated -- templates
     # are swappable and raise arbitrary types -- so catch broadly and skip.
     except Exception as e:
         log.error(f"Failed to process conversation {idx}: {type(e).__name__}: {e}")
-        return []
+        return [], "[]"
 
 
 def _append_row(
@@ -366,6 +431,8 @@ def _append_boundary_rows(
     rows: list[BoundaryRow],
     max_length: int,
     minimum_valid_tokens: int | None,
+    *,
+    tools_json: str | None = None,
 ) -> tuple[int, int, int]:
     """Append rendered rows and return kept, unsupervised, and clipped counts."""
     num_kept = 0
@@ -388,6 +455,7 @@ def _append_boundary_rows(
             num_kept += 1
             if "messages" in results:
                 results["messages"].append(_adapt_conv_for_vllm(row["conv"]))
+                results["tools"].append(tools_json or "[]")
 
     return num_kept, num_unsupervised, num_clipped
 
@@ -459,12 +527,13 @@ def _preprocess_batch(
         )
 
     results: dict[str, list] = {"input_ids": [], "loss_mask": [], "seq_len": []}
-    conversations: list[list[dict]] = examples.get("conversations", [])
+    conversations: list[list[dict]] = _get_conversations_from_examples(examples)
 
     # MM inputs are extracted via the Chat Completions API, which needs the
     # original messages -- token ids alone cannot carry the images.
     if is_multimodal:
         results["messages"] = []
+        results["tools"] = []
 
     if not conversations:
         log.warning(f"No conversations key found. Keys: {list(examples.keys())}")
@@ -485,15 +554,16 @@ def _preprocess_batch(
 
     for idx, conv in enumerate(conversations):
         conv_tools = tools_col[idx] if tools_col is not None else None
-        rows = _render_conversation_rows(
+        rendered = _render_conversation_rows(
             conv,
             conv_tools,
             idx,
             render_endpoint,
             max_length,
         )
-        if rows is None:
+        if rendered is None:
             continue
+        rows, canonical_tools_json = rendered
 
         num_convs_in += 1
         num_kept, row_unsupervised, row_clipped = _append_boundary_rows(
@@ -501,6 +571,7 @@ def _preprocess_batch(
             rows,
             max_length,
             minimum_valid_tokens,
+            tools_json=canonical_tools_json,
         )
         num_unsupervised += row_unsupervised
         num_clipped += row_clipped
@@ -528,6 +599,7 @@ def build_speculator_training_dataset(
     *,
     render_endpoint: str | None = None,
     minimum_valid_tokens: int | None = None,
+    is_multimodal: bool | None = None,
 ) -> HFDataset:
     """Build a speculator training dataset with render-boundary loss masks.
 
@@ -555,7 +627,10 @@ def build_speculator_training_dataset(
     # Multimodal rows keep their `messages` so the images survive to hidden-state
     # extraction. Compute once here rather than pickling the heavyweight processor
     # into every map worker just to recheck it.
-    is_multimodal = isinstance(processor, ProcessorMixin)
+    processor_is_multimodal = isinstance(processor, ProcessorMixin)
+    if is_multimodal is True and not processor_is_multimodal:
+        raise ValueError("Requested multimodal preprocessing with a text processor.")
+    raw_multimodal = processor_is_multimodal if is_multimodal is None else is_multimodal
 
     if pretokenized:
         log.info("Speculator-format rows: using their loss mask, skipping render")
@@ -570,11 +645,11 @@ def build_speculator_training_dataset(
 
     # Avoid CPU contention for MM processing:
     # https://github.com/vllm-project/vllm/pull/31879
-    with set_default_torch_num_threads() if is_multimodal else nullcontext():
+    with set_default_torch_num_threads() if raw_multimodal else nullcontext():
         dataset = dataset.map(
             lambda examples: _preprocess_batch(
                 examples,
-                is_multimodal,
+                raw_multimodal,
                 render_endpoint,
                 max_length,
                 minimum_valid_tokens,
@@ -736,6 +811,7 @@ def load_and_preprocess_dataset(
     minimum_valid_tokens: int | None = None,
     allow_empty_output: bool = False,
     trust_remote_code: bool = False,
+    is_multimodal: bool | None = None,
 ) -> tuple[HFDataset, ProcessorLike]:
     """Load, tokenize, and preprocess a dataset for speculator training.
 
@@ -775,6 +851,12 @@ def load_and_preprocess_dataset(
 
     log.subsection("Loading processor")
     processor = load_processor(target_model_path, trust_remote_code=trust_remote_code)
+    processor_is_multimodal = isinstance(processor, ProcessorMixin)
+    if is_multimodal and not processor_is_multimodal:
+        raise ValueError(
+            f"Processor for {target_model_path} is not a multimodal ProcessorMixin."
+        )
+    log.info(f"Using multimodal mode: {processor_is_multimodal}")
 
     if render_endpoint is not None:
         log.info(f"Rendering conversations via vLLM endpoint: {render_endpoint}")
@@ -807,6 +889,7 @@ def load_and_preprocess_dataset(
             num_proc=build_dataset_num_proc,
             render_endpoint=render_endpoint,
             minimum_valid_tokens=minimum_valid_tokens,
+            is_multimodal=is_multimodal,
         )
         if minimum_valid_tokens is not None:
             log.info(f"Kept {len(preprocessed_dataset)} samples after filtering")
