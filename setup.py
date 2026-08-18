@@ -43,7 +43,6 @@ def get_next_version(
     """
     Get the next version based on the build type and iteration.
     - build_type == release: take the last version and add a post if build iteration
-    - build_type == candidate: increment to next minor, add 'rc' with build iteration
     - build_type == nightly: increment to next minor, add 'a' with build iteration
     - build_type == alpha: increment to next minor, add 'a' with build iteration
     - build_type == dev: increment to next minor, add 'dev' with build iteration
