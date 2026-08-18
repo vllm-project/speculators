@@ -206,11 +206,14 @@ class MooncakeHiddenStatesStore:
             manifest = json.loads(raw)
             names = list(manifest.get("tensors", {}))
         except (UnicodeDecodeError, json.JSONDecodeError, AttributeError, TypeError):
+            logger.warning(
+                "Corrupt manifest for key=%s; falling back to default tensor names", key
+            )
             names = ["hidden_states", "token_ids"]
         keys_to_remove = [f"{key}:{name}" for name in names] + [f"{key}:meta"]
         results = self._store.batch_remove(keys_to_remove, force=True)
-        for i, status in enumerate(results):
-            _check_store_result("batch_remove", keys_to_remove[i], status)
+        for key_to_remove, status in zip(keys_to_remove, results, strict=True):
+            _check_store_result("batch_remove", key_to_remove, status)
 
     def get_sample(
         self, key: str, timeout: float = 120.0, poll_interval: float = 0.05
