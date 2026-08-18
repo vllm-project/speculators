@@ -101,16 +101,9 @@ def normalize_counted_metrics(
     return metrics
 
 
-def save_train_command(save_path: str, argv: list[str] | None = None) -> None:
-    """Write the launch command and provenance header to save_path/train_command.txt.
-
-    ``argv`` is the exact command the run was resolved from (``TrainConfig`` records
-    it during resolution); it falls back to the live ``sys.argv`` when a caller has
-    no recorded argv, so a direct call is unchanged.
-    """
-    repo_root = find_repo_root(Path(__file__))
+def _git_sha(repo_root: Path | None) -> str:
     try:
-        sha = subprocess.run(
+        return subprocess.run(
             ["git", "rev-parse", "HEAD"],  # noqa: S607
             capture_output=True,
             text=True,
@@ -118,7 +111,48 @@ def save_train_command(save_path: str, argv: list[str] | None = None) -> None:
             check=True,
         ).stdout.strip()
     except (OSError, subprocess.CalledProcessError):
-        sha = "unknown"
+        return "unknown"
+
+
+def _atomic_write(dest: Path, content: str) -> None:
+    fd, tmp = tempfile.mkstemp(dir=dest.parent, prefix=f".{dest.name}_", suffix=".tmp")
+    tmp_path = Path(tmp)
+    try:
+        with os.fdopen(fd, "w") as f:
+            f.write(content)
+        tmp_path.replace(dest)
+    finally:
+        if tmp_path.exists():
+            tmp_path.unlink()
+
+
+def _save_speculators_patch(save_dir: Path, repo_root: Path | None, sha: str) -> None:
+    if repo_root is None:
+        return
+    try:
+        diff = subprocess.run(
+            ["git", "diff", "HEAD"],  # noqa: S607
+            capture_output=True,
+            text=True,
+            cwd=repo_root,
+            timeout=30,
+            check=False,
+        ).stdout.strip()
+        content = f"# repo: {repo_root} ({sha})\n{diff}"
+        _atomic_write(save_dir / "speculators.patch", content)
+    except (OSError, subprocess.TimeoutExpired):
+        logger.warning("Failed to save speculators.patch", exc_info=True)
+
+
+def save_train_command(save_path: str, argv: list[str] | None = None) -> None:
+    """Write train_command.txt and speculators.patch to *save_path*.
+
+    ``argv`` is the exact command the run was resolved from (``TrainConfig`` records
+    it during resolution); it falls back to the live ``sys.argv`` when a caller has
+    no recorded argv, so a direct call is unchanged.
+    """
+    repo_root = find_repo_root(Path(__file__))
+    sha = _git_sha(repo_root)
 
     pkg_versions: list[str] = []
     for pkg in ("speculators", "vllm", "transformers", "torch", "compressed-tensors"):
@@ -142,12 +176,5 @@ def save_train_command(save_path: str, argv: list[str] | None = None) -> None:
 
     path = Path(save_path)
     path.mkdir(parents=True, exist_ok=True)
-    fd, tmp = tempfile.mkstemp(dir=save_path, prefix=".train_command_", suffix=".tmp")
-    tmp_path = Path(tmp)
-    try:
-        with os.fdopen(fd, "w") as f:
-            f.write(content)
-        tmp_path.replace(path / "train_command.txt")
-    finally:
-        if tmp_path.exists():
-            tmp_path.unlink()
+    _atomic_write(path / "train_command.txt", content)
+    _save_speculators_patch(path, repo_root, sha)
