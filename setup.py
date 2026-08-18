@@ -145,10 +145,15 @@ def write_version_files() -> tuple[Path, Path]:
 
 def get_hs_connectors_requirement() -> str:
     build_type = os.getenv("SPECULATORS_BUILD_TYPE", "dev").lower()
-    version, tag, build_iteration = get_next_version(
-        build_type=build_type,
-        build_iteration=os.getenv("SPECULATORS_BUILD_ITERATION"),
-    )
+    version_py_path = REPO_ROOT / "src" / "speculators" / "version.py"
+
+    if building_from_sdist() and version_py_path.exists():
+        version, tag, build_iteration = read_existing_version(version_py_path)
+    else:
+        version, tag, build_iteration = get_next_version(
+            build_type=build_type,
+            build_iteration=os.getenv("SPECULATORS_BUILD_ITERATION"),
+        )
 
     if build_type == "dev":
         # Source install: path dep for pip; uv workspace overrides anyway

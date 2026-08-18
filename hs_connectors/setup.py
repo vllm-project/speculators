@@ -70,7 +70,7 @@ def write_version_files() -> tuple[Path, Path]:
     version_txt_path = module_path / "version.txt"
     version_py_path = module_path / "version.py"
 
-    if building_from_sdist() and version_py.exists():
+    if building_from_sdist() and version_py_path.exists():
         version, tag, build_iteration = read_existing_version(version_py_path)
     else:
         version, tag, build_iteration = get_next_version(build_type)
