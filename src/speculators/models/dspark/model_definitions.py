@@ -33,6 +33,7 @@ class MarkovHead(nn.Module):
         self.head_type = head_type
         self.markov_rank = markov_rank
         self.markov_w1 = nn.Embedding(verifier_vocab_size, markov_rank)
+        nn.init.normal_(self.markov_w1.weight, std=0.01)
         self.markov_w2 = nn.Linear(markov_rank, draft_vocab_size, bias=False)
         if head_type == "gated":
             self.gate_proj = nn.Linear(hidden_size + markov_rank, markov_rank)
