@@ -65,6 +65,12 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+mooncake-cuda = [
+    "mooncake-transfer-engine",
+]
+mooncake-cuda13 = [
+    "mooncake-transfer-engine-cuda13",
+]
 dev = [
     # build
     "build>=1.5.0",
