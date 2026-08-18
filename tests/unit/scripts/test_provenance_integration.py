@@ -105,6 +105,31 @@ class TestLaunchVllmProvenance:
         assert "extract_hidden_states" in content
 
 
+    def test_flags_only_falls_back_to_train(self):
+        """Unknown flags without explicit subcommand fall back to train."""
+        result = subprocess.run(  # noqa: S603
+            [sys.executable, LAUNCH_VLLM, "--some-vllm-flag"],
+            capture_output=True,
+            text=True,
+            timeout=120,
+            check=False,
+        )
+        assert result.returncode != 0
+        assert "model" in result.stderr.lower()
+
+    def test_no_args_shows_usage_error(self):
+        """Bare launch_vllm.py with no arguments reports missing model."""
+        result = subprocess.run(  # noqa: S603
+            [sys.executable, LAUNCH_VLLM],
+            capture_output=True,
+            text=True,
+            timeout=120,
+            check=False,
+        )
+        assert result.returncode != 0
+        assert "model" in result.stderr.lower()
+
+
 class TestLaunchVllmEvalMode:
     """Eval subcommand integration tests."""
 
