@@ -117,7 +117,30 @@ def write_version_files() -> tuple[Path, Path]:
     return version_txt_path, version_py_path
 
 
+def get_hs_connectors_requirement() -> str:
+    build_type = os.getenv("SPECULATORS_BUILD_TYPE", "dev").lower()
+    version, tag, build_iteration = get_next_version(
+        build_type=build_type,
+        build_iteration=os.getenv("SPECULATORS_BUILD_ITERATION"),
+    )
+
+    if build_type == "dev":
+        # Source install: path dep for pip; uv workspace overrides anyway
+        local = (Path(__file__).parent / "hs_connectors").resolve()
+        return f"hs-connectors @ file://{local.as_posix()}"
+    else if build_type == "release":
+        # Install release version: hs_connectors has the same release version as speculators
+        return f"hs-connectors=={version}"
+    else:
+        # Install nightly version
+        return f"hs-connectors>{LAST_RELEASE_VERSION},<{version}"
+
+
 setup(
+    install_requires=[
+        # set hs_connectors version to install
+        get_hs_connectors_requirement(),
+    ],
     setuptools_git_versioning={
         "enabled": True,
         "version_file": str(write_version_files()[0]),
