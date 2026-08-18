@@ -63,3 +63,18 @@ class TestPrepareDataCommand:
     def test_missing_required_args(self):
         result = runner.invoke(app, ["prepare-data"])
         assert result.exit_code != 0
+
+    def test_allow_empty_output_in_help(self):
+        result = runner.invoke(app, ["prepare-data", "--help"])
+        assert result.exit_code == 0
+        assert "--allow-empty-output" in result.output
+
+    def test_overwrite_in_help(self):
+        result = runner.invoke(app, ["prepare-data", "--help"])
+        assert result.exit_code == 0
+        assert "--overwrite" in result.output
+
+    def test_render_endpoint_in_help(self):
+        result = runner.invoke(app, ["prepare-data", "--help"])
+        assert result.exit_code == 0
+        assert "--render-endpoint" in result.output
