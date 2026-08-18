@@ -17,7 +17,7 @@ include = ["*"]
 # ************************************************
 
 [project]
-dynamic = ["version", "dependencies"]
+dynamic = ["version"]
 name = "speculators"
 description = "A unified library for creating, representing, and storing speculative decoding algorithms for LLM serving such as in vLLM."
 readme = { file = "README.md", content-type = "text/markdown" }
