@@ -189,7 +189,9 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
         )
 
         target_layer_ids = resolve_target_layer_ids(
-            kwargs.get("target_layer_ids"), kwargs["verifier_name_or_path"]
+            kwargs.get("target_layer_ids"),
+            kwargs["verifier_name_or_path"],
+            trust_remote_code=kwargs.get("trust_remote_code", False),
         )
         verifier_config._attn_implementation = kwargs.get(  # noqa: SLF001
             "draft_attn_impl", "simple_flex_attention"
