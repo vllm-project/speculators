@@ -61,6 +61,7 @@ def get_next_version(
     elif isinstance(build_iteration, str):
         build_iteration = int(build_iteration)
 
+    # in case tag is behind LAST_RELEASE_VERSION
     if version < LAST_RELEASE_VERSION:
         version = LAST_RELEASE_VERSION
 
@@ -120,13 +121,6 @@ def write_version_files() -> tuple[Path, Path]:
     version_txt_path = module_path / "version.txt"
     version_py_path = module_path / "version.py"
 
-    print("IN write_version_files()")
-    print(f"REPO_ROOT={REPO_ROOT}")
-    print("building_from_sdist() returns: ")
-    print(building_from_sdist())
-    print("version_py_path.exists() returns: ")
-    print(version_py_path.exists())
-
     if building_from_sdist() and version_py_path.exists():
         version, tag, build_iteration = read_existing_version(version_py_path)
     else:
@@ -135,7 +129,8 @@ def write_version_files() -> tuple[Path, Path]:
             build_iteration=os.getenv("SPECULATORS_BUILD_ITERATION"),
         )
 
-    print(f"version, tag, build_iteration={version},{tag},{build_iteration}")
+    git_commit = get_sha(root=REPO_ROOT) if (not building_from_sdist()) else ""
+    git_branch = get_branch(root=REPO_ROOT) if (not building_from_sdist()) else ""
 
     with version_txt_path.open("w") as file:
         file.write(str(version))
@@ -159,13 +154,6 @@ def get_hs_connectors_requirement() -> str:
     build_type = os.getenv("SPECULATORS_BUILD_TYPE", "dev").lower()
     version_py_path = REPO_ROOT / "src" / "speculators" / "version.py"
 
-    print("IN get_hs_connectors_requirement()")
-    print(f"REPO_ROOT={REPO_ROOT}")
-    print("building_from_sdist() returns: ")
-    print(building_from_sdist())
-    print("version_py_path.exists() returns: ")
-    print(version_py_path.exists())
-
     if building_from_sdist() and version_py_path.exists():
         version, tag, build_iteration = read_existing_version(version_py_path)
     else:
@@ -173,8 +161,6 @@ def get_hs_connectors_requirement() -> str:
             build_type=build_type,
             build_iteration=os.getenv("SPECULATORS_BUILD_ITERATION"),
         )
-
-    print(f"version, tag, build_iteration={version},{tag},{build_iteration}")
 
     if build_type == "dev":
         # Source install: path dep for pip; uv workspace overrides anyway
