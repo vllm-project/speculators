@@ -10,4 +10,4 @@ Training, eval, and vLLM-launch scripts write reproducibility artifacts so runs 
   - `launch_vllm.py train MODEL` (default): hidden-states extraction for training data generation.
   - `launch_vllm.py eval MODEL --spec-model DRAFTER`: speculative decoding serving for evaluation.
 
-When publishing a model or eval results (HuggingFace, GitHub comments, etc.), always include the provenance artifacts (`train_command.txt`, `eval_command.txt`, `vllm_command.txt`, `checkpoint_sha256.txt`, patches) so the run can be reproduced.
+When publishing a model or eval results (HuggingFace, GitHub comments, etc.), always include the provenance artifacts (`train_command.txt`, `eval_command.txt`, `vllm_command.txt`, `checkpoint_sha256.txt`, `drafter_checkpoint_sha256.txt`, patches) so the run can be reproduced.

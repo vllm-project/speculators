@@ -240,9 +240,13 @@ def _save_vllm_patch(
 
 
 def _save_checkpoint_sha256(
-    prov_dir: Path, model: str, *, skip_hash: bool = False
+    prov_dir: Path,
+    model: str,
+    *,
+    skip_hash: bool = False,
+    dest_name: str = "checkpoint_sha256.txt",
 ) -> None:
-    dest = prov_dir / "checkpoint_sha256.txt"
+    dest = prov_dir / dest_name
     model_path = os.path.expanduser(model)
     if not os.path.isdir(model_path):
         atomic_write(dest, f"# model: {model} (not a local path)\n")
@@ -280,6 +284,7 @@ def _save_vllm_provenance(
     model: str,
     *,
     skip_hash: bool = False,
+    spec_model: str | None = None,
 ) -> None:
     """Write vllm_command.txt, vllm.patch, and checkpoint_sha256.txt.
 
@@ -312,6 +317,15 @@ def _save_vllm_provenance(
             lambda: _save_checkpoint_sha256(prov_dir, model, skip_hash=skip_hash),
         ),
     ]
+    if spec_model is not None:
+        drafter_dest = "drafter_checkpoint_sha256.txt"
+        writers.append((
+            drafter_dest,
+            lambda: _save_checkpoint_sha256(
+                prov_dir, spec_model,
+                skip_hash=skip_hash, dest_name=drafter_dest,
+            ),
+        ))
     for artifact, write in writers:
         try:
             write()
@@ -411,6 +425,7 @@ def main():
         args.provenance_dir,
         args.model,
         skip_hash=args.no_hash_checkpoints,
+        spec_model=getattr(args, "spec_model", None),
     )
 
     if not args.dry_run:

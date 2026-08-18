@@ -163,6 +163,7 @@ class TestLaunchVllmEvalMode:
         assert (provenance_dir / "vllm_command.txt").exists()
         assert (provenance_dir / "vllm.patch").exists()
         assert (provenance_dir / "checkpoint_sha256.txt").exists()
+        assert (provenance_dir / "drafter_checkpoint_sha256.txt").exists()
 
     def test_eval_command_contains_spec_flags(self, provenance_dir: Path):
         self._run(provenance_dir)

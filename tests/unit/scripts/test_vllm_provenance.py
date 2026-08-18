@@ -144,6 +144,18 @@ class TestSaveVllmProvenance:
         assert (prov_dir / "vllm_command.txt").exists()
         assert (prov_dir / "vllm.patch").exists()
         assert (prov_dir / "checkpoint_sha256.txt").exists()
+        assert not (prov_dir / "drafter_checkpoint_sha256.txt").exists()
+
+    def test_creates_drafter_checkpoint_in_eval_mode(self, tmp_path: Path):
+        prov_dir = tmp_path / "provenance"
+        _save_vllm_provenance(
+            ["python", "serve"], str(prov_dir), "org/model",
+            spec_model="org/drafter",
+        )
+        assert (prov_dir / "checkpoint_sha256.txt").exists()
+        assert (prov_dir / "drafter_checkpoint_sha256.txt").exists()
+        content = (prov_dir / "drafter_checkpoint_sha256.txt").read_text()
+        assert "org/drafter" in content
 
     def test_creates_provenance_dir(self, tmp_path: Path):
         prov_dir = tmp_path / "nested" / "provenance"
