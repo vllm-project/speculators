@@ -1,12 +1,18 @@
 """Convert command — convert external models to speculators format."""
 
 import json
+from enum import Enum
 from typing import Annotated, Any
 
-import click
 import typer
 
 from speculators.convert import convert_model
+
+
+class AlgorithmChoice(str, Enum):
+    eagle3 = "eagle3"
+    mtp = "mtp"
+    dflash = "dflash"
 
 
 def convert(
@@ -25,13 +31,12 @@ def convert(
         ),
     ],
     algorithm: Annotated[
-        str,
+        AlgorithmChoice,
         typer.Option(
             help=(
                 "The source repo/algorithm to convert from into the matching "
                 "algorithm in Speculators"
             ),
-            click_type=click.Choice(["eagle", "eagle3", "mtp"]),
         ),
     ],
     output_path: Annotated[
@@ -52,33 +57,18 @@ def convert(
             parser=json.loads,
             help=(
                 "Additional keyword args for the conversion alg as a JSON string. "
-                'Options for Eagle: {"layernorms": true, "fusion_bias": true}. '
                 'Options for Eagle3: {"norm_before_residual": true, '
                 '"eagle_aux_hidden_state_layer_ids": [1,23,44]}. '
-                'Options for MTP: {"num_speculative_steps": 3}.'
+                'Options for MTP: {"num_speculative_steps": 3}. '
+                'Options for DFlash: {"aux_hidden_state_layer_ids": [2,10,18,26,34]}.'
             ),
         ),
     ] = None,
 ):
     """Convert models from external research repositories or formats
     into the standardized Speculators format for use within the Speculators
-    framework, Hugging Face model hub compatability, and deployment with vLLM.
+    framework, Hugging Face model hub compatibility, and deployment with vLLM.
     Supported algorithms, repositories, and examples given below.
-
-    \b
-    algorithm=="eagle":
-        Eagle v1, v2: https://github.com/SafeAILab/EAGLE
-        HASS: https://github.com/HArmonizedSS/HASS
-        ::
-        # general
-        speculators convert "yuhuili/EAGLE-LLaMA3.1-Instruct-8B" \\
-            --algorithm eagle \\
-            --verifier "meta-llama/Llama-3.1-8B-Instruct"
-        # with layernorms and fusion bias enabled
-        speculators convert "./eagle/checkpoint" \\
-            --algorithm eagle \\
-            --algorithm-kwargs '{"layernorms": true, "fusion_bias": true}' \\
-            --verifier "meta-llama/Llama-3.1-8B-Instruct"
 
     \b
     algorithm=="eagle3":
@@ -103,6 +93,14 @@ def convert(
             --algorithm mtp \\
             --verifier "Qwen/Qwen3-Next-80B-A3B-Instruct" \\
             --algorithm-kwargs '{"num_speculative_steps": 3}'
+
+    \b
+    algorithm=="dflash":
+        DFlash: https://z-lab.ai/projects/dflash/
+        ::
+        speculators convert "z-lab/Qwen3-8B-DFlash-b16" \\
+            --algorithm dflash \\
+            --verifier "Qwen/Qwen3-8B"
     """
     if not algorithm_kwargs:
         algorithm_kwargs = {}
@@ -117,6 +115,6 @@ def convert(
         verifier=verifier,
         output_path=output_path,
         validate_device=validate_device,
-        algorithm=algorithm,  # type: ignore[arg-type]
+        algorithm=algorithm.value,
         **algorithm_kwargs,
     )

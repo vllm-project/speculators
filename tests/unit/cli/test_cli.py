@@ -35,6 +35,12 @@ class TestConvertCommand:
         assert "--verifier" in result.output
         assert "--algorithm" in result.output
 
+    def test_algorithm_choices_in_help(self):
+        result = runner.invoke(app, ["convert", "--help"])
+        assert result.exit_code == 0
+        for algo in ("eagle3", "mtp", "dflash"):
+            assert algo in result.output
+
     def test_missing_required_args(self):
         result = runner.invoke(app, ["convert"])
         assert result.exit_code != 0
