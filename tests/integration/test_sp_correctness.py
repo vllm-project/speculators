@@ -29,7 +29,7 @@ def _a2a(x, scatter_dim, gather_dim):
     return torch.ops.speculators.all_to_all_sp(x, scatter_dim, gather_dim)
 
 
-def test_round_trip(rank, device):
+def check_round_trip(rank, device):
     """Scatter then gather should recover the original tensor."""
     torch.manual_seed(42)
     x = torch.randn(1, 8, 256, 64, device=device, dtype=torch.bfloat16)
@@ -44,7 +44,7 @@ def test_round_trip(rank, device):
     return max_diff < 1e-6
 
 
-def test_attention_equivalence(sp_size, rank, device):
+def check_attention_equivalence(sp_size, rank, device):
     """SP scatter->attention->gather should match direct attention."""
     from speculators.train.sequence_parallel import (
         maybe_replicate_kv_heads,
@@ -94,7 +94,7 @@ def test_attention_equivalence(sp_size, rank, device):
     return max_diff < 5e-2
 
 
-def test_gradient_equivalence(sp_size, rank, device):
+def check_gradient_equivalence(sp_size, rank, device):
     """Gradients through SP path should match gradients without SP."""
     from speculators.train.sequence_parallel import (
         maybe_replicate_kv_heads,
@@ -165,9 +165,9 @@ def main():
         print(f"Testing SP correctness with {world_size} GPUs\n")
 
     results = [
-        test_round_trip(rank, device),
-        test_attention_equivalence(world_size, rank, device),
-        test_gradient_equivalence(world_size, rank, device),
+        check_round_trip(rank, device),
+        check_attention_equivalence(world_size, rank, device),
+        check_gradient_equivalence(world_size, rank, device),
     ]
 
     if rank == 0:
