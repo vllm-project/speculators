@@ -10,7 +10,7 @@ def check_hidden_states(data: dict, tokens: list[int]):
     required = {"token_ids", "hidden_states"}
     missing = required - data.keys()
     if missing:
-        raise ValueError(f"Hidden-state payload is missing keys: {sorted(missing)}")
+        raise ValueError(f"Hidden-state payload is missing keys: {missing}")
 
     t_ids = data["token_ids"].tolist()
     if t_ids != tokens:
