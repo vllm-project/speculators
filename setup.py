@@ -170,7 +170,7 @@ def get_hs_connectors_requirement() -> str:
         return f"hs-connectors=={version}"
     else:
         # Install nightly version
-        return f"hs-connectors>{LAST_RELEASE_VERSION},<{version}"
+        return f"hs-connectors>{LAST_RELEASE_VERSION},<={version}"
 
 
 BASE_DEPENDENCIES = [
