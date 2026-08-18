@@ -85,9 +85,6 @@ def _add_shared_args(parser: argparse.ArgumentParser) -> None:
     )
 
 
-_SUBCOMMANDS = {"train", "eval"}
-
-
 def parse_args():
     parser = argparse.ArgumentParser(
         description="Launch vLLM for training or evaluation",
@@ -170,8 +167,9 @@ def parse_args():
     )
     _add_shared_args(eval_parser)
 
+    subcommands = set(sub.choices)
     argv = sys.argv[1:]
-    if not argv or (argv[0] not in _SUBCOMMANDS and not argv[0].startswith("-")):
+    if not argv or (argv[0] not in subcommands and not argv[0].startswith("-")):
         argv = ["train", *argv]
     args, vllm_args = parser.parse_known_args(argv)
     if args.subcommand is None:
