@@ -78,6 +78,10 @@ class _FakeProcessor:
         return ""
 
 
+class _NoChatTemplateProcessor:
+    chat_template = None
+
+
 def _patch_empty_pipeline(monkeypatch: pytest.MonkeyPatch) -> None:
     """Make load_and_preprocess_dataset produce an empty dataset without GPU/network."""
     empty = HFDataset.from_dict({"input_ids": [], "loss_mask": [], "seq_len": []})
@@ -124,3 +128,82 @@ def test_load_and_preprocess_allows_empty_output_with_flag(
 
     assert len(dataset) == 0
     assert isinstance(processor, _FakeProcessor)
+
+
+def test_pretokenized_data_does_not_require_chat_template(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+):
+    raw = HFDataset.from_dict(
+        {
+            "input_ids": [[1, 2, 3]],
+            "loss_mask": [[0, 1, 1]],
+        }
+    )
+    monkeypatch.setattr(
+        preprocessing_module,
+        "load_processor",
+        lambda *a, **k: _NoChatTemplateProcessor(),
+    )
+    monkeypatch.setattr(
+        preprocessing_module, "load_raw_dataset", lambda _path: (raw, None)
+    )
+    processed = HFDataset.from_dict(
+        {
+            "input_ids": [[1, 2, 3]],
+            "loss_mask": [[0, 1, 1]],
+            "seq_len": [3],
+        }
+    )
+    processed.set_format(type="torch")
+    monkeypatch.setattr(
+        preprocessing_module,
+        "build_speculator_training_dataset",
+        lambda *a, **k: processed,
+    )
+    monkeypatch.setattr(
+        preprocessing_module, "save_token_frequency_distribution", lambda **k: None
+    )
+    monkeypatch.setattr(preprocessing_module, "_visualize_sample", lambda *a, **k: None)
+
+    dataset, _ = load_and_preprocess_dataset(
+        "custom-model",
+        ["pretokenized.jsonl"],
+        seq_length=8,
+        build_dataset_num_proc=1,
+        token_freq_path=tmp_path / "token_freq.pt",
+    )
+
+    assert len(dataset) == 1
+    assert dataset[0]["input_ids"].tolist() == [1, 2, 3]
+
+
+def test_conversation_data_still_requires_chat_template(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+):
+    raw = HFDataset.from_dict(
+        {
+            "conversations": [
+                [
+                    {"role": "user", "content": "hello"},
+                    {"role": "assistant", "content": "hi"},
+                ]
+            ]
+        }
+    )
+    monkeypatch.setattr(
+        preprocessing_module,
+        "load_processor",
+        lambda *a, **k: _NoChatTemplateProcessor(),
+    )
+    monkeypatch.setattr(
+        preprocessing_module, "load_raw_dataset", lambda _path: (raw, None)
+    )
+
+    with pytest.raises(ValueError, match="does not support chat templates"):
+        load_and_preprocess_dataset(
+            "custom-model",
+            ["conversations.jsonl"],
+            seq_length=8,
+            build_dataset_num_proc=1,
+            token_freq_path=tmp_path / "token_freq.pt",
+        )
