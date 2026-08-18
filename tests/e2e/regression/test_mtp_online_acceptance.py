@@ -1,4 +1,4 @@
-"""Weekly regression test for MTP online finetuning acceptance rates.
+"""Nightly regression test for MTP online finetuning acceptance rates.
 
 Imports and calls the shared ``run_mtp_finetuning_e2e()`` pipeline from the
 smoke module with Qwen3.5-4B parameters. Evaluates on generic (non-GSM8k)
@@ -24,7 +24,7 @@ from tests.utils import requires_cadence
 TRAINING_DATA_REPO = "inference-optimization/Qwen3.5-4B-responses"
 
 
-@requires_cadence("weekly")
+@requires_cadence("nightly")
 @pytest.mark.regression
 @requires_cuda
 @requires_transformers_version("5.2.0")
