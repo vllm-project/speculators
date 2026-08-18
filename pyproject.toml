@@ -66,7 +66,7 @@ dependencies = [
 
 [project.optional-dependencies]
 mooncake-cuda = [
-    "mooncake-transfer",
+    "mooncake-transfer-engine",
 ]
 mooncake-cuda13 = [
     "mooncake-transfer-engine-cuda13",
