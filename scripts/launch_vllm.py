@@ -183,7 +183,7 @@ def _save_vllm_patch(
     vllm_ver: str,
 ) -> None:
     if vllm_repo:
-        content = f"# repo: {vllm_repo} ({sha})\n{diff}"
+        content = f"# repo: {vllm_repo} ({sha})\n{diff}\n"
     else:
         content = f"# vllm {vllm_ver} (wheel install, no git repo found)\n"
     atomic_write(prov_dir / "vllm.patch", content)
@@ -326,7 +326,7 @@ def main():
 
     if not args.provenance_dir:
         sanitized = args.model.replace("/", "_").replace(" ", "_")
-        ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+        ts = datetime.datetime.now(tz=datetime.timezone.utc).strftime("%Y%m%d_%H%M%S")
         args.provenance_dir = f"vllm_{sanitized}_{ts}"
     _save_vllm_provenance(
         cmd,
