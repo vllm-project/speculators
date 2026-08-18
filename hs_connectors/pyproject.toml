@@ -8,8 +8,23 @@ include = ["*"]
 
 [project]
 name = "hs-connectors"
+description = "Pluggable backends for transferring hidden states between vLLM and Speculators during online and offline training."
 version = "0.1.0"
 requires-python = ">=3.10"
+keywords = [
+    "hidden states",
+    "speculative decoding",
+    "speculators",
+    "vllm",
+    "llm",
+    "inference",
+    "training",
+    "online training",
+    "offline training",
+    "safetensors",
+    "mooncake",
+    "distributed training"
+]
 dependencies = [
     "safetensors",
     "torch",
