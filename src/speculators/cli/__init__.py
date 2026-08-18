@@ -16,10 +16,7 @@ __all__ = ["app"]
 
 app = typer.Typer(
     name="speculators",
-    help=(
-        "Speculators - A unified library for speculative decoding algorithms for LLMs"
-    ),
-    add_completion=False,
+    help="Speculators - speculative decoding for vLLM",
     no_args_is_help=True,
 )
 
