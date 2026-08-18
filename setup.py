@@ -123,9 +123,10 @@ def write_version_files() -> tuple[Path, Path]:
     print("IN write_version_files()")
     print(f"REPO_ROOT={REPO_ROOT}")
     print("building_from_sdist() returns: ")
-    building_from_sdist()
+    print(building_from_sdist())
     print("version_py_path.exists() returns: ")
-    version_py_path.exists()
+    print(version_py_path.exists())
+
     if building_from_sdist() and version_py_path.exists():
         version, tag, build_iteration = read_existing_version(version_py_path)
     else:
@@ -160,6 +161,10 @@ def get_hs_connectors_requirement() -> str:
 
     print("IN get_hs_connectors_requirement()")
     print(f"REPO_ROOT={REPO_ROOT}")
+    print("building_from_sdist() returns: ")
+    print(building_from_sdist())
+    print("version_py_path.exists() returns: ")
+    print(version_py_path.exists())
 
     if building_from_sdist() and version_py_path.exists():
         version, tag, build_iteration = read_existing_version(version_py_path)
