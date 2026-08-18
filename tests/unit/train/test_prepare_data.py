@@ -156,7 +156,9 @@ def test_pretokenized_data_does_not_require_chat_template(
     )
     processed.set_format(type="torch")
     monkeypatch.setattr(
-        preprocessing_module, "build_eagle3_dataset", lambda *a, **k: processed
+        preprocessing_module,
+        "build_speculator_training_dataset",
+        lambda *a, **k: processed,
     )
     monkeypatch.setattr(
         preprocessing_module, "save_token_frequency_distribution", lambda **k: None
