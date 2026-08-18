@@ -4,9 +4,9 @@ Regenerates assistant responses in existing datasets using a vLLM-served model. 
 
 The pipeline consists of two entry points:
 
-| Entry point                  | Purpose                                                        |
-| ---------------------------- | -------------------------------------------------------------- |
-| `run_all.sh`                 | End-to-end pipeline: starts vLLM, regenerates responses, stops |
+| Entry point                        | Purpose                                                        |
+| ---------------------------------- | -------------------------------------------------------------- |
+| `run_all.sh`                       | End-to-end pipeline: starts vLLM, regenerates responses, stops |
 | `speculators regenerate-responses` | Standalone response regeneration against a running vLLM server |
 
 ## run_all.sh
