@@ -395,8 +395,10 @@ def main():
 
     if args.subcommand == "train":
         cmd = _build_train_cmd(args, vllm_args)
-    else:
+    elif args.subcommand == "eval":
         cmd = _build_eval_cmd(args, vllm_args)
+    else:
+        raise ValueError(f"Unknown subcommand: {args.subcommand}")
 
     print("Running command:")
     print(" ".join(cmd))
