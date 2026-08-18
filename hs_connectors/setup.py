@@ -67,15 +67,13 @@ def building_from_sdist() -> bool:
 def write_version_files() -> tuple[Path, Path]:
     build_type = os.getenv("HS_CONNECTORS_BUILD_TYPE", "nightly").lower()
     module_path = Path(__file__).parent / "src" / "hs_connectors"
-    version_py = module_path / "version.py"
-
-    if building_from_sdist() and version_py.exists():
-        version, tag, build_iteration = read_existing_version(version_py)
-    else:
-        version, tag, build_iteration = get_next_version(build_type)
-
     version_txt_path = module_path / "version.txt"
     version_py_path = module_path / "version.py"
+
+    if building_from_sdist() and version_py.exists():
+        version, tag, build_iteration = read_existing_version(version_py_path)
+    else:
+        version, tag, build_iteration = get_next_version(build_type)
 
     git_commit = get_sha(root=REPO_ROOT) if (not building_from_sdist()) else ""
     git_branch = get_branch(root=REPO_ROOT) if (not building_from_sdist()) else ""
