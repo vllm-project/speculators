@@ -49,20 +49,64 @@ if "file" not in _backend_registry:
 # the render stage serializes there no matter how many client workers run.
 # These flags only scale the HTTP front end (template + tokenize); the engine
 # and hidden-states connector are untouched.
-RENDER_THROUGHPUT_DEFAULTS = {
-    "--api-server-count": "4",
-    "--renderer-num-workers": "2",
-}
+#
+# Sizing, measured on an H100 node (2x EPYC 9654, 384 CPUs). prepare_data
+# renders from --num-preprocessing-workers forked clients (default 8), each
+# blocking on one call at a time, so at most that many renders are ever in
+# flight and the front end needs about that many render slots -- a slot being
+# one renderer thread in one API process.
+#
+# How the slots are split matters more than how many there are. Eight threads in
+# one process reach only 1.2x stock, because chat-template rendering is Python
+# and serializes on the GIL; eight single-threaded processes cost ~1.2 GB RSS
+# each and still trail four processes of two threads (1390 vs 1702 renders/s).
+# Past the client's in-flight limit more front ends are memory for nothing, and
+# on a host with few cores they only take cores from the clients -- hence the
+# cap and the per-CPU scaling below.
+RENDER_CLIENT_CONCURRENCY = 8  # prepare_data --num-preprocessing-workers default
+RENDERER_THREADS_PER_SERVER = 2
+CPUS_PER_API_SERVER = 4
+
+
+def _usable_cpu_count() -> int:
+    """Number of CPUs this process may actually run on.
+
+    Not ``os.cpu_count()``: that reports the whole machine and ignores CPU
+    affinity, so a datagen job confined to a few cores of a large node would
+    still start a front end per idle core it cannot use.
+    """
+    if hasattr(os, "process_cpu_count"):  # Python 3.13+
+        return os.process_cpu_count() or 1
+    if hasattr(os, "sched_getaffinity"):  # Linux
+        return len(os.sched_getaffinity(0))
+    return os.cpu_count() or 1
+
+
+def render_throughput_defaults(cpus: int | None = None) -> dict[str, str]:
+    """Front-end sizing for this host.
+
+    Enough render slots to keep the default client concurrency busy, capped by
+    the CPUs actually available: past the client's in-flight limit extra front
+    ends buy nothing, and on a small host they only take cores from the clients.
+    """
+    if cpus is None:
+        cpus = _usable_cpu_count()
+    max_useful = RENDER_CLIENT_CONCURRENCY // RENDERER_THREADS_PER_SERVER
+    api_servers = max(1, min(max_useful, cpus // CPUS_PER_API_SERVER))
+    return {
+        "--api-server-count": str(api_servers),
+        "--renderer-num-workers": str(RENDERER_THREADS_PER_SERVER),
+    }
 
 
 def _with_render_defaults(vllm_args: list[str]) -> list[str]:
-    """Prepend RENDER_THROUGHPUT_DEFAULTS for flags the caller did not set.
+    """Prepend the render throughput defaults for flags the caller did not set.
 
     Defaults go before ``vllm_args`` so an explicit flag always wins (argparse
     keeps the last occurrence), even for spellings the presence check misses.
     """
     extra: list[str] = []
-    for flag, value in RENDER_THROUGHPUT_DEFAULTS.items():
+    for flag, value in render_throughput_defaults().items():
         # vLLM's parser accepts dash and underscore spellings, plus "=" form.
         names = {flag, "--" + flag[2:].replace("-", "_")}
         if any(
