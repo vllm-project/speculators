@@ -255,6 +255,8 @@ class Qwen3DFlashDecoderLayer(GradientCheckpointingLayer):
             config.hidden_size,
             eps=config.rms_norm_eps,  # type: ignore[arg-type]
         )
+        self.attention_conv: GroupedDynamicCausalConv | None = None
+        self.mlp_conv: GroupedDynamicCausalConv | None = None
         if conv_kernel_size is not None and conv_group_size is not None:
             assert block_size is not None  # noqa: S101
             self.attention_conv = GroupedDynamicCausalConv(
@@ -263,9 +265,6 @@ class Qwen3DFlashDecoderLayer(GradientCheckpointingLayer):
             self.mlp_conv = GroupedDynamicCausalConv(
                 config.hidden_size, conv_kernel_size, conv_group_size, block_size
             )
-        else:
-            self.attention_conv: GroupedDynamicCausalConv | None = None
-            self.mlp_conv: GroupedDynamicCausalConv | None = None
 
     def forward(
         self,
