@@ -138,7 +138,7 @@ class _Resp:
 
 
 def test_render_conversation_missing_token_ids_raises(monkeypatch):
-    monkeypatch.setattr(render_client.httpx, "post", lambda *a, **k: _Resp(200, {}))
+    monkeypatch.setattr(render_client, "_post", lambda *a, **k: _Resp(200, {}))
     with pytest.raises(render_client.RenderError):
         render_client.render_conversation(
             "http://x", [], add_generation_prompt=False, max_retries=0
@@ -152,10 +152,34 @@ def test_render_conversation_client_error_not_retried(monkeypatch):
         calls.append(1)
         return _Resp(400, {}, "bad request")
 
-    monkeypatch.setattr(render_client.httpx, "post", post)
+    monkeypatch.setattr(render_client, "_post", post)
     with pytest.raises(InvalidResponseError):
         render_client.render_conversation("http://x", [], add_generation_prompt=False)
     assert len(calls) == 1  # 4xx is deterministic: no retry
+
+
+def test_post_pools_client_per_process(monkeypatch):
+    created = []
+
+    class _FakeClient:
+        def __init__(self):
+            created.append(self)
+
+        def post(self, url, *, json, timeout):
+            return _Resp(200, {"token_ids": [1]})
+
+    monkeypatch.setattr(render_client.httpx, "Client", _FakeClient)
+    monkeypatch.setattr(render_client, "_client", None)
+    monkeypatch.setattr(render_client, "_client_pid", None)
+
+    render_client.render_conversation("http://x", [], add_generation_prompt=False)
+    render_client.render_conversation("http://x", [], add_generation_prompt=False)
+    assert len(created) == 1  # one client reused within the process
+
+    # A forked map worker must not reuse the parent's pooled sockets.
+    monkeypatch.setattr(render_client.os, "getpid", lambda: -1)
+    render_client.render_conversation("http://x", [], add_generation_prompt=False)
+    assert len(created) == 2
 
 
 @pytest.mark.parametrize("status", [408, 429])
@@ -166,7 +190,7 @@ def test_render_conversation_transient_status_is_retried(monkeypatch, status):
         calls.append(1)
         return _Resp(status, {}, "slow down")
 
-    monkeypatch.setattr(render_client.httpx, "post", post)
+    monkeypatch.setattr(render_client, "_post", post)
     monkeypatch.setattr(time, "sleep", lambda _: None)  # skip the backoff
     with pytest.raises(render_client.RenderError):
         render_client.render_conversation(

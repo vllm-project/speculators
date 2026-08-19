@@ -6,6 +6,7 @@ between two renders, not the server's ``assistant_tokens_mask`` (which needs
 already runs, so one tokenizer feeds the mask, hidden states, and serving.
 """
 
+import os
 from http import HTTPStatus
 
 import httpx
@@ -13,6 +14,30 @@ import httpx
 from speculators.data_generation.vllm_client import InvalidResponseError, with_retries
 
 DEFAULT_RENDER_TIMEOUT = 30
+
+_client: httpx.Client | None = None
+_client_pid: int | None = None
+
+
+def _post(url: str, *, json: dict, timeout: float) -> httpx.Response:
+    """POST through a per-process pooled client.
+
+    Boundary derivation issues a couple of renders per assistant turn, tens of
+    thousands per dataset. Module-level ``httpx.post`` builds a new client
+    (SSL context, CA bundle) and a new TCP connection for every call, ~2-3 ms
+    of overhead each plus one throwaway socket. A pooled client removes both.
+
+    The client is keyed by PID because ``datasets.map`` workers are forked
+    processes: pooled sockets inherited across a fork would be shared with the
+    parent and corrupt each other's responses.
+    """
+    global _client, _client_pid  # noqa: PLW0603
+    pid = os.getpid()
+    if _client is None or _client_pid != pid:
+        _client = httpx.Client()
+        _client_pid = pid
+    return _client.post(url, json=json, timeout=timeout)
+
 
 # 4xx that mean "retry", not "your request is wrong".
 TRANSIENT_STATUSES = frozenset(
@@ -50,7 +75,7 @@ def render_conversation(
     if chat_template_kwargs is not None:
         body["chat_template_kwargs"] = chat_template_kwargs
 
-    resp = httpx.post(url, json=body, timeout=timeout)
+    resp = _post(url, json=body, timeout=timeout)
 
     if (
         HTTPStatus.BAD_REQUEST <= resp.status_code < HTTPStatus.INTERNAL_SERVER_ERROR
