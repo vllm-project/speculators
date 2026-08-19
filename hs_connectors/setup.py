@@ -41,10 +41,12 @@ def get_next_version(build_type: str) -> tuple[Version, str | None, int]:
         return version, tag, 0
 
     if build_type == "nightly":
-        # nightly version will be patch+1 from last release tag: e.g. tag hsc-v0.1.0 + 3 commits -> 0.1.1a3
+        # nightly version will be patch+1 from last release tag:
+        # e.g. tag hsc-v0.1.0 + 3 commits -> 0.1.1a3
         return (
             Version(
-                f"{version.major}.{version.minor}.{version.micro + 1}.a{commits_since_last}"
+                f"{version.major}.{version.minor}.{version.micro + 1}"
+                f".a{commits_since_last}"
             ),
             tag,
             commits_since_last,

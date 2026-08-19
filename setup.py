@@ -64,8 +64,7 @@ def get_next_version(
         build_iteration = int(build_iteration)
 
     # in case tag is behind LAST_RELEASE_VERSION
-    if version < LAST_RELEASE_VERSION:
-        version = LAST_RELEASE_VERSION
+    version = max(version, LAST_RELEASE_VERSION)
 
     if build_type == "release":
         if not tag:
@@ -171,7 +170,7 @@ def get_hs_connectors_requirement() -> str:
         local = (REPO_ROOT / "hs_connectors").resolve()
         return f"hs-connectors @ file://{local.as_posix()}"
     elif build_type == "release":
-        # Install release version: hs_connectors has the same release version as speculators
+        # Install release version: hs_connectors has the same version as speculators
         return f"hs-connectors=={version}"
     else:
         # Install nightly version
