@@ -79,7 +79,7 @@ class GroupedDynamicCausalConv(nn.Module):
         self.group_size = group_size
         self.block_size = block_size
         groups = hidden_size // group_size
-        self.base_kernel = nn.Parameter(torch.empty(2, kernel_size, hidden_size))
+        self.base_kernel = nn.Parameter(torch.zeros(2, kernel_size, hidden_size))
         self.kernel_projection = nn.Linear(
             hidden_size, 2 * kernel_size * groups, bias=False
         )
@@ -109,8 +109,8 @@ class CandidateSelector(nn.Module):
     def __init__(self, vocab_size: int, hidden_size: int, rank: int, top_k: int):
         super().__init__()
         self.top_k = top_k
-        self.predecessor_codebook = nn.Parameter(torch.empty(vocab_size, rank))
-        self.successor_codebook = nn.Parameter(torch.empty(vocab_size, rank))
+        self.predecessor_codebook = nn.Embedding(vocab_size, rank)
+        self.successor_codebook = nn.Embedding(vocab_size, rank)
         self.hidden_projection = nn.Linear(hidden_size, rank, bias=False)
 
     def score(
@@ -119,10 +119,10 @@ class CandidateSelector(nn.Module):
         predecessor_ids: torch.Tensor,
         candidate_ids: torch.Tensor,
     ) -> torch.Tensor:
-        context = self.predecessor_codebook[predecessor_ids] * self.hidden_projection(
+        context = self.predecessor_codebook(predecessor_ids) * self.hidden_projection(
             hidden
         )
-        successor_emb = self.successor_codebook[candidate_ids]
+        successor_emb = self.successor_codebook(candidate_ids)
         return torch.einsum("...r,...kr->...k", context, successor_emb)
 
 

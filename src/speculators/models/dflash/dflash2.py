@@ -133,10 +133,10 @@ class DFlash2DraftModel(DFlashDraftModel):
         )
 
         predecessor_ids = self._predecessor_ids(input_ids, anchored_block_indices)
-        context = self.candidate_selector.predecessor_codebook[
+        context = self.candidate_selector.predecessor_codebook(
             predecessor_ids
-        ] * self.candidate_selector.hidden_projection(hidden)
-        edge_scores = context @ self.candidate_selector.successor_codebook.T
+        ) * self.candidate_selector.hidden_projection(hidden)
+        edge_scores = context @ self.candidate_selector.successor_codebook.weight.T
         logits = logits + edge_scores
 
         loss, metrics = compute_metrics(
