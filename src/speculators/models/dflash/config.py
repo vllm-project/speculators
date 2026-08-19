@@ -81,6 +81,17 @@ class DFlashSpeculatorConfig(SpeculatorModelConfig):
         ),
     )
 
+    conv_kernel_size: int | None = Field(
+        default=None,
+        description="Kernel size for grouped dynamic causal convolutions (DFlash 2). "
+        "None disables convolutions (DFlash 1 behavior).",
+    )
+
+    conv_group_size: int | None = Field(
+        default=None,
+        description="Group size for grouped dynamic causal convolutions (DFlash 2).",
+    )
+
     @field_serializer("transformer_layer_config")
     def serialize_transformer_config(self, value: PretrainedConfig) -> dict:
         """Serialize transformer config to dict."""

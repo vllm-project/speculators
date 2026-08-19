@@ -81,7 +81,15 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
         num_draft_layers = tl_config.num_hidden_layers
         self.layers = nn.ModuleList(
             [
-                Qwen3DFlashDecoderLayer(config.transformer_layer_config, layer_idx)  # type: ignore[arg-type]
+                Qwen3DFlashDecoderLayer(
+                    config.transformer_layer_config,  # type: ignore[arg-type]
+                    layer_idx,
+                    conv_kernel_size=config.conv_kernel_size,
+                    conv_group_size=config.conv_group_size,
+                    block_size=config.block_size
+                    if config.conv_kernel_size is not None
+                    else None,
+                )
                 for layer_idx in range(num_draft_layers)
             ]
         )
