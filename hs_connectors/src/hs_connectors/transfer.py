@@ -332,3 +332,117 @@ class MooncakeBackend(HiddenStatesBackend):
                 "mooncake": dataclasses.asdict(mooncake_cfg),
             },
         }
+
+# ---------------------------------------------------------------------------
+# HTTP backend (vLLM writes to local fast disk; trainer fetches over HTTP)
+#
+# Motivation: pointing ``shared_storage_path`` at a shared network filesystem
+# (e.g. cephfs) makes every connector write a cross-host op that contends on
+# the MDS; under saturation, batches of writes stall together with 1-3 s tail
+# latency, which punches through the trainer's prefetch buffer and produces
+# tail training steps. This backend instead tells vLLM to write to a local
+# disk on its own node (no MDS, no cross-host write bursts) and has the
+# trainer pull the file back over plain HTTP from a tiny static file server
+# (``scripts/serve_hs.py``) running next to vLLM. It also works without any
+# shared filesystem between the two nodes.
+#
+# The connector side is unchanged: it still writes
+# ``{shared_storage_path}/{req_id}.safetensors`` under a ``.lock`` flock and
+# returns that absolute path as the handle. We only reinterpret the handle on
+# the trainer side: strip the basename, prepend ``--hs-http-base``, GET it.
+# The file server blocks on the same ``.lock`` flock until the write is done,
+# preserving the existing synchronization semantics.
+# ---------------------------------------------------------------------------
+
+import urllib.error
+import urllib.request
+
+from safetensors.torch import load as load_safetensors_bytes
+
+
+class HttpTransfer(HiddenStatesTransfer):
+    def __init__(self, hs_http_base: str, hidden_states_path, timeout: float = 120.0):
+        self.hs_http_base = hs_http_base.rstrip("/")
+        self.hidden_states_path = hidden_states_path
+        self.timeout = timeout
+
+    def get_cached(self, file_idx: int):
+        path = self.hidden_states_path / f"hs_{file_idx}.safetensors"
+        return _load_hs_file(path)
+
+    def _url_for(self, handle: str) -> str:
+        return f"{self.hs_http_base}/{os.path.basename(handle)}"
+
+    def get_generated(self, handle: str):
+        url = self._url_for(handle)
+        try:
+            req = urllib.request.Request(url, method="GET")
+            with urllib.request.urlopen(req, timeout=self.timeout) as resp:
+                payload = resp.read()
+        except urllib.error.HTTPError as e:
+            if e.code == 404:
+                return None
+            raise
+        if not payload:
+            return None
+        return load_safetensors_bytes(payload)
+
+    def cache(self, handle: str, file_idx: int) -> None:
+        raise NotImplementedError(
+            "HttpTransfer.cache() is unsupported: the hidden-states file lives"
+            " on the vLLM node. Use --hidden-states-backend file for"
+            " on_generate=cache, or keep on_generate=delete with the http"
+            " backend."
+        )
+
+    def delete(self, handle: str) -> None:
+        url = self._url_for(handle)
+        try:
+            req = urllib.request.Request(url, method="DELETE")
+            with urllib.request.urlopen(req, timeout=self.timeout) as resp:
+                resp.read()
+        except Exception:
+            pass
+
+
+@HiddenStatesBackend.register("http")
+class HttpBackend(HiddenStatesBackend):
+    @staticmethod
+    def add_train_args(parser):
+        parser.add_argument(
+            "--hs-http-base",
+            type=str,
+            default=None,
+            help="Base URL of the hidden-states file server, e.g. 'http://10.0.0.1:9010'.",
+        )
+        parser.add_argument(
+            "--hs-http-timeout",
+            type=float,
+            default=120.0,
+            help="Per-request timeout (seconds) for HTTP hidden-states fetches.",
+        )
+
+    @staticmethod
+    def add_launch_args(parser):
+        pass
+
+    @staticmethod
+    def from_train_args(args, data_path):
+        if not getattr(args, 'hs_http_base', None):
+            raise ValueError("--hs-http-base is required when --hidden-states-backend=http")
+        hs_path = Path(args.hidden_states_path) if args.hidden_states_path else Path(data_path) / "hidden_states"
+        return HttpTransfer(
+            hs_http_base=args.hs_http_base,
+            hidden_states_path=hs_path,
+            timeout=getattr(args, 'hs_http_timeout', 120.0),
+        )
+
+    @staticmethod
+    def build_kv_transfer_config(args):
+        return {
+            "kv_connector": "ExampleHiddenStatesConnector",
+            "kv_role": "kv_producer",
+            "kv_connector_extra_config": {
+                "shared_storage_path": args.hidden_states_path,
+            },
+        }
