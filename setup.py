@@ -34,9 +34,7 @@ def get_last_version_diff() -> tuple[Version, str | None, int | None]:
         tagged_versions[-1] if tagged_versions else (LAST_RELEASE_VERSION, None)
     )
     commits_since_last = (
-        count_since(last_tag + "^{commit}", root=REPO_ROOT)
-        if last_tag
-        else None
+        count_since(last_tag + "^{commit}", root=REPO_ROOT) if last_tag else None
     )
 
     return last_version, last_tag, commits_since_last
@@ -98,7 +96,9 @@ def read_existing_version(version_py: Path) -> tuple[Version, str | None, int]:
 
         match_version = re.search(r'^version\s*=\s*["\']([^"\']+)["\']', text, re.M)
         match_tag = re.search(r'^git_last_tag\s*=\s*["\']([^"\']*)["\']', text, re.M)
-        match_iteration = re.search(r'^build_iteration\s*=\s*["\']([^"\']+)["\']', text, re.M)
+        match_iteration = re.search(
+            r'^build_iteration\s*=\s*["\']([^"\']+)["\']', text, re.M
+        )
 
         version = Version(match_version.group(1)) if match_version else None
         tag = match_tag.group(1) if match_tag and match_tag.group(1) else None
@@ -196,5 +196,5 @@ setup(
     setuptools_git_versioning={
         "enabled": True,
         "version_file": str(write_version_files()[0]),
-    }
+    },
 )

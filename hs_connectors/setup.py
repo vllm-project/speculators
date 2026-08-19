@@ -42,7 +42,13 @@ def get_next_version(build_type: str) -> tuple[Version, str | None, int]:
 
     if build_type == "nightly":
         # nightly version will be patch+1 from last release tag: e.g. tag hsc-v0.1.0 + 3 commits -> 0.1.1a3
-        return Version(f"{version.major}.{version.minor}.{version.micro + 1}.a{commits_since_last}"), tag, commits_since_last
+        return (
+            Version(
+                f"{version.major}.{version.minor}.{version.micro + 1}.a{commits_since_last}"
+            ),
+            tag,
+            commits_since_last,
+        )
 
     raise ValueError(f"Unsupported HS_CONNECTORS_BUILD_TYPE={build_type!r}")
 
@@ -52,7 +58,9 @@ def read_existing_version(version_py: Path) -> tuple[Version, str | None, int]:
         text = version_py.read_text()
         match_version = re.search(r'^version\s*=\s*["\']([^"\']+)["\']', text, re.M)
         match_tag = re.search(r'^git_last_tag\s*=\s*["\']([^"\']*)["\']', text, re.M)
-        match_iteration = re.search(r'^build_iteration\s*=\s*["\']([^"\']+)["\']', text, re.M)
+        match_iteration = re.search(
+            r'^build_iteration\s*=\s*["\']([^"\']+)["\']', text, re.M
+        )
         version = Version(match_version.group(1)) if match_version else None
         tag = match_tag.group(1) if match_tag and match_tag.group(1) else None
         build_iteration = int(match_iteration.group(1)) if match_iteration else 0
@@ -81,14 +89,16 @@ def write_version_files() -> tuple[Path, Path]:
     with version_txt_path.open("w") as f:
         f.write(str(version))
     with version_py_path.open("w") as f:
-        f.writelines([
-            f'version = "{version}"\n',
-            f'build_type = "{build_type}"\n',
-            f'build_iteration = "{build_iteration}"\n',
-            f'git_commit = "{git_commit}"\n',
-            f'git_branch = "{git_branch}"\n',
-            f'git_last_tag = "{tag or ""}"\n',
-        ])
+        f.writelines(
+            [
+                f'version = "{version}"\n',
+                f'build_type = "{build_type}"\n',
+                f'build_iteration = "{build_iteration}"\n',
+                f'git_commit = "{git_commit}"\n',
+                f'git_branch = "{git_branch}"\n',
+                f'git_last_tag = "{tag or ""}"\n',
+            ]
+        )
     return version_txt_path, version_py_path
 
 
