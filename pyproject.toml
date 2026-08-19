@@ -60,11 +60,17 @@ dependencies = [
     "torchaudio",
     "torchvision",
     "tqdm>=4.66.3,<=4.70.0",
-    "transformers>=4.56.1,<5.15.0",
+    "transformers>=4.56.1,<5.16.0",
     "typer>=0.12.0",
 ]
 
 [project.optional-dependencies]
+mooncake-cuda = [
+    "mooncake-transfer-engine",
+]
+mooncake-cuda13 = [
+    "mooncake-transfer-engine-cuda13",
+]
 dev = [
     # build
     "build>=1.5.0",

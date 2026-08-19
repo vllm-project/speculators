@@ -776,6 +776,11 @@ def load_and_preprocess_dataset(
     log.subsection("Loading processor")
     processor = load_processor(target_model_path, trust_remote_code=trust_remote_code)
 
+    processor_has_chat_template = (
+        hasattr(processor, "apply_chat_template")
+        and getattr(processor, "chat_template", None) is not None
+    )
+
     if render_endpoint is not None:
         log.info(f"Rendering conversations via vLLM endpoint: {render_endpoint}")
 
@@ -796,6 +801,14 @@ def load_and_preprocess_dataset(
                 normalize_fn,
                 num_proc=build_dataset_num_proc,
                 keep_in_memory=True,  # skip caching
+            )
+
+        pretokenized = {"input_ids", "loss_mask"} <= set(raw_dataset.column_names)
+        if not pretokenized and not processor_has_chat_template:
+            raise ValueError(
+                f"Processor for {target_model_path} does not support chat templates. "
+                "Please use a model with a pre-configured chat template or provide "
+                "pre-tokenized input_ids and loss_mask columns."
             )
 
         log.info(f"Loaded {len(raw_dataset)} samples")

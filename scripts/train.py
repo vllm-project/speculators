@@ -31,7 +31,11 @@ from speculators.train.distributed import (
     maybe_destroy_distributed,
     maybe_setup_distributed,
 )
-from speculators.train.logger import setup_metric_logger, setup_root_logger
+from speculators.train.logger import (
+    log_run_config,
+    setup_metric_logger,
+    setup_root_logger,
+)
 from speculators.train.trainer import Trainer, TrainerConfig
 from speculators.train.utils import resolve_mask_token_id
 from speculators.train.vocab_mapping import (
@@ -111,6 +115,7 @@ def create_transformer_layer_config(  # noqa: C901
     sliding_window: int,
     full_attention_indices: list[int],
     mrope_full_head_hack: bool = True,
+    trust_remote_code: bool = False,
 ) -> PretrainedConfig:
     if draft_arch not in DRAFT_ARCH_CONFIGS:
         raise ValueError(
@@ -127,7 +132,10 @@ def create_transformer_layer_config(  # noqa: C901
         )
 
     config_class = DRAFT_ARCH_CONFIGS[draft_arch]
-    verifier_config = AutoConfig.from_pretrained(verifier_name_or_path)
+    verifier_config = AutoConfig.from_pretrained(
+        verifier_name_or_path,
+        trust_remote_code=trust_remote_code,
+    )
 
     # For multimodal models (Qwen3VL, etc.), extract text_config
     if hasattr(verifier_config, "text_config"):
@@ -246,6 +254,7 @@ def create_transformer_layer_config(  # noqa: C901
 def load_draft_transformer_layer_config(
     draft_config: str,
     verifier_name_or_path: str,
+    trust_remote_code: bool = False,
 ) -> PretrainedConfig:
     """Load the draft decoder ``transformer_layer_config`` from a config source.
 
@@ -275,7 +284,10 @@ def load_draft_transformer_layer_config(
     config_class: type[PretrainedConfig] = type(AutoConfig.for_model(model_type))
     draft_config_obj = config_class.from_dict(config_dict)
 
-    verifier_config = get_verifier_config(verifier_name_or_path)
+    verifier_config = get_verifier_config(
+        verifier_name_or_path,
+        trust_remote_code=trust_remote_code,
+    )
     if draft_config_obj.hidden_size != verifier_config.hidden_size:
         raise ValueError(
             f"--draft-config hidden_size ({draft_config_obj.hidden_size}) must match "
@@ -332,7 +344,11 @@ def parse_vocab_mappings(args: argparse.Namespace):
         logger.info("No vocab mappings provided. Regenerating from token frequencies")
         token_freq_dict = torch.load(token_freq_path, weights_only=True)
 
-        target_vocab_size = get_target_vocab_size(None, args.verifier_name_or_path)
+        target_vocab_size = get_target_vocab_size(
+            None,
+            args.verifier_name_or_path,
+            trust_remote_code=args.trust_remote_code,
+        )
 
         d2t, t2d = build_vocab_mappings_from_distribution(
             token_freq_dict=token_freq_dict,
@@ -359,7 +375,10 @@ def parse_vocab_mappings(args: argparse.Namespace):
         "None. Using full verifier vocab"
     )
     # When vocab mapping is not provided, use the full verifier vocab
-    verifier_config = AutoConfig.from_pretrained(args.verifier_name_or_path)
+    verifier_config = AutoConfig.from_pretrained(
+        args.verifier_name_or_path,
+        trust_remote_code=args.trust_remote_code,
+    )
     if hasattr(verifier_config, "text_config"):
         verifier_config = verifier_config.text_config
     return None, None, verifier_config.vocab_size
@@ -464,11 +483,16 @@ def build_draft_model(
         # transformer_layer_config and extracts the native MTP head weights from
         # the verifier; the decoder-shaping flags and --draft-config do not apply,
         # and there is no draft mask token to resolve.
-        transformer_layer_config = get_verifier_config(args.verifier_name_or_path)
+        transformer_layer_config = get_verifier_config(
+            args.verifier_name_or_path,
+            trust_remote_code=getattr(args, "trust_remote_code", False),
+        )
     else:
         if args.draft_config:
             transformer_layer_config = load_draft_transformer_layer_config(
-                args.draft_config, args.verifier_name_or_path
+                args.draft_config,
+                args.verifier_name_or_path,
+                trust_remote_code=args.trust_remote_code,
             )
         else:
             full_attention_indices = args.full_attention_indices
@@ -489,6 +513,7 @@ def build_draft_model(
                 sliding_window=args.sliding_window,
                 full_attention_indices=full_attention_indices,
                 mrope_full_head_hack=args.draft_mrope_full_head_hack,
+                trust_remote_code=args.trust_remote_code,
             )
 
         args.mask_token_id = resolve_mask_token_id(
@@ -525,6 +550,9 @@ def main(cfg: TrainConfig):  # noqa: C901
 
     # Setup distributed training
     maybe_setup_distributed()
+
+    # Publish train config to metric backends that support hyperparameter logging
+    log_run_config(cfg)
 
     if args.fsdp_shard and not is_distributed():
         raise ValueError(
