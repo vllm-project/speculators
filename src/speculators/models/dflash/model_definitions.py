@@ -107,6 +107,29 @@ class GroupedDynamicCausalConv(nn.Module):
         return convolved.view(shape)
 
 
+class CandidateSelector(nn.Module):
+    def __init__(
+        self, vocab_size: int, hidden_size: int, rank: int, top_k: int
+    ):
+        super().__init__()
+        self.top_k = top_k
+        self.predecessor_codebook = nn.Embedding(vocab_size, rank)
+        self.successor_codebook = nn.Embedding(vocab_size, rank)
+        self.hidden_projection = nn.Linear(hidden_size, rank, bias=False)
+
+    def score(
+        self,
+        hidden: torch.Tensor,
+        predecessor_ids: torch.Tensor,
+        candidate_ids: torch.Tensor,
+    ) -> torch.Tensor:
+        context = self.predecessor_codebook(predecessor_ids) * self.hidden_projection(
+            hidden
+        )
+        successor_emb = self.successor_codebook(candidate_ids)
+        return torch.einsum("...r,...kr->...k", context, successor_emb)
+
+
 class Qwen3DFlashAttention(nn.Module):
     """Multi-headed attention from 'Attention Is All You Need' paper"""
 

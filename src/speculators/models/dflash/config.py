@@ -92,6 +92,17 @@ class DFlashSpeculatorConfig(SpeculatorModelConfig):
         description="Group size for grouped dynamic causal convolutions (DFlash 2).",
     )
 
+    selector_rank: int | None = Field(
+        default=None,
+        description="Rank of the bilinear candidate selector (DFlash 2). "
+        "None disables the selector (DFlash 1 behavior).",
+    )
+
+    selector_top_k: int | None = Field(
+        default=None,
+        description="Number of top-k candidates scored by the selector (DFlash 2).",
+    )
+
     @field_serializer("transformer_layer_config")
     def serialize_transformer_config(self, value: PretrainedConfig) -> dict:
         """Serialize transformer config to dict."""
