@@ -2,7 +2,7 @@
 
 Exercises the full pipeline documented in
 docs/user_guide/tutorials/train.md:
-  1. Prepare data (scripts/prepare_data.py)
+  1. Prepare data (pre-tokenized download or render-boundary tokenization)
   2. Launch a vLLM server for hidden-state extraction (scripts/launch_vllm.py)
   3. Train a draft model against the live server (scripts/train.py)
   4. Validate the trained checkpoint via vLLM inference (run_vllm_engine)
@@ -30,7 +30,7 @@ MM_MODEL = "Qwen/Qwen3-VL-2B-Instruct"
 @pytest.mark.parametrize(
     ("model", "dataset"),
     [
-        (TEXT_MODEL, "sharegpt"),
+        (TEXT_MODEL, "hf:inference-optimization/speculators-ci-datasets:smoke_regen"),
         (MM_MODEL, "sharegpt4v_coco"),
     ],
 )
@@ -90,9 +90,6 @@ def run_online_e2e(
     data_path = tmp_path / "data"
     save_path = tmp_path / "checkpoints"
 
-    # Step 1: Prepare data
-    run_prepare_data(model, dataset, data_path, max_samples, seq_length)
-
     hidden_states_path = str(tmp_path / "hidden_states")
     with launch_vllm_server_context(
         model,
@@ -101,7 +98,18 @@ def run_online_e2e(
         max_model_len=seq_length + 1,
         **(vllm_kwargs or {}),
     ):
-        # Step 2: Train against live vLLM server
+        # Prepare data: pretokenized HF datasets pass through without
+        # rendering; conversation datasets use the render endpoint.
+        run_prepare_data(
+            model,
+            dataset,
+            data_path,
+            max_samples,
+            seq_length,
+            render_endpoint=f"http://localhost:{port}",
+        )
+
+        # Train against live vLLM server
         run_training(
             model,
             data_path,

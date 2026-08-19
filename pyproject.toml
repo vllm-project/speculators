@@ -45,6 +45,7 @@ dependencies = [
     "click",
     "datasets>=4.0.0,<=5.0.1",
     "hs-connectors",
+    "httpx",
     "huggingface-hub",
     "loguru>=0.7.2,<=0.7.3",
     "numpy>=2.0.0,<=2.4.6",
@@ -59,11 +60,17 @@ dependencies = [
     "torchaudio",
     "torchvision",
     "tqdm>=4.66.3,<=4.70.0",
-    "transformers>=4.56.1,<5.15.0",
+    "transformers>=4.56.1,<5.16.0",
     "typer>=0.12.0",
 ]
 
 [project.optional-dependencies]
+mooncake-cuda = [
+    "mooncake-transfer-engine",
+]
+mooncake-cuda13 = [
+    "mooncake-transfer-engine-cuda13",
+]
 dev = [
     # build
     "build>=1.5.0",
