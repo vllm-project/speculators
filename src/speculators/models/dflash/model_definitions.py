@@ -2,7 +2,7 @@ from typing import TYPE_CHECKING
 
 import torch
 from torch import nn
-from torch.nn import functional as F
+from torch.nn import functional as F  # noqa: N812
 from transformers.cache_utils import Cache
 from transformers.models.qwen3.modeling_qwen3 import (
     ALL_ATTENTION_FUNCTIONS,
@@ -84,9 +84,7 @@ class GroupedDynamicCausalConv(nn.Module):
             hidden_size, 2 * kernel_size * groups, bias=False
         )
 
-    def prepare(
-        self, hidden: torch.Tensor
-    ) -> tuple[torch.Tensor, torch.Tensor]:
+    def prepare(self, hidden: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         shape = hidden.shape
         hidden = hidden.view(-1, self.block_size, shape[-1])
         groups = shape[-1] // self.group_size
@@ -108,13 +106,11 @@ class GroupedDynamicCausalConv(nn.Module):
 
 
 class CandidateSelector(nn.Module):
-    def __init__(
-        self, vocab_size: int, hidden_size: int, rank: int, top_k: int
-    ):
+    def __init__(self, vocab_size: int, hidden_size: int, rank: int, top_k: int):
         super().__init__()
         self.top_k = top_k
-        self.predecessor_codebook = nn.Embedding(vocab_size, rank)
-        self.successor_codebook = nn.Embedding(vocab_size, rank)
+        self.predecessor_codebook = nn.Parameter(torch.empty(vocab_size, rank))
+        self.successor_codebook = nn.Parameter(torch.empty(vocab_size, rank))
         self.hidden_projection = nn.Linear(hidden_size, rank, bias=False)
 
     def score(
@@ -123,10 +119,10 @@ class CandidateSelector(nn.Module):
         predecessor_ids: torch.Tensor,
         candidate_ids: torch.Tensor,
     ) -> torch.Tensor:
-        context = self.predecessor_codebook(predecessor_ids) * self.hidden_projection(
+        context = self.predecessor_codebook[predecessor_ids] * self.hidden_projection(
             hidden
         )
-        successor_emb = self.successor_codebook(candidate_ids)
+        successor_emb = self.successor_codebook[candidate_ids]
         return torch.einsum("...r,...kr->...k", context, successor_emb)
 
 
@@ -289,9 +285,7 @@ class Qwen3DFlashDecoderLayer(GradientCheckpointingLayer):
         hidden_states = self.input_layernorm(hidden_states)
         attention_kernel = None
         if self.attention_conv is not None:
-            hidden_states, attention_kernel = self.attention_conv.prepare(
-                hidden_states
-            )
+            hidden_states, attention_kernel = self.attention_conv.prepare(hidden_states)
         hidden_states = self.self_attn(
             hidden_states=hidden_states,
             target_hidden=target_hidden,

@@ -68,7 +68,9 @@ class DFlash2DraftModel(DFlashDraftModel):
         d2t: torch.Tensor | None = None,
         **kwargs,
     ) -> "DFlash2DraftModel":
-        base_kwargs = cls._build_base_config_kwargs("dflash2", verifier_config, **kwargs)
+        base_kwargs = cls._build_base_config_kwargs(
+            "dflash2", verifier_config, **kwargs
+        )
         base_kwargs.update(
             conv_kernel_size=kwargs["conv_kernel_size"],
             conv_group_size=kwargs["conv_group_size"],
@@ -131,11 +133,10 @@ class DFlash2DraftModel(DFlashDraftModel):
         )
 
         predecessor_ids = self._predecessor_ids(input_ids, anchored_block_indices)
-        context = (
-            self.candidate_selector.predecessor_codebook(predecessor_ids)
-            * self.candidate_selector.hidden_projection(hidden)
-        )
-        edge_scores = context @ self.candidate_selector.successor_codebook.weight.T
+        context = self.candidate_selector.predecessor_codebook[
+            predecessor_ids
+        ] * self.candidate_selector.hidden_projection(hidden)
+        edge_scores = context @ self.candidate_selector.successor_codebook.T
         logits = logits + edge_scores
 
         loss, metrics = compute_metrics(
