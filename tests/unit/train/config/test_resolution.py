@@ -299,6 +299,34 @@ def test_matching_algorithm_block_does_not_warn():
         )
 
 
+def test_dflash2_consumes_shared_and_exclusive_algorithm_blocks():
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        cfg = TrainConfig.from_sources(
+            cli={
+                "verifier_name_or_path": "m",
+                "speculator_type": "dflash2",
+                "block_size": 4,
+                "conv_kernel_size": 3,
+            },
+            argv=["train.py"],
+        )
+    assert cfg.dflash.block_size == 4
+    assert cfg.dflash2.conv_kernel_size == 3
+
+
+def test_dflash2_exclusive_block_warns_for_other_dflash_family_member():
+    with pytest.warns(UserWarning, match="does not use the 'dflash2'"):
+        TrainConfig.from_sources(
+            cli={
+                "verifier_name_or_path": "m",
+                "speculator_type": "dspark",
+                "selector_top_k": 8,
+            },
+            argv=["train.py"],
+        )
+
+
 def test_default_algorithm_block_does_not_warn():
     # An untouched (all-default) mismatched group is not "set", so it stays silent.
     with warnings.catch_warnings():
@@ -331,6 +359,51 @@ def test_resolve_verifier_from_config_only_succeeds(tmp_path):
     config.write_text("train:\n  verifier:\n    verifier_name_or_path: from-yaml\n")
     cfg = TrainConfig.resolve(["--config", str(config)])
     assert cfg.flatten()["verifier_name_or_path"] == "from-yaml"
+
+
+def test_resolve_dflash2_flags_and_derived_defaults():
+    cfg = TrainConfig.resolve(
+        [
+            "--verifier-name-or-path",
+            "m",
+            "--speculator-type",
+            "dflash2",
+            "--conv-kernel-size",
+            "3",
+            "--conv-group-size",
+            "8",
+            "--selector-rank",
+            "128",
+            "--selector-top-k",
+            "12",
+            "--selector-loss-alpha",
+            "0.3",
+        ]
+    )
+    flat = cfg.flatten()
+    assert flat["num_layers"] == 5
+    assert flat["block_size"] == 8
+    assert flat["loss_fn"] == "kl_div"
+    assert flat["sliding_window_non_causal"] is True
+    assert flat["conv_kernel_size"] == 3
+    assert flat["conv_group_size"] == 8
+    assert flat["selector_rank"] == 128
+    assert flat["selector_top_k"] == 12
+    assert flat["selector_loss_alpha"] == pytest.approx(0.3)
+
+
+def test_resolve_dflash2_allows_explicit_causal_override():
+    cfg = TrainConfig.resolve(
+        [
+            "--verifier-name-or-path",
+            "m",
+            "--speculator-type",
+            "dflash2",
+            "--no-sliding-window-non-causal",
+        ]
+    )
+
+    assert cfg.flatten()["sliding_window_non_causal"] is False
 
 
 def test_resolve_config_error_exits_cleanly(capsys):
@@ -389,7 +462,15 @@ def test_resolve_flag_overrides_config_file(tmp_path):
 
 def test_help_is_grouped_by_concern():
     titles = {group.title for group in build_parser()._action_groups}
-    assert {"general", "verifier", "draft", "data", "optimizer", "mtp"} <= titles
+    assert {
+        "general",
+        "verifier",
+        "draft",
+        "data",
+        "optimizer",
+        "dflash2",
+        "mtp",
+    } <= titles
 
 
 # --------------------------------------------------------------------------- #
@@ -564,3 +645,129 @@ def test_recipe_flags_resolve_unchanged(recipe: str, expected: dict):
     flat = TrainConfig.resolve(_recipe_argv(EXAMPLES / recipe)).flatten()
     for dest, value in expected.items():
         assert flat[dest] == value, dest
+
+
+PAIRED_RECIPE = EXAMPLES / "dflash2_dspark_qwen3_4b_offline_smoke.sh"
+
+
+def _captured_train_argv(path: Path) -> list[str]:
+    argv = path.read_text().splitlines()
+    return argv[argv.index("scripts/train.py") + 1 :]
+
+
+@pytest.mark.skipif(shutil.which("bash") is None, reason="requires bash")
+def test_paired_recipe_resolves_matching_training_contract(tmp_path):
+    """Exercise the function-based launcher, which RECIPES cannot extract."""
+    data_path = tmp_path / "data"
+    hidden_states_path = tmp_path / "hidden_states"
+    capture_path = tmp_path / "captured"
+    bin_path = tmp_path / "bin"
+    torchrun_path = tmp_path / ".venv" / "bin" / "torchrun"
+    for path in (data_path, hidden_states_path, capture_path, bin_path):
+        path.mkdir(parents=True)
+    torchrun_path.parent.mkdir(parents=True)
+    (data_path / "shard.arrow").touch()
+    (data_path / "token_freq.pt").touch()
+    (hidden_states_path / "hs_0.safetensors").touch()
+
+    nvidia_smi = bin_path / "nvidia-smi"
+    nvidia_smi.write_text("#!/usr/bin/env bash\nexit 0\n")
+    nvidia_smi.chmod(0o755)
+    torchrun_path.write_text(
+        "#!/usr/bin/env bash\n"
+        "algorithm=\n"
+        "previous=\n"
+        'for argument in "$@"; do\n'
+        '    if [[ "$previous" == "--speculator-type" ]]; then\n'
+        '        algorithm="$argument"\n'
+        "    fi\n"
+        '    previous="$argument"\n'
+        "done\n"
+        '[[ -n "$algorithm" ]]\n'
+        'printf "%s\\n" "$@" > "$CAPTURE_DIR/$algorithm.argv"\n'
+    )
+    torchrun_path.chmod(0o755)
+
+    env = {
+        "PATH": f"{bin_path}:/usr/bin:/bin",
+        "RUN_ROOT": str(tmp_path / "run"),
+        "DATA_PATH": str(data_path),
+        "HIDDEN_STATES_PATH": str(hidden_states_path),
+        "DFLASH2_GPUS": "0",
+        "DSPARK_GPUS": "1",
+        "NUM_GPUS_PER_RUN": "1",
+        "CAPTURE_DIR": str(capture_path),
+    }
+    subprocess.run(  # noqa: S603
+        [shutil.which("bash") or "bash", str(PAIRED_RECIPE)],
+        cwd=tmp_path,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+
+    dflash2 = TrainConfig.resolve(
+        _captured_train_argv(capture_path / "dflash2.argv")
+    ).flatten()
+    dspark = TrainConfig.resolve(
+        _captured_train_argv(capture_path / "dspark.argv")
+    ).flatten()
+    parity_fields = {
+        "verifier_name_or_path",
+        "data_path",
+        "hidden_states_backend",
+        "hidden_states_path",
+        "num_layers",
+        "block_size",
+        "sample_from_anchor",
+        "draft_vocab_size",
+        "target_layer_ids",
+        "total_seq_len",
+        "train_data_ratio",
+        "max_anchors",
+        "loss_fn",
+        "per_position_loss_weight",
+        "dflash_decay_gamma",
+        "optimizer",
+        "lr",
+        "weight_decay",
+        "scheduler_type",
+        "scheduler_warmup_ratio",
+        "epochs",
+        "max_steps",
+        "checkpoint_freq",
+        "seed",
+        "draft_attn_impl",
+        "sliding_window_non_causal",
+        "hidden_states_dtype",
+        "num_workers",
+        "prefetch_factor",
+        "on_missing",
+        "no_resume_from_checkpoint",
+    }
+    for field in parity_fields:
+        assert dflash2[field] == dspark[field], field
+    assert dflash2["speculator_type"] == "dflash2"
+    assert dflash2["selector_loss_alpha"] == pytest.approx(0.1)
+    assert dspark["speculator_type"] == "dspark"
+    assert dspark["confidence_head_alpha"] == pytest.approx(1.0)
+
+
+@pytest.mark.skipif(shutil.which("bash") is None, reason="requires bash")
+def test_paired_recipe_rejects_duplicate_gpu_ids(tmp_path):
+    result = subprocess.run(  # noqa: S603
+        [shutil.which("bash") or "bash", str(PAIRED_RECIPE)],
+        cwd=tmp_path,
+        env={
+            "PATH": "/usr/bin:/bin",
+            "DFLASH2_GPUS": "0,0",
+            "DSPARK_GPUS": "1,2",
+            "NUM_GPUS_PER_RUN": "2",
+        },
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode != 0
+    assert "DFLASH2_GPUS contains duplicate GPU id: 0" in result.stderr

@@ -1,6 +1,6 @@
 # Train a Speculator
 
-This tutorial walks you through training a speculator model end to end, from raw data to a checkpoint served in vLLM. It covers **Eagle-3**, **P-EAGLE**, **DFlash**, **DSpark**, and **MTP** in all three training modes.
+This tutorial walks you through training a speculator model end to end, from raw data to a checkpoint served in vLLM. It covers **Eagle-3**, **P-EAGLE**, **DFlash**, **DFlash2**, **DSpark**, and **MTP** in all three training modes.
 
 Pick an algorithm and a training mode below; the rest of the walkthrough is the same for every combination. The examples use `Qwen/Qwen3-8B` as the target model -- except for MTP, which needs a verifier with native MTP layers and so uses `Qwen/Qwen3.5-9B`. The process is the same for other models.
 
@@ -8,7 +8,7 @@ Pick an algorithm and a training mode below; the rest of the walkthrough is the 
 
 ### 1. Pick an algorithm
 
-All five are lossless: they produce output from the same distribution as the target model. See the [Decision Guide](../algorithms/decision_guide.md) if you're unsure.
+All six are lossless: they produce output from the same distribution as the target model. See the [Decision Guide](../algorithms/decision_guide.md) if you're unsure.
 
 /// tab | Eagle-3
 
@@ -25,6 +25,12 @@ Extends Eagle-3 with parallel multi-token prediction across depths, using COD sa
 /// tab | DFlash
 
 Predicts a whole block in one forward pass using anchored block diffusion. ([details](../algorithms/dflash.md))
+
+///
+
+/// tab | DFlash2
+
+DFlash plus local dynamic convolutions and a candidate selector. The public training objective is not available, so the current implementation is experimental. ([details](../algorithms/dflash2.md))
 
 ///
 

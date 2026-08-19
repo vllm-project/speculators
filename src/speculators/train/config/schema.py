@@ -84,7 +84,7 @@ class DraftArgs(_Group):
     draft_config: str = Field(
         default="",
         description="HF id, directory, or JSON path of a decoder config (LlamaConfig "
-        "for eagle3/peagle, Qwen3Config for dflash) to use as the draft "
+        "for eagle3/peagle, Qwen3Config for DFlash-family models) to use as the draft "
         "transformer_layer_config; the rest of the speculator is built from the other "
         "CLI args. Mutually exclusive with --from-pretrained and the decoder-shaping "
         "flags (--num-layers, --draft-arch, --draft-hidden-act, --sliding-window, "
@@ -103,8 +103,8 @@ class DraftArgs(_Group):
     draft_hidden_act: str = Field(
         default="silu",
         description="Activation function for draft decoder layers. Defaults to 'silu'. "
-        "Qwen3 layers of dflash expect 'silu' for vLLM deployment. Leave as None to "
-        "fall back to the verifier's activation function.",
+        "Qwen3 layers of DFlash-family models expect 'silu' for vLLM deployment. "
+        "Leave as None to fall back to the verifier's activation function.",
     )
     draft_mrope_full_head_hack: bool = Field(
         default=True,
@@ -181,11 +181,11 @@ class DraftArgs(_Group):
         "by default (except mtp). (e.g. '--full-attention-indices 0 2' makes layers 0 "
         "and 2 use full attention; the rest use sliding window).",
     )
-    sliding_window_non_causal: bool = Field(
-        default=False,
+    sliding_window_non_causal: bool | None = Field(
+        default=None,
         description="Use non-causal (bidirectional) masking within draft blocks for "
         "sliding window attention layers. Full attention layers are always "
-        "bidirectional. Note: vLLM currently doesn't support these models.",
+        "bidirectional. Defaults to True for DFlash2 and False otherwise.",
     )
     draft_attn_impl: Literal["simple_flex_attention", "sdpa", "eager"] = Field(
         default="simple_flex_attention",
@@ -228,7 +228,7 @@ class DataArgs(_Group):
     prefetch_factor: int = Field(default=4, description="Dataloader prefetch factor.")
     max_anchors: int = Field(
         default=512,
-        description="Maximum anchor positions for DFlash, DSpark, and P-EAGLE training "
+        description="Maximum anchor positions for DFlash-family and P-EAGLE training "
         "(default: 512).",
     )
 
@@ -292,7 +292,7 @@ class LossArgs(_Group):
     loss_implementation: Literal["fused", "eager"] = Field(
         default="fused",
         description="Loss implementation to use; eager is for compatibility and "
-        "numerical validation and may OOM with DFlash or DSpark.",
+        "numerical validation and may OOM with DFlash-family models.",
     )
     loss_fn: str | None = Field(
         default=None,
@@ -436,7 +436,7 @@ class LoggingArgs(_Group):
 
 
 class DFlashArgs(_Group):
-    """DFlash-family backbone knobs (also used by DSpark, which is-a DFlash)."""
+    """Shared DFlash-family backbone knobs."""
 
     block_size: int | None = Field(
         default=None,
@@ -446,10 +446,10 @@ class DFlashArgs(_Group):
     sample_from_anchor: bool | None = Field(
         default=None,
         description="Sample from the anchor position (all positions predict). "
-        "Default: False for dflash, True for dspark.",
+        "Default: False for dflash/dflash2, True for dspark.",
     )
     dflash_decay_gamma: float = Field(
-        default=4.0, description="Decay gamma for DFlash/DSpark loss weighting."
+        default=4.0, description="Decay gamma for DFlash-family loss weighting."
     )
     per_position_loss_weight: Literal["fixed-exp-decay", "dpace"] | None = Field(
         default=None,
@@ -460,6 +460,29 @@ class DFlashArgs(_Group):
         default=0.5,
         description="Smoothing constant for the D-PACE loss (default: 0.5). Must be in "
         "(0, 1] when --per-position-loss-weight=dpace.",
+    )
+
+
+class DFlash2Args(_Group):
+    """DFlash2-exclusive local-convolution and candidate-selector knobs."""
+
+    conv_kernel_size: int = Field(
+        default=2, description="DFlash2: local convolution kernel size."
+    )
+    conv_group_size: int = Field(
+        default=16, description="DFlash2: channel group size for local convolution."
+    )
+    selector_rank: int = Field(
+        default=256,
+        description="DFlash2: low-rank dimension of the candidate selector.",
+    )
+    selector_top_k: int = Field(
+        default=16, description="DFlash2: number of candidates retained per position."
+    )
+    selector_loss_alpha: float = Field(
+        default=1.0,
+        ge=0.0,
+        description="DFlash2: weight of the candidate-selector K-way CE term.",
     )
 
 
@@ -525,6 +548,7 @@ _GROUPS: dict[str, type[_Group]] = {
     "trainer": TrainerArgs,
     "logging": LoggingArgs,
     "dflash": DFlashArgs,
+    "dflash2": DFlash2Args,
     "dspark": DSparkArgs,
     "peagle": PEagleArgs,
     "mtp": MTPArgs,
@@ -609,7 +633,7 @@ class TrainConfig(BaseSettings):
     speculator_type: str = Field(
         default="eagle3",
         description="Type of speculator model to train "
-        "(eagle3, dflash, dspark, peagle, mtp).",
+        "(eagle3, dflash, dflash2, dspark, peagle, mtp).",
     )
     dry_run: bool = Field(
         default=False,
@@ -634,6 +658,7 @@ class TrainConfig(BaseSettings):
     trainer: TrainerArgs = Field(default_factory=TrainerArgs)
     logging: LoggingArgs = Field(default_factory=LoggingArgs)
     dflash: DFlashArgs = Field(default_factory=DFlashArgs)
+    dflash2: DFlash2Args = Field(default_factory=DFlash2Args)
     dspark: DSparkArgs = Field(default_factory=DSparkArgs)
     peagle: PEagleArgs = Field(default_factory=PEagleArgs)
     mtp: MTPArgs = Field(default_factory=MTPArgs)
@@ -657,7 +682,10 @@ class TrainConfig(BaseSettings):
         out-of-the-box behavior for ``--speculator-type dflash`` rather than
         something users need to separately discover and opt into. DSpark
         (which shares the ``dflash`` group) keeps ``block_size=8``, since that
-        combination was never tested there. ``--muon-lr`` / ``--lr`` are
+        combination was never tested there. DFlash2 shares the ``dflash`` group
+        and uses five layers, while keeping ``block_size=8``, fixed exponential
+        position weights, and KL loss for direct comparison with DSpark.
+        ``--muon-lr`` / ``--lr`` are
         deliberately left as-is: the right learning rate depends on effective
         batch size (anchor count, sequence length, GPU count), which varies by
         setup, so we did not want to bake in a single "recommended" value.
@@ -674,6 +702,8 @@ class TrainConfig(BaseSettings):
             self.draft.norm_before_fc = is_eagle3
         if self.draft.norm_output is None:
             self.draft.norm_output = is_eagle3
+        if self.draft.sliding_window_non_causal is None:
+            self.draft.sliding_window_non_causal = self.speculator_type == "dflash2"
         if self.optimizer.muon_lr is None:
             self.optimizer.muon_lr = 10 * self.optimizer.lr
         if self.draft.num_layers is None:
