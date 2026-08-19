@@ -35,9 +35,11 @@ Examples
     python scripts/serve_hs.py --root /data/local_hs/8010 --port 9010
     python scripts/serve_hs.py --root /data/local_hs/8020 --port 9020
 """
+
 from __future__ import annotations
 
 import argparse
+import contextlib
 import fcntl
 import http.server
 import os
@@ -122,11 +124,9 @@ def _sweep(root: Path, ttl: float, interval: float) -> None:
                 continue
             if now - mtime < ttl:
                 continue
-            if entry.suffix == ".safetensors" or entry.suffix == ".lock":
-                try:
+            if entry.suffix in {".safetensors", ".lock"}:
+                with contextlib.suppress(OSError):
                     entry.unlink()
-                except OSError:
-                    pass
 
 
 class HiddenStatesHandler(http.server.BaseHTTPRequestHandler):
@@ -134,7 +134,7 @@ class HiddenStatesHandler(http.server.BaseHTTPRequestHandler):
     lock_timeout: float
 
     # Quieter logging: one line per request, no noise to stderr per default.
-    def log_message(self, fmt: str, *args) -> None:  # noqa: A003
+    def log_message(self, fmt: str, *args) -> None:
         pass
 
     # --- helpers ----------------------------------------------------------
@@ -142,7 +142,7 @@ class HiddenStatesHandler(http.server.BaseHTTPRequestHandler):
         """Map URL path to a safe absolute path under ``root`` (no traversal)."""
         # Strip query/fragment, take the basename only. The connector writes a
         # flat ``{req_id}.safetensors``, so we never serve nested paths.
-        name = os.path.basename(urlpath.split("?")[0])
+        name = os.path.basename(urlpath.partition("?")[0])
         if not name or name in (".", "..") or "/" in name or "\\" in name:
             return None
         candidate = (self.root / name).resolve()
@@ -153,7 +153,7 @@ class HiddenStatesHandler(http.server.BaseHTTPRequestHandler):
         return candidate
 
     # --- GET --------------------------------------------------------------
-    def do_GET(self) -> None:  # noqa: N802 - http.server API
+    def do_GET(self) -> None:
         data_path = self._resolve(self.path)
         if data_path is None or data_path.suffix != ".safetensors":
             self.send_error(404, "Not found")
@@ -189,17 +189,15 @@ class HiddenStatesHandler(http.server.BaseHTTPRequestHandler):
             pass
 
     # --- DELETE -----------------------------------------------------------
-    def do_DELETE(self) -> None:  # noqa: N802 - http.server API
+    def do_DELETE(self) -> None:
         data_path = self._resolve(self.path)
         if data_path is None or data_path.suffix != ".safetensors":
             self.send_error(404, "Not found")
             return
         lock_path = Path(str(data_path) + ".lock")
         for p in (data_path, lock_path):
-            try:
+            with contextlib.suppress(OSError):
                 p.unlink()
-            except OSError:
-                pass
         self.send_response(204)
         self.end_headers()
 
@@ -246,7 +244,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--host",
         type=str,
-        default="0.0.0.0",
+        default="0.0.0.0",  # noqa: S104 - must be reachable from the trainer node
         help="Bind address. Default: 0.0.0.0 (all interfaces).",
     )
     parser.add_argument(

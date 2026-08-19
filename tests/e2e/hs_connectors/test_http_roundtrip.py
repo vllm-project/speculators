@@ -36,16 +36,17 @@ def _free_port() -> int:
         return s.getsockname()[1]
 
 
-@pytest.fixture()
+@pytest.fixture
 def serve_hs(tmp_path: Path):
     """Launch ``scripts/serve_hs.py`` on a scratch port; yield its base URL."""
     port = _free_port()
     root = tmp_path / "hidden_states"
     root.mkdir()
-    proc = subprocess.Popen(
+    serve_script = str(REPO_ROOT / "scripts" / "serve_hs.py")
+    proc = subprocess.Popen(  # noqa: S603 - fixed argv, repo-controlled script
         [
             sys.executable,
-            str(REPO_ROOT / "scripts" / "serve_hs.py"),
+            serve_script,
             "--root",
             str(root),
             "--port",
@@ -63,7 +64,7 @@ def serve_hs(tmp_path: Path):
                 break
         except OSError:
             if proc.poll() is not None:
-                raise RuntimeError("serve_hs.py exited during startup")
+                raise RuntimeError("serve_hs.py exited during startup") from None
             time.sleep(0.05)
     else:
         proc.terminate()

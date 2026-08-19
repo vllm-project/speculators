@@ -8,11 +8,15 @@ import os
 import shutil
 import socket
 import time
+import urllib.error
+import urllib.request
 from abc import ABC, abstractmethod
+from http import HTTPStatus
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, ClassVar
 
 import torch
+from safetensors.torch import load as load_safetensors_bytes
 from safetensors.torch import load_file
 
 from hs_connectors.mooncake_store import MooncakeHiddenStatesStore, MooncakeStoreConfig
@@ -333,6 +337,7 @@ class MooncakeBackend(HiddenStatesBackend):
             },
         }
 
+
 # ---------------------------------------------------------------------------
 # HTTP backend (vLLM writes to local fast disk; trainer fetches over HTTP)
 #
@@ -354,11 +359,6 @@ class MooncakeBackend(HiddenStatesBackend):
 # preserving the existing synchronization semantics.
 # ---------------------------------------------------------------------------
 
-import urllib.error
-import urllib.request
-
-from safetensors.torch import load as load_safetensors_bytes
-
 
 class HttpTransfer(HiddenStatesTransfer):
     def __init__(self, hs_http_base: str, hidden_states_path, timeout: float = 120.0):
@@ -376,11 +376,11 @@ class HttpTransfer(HiddenStatesTransfer):
     def get_generated(self, handle: str):
         url = self._url_for(handle)
         try:
-            req = urllib.request.Request(url, method="GET")
-            with urllib.request.urlopen(req, timeout=self.timeout) as resp:
+            req = urllib.request.Request(url, method="GET")  # noqa: S310
+            with urllib.request.urlopen(req, timeout=self.timeout) as resp:  # noqa: S310
                 payload = resp.read()
         except urllib.error.HTTPError as e:
-            if e.code == 404:
+            if e.code == HTTPStatus.NOT_FOUND:
                 return None
             raise
         if not payload:
@@ -398,11 +398,11 @@ class HttpTransfer(HiddenStatesTransfer):
     def delete(self, handle: str) -> None:
         url = self._url_for(handle)
         try:
-            req = urllib.request.Request(url, method="DELETE")
-            with urllib.request.urlopen(req, timeout=self.timeout) as resp:
+            req = urllib.request.Request(url, method="DELETE")  # noqa: S310
+            with urllib.request.urlopen(req, timeout=self.timeout) as resp:  # noqa: S310
                 resp.read()
-        except Exception:
-            pass
+        except OSError:
+            pass  # best-effort cleanup; the server TTL-sweeps leftovers
 
 
 @HiddenStatesBackend.register("http")
@@ -428,13 +428,19 @@ class HttpBackend(HiddenStatesBackend):
 
     @staticmethod
     def from_train_args(args, data_path):
-        if not getattr(args, 'hs_http_base', None):
-            raise ValueError("--hs-http-base is required when --hidden-states-backend=http")
-        hs_path = Path(args.hidden_states_path) if args.hidden_states_path else Path(data_path) / "hidden_states"
+        if not getattr(args, "hs_http_base", None):
+            raise ValueError(
+                "--hs-http-base is required when --hidden-states-backend=http"
+            )
+        hs_path = (
+            Path(args.hidden_states_path)
+            if args.hidden_states_path
+            else Path(data_path) / "hidden_states"
+        )
         return HttpTransfer(
             hs_http_base=args.hs_http_base,
             hidden_states_path=hs_path,
-            timeout=getattr(args, 'hs_http_timeout', 120.0),
+            timeout=getattr(args, "hs_http_timeout", 120.0),
         )
 
     @staticmethod
