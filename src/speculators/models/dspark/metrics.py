@@ -36,14 +36,25 @@ def _masked_decayed_mean(
     decay_fn: Callable[..., torch.Tensor] | None,
 ) -> torch.Tensor:
     """Masked, optionally position-decayed mean of a precomputed per-position term."""
+    import torch.distributed as dist  # noqa: PLC0415
+
+    from speculators.train.distributed import get_sp_group, get_sp_size  # noqa: PLC0415
+
     loss_mask = loss_mask.to(elementwise.dtype)
     weighted = elementwise * loss_mask
     if decay_fn is not None:
         weighted = weighted * decay_fn(
             pos_idx.to(weighted.dtype), elementwise_loss=elementwise
         )
+    numerator = weighted.sum(dim=1)
     denominator = loss_mask.sum(dim=1) + _EPS
-    return (weighted.sum(dim=1) / denominator).mean()
+
+    if get_sp_size() > 1:
+        sp_group = get_sp_group()
+        dist.all_reduce(numerator, group=sp_group)
+        dist.all_reduce(denominator, group=sp_group)
+
+    return (numerator / denominator).mean()
 
 
 def compute_metrics(

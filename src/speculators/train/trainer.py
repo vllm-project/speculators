@@ -28,12 +28,17 @@ from speculators.train.checkpointer import (
 )
 from speculators.train.distributed import (
     apply_fully_sharded,
+    get_dp_group,
     get_local_rank,
     get_rank,
+    get_sp_rank,
+    get_sp_size,
     is_distributed,
+    register_sp_gradient_hooks,
 )
 from speculators.train.graceful_shutdown import with_graceful_shutdown
 from speculators.train.optimizers import build_optimizers
+from speculators.train.sequence_parallel import split_batch_for_sp
 from speculators.train.utils import normalize_counted_metrics
 
 root_logger = logging.getLogger("speculators")
@@ -172,6 +177,7 @@ class Trainer:
         val_loader: DataLoader | None = None,
     ):
         self.model = model
+        self._sp_splits_batch = getattr(model, "_sp_splits_batch", True)
         self.config = config
         self.local_rank = get_local_rank()
         self.rank = get_rank()
@@ -179,6 +185,7 @@ class Trainer:
         self.val_loader = val_loader
         self.is_distributed = is_distributed()
         self.resume_from_checkpoint = config.resume_from_checkpoint
+        self._sp_grad_hooks: list = []
         acc = torch.accelerator.current_accelerator()
         self.device_type = acc.type if acc is not None else "cuda"
         checkpointer_class: type[BaseCheckpointer] = (
@@ -191,6 +198,11 @@ class Trainer:
         self.setup_trainer()
         self.setup_model()
         self.setup_optimizer()
+
+    def _cleanup(self):
+        for handle in self._sp_grad_hooks:
+            handle.remove()
+        self._sp_grad_hooks.clear()
 
     def _training_state_path(self, epoch: int) -> Path:
         return self.checkpointer.path / str(epoch) / "training_state.json"
@@ -303,6 +315,7 @@ class Trainer:
             full_state_dict = self.model.state_dict()
 
         apply_fully_sharded(self.model, param_dtype=self.config.hidden_states_dtype)
+        self._sp_grad_hooks = register_sp_gradient_hooks(self.model)
 
         if load_checkpoint:
             self.checkpointer.load_model_state_dict(self.model)
@@ -332,8 +345,12 @@ class Trainer:
                 dist.broadcast(param.data, src=0)
             dist.barrier()
 
-        # DDP constructor broadcasts rank 0's params to all ranks
-        self.model = DistributedDataParallel(self.model)  # type: ignore[assignment]
+        self._sp_grad_hooks = register_sp_gradient_hooks(self.model)
+
+        # Scope DDP to the DP sub-group so its all-reduce averages across DP
+        # peers only; the SP gradient hooks handle the cross-SP sum separately.
+        dp_group = get_dp_group()
+        self.model = DistributedDataParallel(self.model, process_group=dp_group)  # type: ignore[assignment]
 
     def setup_optimizer(self):
         # Setup optimizer(s). The "muon" option returns two optimizers (Muon for the
@@ -455,6 +472,8 @@ class Trainer:
                 else v
                 for k, v in batch.items()
             }
+            if self._sp_splits_batch:
+                gpu_batch = split_batch_for_sp(gpu_batch, get_sp_rank(), get_sp_size())
 
             with torch.autocast(
                 self.device_type, dtype=self.config.hidden_states_dtype
@@ -481,7 +500,9 @@ class Trainer:
 
             profile = None
             if timer.enabled:
-                num_tokens = int((gpu_batch["document_ids"] != -1).sum().item())
+                num_tokens = (
+                    int((gpu_batch["document_ids"] != -1).sum().item()) // get_sp_size()
+                )
                 profile = timer.profile(num_tokens)
                 if self.is_distributed:
                     for v in metrics.values():
@@ -549,6 +570,8 @@ class Trainer:
                 else v
                 for k, v in batch.items()
             }
+            if self._sp_splits_batch:
+                gpu_batch = split_batch_for_sp(gpu_batch, get_sp_rank(), get_sp_size())
 
             with torch.autocast(
                 self.device_type, dtype=self.config.hidden_states_dtype
@@ -667,3 +690,5 @@ class Trainer:
 
             if self.is_distributed:
                 dist.barrier()
+
+        self._cleanup()

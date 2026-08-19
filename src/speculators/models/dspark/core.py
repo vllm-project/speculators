@@ -149,8 +149,8 @@ class DSparkDraftModel(DFlashDraftModel):
         )
 
         # DSpark: add the Markov logit bias and predict per-position confidence.
-        num_blocks = max_anchors
         block = self.block_size
+        num_blocks = anchored_block_indices.shape[0] // block
         mask_tokens_size = num_blocks * block
         # Ground-truth block tokens (verifier vocab); position 0 is the anchor.
         block_tokens = input_ids[0, anchored_block_indices].view(num_blocks, block)

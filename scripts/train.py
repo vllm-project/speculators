@@ -549,7 +549,44 @@ def main(cfg: TrainConfig):  # noqa: C901
     )
 
     # Setup distributed training
-    maybe_setup_distributed()
+    maybe_setup_distributed(sp_size=args.sp_size)
+
+    if args.sp_size > 1:
+        if not is_distributed():
+            raise ValueError(
+                "--sp-size > 1 requires launching with torchrun/distributed "
+                "training; otherwise sequence parallelism has no effect."
+            )
+        if args.total_seq_len % args.sp_size != 0:
+            raise ValueError(
+                f"--total-seq-len ({args.total_seq_len}) must be divisible "
+                f"by --sp-size ({args.sp_size})"
+            )
+        if args.speculator_type not in ("eagle3", "dflash", "dspark", "peagle"):
+            raise ValueError(
+                f"Sequence parallelism (--sp-size > 1) is currently only "
+                f"supported for eagle3, dflash, dspark, and peagle, "
+                f"got --speculator-type={args.speculator_type}"
+            )
+        if not args.fsdp_shard:
+            logger.warning(
+                "--sp-size > 1 without --fsdp-shard uses DDP, which is "
+                "supported but less memory-efficient for long-context SP "
+                "training. Consider adding --fsdp-shard."
+            )
+        if args.draft_attn_impl != "simple_flex_attention":
+            raise ValueError(
+                f"Sequence parallelism (--sp-size > 1) requires "
+                f"--draft-attn-impl=simple_flex_attention, "
+                f"got '{args.draft_attn_impl}'"
+            )
+        if (
+            args.speculator_type in ("dflash", "dspark")
+        ) and args.max_anchors % args.sp_size != 0:
+            raise ValueError(
+                f"--max-anchors ({args.max_anchors}) must be divisible "
+                f"by --sp-size ({args.sp_size}) for DFlash/DSpark SP"
+            )
 
     # Publish train config to metric backends that support hyperparameter logging
     log_run_config(cfg)
@@ -607,6 +644,16 @@ def main(cfg: TrainConfig):  # noqa: C901
     model_class = registry[args.speculator_type]
 
     draft_model = build_draft_model(args, model_class, t2d, d2t, draft_vocab_size)
+
+    if args.sp_size > 1:
+        num_attention_heads = (
+            draft_model.config.transformer_layer_config.num_attention_heads
+        )
+        if num_attention_heads % args.sp_size != 0:
+            raise ValueError(
+                f"num_attention_heads ({num_attention_heads}) must be "
+                f"divisible by --sp-size ({args.sp_size})"
+            )
 
     # Get target layer IDs from the model (resolved at model level)
     num_target_layers = len(draft_model.target_layer_ids)  # type: ignore[arg-type]
@@ -719,7 +766,6 @@ def main(cfg: TrainConfig):  # noqa: C901
 
 if __name__ == "__main__":
     main(TrainConfig.resolve())
-
 
 # RUN WITH:
 # torchrun --standalone --nproc_per_node=<num_gpus>  scripts/train.py

@@ -287,6 +287,10 @@ def loss_function(
     Returns:
         Scalar mean loss across the batch.
     """
+    import torch.distributed as dist  # noqa: PLC0415
+
+    from speculators.train.distributed import get_sp_group, get_sp_size  # noqa: PLC0415
+
     elementwise_loss = loss_fn(logits, targets)  # shape: [1, seq_len]
 
     loss_mask = loss_mask.to(elementwise_loss.dtype)
@@ -298,7 +302,13 @@ def loss_function(
         )
         elementwise_loss = elementwise_loss * decay_mult
 
+    numerator = torch.sum(elementwise_loss, dim=1)
     denominator = loss_mask.sum(dim=1) + _LOSS_REDUCTION_EPS
 
-    batch_loss = torch.sum(elementwise_loss, dim=1) / denominator  # shape: [1]
+    if get_sp_size() > 1:
+        sp_group = get_sp_group()
+        dist.all_reduce(numerator, group=sp_group)
+        dist.all_reduce(denominator, group=sp_group)
+
+    batch_loss = numerator / denominator  # shape: [1]
     return batch_loss.mean()  # shape: []

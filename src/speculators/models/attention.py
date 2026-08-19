@@ -26,10 +26,12 @@ def flex_attention_forward(
     scaling: float | None = None,
     **_kwargs,
 ) -> tuple[torch.Tensor, torch.Tensor | None]:
-    """Shared flex attention forward implementation.
+    """Shared flex attention forward with optional Ulysses sequence parallelism.
 
-    This function is used by both EAGLE3 and DFlash attention mechanisms to avoid
-    code duplication and ensure consistent behavior.
+    When ``sp_size > 1``, Q/K/V are transposed via all-to-all from
+    sequence-parallel layout ``(B, H, S_local, D)`` to head-parallel
+    layout ``(B, H/sp, S_full, D)`` before attention, and the output
+    is transposed back afterwards.
 
     Args:
         module: The attention module (unused but required for interface compatibility).
@@ -44,6 +46,47 @@ def flex_attention_forward(
         Tuple of (attention_output, None) where attention_output has shape
         (batch, seq_len, num_heads, head_dim) and None represents no attention weights.
     """
+    from speculators.train.distributed import get_sp_group, get_sp_size  # noqa: PLC0415
+    from speculators.train.sequence_parallel import (  # noqa: PLC0415
+        maybe_replicate_kv_heads,
+        ulysses_gather,
+        ulysses_scatter,
+    )
+
+    sp_size = get_sp_size()
+    use_sp = sp_size > 1
+
+    if use_sp:
+        sp_group = get_sp_group()
+        if sp_group is None:
+            raise RuntimeError(
+                "SP group did not initialize for sequence parallelism, \
+                something went wrong!"
+            )
+
+        key, value = maybe_replicate_kv_heads(key, value, sp_size)
+
+        q_len = query.shape[2]
+        kv_len = key.shape[2]
+
+        query = ulysses_scatter(query, sp_group, sp_size)
+
+        if kv_len > q_len:
+            # KV cache from TTT: K/V = [step0_local | step1_local | ...].
+            # Scatter each step separately so the result is
+            # [step0_full | step1_full | ...] matching the extended mask.
+            k_parts = key.split(q_len, dim=2)
+            v_parts = value.split(q_len, dim=2)
+            key = torch.cat(
+                [ulysses_scatter(k, sp_group, sp_size) for k in k_parts], dim=2
+            )
+            value = torch.cat(
+                [ulysses_scatter(v, sp_group, sp_size) for v in v_parts], dim=2
+            )
+        else:
+            key = ulysses_scatter(key, sp_group, sp_size)
+            value = ulysses_scatter(value, sp_group, sp_size)
+
     num_query_heads = query.shape[1]
     num_key_value_heads = key.shape[1]
     enable_gqa = num_query_heads != num_key_value_heads
@@ -61,7 +104,11 @@ def flex_attention_forward(
         enable_gqa=enable_gqa,
         scale=scaling,
     )
-    attention_output: torch.Tensor = flex_attention_output
+    attention_output: torch.Tensor = flex_attention_output  # type: ignore[assignment]
+
+    if use_sp:
+        attention_output = ulysses_gather(attention_output, sp_group, sp_size)  # type: ignore[arg-type]
+
     attention_output = attention_output.transpose(1, 2).contiguous()
     return attention_output, None
 
@@ -106,3 +153,16 @@ def block_mask_to_dense_attention_mask(
 # Singleton registry for attention functions (shared across all models)
 ALL_ATTENTION_FUNCTIONS = AttentionInterface()
 ALL_ATTENTION_FUNCTIONS.register("simple_flex_attention", flex_attention_forward)
+
+
+def _dflash_flex_attention_forward(*args, **kwargs):
+    from speculators.train.sequence_parallel import (  # noqa: PLC0415
+        dflash_flex_attention_forward,
+    )
+
+    return dflash_flex_attention_forward(*args, **kwargs)
+
+
+ALL_ATTENTION_FUNCTIONS.register(
+    "dflash_flex_attention", _dflash_flex_attention_forward
+)
