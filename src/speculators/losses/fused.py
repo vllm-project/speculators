@@ -59,9 +59,6 @@ _N_STATS = 5
 def _calculate_settings(n, device):
     max_size = MAX_FUSED_SIZE_NPU if device.type == "npu" else MAX_FUSED_SIZE
     BLOCK_SIZE = min(triton.next_power_of_2(n), max_size)
-    # triton-ascend currently ignores num_warps (NPU AI Cores have no warp
-    # concept), so no NPU-specific branch is needed here; the value still
-    # tunes CUDA/HIP launches below.
     num_warps = 4
     if BLOCK_SIZE >= 32768:
         num_warps = 32
