@@ -9,6 +9,7 @@ from transformers.models.qwen3.modeling_qwen3 import (
 from speculators import SpeculatorModelConfig
 
 __all__ = [
+    "DFlash2SpeculatorConfig",
     "DFlashSpeculatorConfig",
 ]
 
@@ -81,28 +82,6 @@ class DFlashSpeculatorConfig(SpeculatorModelConfig):
         ),
     )
 
-    conv_kernel_size: int | None = Field(
-        default=None,
-        description="Kernel size for grouped dynamic causal convolutions (DFlash 2). "
-        "None disables convolutions (DFlash 1 behavior).",
-    )
-
-    conv_group_size: int | None = Field(
-        default=None,
-        description="Group size for grouped dynamic causal convolutions (DFlash 2).",
-    )
-
-    selector_rank: int | None = Field(
-        default=None,
-        description="Rank of the bilinear candidate selector (DFlash 2). "
-        "None disables the selector (DFlash 1 behavior).",
-    )
-
-    selector_top_k: int | None = Field(
-        default=None,
-        description="Number of top-k candidates scored by the selector (DFlash 2).",
-    )
-
     @field_serializer("transformer_layer_config")
     def serialize_transformer_config(self, value: PretrainedConfig) -> dict:
         """Serialize transformer config to dict."""
@@ -125,3 +104,34 @@ class DFlashSpeculatorConfig(SpeculatorModelConfig):
     def target_vocab_size(self) -> int:
         """Get target vocabulary size from transformer config."""
         return self.transformer_layer_config.vocab_size
+
+
+@SpeculatorModelConfig.register("dflash2")
+class DFlash2SpeculatorConfig(DFlashSpeculatorConfig):
+    """DFlash config plus grouped dynamic causal convolutions and a bilinear
+    candidate selector.
+
+    All DFlash fields are inherited unchanged.
+    """
+
+    speculators_model_type: Literal["dflash2"] = "dflash2"  # type: ignore[assignment]
+    architectures: list[str] = Field(
+        default_factory=lambda: ["DFlash2Speculator"],
+        description="Model architectures that can load these weights",
+    )
+
+    conv_kernel_size: int = Field(
+        description="Kernel size for grouped dynamic causal convolutions.",
+    )
+
+    conv_group_size: int = Field(
+        description="Group size for grouped dynamic causal convolutions.",
+    )
+
+    selector_rank: int = Field(
+        description="Rank of the bilinear candidate selector.",
+    )
+
+    selector_top_k: int = Field(
+        description="Number of top-k candidates scored by the selector at inference.",
+    )

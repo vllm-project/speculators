@@ -5,7 +5,7 @@ from transformers import PretrainedConfig
 
 from speculators.losses import LossConfig, resolve_loss_config
 from speculators.model import SpeculatorModel
-from speculators.models.dflash import DFlashSpeculatorConfig
+from speculators.models.dflash.config import DFlash2SpeculatorConfig
 from speculators.models.dflash.core import DFlashDraftModel
 from speculators.models.dflash.metrics import compute_metrics
 from speculators.models.dflash.model_definitions import CandidateSelector
@@ -23,17 +23,17 @@ class DFlash2DraftModel(DFlashDraftModel):
     logits before the loss, training the selector jointly with the backbone.
     """
 
-    def __init__(self, config: DFlashSpeculatorConfig) -> None:
+    config_class: ClassVar[type[DFlash2SpeculatorConfig]] = DFlash2SpeculatorConfig  # type: ignore[misc,assignment]
+
+    def __init__(self, config: DFlash2SpeculatorConfig) -> None:
         super().__init__(config=config)
 
-        self.candidate_selector: CandidateSelector | None = None
-        if config.selector_rank is not None and config.selector_top_k is not None:
-            self.candidate_selector = CandidateSelector(
-                vocab_size=self.draft_vocab_size,
-                hidden_size=config.transformer_layer_config.hidden_size,
-                rank=config.selector_rank,
-                top_k=config.selector_top_k,
-            )
+        self.candidate_selector = CandidateSelector(
+            vocab_size=self.draft_vocab_size,
+            hidden_size=config.transformer_layer_config.hidden_size,
+            rank=config.selector_rank,
+            top_k=config.selector_top_k,
+        )
 
     def _predecessor_ids(
         self,
@@ -70,12 +70,12 @@ class DFlash2DraftModel(DFlashDraftModel):
     ) -> "DFlash2DraftModel":
         base_kwargs = cls._build_base_config_kwargs("dflash2", verifier_config, **kwargs)
         base_kwargs.update(
-            conv_kernel_size=kwargs.get("conv_kernel_size"),
-            conv_group_size=kwargs.get("conv_group_size"),
-            selector_rank=kwargs.get("selector_rank"),
-            selector_top_k=kwargs.get("selector_top_k"),
+            conv_kernel_size=kwargs["conv_kernel_size"],
+            conv_group_size=kwargs["conv_group_size"],
+            selector_rank=kwargs["selector_rank"],
+            selector_top_k=kwargs["selector_top_k"],
         )
-        config = DFlashSpeculatorConfig(**base_kwargs)
+        config = DFlash2SpeculatorConfig(**base_kwargs)
         model = cls(config=config)
         model.load_vocab_mappings(t2d, d2t)
         model.load_verifier_weights()
@@ -130,14 +130,13 @@ class DFlash2DraftModel(DFlashDraftModel):
             )
         )
 
-        if self.candidate_selector is not None:
-            predecessor_ids = self._predecessor_ids(input_ids, anchored_block_indices)
-            context = (
-                self.candidate_selector.predecessor_codebook(predecessor_ids)
-                * self.candidate_selector.hidden_projection(hidden)
-            )
-            edge_scores = context @ self.candidate_selector.successor_codebook.weight.T
-            logits = logits + edge_scores
+        predecessor_ids = self._predecessor_ids(input_ids, anchored_block_indices)
+        context = (
+            self.candidate_selector.predecessor_codebook(predecessor_ids)
+            * self.candidate_selector.hidden_projection(hidden)
+        )
+        edge_scores = context @ self.candidate_selector.successor_codebook.weight.T
+        logits = logits + edge_scores
 
         loss, metrics = compute_metrics(
             logits,
