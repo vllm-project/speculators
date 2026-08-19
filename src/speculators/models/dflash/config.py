@@ -121,17 +121,21 @@ class DFlash2SpeculatorConfig(DFlashSpeculatorConfig):
     )
 
     conv_kernel_size: int = Field(
+        default=2,
         description="Kernel size for grouped dynamic causal convolutions.",
     )
 
     conv_group_size: int = Field(
+        default=16,
         description="Group size for grouped dynamic causal convolutions.",
     )
 
     selector_rank: int = Field(
+        default=256,
         description="Rank of the bilinear candidate selector.",
     )
 
     selector_top_k: int = Field(
+        default=16,
         description="Number of top-k candidates scored by the selector at inference.",
     )
