@@ -13,6 +13,8 @@ BLOCK_SIZE cap (MAX_FUSED_SIZE_NPU = 4096), which forces the tighter
 multi-block streaming loop.
 """
 
+from types import SimpleNamespace
+
 import pytest
 import torch
 
@@ -155,3 +157,45 @@ def test_eager_implementation_supports_differentiable_targets():
         loss_fn(logits, targets).sum().backward()
         assert logits.grad is not None, name
         assert targets.grad is not None, name
+
+
+def test_calculate_settings_respects_device_cap():
+    """`_calculate_settings` picks the right BLOCK_SIZE for each device without
+    needing NPU or CUDA hardware -- the helper only reads ``device.type``.
+
+    Exercises the NPU cap (MAX_FUSED_SIZE_NPU = 4096) and the CUDA cap
+    (MAX_FUSED_SIZE = 131072) at vocab sizes that span the boundaries, so
+    upstream CI (which typically has no NPU) still covers the NPU branch.
+    """
+    fused_losses = pytest.importorskip("speculators.losses.fused")
+
+    npu_cases = (
+        (512, 512),
+        (4096, 4096),
+        (8192, 4096),
+        (32768, 4096),
+        (131072, 4096),
+        (151936, 4096),
+    )
+    for vocab, expected in npu_cases:
+        block, _ = fused_losses._calculate_settings(
+            vocab, SimpleNamespace(type="npu")
+        )
+        assert block == expected, (
+            f"NPU cap: vocab={vocab} -> BLOCK_SIZE={block}, expected {expected}"
+        )
+
+    cuda_cases = (
+        (512, 512),
+        (4096, 4096),
+        (8192, 8192),
+        (131072, 131072),
+        (151936, 131072),
+    )
+    for vocab, expected in cuda_cases:
+        block, _ = fused_losses._calculate_settings(
+            vocab, SimpleNamespace(type="cuda")
+        )
+        assert block == expected, (
+            f"CUDA cap: vocab={vocab} -> BLOCK_SIZE={block}, expected {expected}"
+        )
