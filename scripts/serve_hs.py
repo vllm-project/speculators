@@ -42,6 +42,7 @@ import argparse
 import contextlib
 import fcntl
 import http.server
+import math
 import os
 import socketserver
 import threading
@@ -92,7 +93,12 @@ def _wait_for_write(data_path: Path, lock_timeout: float) -> str | None:
     if not _wait_for_file(lock_path, timeout=lock_timeout):
         return None  # lock never appeared; do NOT serve (would risk a partial read)
 
-    fd = os.open(str(lock_path), os.O_RDONLY)
+    try:
+        fd = os.open(str(lock_path), os.O_RDONLY)
+    except OSError:
+        # Lost a race with DELETE / TTL sweeper between the existence check
+        # and the open; treat as unavailable rather than crashing the handler.
+        return None
     deadline = time.monotonic() + lock_timeout
     try:
         while time.monotonic() < deadline:
@@ -112,7 +118,10 @@ def _sweep(root: Path, ttl: float, interval: float) -> None:
     """Daemon loop: delete ``.safetensors`` (and ``.lock``) older than ``ttl``."""
     while True:
         time.sleep(interval)
-        now = time.monotonic()
+        # NB: st_mtime is Unix wall-clock time; compare against time.time(),
+        # NOT time.monotonic() (seconds since boot), or the age check never
+        # fires and stale files are never reclaimed.
+        now = time.time()
         try:
             entries = list(root.iterdir())
         except OSError:
@@ -133,9 +142,10 @@ class HiddenStatesHandler(http.server.BaseHTTPRequestHandler):
     root: Path  # injected via the server factory below
     lock_timeout: float
 
-    # Quieter logging: one line per request, no noise to stderr per default.
+    # One concise line per request (default http.server logs hit stderr with
+    # client address + date noise on every GET).
     def log_message(self, fmt: str, *args) -> None:
-        pass
+        print(f"[serve_hs] {self.address_string()} {fmt % args}", flush=True)
 
     # --- helpers ----------------------------------------------------------
     def _resolve(self, urlpath: str) -> Path | None:
@@ -164,29 +174,33 @@ class HiddenStatesHandler(http.server.BaseHTTPRequestHandler):
             self.send_error(404, "Hidden states not available")
             return
 
+        # Open before sending the 200 so a DELETE / TTL-sweeper race after the
+        # lock-wait answers 404 instead of failing mid-transfer. The fd stays
+        # open across header-send and streaming, so no context manager.
         try:
-            size = data_path.stat().st_size
+            f = open(data_path, "rb")  # noqa: SIM115 - closed in finally below
         except OSError:
             self.send_error(404, "Not found")
             return
+        with contextlib.suppress(OSError):
+            size = os.fstat(f.fileno()).st_size
 
         self.send_response(200)
         self.send_header("Content-Type", "application/octet-stream")
         self.send_header("Content-Length", str(size))
         self.end_headers()
         try:
-            with open(data_path, "rb") as f:
-                while True:
-                    buf = f.read(CHUNK)
-                    if not buf:
-                        break
-                    self.wfile.write(buf)
-        except FileNotFoundError:
-            # Lost a race with DELETE / TTL sweeper after the lock-wait.
-            self.send_error(404, "Not found")
+            while True:
+                buf = f.read(CHUNK)
+                if not buf:
+                    break
+                self.wfile.write(buf)
         except (BrokenPipeError, ConnectionResetError):
             # Client went away mid-transfer; nothing to do.
             pass
+        finally:
+            with contextlib.suppress(OSError):
+                f.close()
 
     # --- DELETE -----------------------------------------------------------
     def do_DELETE(self) -> None:
@@ -217,6 +231,17 @@ def make_handler(root: Path, lock_timeout: float) -> type[HiddenStatesHandler]:
     )
 
 
+def _positive_float(value: str) -> float:
+    """argparse type: finite float strictly greater than zero."""
+    try:
+        f = float(value)
+    except ValueError as e:
+        raise argparse.ArgumentTypeError(f"{value!r} is not a number") from e
+    if not math.isfinite(f) or f <= 0:
+        raise argparse.ArgumentTypeError(f"{value!r} must be a positive finite number")
+    return f
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
@@ -244,12 +269,16 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--host",
         type=str,
-        default="0.0.0.0",  # noqa: S104 - must be reachable from the trainer node
-        help="Bind address. Default: 0.0.0.0 (all interfaces).",
+        default="127.0.0.1",
+        help=(
+            "Bind address. The trainer usually runs on another node; pass "
+            "--host 0.0.0.0 (or the node's IP) to accept cross-node "
+            "connections. Default: 127.0.0.1."
+        ),
     )
     parser.add_argument(
         "--lock-timeout",
-        type=float,
+        type=_positive_float,
         default=DEFAULT_LOCK_TIMEOUT,
         help=(
             "Seconds to wait for the connector to finish writing a file before "
@@ -258,7 +287,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--ttl",
-        type=float,
+        type=_positive_float,
         default=DEFAULT_TTL,
         help=(
             "Stale .safetensors/.lock files older than this many seconds are "
@@ -267,7 +296,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--ttl-interval",
-        type=float,
+        type=_positive_float,
         default=DEFAULT_TTL_INTERVAL,
         help=f"Seconds between sweeper passes. Default: {DEFAULT_TTL_INTERVAL}",
     )

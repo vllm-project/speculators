@@ -361,19 +361,24 @@ class MooncakeBackend(HiddenStatesBackend):
 
 
 class HttpTransfer(HiddenStatesTransfer):
-    def __init__(self, hs_http_base: str, hidden_states_path, timeout: float = 120.0):
+    def __init__(
+        self,
+        hs_http_base: str,
+        hidden_states_path: Path,
+        timeout: float = 120.0,
+    ):
         self.hs_http_base = hs_http_base.rstrip("/")
         self.hidden_states_path = hidden_states_path
         self.timeout = timeout
 
-    def get_cached(self, file_idx: int):
+    def get_cached(self, file_idx: int) -> dict[str, torch.Tensor] | None:
         path = self.hidden_states_path / f"hs_{file_idx}.safetensors"
         return _load_hs_file(path)
 
     def _url_for(self, handle: str) -> str:
         return f"{self.hs_http_base}/{os.path.basename(handle)}"
 
-    def get_generated(self, handle: str):
+    def get_generated(self, handle: str) -> dict[str, torch.Tensor] | None:
         url = self._url_for(handle)
         try:
             req = urllib.request.Request(url, method="GET")  # noqa: S310

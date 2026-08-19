@@ -123,7 +123,12 @@ def test_http_get_blocks_until_lock_released(serve_hs):
     save_file({"hidden_states": hs}, str(data_path))
 
     hold_seconds = 1.0
-    threading.Timer(hold_seconds, lambda: fcntl.flock(fd, fcntl.LOCK_UN)).start()
+
+    def _release():
+        fcntl.flock(fd, fcntl.LOCK_UN)
+
+    timer = threading.Timer(hold_seconds, _release)
+    timer.start()
     try:
         transfer = HttpTransfer(base, root, timeout=10.0)
         start = time.monotonic()
@@ -136,6 +141,9 @@ def test_http_get_blocks_until_lock_released(serve_hs):
             f"GET returned in {elapsed:.2f}s, before the {hold_seconds}s lock release"
         )
     finally:
+        # Cancel-and-join first so the timer can never fire on a closed fd.
+        timer.cancel()
+        timer.join()
         os.close(fd)
 
 
@@ -150,3 +158,53 @@ def test_http_get_rejected_name_maps_404_to_none(serve_hs):
     base, root = serve_hs
     transfer = HttpTransfer(base, root, timeout=10.0)
     assert transfer.get_generated(str(root / "not_a_safetensors_file.txt")) is None
+
+
+@pytest.mark.e2e
+def test_http_ttl_sweeper_reclaims_stale_files(tmp_path: Path):
+    """Files older than --ttl are deleted (trainer-crash cleanup)."""
+    port = _free_port()
+    root = tmp_path / "hidden_states"
+    root.mkdir()
+    proc = subprocess.Popen(  # noqa: S603 - fixed argv, repo-controlled script
+        [
+            sys.executable,
+            str(REPO_ROOT / "scripts" / "serve_hs.py"),
+            "--root",
+            str(root),
+            "--port",
+            str(port),
+            "--ttl",
+            "1",
+            "--ttl-interval",
+            "0.2",
+        ],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    try:
+        stale = root / "stale.safetensors"
+        stale_lock = root / "stale.safetensors.lock"
+        fresh = root / "fresh.safetensors"
+        fresh_lock = root / "fresh.safetensors.lock"
+        for p in (stale, stale_lock, fresh, fresh_lock):
+            p.write_bytes(b"x")
+
+        # Age the "stale" pair past the 1s TTL while "fresh" stays young.
+        stale_age = time.time() - 10
+        os.utime(stale, (stale_age, stale_age))
+        os.utime(stale_lock, (stale_age, stale_age))
+
+        deadline = time.monotonic() + 10.0
+        while time.monotonic() < deadline:
+            if not stale.exists() and not stale_lock.exists():
+                break
+            time.sleep(0.1)
+
+        assert not stale.exists(), "stale .safetensors was not swept"
+        assert not stale_lock.exists(), "stale .lock was not swept"
+        assert fresh.exists(), "fresh file was swept prematurely"
+        assert fresh_lock.exists(), "fresh lock was swept prematurely"
+    finally:
+        proc.terminate()
+        proc.wait(timeout=5)
