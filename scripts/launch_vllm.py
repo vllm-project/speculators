@@ -42,6 +42,39 @@ if "file" not in _backend_registry:
     _backend_registry["file"] = _InlineFileBackend  # type: ignore[assignment]
 
 
+# Front-end throughput defaults, applied unless the flag is passed after "--".
+# prepare_data drives /v1/chat/completions/render with ~2 requests per
+# assistant turn; vLLM's stock front end handles them in one API process whose
+# renderer pool is a single thread (--renderer-num-workers defaults to 1), so
+# the render stage serializes there no matter how many client workers run.
+# These flags only scale the HTTP front end (template + tokenize); the engine
+# and hidden-states connector are untouched.
+RENDER_THROUGHPUT_DEFAULTS = {
+    "--api-server-count": "4",
+    "--renderer-num-workers": "2",
+}
+
+
+def _with_render_defaults(vllm_args: list[str]) -> list[str]:
+    """Prepend RENDER_THROUGHPUT_DEFAULTS for flags the caller did not set.
+
+    Defaults go before ``vllm_args`` so an explicit flag always wins (argparse
+    keeps the last occurrence), even for spellings the presence check misses.
+    """
+    extra: list[str] = []
+    for flag, value in RENDER_THROUGHPUT_DEFAULTS.items():
+        # vLLM's parser accepts dash and underscore spellings, plus "=" form.
+        names = {flag, "--" + flag[2:].replace("-", "_")}
+        if any(
+            arg == name or arg.startswith(f"{name}=")
+            for arg in vllm_args
+            for name in names
+        ):
+            continue
+        extra += [flag, value]
+    return [*extra, *vllm_args]
+
+
 def parse_args():
     parser = argparse.ArgumentParser(
         description="Launch vLLM for hidden states extraction",
@@ -164,7 +197,7 @@ def main():
         json.dumps(speculative_config),
         "--kv_transfer_config",
         json.dumps(kv_transfer_config),
-        *vllm_args,
+        *_with_render_defaults(vllm_args),
     ]
 
     print("Running command:")
