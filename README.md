@@ -41,12 +41,12 @@ Big updates have landed in Speculators! To get a more in-depth look, check out t
 
 Some of the exciting new features include:
 
+- **Multi-Node Online Training via hs_connectors**: Added the [`hs_connectors`](https://github.com/vllm-project/speculators/tree/main/hs_connectors) plugin package with pluggable backends for transferring hidden states between vLLM and the trainer across nodes. The file-based backend uses a shared filesystem, while the Mooncake backend leverages a distributed store for environments without shared storage, enabling online speculator training at multi-node scale.
 - **DSpark Training Algorithm**: Added support for the DSpark training algorithm, which extends DFlash's anchored-block drafting with a Markov head that conditions each draft position on the previous token within the block, plus a confidence head that predicts per-position acceptance probability. DSpark checkpoints can warm-start from existing DFlash checkpoints.
 - **P-EAGLE Training Support**: Added support for the [P-EAGLE training algorithm](https://docs.vllm.ai/projects/speculators/en/latest/user_guide/algorithms/peagle), which extends EAGLE-3's architecture with parallel multi-token prediction via Conditional-On-Distribution (COD) sampling. Rather than generating draft tokens sequentially, P-EAGLE predicts multiple tokens in a single forward pass, reducing drafting latency. The Red Hat team published a [P-EAGLE speculator for Qwen3-8B](https://huggingface.co/RedHatAI/Qwen3-8B-speculator.peagle).
 - **MTP Finetuning Support**: Added support for finetuning the native Multi-Token Prediction (MTP) heads of models like Qwen3-Next on domain-specific data, following the [FastMTP](https://arxiv.org/abs/2509.18362) approach. Because the MTP head is small (~100M–400M params), it can be trained on pre-extracted hidden states without loading the full verifier
 - **Sliding Window Attention for DFlash and DSpark**: DFlash and DSpark speculators use sliding window attention on all draft layers by default. Use `--sliding-window` to set the window size and `--full-attention-indices` to opt specific layers into full attention. Sliding window attention reduces KV cache allocation for long-context sequences and can improve per-position acceptance rates compared to full attention.
 - **DFlash Training Algorithm**: Added support for the DFlash training algorithm with anchored-block drafting, using auxiliary hidden states from multiple verifier layers. Includes CLI options for block size and max anchors, plus DFlash metrics, utilities, and draft model. DFlash models trained through Speculators can now run seamlessly in vLLM as of [vLLM PR #38300](https://github.com/vllm-project/vllm/pull/38300).
-- **Online Training Support**: Added support for online training using the new [vLLM hidden extraction system](https://github.com/vllm-project/vllm/pull/33736), enabling real-time hidden state generation during training without requiring separate offline data generation steps.
 
 ______________________________________________________________________
 
@@ -75,7 +75,7 @@ The following table summarizes the models that have been trained end-to-end by o
 </thead>
 <tbody>
 <tr>
-<td rowspan="3">Llama</td>
+<td rowspan="2">Llama</td>
 <td>8B-Instruct</td>
 <td><a href="https://huggingface.co/RedHatAI/Llama-3.1-8B-Instruct-speculator.eagle3">EAGLE-3</a> ✅</td>
 <td>✅</td>
@@ -84,8 +84,6 @@ The following table summarizes the models that have been trained end-to-end by o
 <td>70B-Instruct</td>
 <td><a href="https://huggingface.co/RedHatAI/Llama-3.3-70B-Instruct-speculator.eagle3">EAGLE-3</a> ✅</td>
 <td>✅</td>
-</tr>
-<tr>
 </tr>
 <tr>
 <td rowspan="3">Qwen3</td>
@@ -145,6 +143,7 @@ The following table summarizes the models that have been trained end-to-end by o
     </a> ✅</td>
   <td>✅</td>
 </tr>
+<tr>
 <td>Qwen3-VL</td>
 <td>235B-A22B</td>
 <td><a href="https://huggingface.co/RedHatAI/Qwen3-VL-235B-A22B-Instruct-speculator.eagle3">
@@ -155,7 +154,7 @@ The following table summarizes the models that have been trained end-to-end by o
 <tr>
 <td>Mistral Small 4</td>
 <td>119B</td>
-<td><a href="https://huggingface.co/RedHatAI/Mistral-Small-4-119B-2603.dflash">DFlash</a> ✅</td>
+<td><a href="https://huggingface.co/RedHatAI/Mistral-Small-4-119B-2603.dflash">DFlash</a> ✅<br/><a href="https://huggingface.co/RedHatAI/Mistral-Small-4-119B-2603-speculator.dspark">DSpark</a> ✅</td>
 <td>✅</td>
 </tr>
 <tr>
@@ -180,6 +179,24 @@ The following table summarizes the models that have been trained end-to-end by o
 <td>NVIDIA Nemotron 3 Super</td>
 <td>120B-A12B</td>
 <td><a href="https://huggingface.co/RedHatAI/NVIDIA-Nemotron-3-Super-120B-A12B-speculator.dflash">DFlash</a> ✅</td>
+<td>✅</td>
+</tr>
+<tr>
+<td>Kimi K3</td>
+<td>-</td>
+<td><a href="https://huggingface.co/RedHatAI/Kimi-K3-speculator.dspark">DSpark</a> ✅</td>
+<td>✅</td>
+</tr>
+<tr>
+<td>Qwen3.6 MoE</td>
+<td>35B-A3B</td>
+<td><a href="https://huggingface.co/RedHatAI/Qwen3.6-35B-A3B-speculator.dspark">DSpark</a> ✅</td>
+<td>✅</td>
+</tr>
+<tr>
+<td>GLM 5.2</td>
+<td>-</td>
+<td><a href="https://huggingface.co/RedHatAI/GLM-5.2-speculator.dspark">DSpark</a> ✅</td>
 <td>✅</td>
 </tr>
 </tbody>

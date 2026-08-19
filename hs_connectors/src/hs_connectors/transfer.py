@@ -23,7 +23,7 @@ if TYPE_CHECKING:
 
 
 def wait_for_lock(lock_path: str, timeout: float = 10.0, poll_interval: float = 0.1):
-    fd = os.open(lock_path, os.O_RDONLY)
+    fd = os.open(lock_path, os.O_RDWR)
     try:
         deadline = time.monotonic() + timeout
         while True:
@@ -255,6 +255,21 @@ class MooncakeBackend(HiddenStatesBackend):
             default="tcp",
             help="Mooncake transport protocol. Used with backend=mooncake.",
         )
+        parser.add_argument(
+            "--mooncake-global-segment-gib",
+            type=float,
+            default=4.0,
+            help=(
+                "Memory registered by each Mooncake client for globally visible "
+                "objects, in GiB. Increase for many concurrent long sequences."
+            ),
+        )
+        parser.add_argument(
+            "--mooncake-local-buffer-gib",
+            type=float,
+            default=2.0,
+            help="Mooncake client's local staging buffer, in GiB.",
+        )
 
     @staticmethod
     def add_train_args(parser: argparse.ArgumentParser) -> None:
@@ -263,6 +278,12 @@ class MooncakeBackend(HiddenStatesBackend):
     @staticmethod
     def add_launch_args(parser: argparse.ArgumentParser) -> None:
         MooncakeBackend._add_mooncake_args(parser)
+        parser.add_argument(
+            "--mooncake-writer-threads",
+            type=int,
+            default=4,
+            help="Number of asynchronous Mooncake writer threads in the vLLM client.",
+        )
 
     @staticmethod
     def from_train_args(
@@ -278,6 +299,8 @@ class MooncakeBackend(HiddenStatesBackend):
                 local_hostname=local_hostname,
                 metadata_server=args.mooncake_metadata_server,
                 master_server_address=args.mooncake_master,
+                global_segment_size=round(args.mooncake_global_segment_gib * 1024**3),
+                local_buffer_size=round(args.mooncake_local_buffer_gib * 1024**3),
                 protocol=args.mooncake_protocol,
             )
         )
@@ -293,7 +316,10 @@ class MooncakeBackend(HiddenStatesBackend):
             local_hostname=local_hostname,
             metadata_server=args.mooncake_metadata_server,
             master_server_address=args.mooncake_master,
+            global_segment_size=round(args.mooncake_global_segment_gib * 1024**3),
+            local_buffer_size=round(args.mooncake_local_buffer_gib * 1024**3),
             protocol=args.mooncake_protocol,
+            num_writer_threads=args.mooncake_writer_threads,
         )
 
         return {

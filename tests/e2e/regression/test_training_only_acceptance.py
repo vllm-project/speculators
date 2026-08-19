@@ -90,6 +90,18 @@ def test_dflash_qwen3_8b_sharegpt(tmp_path: Path, prompts: list[list[dict[str, s
             online=False,
             log_freq=50,
             timeout=45 * 60,  # 45 mins
+            # Pin these explicitly: the acceptance_thresholds below were
+            # calibrated against fixed-exp-decay/kl_div/block_size=8, and
+            # dflash's CLI defaults for these changed in #979/#980. Keep this
+            # regression baseline stable regardless of future default changes.
+            extra_train_args=[
+                "--per-position-loss-weight",
+                "fixed-exp-decay",
+                "--loss-fn",
+                "kl_div",
+                "--block-size",
+                "8",
+            ],
         )
     final_checkpoint = str(save_path / str(epochs - 1))
     run_vllm_engine(

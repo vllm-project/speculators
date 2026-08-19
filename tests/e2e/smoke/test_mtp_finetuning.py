@@ -100,18 +100,7 @@ def run_mtp_finetuning_e2e(
     )
     logger.info("Training data: %s", training_data_path)
 
-    # Step 2: Prepare data
-    logger.info("Preparing tokenized data")
-    run_prepare_data(
-        model=verifier,
-        data=training_data_path,
-        data_path=data_path,
-        max_samples=max_samples,
-        seq_length=seq_length,
-    )
-    logger.info("Data prepared: %s", data_path)
-
-    # Step 3-4: Launch vLLM, train online
+    # Step 2-4: Launch vLLM, prepare data (render endpoint), train online
     logger.info("Starting online training")
     with launch_vllm_server_context(
         verifier,
@@ -122,6 +111,17 @@ def run_mtp_finetuning_e2e(
         target_layer_ids=target_layer_ids,
         enforce_eager=enforce_eager,
     ):
+        logger.info("Preparing tokenized data")
+        run_prepare_data(
+            model=verifier,
+            data=training_data_path,
+            data_path=data_path,
+            max_samples=max_samples,
+            seq_length=seq_length,
+            render_endpoint=f"http://localhost:{port}",
+        )
+        logger.info("Data prepared: %s", data_path)
+
         run_training(
             model=verifier,
             data_path=data_path,

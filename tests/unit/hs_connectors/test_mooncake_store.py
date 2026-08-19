@@ -14,7 +14,10 @@ pytest.importorskip("hs_connectors.mooncake_store")
 
 from hs_connectors.mooncake_store import (
     MooncakeHiddenStatesStore,
+    MooncakeIntegrityError,
     MooncakeStoreConfig,
+    NonFiniteTensorError,
+    assert_finite,
 )
 
 
@@ -98,7 +101,7 @@ def test_delete_sample_noop_when_missing(store):
     store.delete_sample("nonexistent-key")
 
 
-def test_get_sample_raises_on_evicted_tensor(store):
+def test_get_sample_raises_on_unavailable_tensor(store):
     hs = torch.randn(4, 2, 8, dtype=torch.bfloat16)
     tids = torch.arange(4, dtype=torch.int64)
     store.put_sample("req-evict", {"hidden_states": hs, "token_ids": tids})
@@ -106,5 +109,58 @@ def test_get_sample_raises_on_evicted_tensor(store):
     # Simulate eviction: meta key survives but tensor data is gone
     del store._store._tensors["req-evict:hidden_states"]
 
-    with pytest.raises(RuntimeError, match="evicted"):
+    with pytest.raises(MooncakeIntegrityError, match="unavailable"):
         store.get_sample("req-evict", timeout=1.0)
+
+
+def test_get_sample_rejects_checksum_corruption(store):
+    hs = torch.randn(4, 2, 8, dtype=torch.bfloat16)
+    tids = torch.arange(4, dtype=torch.int64)
+    store.put_sample("req-corrupt", {"hidden_states": hs, "token_ids": tids})
+
+    store._store._tensors["req-corrupt:hidden_states"][0, 0, 0] += 1
+
+    with pytest.raises(MooncakeIntegrityError, match="checksum mismatch"):
+        store.get_sample("req-corrupt", timeout=1.0)
+
+
+@pytest.mark.parametrize("bad_value", [torch.nan, torch.inf, -torch.inf])
+def test_assert_finite_rejects_non_finite_tensors(bad_value):
+    # The producer calls this on the accelerator before the DtoH copy, so
+    # put_sample itself no longer walks the sample looking for NaN/inf.
+    hs = torch.zeros(4, 2, 8, dtype=torch.bfloat16)
+    hs[1, 0, 0] = bad_value
+
+    with pytest.raises(NonFiniteTensorError, match="Non-finite producer tensor"):
+        assert_finite("hidden_states", hs)
+
+
+def test_assert_finite_accepts_clean_and_non_float_tensors():
+    assert_finite("hidden_states", torch.randn(4, 2, 8, dtype=torch.bfloat16))
+    assert_finite("token_ids", torch.arange(4, dtype=torch.int64))
+    assert_finite("empty", torch.empty(0, dtype=torch.bfloat16))
+
+
+def test_error_manifest_fails_consumer_immediately(store):
+    store.put_error("req-error", "producer found NaN")
+
+    with pytest.raises(MooncakeIntegrityError, match="producer found NaN"):
+        store.get_sample("req-error", timeout=1.0)
+
+
+def test_negative_put_status_does_not_publish_manifest(store, monkeypatch):
+    def fail_put_tensor(_key, _tensor):
+        return -800
+
+    monkeypatch.setattr(store._store, "put_tensor", fail_put_tensor)
+
+    with pytest.raises(RuntimeError, match="status=-800"):
+        store.put_sample(
+            "req-put-fail",
+            {
+                "hidden_states": torch.zeros(4, 2, 8),
+                "token_ids": torch.arange(4),
+            },
+        )
+
+    assert store._store.get("req-put-fail:meta") == b""

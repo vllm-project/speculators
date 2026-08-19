@@ -40,7 +40,11 @@ def test_mooncake_online_smoke(
     port = 8322
 
     run_prepare_data(
-        MODEL, "sharegpt", data_path, max_samples=50, seq_length=seq_length
+        MODEL,
+        "hf:inference-optimization/speculators-ci-datasets:smoke_regen",
+        data_path,
+        max_samples=50,
+        seq_length=seq_length,
     )
 
     mooncake_kwargs = {
@@ -72,6 +76,10 @@ def test_mooncake_online_smoke(
             lr=3e-4,
             log_freq=1,
             timeout=30 * 60,
+            # Each DataLoader worker opens its own Mooncake transfer-engine
+            # client (a dozen+ OS threads each); the default num_workers=12
+            # exhausts the CI runner's thread/process limit.
+            extra_train_args=["--num-workers", "2"],
             **mooncake_kwargs,  # type: ignore[arg-type]
         )
 

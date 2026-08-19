@@ -26,7 +26,11 @@ from tests.utils import requires_cadence
 @pytest.mark.parametrize(
     ("model", "dataset", "acceptance_thresholds"),
     [
-        ("Qwen/Qwen3-8B", "sharegpt", [0.38, 0.1, 0.01]),
+        (
+            "Qwen/Qwen3-8B",
+            "hf:inference-optimization/speculators-ci-datasets:tutorial_regen",
+            [0.38, 0.1, 0.01],
+        ),
         ("Qwen/Qwen3-VL-2B-Instruct", "sharegpt4v_coco", [0.4, 0.2, 0.04]),
     ],
 )

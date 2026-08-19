@@ -54,7 +54,7 @@ torchrun --standalone --nproc_per_node=4 scripts/train.py \
 
 - **`--dry-run`** (flag) Build the speculator, initialize weights, save a checkpoint to `--save-path`, then exit before training. Useful to validate the config/weights in vLLM before launching a full run; the saved checkpoint can be fed straight back via `--from-pretrained`.
 
-- **`--num-layers`** (int, default: `1`) Number of transformer layers in the draft model.
+- **`--num-layers`** (int, default: `5` for dflash, `1` otherwise) Number of transformer layers in the draft model.
 
 - **`--draft-arch`** (str, default: `"llama"`) Architecture for the synthesized draft decoder layers. Options: `llama`, `qwen3`. Used by Eagle3 and P-EAGLE, which select the decoder layer class from this value; DFlash always uses a Qwen3-style decoder regardless. Both are supported in vLLM for inference, and the target and draft architectures do not have to match.
 
@@ -83,8 +83,6 @@ torchrun --standalone --nproc_per_node=4 scripts/train.py \
 - **`--request-timeout`** (float, default: `180.0`) Timeout in seconds for each individual vLLM request.
 
 - **`--max-retries`** (int, default: `3`) Maximum number of retry attempts per vLLM request on failure.
-
-- **`--legacy-data`** (flag) **DEPRECATED.** Use the old data format which stores hidden states alongside token_ids.
 
 - **`--total-seq-len`** (int, default: `8192`) Maximum total sequence length for training batches. Note: samples will be packed into batches with total combined sequence length `{total-seq-len}`.
 
@@ -129,6 +127,8 @@ torchrun --standalone --nproc_per_node=4 scripts/train.py \
 - **`--hidden-states-dtype`** (str, default: `"bfloat16"`) Data type for dataloader hidden states and autocast compute. Model master weights are always kept in fp32. Options: `float32` (full precision, for debugging), `bfloat16` (recommended for mixed precision training). Note: `float16` is not supported as it requires gradient scaling to prevent underflow.
 
 - **`--deterministic-cuda`** (flag) Enable deterministic CUDA operations. May impact performance.
+
+- **`--loss-fn`** (str, default: `"ce"` for dflash, `"kl_div"` otherwise) Loss function specification. Pass a name for a single loss (`kl_div`, `rkl`, `jsd`, `ce`, `tv`, `nla`, `lk_hybrid`) or a JSON dict for a weighted combination, e.g. `'{"ce": 0.1, "tv": 0.9}'`. Required to be `ce` when `--per-position-loss-weight dpace` is used.
 
 ### Optimizer Arguments
 
@@ -176,7 +176,7 @@ torchrun --standalone --nproc_per_node=4 scripts/train.py \
 
 ### DFlash-Specific Arguments
 
-- **`--block-size`** (int, default: `8`) Block size for DFlash model.
+- **`--block-size`** (int, default: `16` for dflash, `8` for dspark) Block size for DFlash model.
 
 - **`--sample-from-anchor`** / **`--no-sample-from-anchor`** (bool, default: algorithm-specific) Whether to sample from the anchor position. `True`: sample from anchor and all mask positions (default for dspark, produces block_size tokens). `False`: anchor is bonus token (default for dflash, produces block_size-1 tokens).
 
@@ -184,7 +184,7 @@ torchrun --standalone --nproc_per_node=4 scripts/train.py \
 
 - **`--dflash-decay-gamma`** (float, default: `4.0`) Decay gamma for DFlash loss weighting.
 
-- **`--per-position-loss-weight`** (str, default: `"fixed-exp-decay"`) Per-position loss weighting scheme. Options: `fixed-exp-decay`, `dpace`. Applies to DFlash and DSpark.
+- **`--per-position-loss-weight`** (str, default: `"dpace"` for dflash, `"fixed-exp-decay"` for dspark) Per-position loss weighting scheme. Options: `fixed-exp-decay`, `dpace`. Applies to DFlash and DSpark. `dpace` requires `--loss-fn ce`.
 
 - **`--dpace-alpha`** (float, default: `0.5`) Confidence smoothing constant for the D-PACE loss. Only used with `--per-position-loss-weight dpace`.
 
