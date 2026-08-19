@@ -39,6 +39,14 @@ All arguments after `--` are passed directly to vLLM. Common vLLM arguments incl
 
 See [vLLM CLI documentation](https://docs.vllm.ai/en/latest/cli/) for full list of options.
 
+### Render throughput defaults
+
+[prepare_data.py](prepare_data.md) `--render-endpoint` points at this server and drives its `/v1/chat/completions/render` endpoint with roughly two calls per assistant turn. vLLM's stock front end answers those from a single API process whose renderer thread pool holds one thread, so that stage serializes no matter how many preprocessing workers `prepare_data` runs.
+
+`launch_vllm.py` therefore injects `--api-server-count` and `--renderer-num-workers`, sized from the CPUs actually available to the process. Pass either flag after `--` to choose your own value; an explicit flag always wins.
+
+Both flags scale only the HTTP front end (chat-template application and tokenization). The engine and the hidden-states connector are unaffected.
+
 ## Full Example
 
 ```bash
