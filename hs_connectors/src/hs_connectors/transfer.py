@@ -22,7 +22,7 @@ if TYPE_CHECKING:
     from collections.abc import Callable
 
 
-def wait_for_lock(lock_path: str, timeout: float = 10.0, poll_interval: float = 0.1):
+def wait_for_lock(lock_path: str, timeout: float = 10.0, poll_interval: float = 0.02):
     fd = os.open(lock_path, os.O_RDWR)
     try:
         deadline = time.monotonic() + timeout
