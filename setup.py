@@ -2,6 +2,11 @@ import os
 import re
 from pathlib import Path
 
+try:
+    import tomllib
+except ImportError:
+    import tomli as tomllib
+
 from packaging.version import Version
 from setuptools import setup
 from setuptools_git_versioning import count_since, get_branch, get_sha, get_tags
@@ -173,32 +178,21 @@ def get_hs_connectors_requirement() -> str:
         return f"hs-connectors>{LAST_RELEASE_VERSION},<={version}"
 
 
-BASE_DEPENDENCIES = [
-    "click",
-    "datasets>=4.0.0,<=5.0.1",
-    "httpx",
-    "huggingface-hub",
-    "loguru>=0.7.2,<=0.7.3",
-    "numpy>=2.0.0,<=2.4.6",
-    "openai>=2.0.0",
-    "protobuf",
-    "psutil",
-    "pydantic>=2.0.0",
-    "pydantic-settings>=2.0.0",
-    "rich",
-    "safetensors",
-    "torch>=2.9.0,<=2.13.0",
-    "torchaudio",
-    "torchvision",
-    "tqdm>=4.66.3,<=4.70.0",
-    "transformers>=4.56.1,<5.15.0",
-    "typer>=0.12.0",
-]
+def get_base_dependencies() -> list[str]:
+    """
+    Read the static base dependency list from pyproject.toml's
+    [tool.speculators.dependencies].base table, so it stays hand-edited TOML
+    rather than a Python literal duplicated here.
+    """
+    with (REPO_ROOT / "pyproject.toml").open("rb") as file:
+        data = tomllib.load(file)
+
+    return data["tool"]["speculators"]["dependencies"]["base"]
 
 
 setup(
     # set hs_connectors version to install
-    install_requires=BASE_DEPENDENCIES + [get_hs_connectors_requirement()],
+    install_requires=get_base_dependencies() + [get_hs_connectors_requirement()],
     setuptools_git_versioning={
         "enabled": True,
         "version_file": str(write_version_files()[0]),
