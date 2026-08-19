@@ -15,6 +15,7 @@ from typing import TYPE_CHECKING, Any, ClassVar
 import torch
 from safetensors.torch import load_file
 
+from hs_connectors.fp8_utils import SCALES_KEY, dequantize_fp8_tensor
 from hs_connectors.mooncake_store import MooncakeHiddenStatesStore, MooncakeStoreConfig
 
 if TYPE_CHECKING:
@@ -199,6 +200,106 @@ class FileBackend(HiddenStatesBackend):
             "kv_role": "kv_producer",
             "kv_connector_extra_config": {
                 "shared_storage_path": args.hidden_states_path,
+            },
+        }
+
+
+# ---------------------------------------------------------------------------
+# FP8 backend (shared filesystem, quantized hidden states)
+# ---------------------------------------------------------------------------
+
+
+class FP8Transfer(FileTransfer):
+    """File-system transfer that transparently dequantizes FP8 payloads.
+
+    Pairs with ``FP8HiddenStatesConnector`` on the vLLM side. Consumers see
+    plain ``hidden_states`` tensors in ``dequantize_dtype`` -- the
+    ``hidden_states_scales`` tensor and the quantization step are invisible
+    to callers, mirroring ``FileTransfer``'s return shape exactly.
+    """
+
+    def __init__(
+        self,
+        hidden_states_path: Path,
+        dequantize_dtype: torch.dtype = torch.bfloat16,
+    ):
+        super().__init__(hidden_states_path)
+        self.dequantize_dtype = dequantize_dtype
+
+    def _dequantize(
+        self, sample: dict[str, torch.Tensor] | None
+    ) -> dict[str, torch.Tensor] | None:
+        if sample is None or SCALES_KEY not in sample:
+            return sample
+        scales = sample[SCALES_KEY]
+        dequantized = dict(sample)
+        dequantized["hidden_states"] = dequantize_fp8_tensor(
+            sample["hidden_states"], scales, dtype=self.dequantize_dtype
+        )
+        del dequantized[SCALES_KEY]
+        return dequantized
+
+    def get_cached(self, file_idx: int) -> dict[str, torch.Tensor] | None:
+        return self._dequantize(super().get_cached(file_idx))
+
+    def get_generated(self, handle: str) -> dict[str, torch.Tensor] | None:
+        return self._dequantize(super().get_generated(handle))
+
+
+@HiddenStatesBackend.register("fp8")
+class FP8Backend(HiddenStatesBackend):
+    """Shared-filesystem backend that quantizes hidden states to FP8.
+
+    Uses distinct ``--fp8-*`` flags (rather than reusing ``FileBackend``'s
+    ``--hidden-states-path``) since ``add_train_args``/``add_launch_args``
+    from every registered backend are merged into one shared parser, and
+    dest/flag collisions across backends are treated as errors.
+    """
+
+    @staticmethod
+    def add_train_args(parser: argparse.ArgumentParser) -> None:
+        parser.add_argument(
+            "--fp8-hidden-states-path",
+            type=str,
+            default=None,
+            help=(
+                "The path where cached FP8-quantized hidden states files are "
+                "stored. (Default: args.data_path / 'hidden_states')"
+            ),
+        )
+
+    @staticmethod
+    def add_launch_args(parser: argparse.ArgumentParser) -> None:
+        parser.add_argument(
+            "--fp8-hidden-states-path",
+            type=str,
+            default="/tmp/hidden_states",  # noqa: S108
+            help=(
+                "The directory to save FP8 hidden states to. Default "
+                "'/tmp/hidden_states'"
+            ),
+        )
+
+    @staticmethod
+    def from_train_args(
+        args: argparse.Namespace,
+        data_path: str,
+    ) -> FP8Transfer:
+        hs_path = (
+            Path(args.fp8_hidden_states_path)
+            if args.fp8_hidden_states_path
+            else Path(data_path) / "hidden_states"
+        )
+        return FP8Transfer(hs_path)
+
+    @staticmethod
+    def build_kv_transfer_config(args: argparse.Namespace) -> dict[str, Any]:
+        return {
+            "kv_connector": "FP8HiddenStatesConnector",
+            "kv_role": "kv_producer",
+            "kv_connector_module_path": "hs_connectors.fp8_hidden_states_connector",
+            "kv_connector_extra_config": {
+                "shared_storage_path": args.fp8_hidden_states_path,
             },
         }
 
