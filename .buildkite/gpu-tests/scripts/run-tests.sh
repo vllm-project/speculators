@@ -44,6 +44,10 @@ if [ "${TEST_TYPE}" = "smoke" ]; then
   VLLM_VENV_PYTHON="$PWD/vllm_venv/bin/python"
   UV_TORCH_BACKEND=cu130 uv pip install --python "${VLLM_VENV_PYTHON}" vllm
   export VLLM_PYTHON="${VLLM_VENV_PYTHON}"
+
+  # This image has no CUDA toolkit (nvcc), so FlashInfer can't JIT-compile its
+  # sampling kernel at startup. Fall back to vLLM's native sampler instead.
+  export VLLM_USE_FLASHINFER_SAMPLER=0
 fi
 
 echo "+++ Running tests"

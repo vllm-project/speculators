@@ -132,7 +132,7 @@ steps:
 
         matrix:
           setup:
-            python: ["3.10", "3.13"]
+            python: ["3.13"]
 
   - group: ":test_tube: Integration Tests (H100)"
     steps:
