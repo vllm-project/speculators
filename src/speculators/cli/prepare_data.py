@@ -37,12 +37,7 @@ from typing import Annotated
 import typer
 
 from speculators.data_generation.logging_utils import PipelineLogger
-from speculators.data_generation.preprocessing import (
-    MAX_PREPROCESSING_WORKERS,
-    MIN_PREPROCESSING_WORKERS,
-    default_preprocessing_workers,
-    load_and_preprocess_dataset,
-)
+from speculators.data_generation.preprocessing import load_and_preprocess_dataset
 
 log = PipelineLogger(__name__)
 
@@ -52,6 +47,10 @@ PREPARE_DATA_OVERWRITE_ALLOWED_FILES = {
     "state.json",
     "token_freq.pt",
 }
+
+
+# Best measured pairing for launch_vllm.py's 32 API servers x 2 renderer threads.
+DEFAULT_PREPROCESSING_WORKERS = 128
 
 
 def assert_safe_to_overwrite(output: Path, token_freq_path: Path) -> None:
@@ -123,18 +122,15 @@ def prepare_data(
         typer.Option(help="Random seed"),
     ] = 0,
     num_preprocessing_workers: Annotated[
-        int | None,
+        int,
         typer.Option(
             help=(
                 "Number of CPU processes for dataset preprocessing. Each one "
                 "blocks on a single render call at a time, so this is also the "
-                "render concurrency. Defaults to a third of the available CPUs, "
-                f"at least {MIN_PREPROCESSING_WORKERS} and at most "
-                f"{MAX_PREPROCESSING_WORKERS} "
-                f"(this host: {default_preprocessing_workers()})."
+                f"render concurrency (default: {DEFAULT_PREPROCESSING_WORKERS})."
             ),
         ),
-    ] = None,
+    ] = DEFAULT_PREPROCESSING_WORKERS,
     minimum_valid_tokens: Annotated[
         int | None,
         typer.Option(
@@ -217,11 +213,7 @@ def prepare_data(
         target_model_path=model,
         train_data_paths=data,
         seq_length=seq_length,
-        build_dataset_num_proc=(
-            num_preprocessing_workers
-            if num_preprocessing_workers is not None
-            else default_preprocessing_workers()
-        ),
+        build_dataset_num_proc=num_preprocessing_workers,
         seed=seed,
         max_samples=max_samples,
         token_freq_path=resolved_token_freq_path,

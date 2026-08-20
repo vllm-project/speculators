@@ -1,5 +1,4 @@
 import json
-import os
 from collections.abc import Callable
 from contextlib import nullcontext
 from pathlib import Path
@@ -22,7 +21,6 @@ from speculators.train.vocab_mapping import save_token_frequency_distribution
 
 __all__ = [
     "build_speculator_training_dataset",
-    "default_preprocessing_workers",
     "load_and_preprocess_dataset",
     "load_raw_dataset",
 ]
@@ -30,47 +28,6 @@ __all__ = [
 log = PipelineLogger(__name__)
 
 _warned_roles: set[str] = set()
-
-# Preprocessing worker default. Rendering is client-bound: every map worker
-# blocks on one /render call at a time, so throughput is the worker count
-# divided by render latency until the vLLM front end saturates. Measured on a
-# 384-CPU node (2x EPYC 9654) rendering Qwen3-0.6B, with the front end scaled
-# alongside: 8 workers reach 1.7k renders/s, 64 reach 9.0k, 128 reach 16.9k,
-# and 256 fall back to 15.4k. A third of the CPUs lands on that knee while
-# leaving cores for the front end, which sizes itself to match (one API server
-# per 4 workers, see scripts/launch_vllm.py).
-MIN_PREPROCESSING_WORKERS = 8  # the previous fixed default; never go below it
-MAX_PREPROCESSING_WORKERS = 128  # measured knee; 256 workers regressed
-CPUS_PER_PREPROCESSING_WORKER = 3
-
-
-def usable_cpu_count() -> int:
-    """Number of CPUs this process may actually run on.
-
-    Not ``os.cpu_count()``: that reports the whole machine and ignores CPU
-    affinity, so a job pinned to part of a large node would size itself for
-    cores it cannot use.
-    """
-    if hasattr(os, "process_cpu_count"):  # Python 3.13+
-        return os.process_cpu_count() or 1
-    if hasattr(os, "sched_getaffinity"):  # Linux
-        return len(os.sched_getaffinity(0))
-    return os.cpu_count() or 1
-
-
-def default_preprocessing_workers(cpus: int | None = None) -> int:
-    """How many map workers to render with on this host.
-
-    ``datasets`` clamps ``num_proc`` to the row count on its own, so a small
-    dataset does not fan out to more workers than it has rows.
-    """
-    if cpus is None:
-        cpus = usable_cpu_count()
-    return max(
-        MIN_PREPROCESSING_WORKERS,
-        min(MAX_PREPROCESSING_WORKERS, cpus // CPUS_PER_PREPROCESSING_WORKER),
-    )
-
 
 ProcessorLike = PreTrainedTokenizerBase | ProcessorMixin
 

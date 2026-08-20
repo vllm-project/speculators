@@ -70,11 +70,9 @@ speculators prepare-data \
 
 - **`--seed`** (int, default: `0`) Random seed for reproducibility. Must match the seed used in other scripts.
 
-- **`--num-preprocessing-workers`** (int, default: a third of the available CPUs, at least 8 and at most 128) Number of CPU processes for dataset preprocessing. Each worker blocks on one render call at a time, so for natural-language input this is also the render concurrency, and it is the main throughput control for that stage.
+- **`--num-preprocessing-workers`** (int, default: `128`) Number of CPU processes for dataset preprocessing. Each worker blocks on one render call at a time, so for natural-language input this is also the render concurrency.
 
-  The vLLM front end launched by [launch_vllm.py](launch_vllm.md) sizes itself from the same CPU count (one API server per 4 workers), so the two stay matched without being told about each other. If you override this flag well above the default, raise `--api-server-count` to roughly a quarter of it, otherwise the front end becomes the bottleneck. Raising either side alone is worse than raising both.
-
-  Measured on a 384-CPU node (2x EPYC 9654) rendering Qwen3-0.6B: 8 workers with a 4x2 front end reach 1.7k renders/s, 64 with 16x2 reach 9.0k, 128 with 32x2 reach 16.9k, and 256 fall back to 15.4k. The extra API servers cost roughly 1.2 GB RSS each, so the top setting holds ~38 GB of front end — fine on a datagen node, worth capping on a shared one.
+  [launch_vllm.py](launch_vllm.md) supplies the matching `32` API servers with `2` renderer threads each. This fixed pairing was the best measured setting on the standard 384-CPU H100 node, reaching **16,878 renders/s** without manual tuning.
 
 ## Full Example
 

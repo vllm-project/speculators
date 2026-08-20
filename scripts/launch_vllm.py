@@ -42,110 +42,24 @@ if "file" not in _backend_registry:
     _backend_registry["file"] = _InlineFileBackend  # type: ignore[assignment]
 
 
-# Front-end throughput defaults, applied unless the flag is passed after "--".
-# prepare_data drives /v1/chat/completions/render with ~2 requests per
-# assistant turn; vLLM's stock front end handles them in one API process whose
-# renderer pool is a single thread (--renderer-num-workers defaults to 1), so
-# the render stage serializes there no matter how many client workers run.
-# These flags only scale the HTTP front end (template + tokenize); the engine
-# and hidden-states connector are untouched.
-#
-# Sizing, measured on an H100 node (2x EPYC 9654, 384 CPUs), Qwen3-0.6B.
-#
-# The front end is sized against the client, not the machine: prepare_data
-# renders from --num-preprocessing-workers forked processes, each blocking on
-# one call at a time, so that worker count is how many renders are ever in
-# flight. Both sides therefore derive from the same CPU count and stay paired
-# without this script having to read prepare_data's setting -- it cannot, since
-# it runs inside the vLLM virtualenv where speculators is not installed
-# (see #958 / #1008). Keep _preprocessing_workers below in sync with
-# speculators.data_generation.preprocessing.default_preprocessing_workers.
-#
-#   8 workers  +  4x2  ->  1,702 renders/s   (vLLM stock 1x1: 633)
-#  64 workers  + 16x2  ->  8,997
-# 128 workers  + 32x2  -> 16,878             <- where 384 CPUs lands
-# 256 workers  + 32x2  -> 15,400             (past the knee)
-#
-# Raising either side alone is worse than raising both: at 8 workers a 16x1
-# front end measured 1,586 renders/s against 1,702 for 4x2, at three times the
-# memory. How the slots are split matters too -- 8 threads in one process reach
-# only 1.2x stock, because chat-template rendering is Python and serializes on
-# the GIL, while 8 single-threaded processes cost ~1.2 GB RSS each and still
-# trail 4 processes of 2 threads.
-RENDERER_THREADS_PER_SERVER = 2
-WORKERS_PER_API_SERVER = 4
-MAX_API_SERVERS = 32
-CPUS_PER_API_SERVER = 4
-# Mirrors of the preprocessing-side constants; see the sync note above.
-MIN_PREPROCESSING_WORKERS = 8
-MAX_PREPROCESSING_WORKERS = 128
-CPUS_PER_PREPROCESSING_WORKER = 3
-
-
-def _usable_cpu_count() -> int:
-    """Number of CPUs this process may actually run on.
-
-    Not ``os.cpu_count()``: that reports the whole machine and ignores CPU
-    affinity, so a datagen job confined to a few cores of a large node would
-    still start a front end per idle core it cannot use.
-    """
-    if hasattr(os, "process_cpu_count"):  # Python 3.13+
-        return os.process_cpu_count() or 1
-    if hasattr(os, "sched_getaffinity"):  # Linux
-        return len(os.sched_getaffinity(0))
-    return os.cpu_count() or 1
-
-
-def _preprocessing_workers(cpus: int) -> int:
-    """What prepare_data will pick for --num-preprocessing-workers here."""
-    return max(
-        MIN_PREPROCESSING_WORKERS,
-        min(MAX_PREPROCESSING_WORKERS, cpus // CPUS_PER_PREPROCESSING_WORKER),
-    )
-
-
-def render_throughput_defaults(cpus: int | None = None) -> dict[str, str]:
-    """Front-end sizing for this host.
-
-    One API server per WORKERS_PER_API_SERVER renders in flight, so the front
-    end grows with the clients rather than with the machine, and never past what
-    the local cores can run: on a small host extra front ends only take cores
-    away from the preprocessing workers.
-    """
-    if cpus is None:
-        cpus = _usable_cpu_count()
-    api_servers = max(
-        1,
-        min(
-            MAX_API_SERVERS,
-            _preprocessing_workers(cpus) // WORKERS_PER_API_SERVER,
-            cpus // CPUS_PER_API_SERVER,
-        ),
-    )
-    return {
-        "--api-server-count": str(api_servers),
-        "--renderer-num-workers": str(RENDERER_THREADS_PER_SERVER),
-    }
+# Best measured same-host setting on the standard 384-CPU H100 node. This is
+# paired with prepare_data.py's 128 preprocessing workers and reached 16,878
+# renders/s. Passthrough arguments follow these defaults, so explicit values win.
+DEFAULT_API_SERVER_COUNT = 32
+DEFAULT_RENDERER_NUM_WORKERS = 2
 
 
 def _with_render_defaults(vllm_args: list[str]) -> list[str]:
-    """Prepend the render throughput defaults for flags the caller did not set.
-
-    Defaults go before ``vllm_args`` so an explicit flag always wins (argparse
-    keeps the last occurrence), even for spellings the presence check misses.
-    """
-    extra: list[str] = []
-    for flag, value in render_throughput_defaults().items():
-        # vLLM's parser accepts dash and underscore spellings, plus "=" form.
-        names = {flag, "--" + flag[2:].replace("-", "_")}
-        if any(
-            arg == name or arg.startswith(f"{name}=")
-            for arg in vllm_args
-            for name in names
-        ):
-            continue
-        extra += [flag, value]
-    return [*extra, *vllm_args]
+    """Prepend high-throughput render defaults, unless no API server is wanted."""
+    if "--headless" in vllm_args:
+        return vllm_args
+    return [
+        "--api-server-count",
+        str(DEFAULT_API_SERVER_COUNT),
+        "--renderer-num-workers",
+        str(DEFAULT_RENDERER_NUM_WORKERS),
+        *vllm_args,
+    ]
 
 
 def parse_args():

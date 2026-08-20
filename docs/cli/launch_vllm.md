@@ -41,13 +41,11 @@ See [vLLM CLI documentation](https://docs.vllm.ai/en/latest/cli/) for full list 
 
 ### Render throughput defaults
 
-[prepare_data.py](prepare_data.md) `--render-endpoint` points at this server and drives its `/v1/chat/completions/render` endpoint with roughly two calls per assistant turn. vLLM's stock front end answers those from a single API process whose renderer thread pool holds one thread, so that stage serializes no matter how many preprocessing workers `prepare_data` runs.
+[prepare_data.py](prepare_data.md) `--render-endpoint` points at this server and drives its `/v1/chat/completions/render` endpoint. To keep that stage from serializing in vLLM's stock single-process, single-renderer front end, `launch_vllm.py` defaults to `--api-server-count 32 --renderer-num-workers 2`. This pairs with `prepare_data.py`'s default of 128 preprocessing workers.
 
-`launch_vllm.py` therefore injects `--api-server-count` and `--renderer-num-workers`, sized from the CPUs actually available to the process. Pass either flag after `--` to choose your own value; an explicit flag always wins.
+That fixed pairing was the best measured setting on the standard 384-CPU H100 node: **16,878 renders/s**. Arguments passed after `--` follow the defaults, so an explicit value still wins. No frontend defaults are added with `--headless`.
 
-The front end is sized against the client rather than the machine: `prepare_data` renders from `--num-preprocessing-workers` forked processes, each blocking on one call at a time, so that worker count is how many renders are ever in flight. Both defaults derive from the same CPU count — one API server per 4 workers — so they stay matched when both run on the same node. If you point `--render-endpoint` at a server on a different host, or override either flag by hand, keep that ratio yourself.
-
-Both flags scale only the HTTP front end (chat-template application and tokenization). The engine and the hidden-states connector are unaffected.
+The [training tutorial](../user_guide/tutorials/train.md) pins vLLM 0.27.1 for this path. These flags scale only the HTTP front end (chat-template application and tokenization); the engine and hidden-states connector are unaffected.
 
 ## Full Example
 
