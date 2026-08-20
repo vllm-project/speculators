@@ -188,6 +188,33 @@ def test_non_mrope_model_has_no_mrope_section(patch_verifier):
     assert config.rope_parameters["rope_type"] == "llama3"
 
 
+def test_full_attention_uses_full_attention_rope(patch_verifier):
+    vc = _make_verifier_config(
+        rope_parameters={
+            "full_attention": {
+                "rope_type": "default",
+                "rope_theta": 1_000_000.0,
+            },
+            "sliding_attention": {
+                "rope_type": "default",
+                "rope_theta": 10_000.0,
+            },
+        }
+    )
+    patch_verifier(vc, "5.0.0")
+
+    config = _build(
+        draft_arch="qwen3",
+        full_attention_indices=[0],
+        sliding_window=1532,
+    )
+
+    assert config.layer_types == ["full_attention"]
+    assert config.sliding_window is None
+    assert config.use_sliding_window is False
+    assert config.rope_parameters["rope_theta"] == 1_000_000.0
+
+
 # ---------------------------------------------------------------------------
 # transformers < 5.0 (rope_scaling) path
 # ---------------------------------------------------------------------------
