@@ -38,6 +38,7 @@ from pathlib import Path
 
 from speculators.data_generation.logging_utils import PipelineLogger
 from speculators.data_generation.preprocessing import (
+    default_preprocessing_workers,
     load_and_preprocess_dataset,
 )
 
@@ -54,10 +55,6 @@ PREPARE_DATA_OVERWRITE_ALLOWED_FILES = {
     "state.json",
     "token_freq.pt",
 }
-
-# Best measured pairing for launch_vllm.py's 32 API servers x 2 renderer threads.
-DEFAULT_PREPROCESSING_WORKERS = 128
-
 
 def assert_safe_to_overwrite(output: Path, token_freq_path: Path) -> None:
     """Refuse to ``--overwrite`` a directory holding non-artifact files.
@@ -180,11 +177,12 @@ def parse_args():
     parser.add_argument(
         "--num-preprocessing-workers",
         type=int,
-        default=DEFAULT_PREPROCESSING_WORKERS,
+        default=None,
         help=(
             "Number of CPU processes for dataset preprocessing. Each one blocks "
             "on a single render call at a time, so this is also the render "
-            f"concurrency (default: {DEFAULT_PREPROCESSING_WORKERS})."
+            "concurrency. Defaults to one third of the available CPUs, with a "
+            "minimum of 8 and maximum of 128."
         ),
     )
     parser.add_argument(
@@ -245,7 +243,11 @@ def main():
         target_model_path=args.model,
         train_data_paths=args.data,
         seq_length=args.seq_length,
-        build_dataset_num_proc=args.num_preprocessing_workers,
+        build_dataset_num_proc=(
+            args.num_preprocessing_workers
+            if args.num_preprocessing_workers is not None
+            else default_preprocessing_workers()
+        ),
         seed=args.seed,
         max_samples=args.max_samples,
         token_freq_path=token_freq_path,

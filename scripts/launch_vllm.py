@@ -1,5 +1,6 @@
 import argparse
 import json
+import os
 import sys
 import warnings
 
@@ -41,22 +42,59 @@ if "file" not in _backend_registry:
     _backend_registry["file"] = _InlineFileBackend  # type: ignore[assignment]
 
 
-# Best measured same-host setting on the standard 384-CPU H100 node. This is
-# paired with prepare_data.py's 128 preprocessing workers and reached 16,878
-# renders/s. Passthrough arguments follow these defaults, so explicit values win.
-DEFAULT_API_SERVER_COUNT = 32
+# Affinity-aware sizing reaches the measured 128 clients + 32 x 2 front end on
+# a 384-CPU node, while keeping the same defaults usable on smaller machines.
 DEFAULT_RENDERER_NUM_WORKERS = 2
+MAX_API_SERVER_COUNT = 32
+WORKERS_PER_API_SERVER = 4
+CPUS_PER_API_SERVER = 4
+MIN_PREPROCESSING_WORKERS = 8
+MAX_PREPROCESSING_WORKERS = 128
+CPUS_PER_PREPROCESSING_WORKER = 3
+
+
+def _usable_cpu_count() -> int:
+    """Return the CPUs available to this process, respecting affinity."""
+    if hasattr(os, "process_cpu_count"):  # Python 3.13+
+        return os.process_cpu_count() or 1
+    if hasattr(os, "sched_getaffinity"):  # Linux
+        return len(os.sched_getaffinity(0))
+    return os.cpu_count() or 1
+
+
+def _preprocessing_workers(cpus: int) -> int:
+    """Mirror prepare_data.py's worker default in the vLLM environment."""
+    return max(
+        MIN_PREPROCESSING_WORKERS,
+        min(MAX_PREPROCESSING_WORKERS, cpus // CPUS_PER_PREPROCESSING_WORKER),
+    )
+
+
+def render_throughput_defaults(cpus: int | None = None) -> tuple[int, int]:
+    """Return affinity-aware API-server and renderer-worker defaults."""
+    if cpus is None:
+        cpus = _usable_cpu_count()
+    api_servers = max(
+        1,
+        min(
+            MAX_API_SERVER_COUNT,
+            _preprocessing_workers(cpus) // WORKERS_PER_API_SERVER,
+            cpus // CPUS_PER_API_SERVER,
+        ),
+    )
+    return api_servers, DEFAULT_RENDERER_NUM_WORKERS
 
 
 def _with_render_defaults(vllm_args: list[str]) -> list[str]:
     """Prepend high-throughput render defaults, unless no API server is wanted."""
     if "--headless" in vllm_args:
         return vllm_args
+    api_servers, renderer_workers = render_throughput_defaults()
     return [
         "--api-server-count",
-        str(DEFAULT_API_SERVER_COUNT),
+        str(api_servers),
         "--renderer-num-workers",
-        str(DEFAULT_RENDERER_NUM_WORKERS),
+        str(renderer_workers),
         *vllm_args,
     ]
 
