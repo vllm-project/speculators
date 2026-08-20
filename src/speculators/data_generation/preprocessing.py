@@ -17,6 +17,7 @@ from speculators.data_generation.configs import DATASET_CONFIGS
 from speculators.data_generation.logging_utils import PipelineLogger
 from speculators.data_generation.render_client import render_conversation
 from speculators.data_generation.torch_utils import set_default_torch_num_threads
+from speculators.data_generation.vllm_client import stringify_tool_call_arguments
 from speculators.train.vocab_mapping import save_token_frequency_distribution
 
 __all__ = [
@@ -166,7 +167,11 @@ def _adapt_turn_for_vllm(turn: dict):
 
 
 def _adapt_conv_for_vllm(normalized_conv: list[dict]):
-    return [_adapt_turn_for_vllm(turn) for turn in normalized_conv]
+    # HF templates iterate tool-call arguments as dicts; the OpenAI schema the
+    # stored messages are replayed against requires JSON strings.
+    return stringify_tool_call_arguments(
+        [_adapt_turn_for_vllm(turn) for turn in normalized_conv]
+    )
 
 
 class BoundaryUnstableError(ValueError):
@@ -177,6 +182,7 @@ class BoundaryRow(TypedDict):
     input_ids: list[int]
     loss_mask: list[int]
     conv: list[dict]  # prefix through this turn; multimodal rows re-send it
+    tools: list | None  # tools the row was rendered with; re-sent alongside
 
 
 def _encode_render(
@@ -276,10 +282,40 @@ def _render_boundary_rows(
                 "input_ids": full_ids,
                 "loss_mask": [0] * boundary + [1] * (len(full_ids) - boundary),
                 "conv": normalized_conv[: j + 1],
+                "tools": tools,
             }
         )
 
     return rows
+
+
+# Field order of the OpenAI tool params, which is how vLLM's request models
+# re-serialize tools before rendering the chat template. Templates that dump a
+# tool with ``tojson`` put that order straight into the prompt, so tokenizing
+# with the source's key order yields a prompt the server cannot reproduce.
+_TOOL_KEY_ORDER = ("type", "function", "custom")
+_TOOL_FUNCTION_KEY_ORDER = ("name", "description", "parameters", "strict")
+
+
+def _reorder_keys(mapping: dict, order: tuple[str, ...]) -> dict:
+    """Copy of ``mapping`` with ``order``'s keys first; the rest keep their
+    relative order."""
+    ordered = {key: mapping[key] for key in order if key in mapping}
+    return ordered | {k: v for k, v in mapping.items() if k not in ordered}
+
+
+def _canonicalize_tools(tools: list) -> list:
+    canonical = []
+    for tool in tools:
+        if not isinstance(tool, dict):
+            canonical.append(tool)
+            continue
+        adapted = _reorder_keys(tool, _TOOL_KEY_ORDER)
+        function = adapted.get("function")
+        if isinstance(function, dict):
+            adapted["function"] = _reorder_keys(function, _TOOL_FUNCTION_KEY_ORDER)
+        canonical.append(adapted)
+    return canonical
 
 
 def _parse_conv_tools(conv_tools: object, idx: int) -> list | None:
@@ -288,7 +324,7 @@ def _parse_conv_tools(conv_tools: object, idx: int) -> list | None:
     if not conv_tools:
         return None
     if isinstance(conv_tools, list):
-        return conv_tools
+        return _canonicalize_tools(conv_tools)
     if not isinstance(conv_tools, str):
         log.warning(
             f"Non-string value in tools column for conversation {idx}: "
@@ -296,7 +332,7 @@ def _parse_conv_tools(conv_tools: object, idx: int) -> list | None:
         )
         return None
     try:
-        return json.loads(conv_tools)
+        return _canonicalize_tools(json.loads(conv_tools))
     except json.JSONDecodeError as e:
         log.warning(
             f"Invalid JSON in tools column for conversation {idx}: {e}, "
@@ -387,7 +423,21 @@ def _append_boundary_rows(
         if status == "kept":
             num_kept += 1
             if "messages" in results:
-                results["messages"].append(_adapt_conv_for_vllm(row["conv"]))
+                # JSON strings: structured rows are heterogeneous (optional
+                # tool_calls, str vs part-list content), so `map` shards would
+                # infer differing Arrow schemas and concatenation would fail
+                # with "The features can't be aligned". Decoded in
+                # `build_client_item`.
+                results["messages"].append(
+                    json.dumps(_adapt_conv_for_vllm(row["conv"]))
+                )
+                # Not named ``tools``: `map` cannot type an output column on a
+                # shard that emits no rows, so the *input* column of that name
+                # would survive there with its own type and misalign the
+                # schemas.
+                results["tools_json"].append(
+                    json.dumps(row["tools"]) if row["tools"] else ""
+                )
 
     return num_kept, num_unsupervised, num_clipped
 
@@ -465,6 +515,7 @@ def _preprocess_batch(
     # original messages -- token ids alone cannot carry the images.
     if is_multimodal:
         results["messages"] = []
+        results["tools_json"] = []
 
     if not conversations:
         log.warning(f"No conversations key found. Keys: {list(examples.keys())}")

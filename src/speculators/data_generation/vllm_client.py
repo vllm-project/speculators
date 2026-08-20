@@ -1,6 +1,7 @@
 import asyncio
 import fcntl
 import functools
+import json
 import logging
 import os
 import time
@@ -130,6 +131,33 @@ class ClientItem(TypedDict):
     """If provided, pass `messages` to Chat Completions API
     instead of passing `token_ids` to Completions API."""
 
+    tools: NotRequired[list[dict]]
+    """Tool definitions the conversation was tokenized with (see
+    ``_chat_extra_body``)."""
+
+
+def stringify_tool_call_arguments(messages: list[dict]) -> list[dict]:
+    """Re-encode dict ``tool_calls[].function.arguments`` as the JSON strings
+    the OpenAI Chat Completions schema requires; strings pass through."""
+    out = []
+    for turn in messages:
+        tool_calls = turn.get("tool_calls")
+        if not tool_calls:
+            out.append(turn)
+            continue
+        adapted_calls = []
+        for call in tool_calls:
+            function = call.get("function")
+            if function and not isinstance(function.get("arguments", ""), str):
+                arguments = json.dumps(function["arguments"])
+                adapted_calls.append(
+                    call | {"function": function | {"arguments": arguments}}
+                )
+            else:
+                adapted_calls.append(call)
+        out.append(turn | {"tool_calls": adapted_calls})
+    return out
+
 
 async def _poll_lock_async(fd, poll_interval):
     while True:
@@ -186,6 +214,24 @@ def _continue_final_message_for(model: str) -> bool:
     return any(marker in name for marker in _OPEN_FINAL_TURN_MODEL_MARKERS)
 
 
+def _chat_extra_body(model: str, tools: list[dict] | None) -> dict[str, Any]:
+    """Body fields for the Chat Completions re-render of a stored prompt."""
+    extra_body: dict[str, Any] = {
+        "add_generation_prompt": False,
+        # Re-render to match the stored ``input_ids`` (model-dependent).
+        "continue_final_message": _continue_final_message_for(model),
+        "return_token_ids": True,
+    }
+    if tools:
+        # The chat template renders tools into the prompt, so the re-render
+        # only reproduces ``input_ids`` when they are sent back. tool_choice
+        # is pinned to "none" because its default with tools, "auto", is
+        # rejected by vLLM unless the server runs a tool-call parser.
+        extra_body["tools"] = tools
+        extra_body["tool_choice"] = "none"
+    return extra_body
+
+
 @with_retries
 async def generate_hidden_states_async(
     client: openai.AsyncClient,
@@ -221,12 +267,7 @@ async def generate_hidden_states_async(
             model=model,
             messages=messages,
             max_tokens=1,
-            extra_body={
-                "add_generation_prompt": False,
-                # Re-render to match the stored ``input_ids`` (model-dependent).
-                "continue_final_message": _continue_final_message_for(model),
-                "return_token_ids": True,
-            },
+            extra_body=_chat_extra_body(model, client_item.get("tools")),
             timeout=timeout,
         )
 
@@ -268,12 +309,7 @@ def generate_hidden_states(
             model=model,
             messages=messages,
             max_tokens=1,
-            extra_body={
-                "add_generation_prompt": False,
-                # Re-render to match the stored ``input_ids`` (model-dependent).
-                "continue_final_message": _continue_final_message_for(model),
-                "return_token_ids": True,
-            },
+            extra_body=_chat_extra_body(model, client_item.get("tools")),
             timeout=timeout,
         )
 

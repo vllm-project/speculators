@@ -1,3 +1,4 @@
+import json
 import warnings
 from collections.abc import Callable, Sequence
 from os import PathLike
@@ -16,6 +17,7 @@ from speculators.data_generation.vllm_client import (
     DEFAULT_REQUEST_TIMEOUT,
     ClientItem,
     generate_hidden_states,
+    stringify_tool_call_arguments,
 )
 from speculators.train.noise_transforms import TransformTensors
 
@@ -82,8 +84,19 @@ def build_client_item(dataset_item: dict) -> ClientItem:
     """
     out_dict: dict = {"input_ids": dataset_item["input_ids"].tolist()}
 
-    if "messages" in dataset_item and _has_multimodal_content(dataset_item["messages"]):
-        out_dict["messages"] = dataset_item["messages"]
+    if "messages" in dataset_item:
+        messages = dataset_item["messages"]
+        # Stored as a JSON string to keep Arrow schemas aligned across
+        # preprocessing shards; older datasets hold structured rows.
+        if isinstance(messages, str):
+            messages = json.loads(messages)
+        if _has_multimodal_content(messages):
+            # Idempotent; datasets generated before arguments were
+            # stringified at store time still hold dicts.
+            out_dict["messages"] = stringify_tool_call_arguments(messages)
+            tools_json = dataset_item.get("tools_json")
+            if isinstance(tools_json, str) and tools_json:
+                out_dict["tools"] = json.loads(tools_json)
 
     return cast("ClientItem", out_dict)
 
