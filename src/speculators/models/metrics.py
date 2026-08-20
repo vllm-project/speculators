@@ -23,15 +23,27 @@ def compute_accuracy_single_step(
         counts suitable for distributed reduction before computing ratios.
     """
     correct = pred_ids == target_ids
-    cond_total = torch.tensor(correct.numel(), dtype=torch.float, device=correct.device)
+    eval_mask = loss_mask.to(torch.bool) if loss_mask is not None else None
+    cond_total = None
     if prev_correct is not None:
-        cond_total = prev_correct.sum().float()
+        # The conditional denominator counts positions that are both still in
+        # play and evaluable at this step. Counting prev_correct alone would
+        # include positions the numerator can never reach once the caller's
+        # shifted loss_mask zeroes them (biasing cond accuracy low).
+        cond_mask = (
+            prev_correct
+            if eval_mask is None
+            else torch.logical_and(prev_correct, eval_mask)
+        )
+        cond_total = cond_mask.sum().float()
         correct = torch.logical_and(prev_correct, correct, out=prev_correct)
-    if loss_mask is not None:
-        correct = torch.masked_select(correct, loss_mask.to(torch.bool))
+    if eval_mask is not None:
+        correct = torch.masked_select(correct, eval_mask)
 
     correct_sum = correct.float().sum()
     full_total = torch.tensor(correct.numel(), dtype=torch.float, device=correct.device)
+    if cond_total is None:
+        cond_total = full_total.clone()
 
     return correct_sum, full_total, correct_sum.clone(), cond_total
 
