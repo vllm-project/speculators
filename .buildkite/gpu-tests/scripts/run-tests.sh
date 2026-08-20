@@ -1,7 +1,14 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-TEST_TYPE="${1:?Usage: run-tests.sh <unit|integration>}"
+TEST_TYPE="${1:?Usage: run-tests.sh <unit|integration|smoke>}"
+
+case "${TEST_TYPE}" in
+  unit) TEST_PATH="tests/unit" ;;
+  integration) TEST_PATH="tests/integration" ;;
+  smoke) TEST_PATH="tests/e2e/smoke" ;;
+  *) echo "Unknown test type: ${TEST_TYPE}" >&2; exit 1 ;;
+esac
 
 echo "~~~ System info"
 cat /etc/issue
@@ -32,4 +39,4 @@ if [ -n "${TRANSFORMERS_VERSION:-}" ] && [ "${TRANSFORMERS_VERSION}" != "latest"
 fi
 
 echo "+++ Running tests"
-python -m pytest -ra "tests/${TEST_TYPE}"
+python -m pytest -ra "${TEST_PATH}"
