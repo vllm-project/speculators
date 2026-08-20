@@ -42,6 +42,63 @@ if "file" not in _backend_registry:
     _backend_registry["file"] = _InlineFileBackend  # type: ignore[assignment]
 
 
+# Affinity-aware sizing reaches the measured 128 clients + 32 x 2 front end on
+# a 384-CPU node, while keeping the same defaults usable on smaller machines.
+DEFAULT_RENDERER_NUM_WORKERS = 2
+MAX_API_SERVER_COUNT = 32
+WORKERS_PER_API_SERVER = 4
+CPUS_PER_API_SERVER = 4
+MIN_PREPROCESSING_WORKERS = 8
+MAX_PREPROCESSING_WORKERS = 128
+CPUS_PER_PREPROCESSING_WORKER = 3
+
+
+def _usable_cpu_count() -> int:
+    """Return the CPUs available to this process, respecting affinity."""
+    if hasattr(os, "process_cpu_count"):  # Python 3.13+
+        return os.process_cpu_count() or 1
+    if hasattr(os, "sched_getaffinity"):  # Linux
+        return len(os.sched_getaffinity(0))
+    return os.cpu_count() or 1
+
+
+def _preprocessing_workers(cpus: int) -> int:
+    """Mirror prepare_data.py's worker default in the vLLM environment."""
+    return max(
+        MIN_PREPROCESSING_WORKERS,
+        min(MAX_PREPROCESSING_WORKERS, cpus // CPUS_PER_PREPROCESSING_WORKER),
+    )
+
+
+def render_throughput_defaults(cpus: int | None = None) -> tuple[int, int]:
+    """Return affinity-aware API-server and renderer-worker defaults."""
+    if cpus is None:
+        cpus = _usable_cpu_count()
+    api_servers = max(
+        1,
+        min(
+            MAX_API_SERVER_COUNT,
+            _preprocessing_workers(cpus) // WORKERS_PER_API_SERVER,
+            cpus // CPUS_PER_API_SERVER,
+        ),
+    )
+    return api_servers, DEFAULT_RENDERER_NUM_WORKERS
+
+
+def _with_render_defaults(vllm_args: list[str]) -> list[str]:
+    """Prepend high-throughput render defaults, unless no API server is wanted."""
+    if "--headless" in vllm_args:
+        return vllm_args
+    api_servers, renderer_workers = render_throughput_defaults()
+    return [
+        "--api-server-count",
+        str(api_servers),
+        "--renderer-num-workers",
+        str(renderer_workers),
+        *vllm_args,
+    ]
+
+
 def parse_args():
     parser = argparse.ArgumentParser(
         description="Launch vLLM for hidden states extraction",
@@ -153,7 +210,7 @@ def main():
         json.dumps(speculative_config),
         "--kv_transfer_config",
         json.dumps(kv_transfer_config),
-        *vllm_args,
+        *_with_render_defaults(vllm_args),
     ]
 
     print("Running command:")

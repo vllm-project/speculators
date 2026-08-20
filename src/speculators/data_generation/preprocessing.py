@@ -1,4 +1,5 @@
 import json
+import os
 from collections.abc import Callable
 from contextlib import nullcontext
 from pathlib import Path
@@ -21,6 +22,7 @@ from speculators.train.vocab_mapping import save_token_frequency_distribution
 
 __all__ = [
     "build_speculator_training_dataset",
+    "default_preprocessing_workers",
     "load_and_preprocess_dataset",
     "load_raw_dataset",
 ]
@@ -28,6 +30,31 @@ __all__ = [
 log = PipelineLogger(__name__)
 
 _warned_roles: set[str] = set()
+
+# Leave CPU capacity for the vLLM front end while scaling the render clients.
+MIN_PREPROCESSING_WORKERS = 8
+MAX_PREPROCESSING_WORKERS = 128
+CPUS_PER_PREPROCESSING_WORKER = 3
+
+
+def usable_cpu_count() -> int:
+    """Return the CPUs available to this process, respecting affinity."""
+    if hasattr(os, "process_cpu_count"):  # Python 3.13+
+        return os.process_cpu_count() or 1
+    if hasattr(os, "sched_getaffinity"):  # Linux
+        return len(os.sched_getaffinity(0))
+    return os.cpu_count() or 1
+
+
+def default_preprocessing_workers(cpus: int | None = None) -> int:
+    """Scale preprocessing workers up to the measured 128-worker knee."""
+    if cpus is None:
+        cpus = usable_cpu_count()
+    return max(
+        MIN_PREPROCESSING_WORKERS,
+        min(MAX_PREPROCESSING_WORKERS, cpus // CPUS_PER_PREPROCESSING_WORKER),
+    )
+
 
 ProcessorLike = PreTrainedTokenizerBase | ProcessorMixin
 
