@@ -2,11 +2,15 @@
 Unit tests for the loading module in the Speculators library.
 """
 
+import json
+
 import pytest
 import torch
+from safetensors.torch import save_file
 from transformers import AutoModelForCausalLM
 
 from speculators.utils.loading import (
+    _dequantize_unswizzled_nvfp4,
     _resolve_file,
     _resolve_key,
     is_config_only_dir,
@@ -16,6 +20,69 @@ from speculators.utils.loading import (
 # Test model from HuggingFace
 TEST_MODEL_REPO = "nm-testing/tiny-testing-random-weights"
 SMALL_MODEL_REPO = "nm-testing/tinysmokellama-3.2"
+
+
+def _nvfp4_tensors(rows: int = 4, groups: int = 2) -> dict[str, torch.Tensor]:
+    hidden_size = groups * 16
+    nibbles = (
+        torch.arange(rows * hidden_size, dtype=torch.uint8).reshape(rows, hidden_size)
+        % 16
+    )
+    packed = nibbles[:, 0::2] | (nibbles[:, 1::2] << 4)
+    scales = torch.arange(1, rows * groups + 1, dtype=torch.float32).reshape(
+        rows, groups
+    )
+    return {
+        "lm_head.weight": packed,
+        "lm_head.weight_scale": scales.to(torch.float8_e4m3fn),
+        "lm_head.weight_scale_2": torch.tensor(0.5, dtype=torch.float32),
+    }
+
+
+def _write_nvfp4_checkpoint(
+    path,
+    *,
+    tensors: dict[str, torch.Tensor] | None = None,
+    quant_algo: str = "W4A16_NVFP4",
+    group_size: int = 16,
+    write_quant_config: bool = True,
+) -> None:
+    tensors = tensors or _nvfp4_tensors()
+    shard_name = "model-00001-of-00001.safetensors"
+    save_file(tensors, path / shard_name)
+    (path / "model.safetensors.index.json").write_text(
+        json.dumps({"weight_map": dict.fromkeys(tensors, shard_name)})
+    )
+    if write_quant_config:
+        (path / "hf_quant_config.json").write_text(
+            json.dumps(
+                {
+                    "producer": {"name": "modelopt"},
+                    "quantization": {
+                        "quant_algo": "MIXED_PRECISION",
+                        "quantized_layers": {
+                            "lm_head": {
+                                "quant_algo": quant_algo,
+                                "group_size": group_size,
+                            }
+                        },
+                    },
+                }
+            )
+        )
+
+
+def _reference_nvfp4(tensors: dict[str, torch.Tensor]) -> torch.Tensor:
+    packed = tensors["lm_head.weight"]
+    low = packed & 0x0F
+    high = (packed >> 4) & 0x0F
+    nibbles = torch.stack((low, high), dim=-1).flatten(start_dim=1)
+    e2m1 = torch.tensor([0.0, 0.5, 1.0, 1.5, 2.0, 3.0, 4.0, 6.0], dtype=torch.float32)
+    values = e2m1[(nibbles & 0x07).long()]
+    values *= torch.where((nibbles & 0x08) != 0, -1.0, 1.0)
+    scales = tensors["lm_head.weight_scale"].float().repeat_interleave(16, dim=1)
+    return (values * scales * tensors["lm_head.weight_scale_2"]).to(torch.bfloat16)
+
 
 # is_config_only_dir Tests
 
@@ -210,3 +277,203 @@ def test_load_model_layers_matches_full_model():
         assert torch.equal(util_tensor, model_tensor), (
             f"Tensor values don't match for {layer_name}"
         )
+
+
+@pytest.mark.smoke
+def test_load_model_layers_materializes_modelopt_w4a16_nvfp4(tmp_path):
+    tensors = _nvfp4_tensors()
+    _write_nvfp4_checkpoint(tmp_path, tensors=tensors)
+
+    loaded = load_model_layers(["lm_head.weight"], str(tmp_path))["lm_head.weight"]
+
+    assert loaded.dtype == torch.bfloat16
+    assert torch.equal(loaded, _reference_nvfp4(tensors))
+
+
+@pytest.mark.smoke
+@pytest.mark.parametrize(
+    "selector",
+    [
+        torch.tensor([True, False, False, True]),
+        torch.tensor([3, 1], dtype=torch.int64),
+    ],
+)
+def test_nvfp4_select_then_dequantize_matches_dequantize_then_select(
+    tmp_path, selector
+):
+    tensors = _nvfp4_tensors()
+    _write_nvfp4_checkpoint(tmp_path, tensors=tensors)
+
+    selected = load_model_layers(
+        ["lm_head.weight"],
+        str(tmp_path),
+        row_indices={"lm_head.weight": selector},
+    )["lm_head.weight"]
+    full = load_model_layers(["lm_head.weight"], str(tmp_path))["lm_head.weight"]
+
+    assert torch.equal(selected, full[selector])
+
+
+@pytest.mark.smoke
+def test_load_model_layers_selects_dense_rows(tmp_path):
+    weight = torch.arange(24, dtype=torch.bfloat16).reshape(4, 6)
+    save_file({"lm_head.weight": weight}, tmp_path / "model.safetensors")
+    selector = torch.tensor([2, 0], dtype=torch.int64)
+
+    selected = load_model_layers(
+        ["lm_head.weight"],
+        str(tmp_path),
+        row_indices={"lm_head.weight": selector},
+    )["lm_head.weight"]
+
+    assert torch.equal(selected, weight[selector])
+
+
+@pytest.mark.smoke
+def test_packed_weight_requires_modelopt_quant_config(tmp_path):
+    _write_nvfp4_checkpoint(tmp_path, write_quant_config=False)
+
+    with pytest.raises(ValueError, match="requires hf_quant_config.json"):
+        load_model_layers(["lm_head.weight"], str(tmp_path))
+
+
+@pytest.mark.smoke
+def test_packed_weight_rejects_non_modelopt_producer(tmp_path):
+    _write_nvfp4_checkpoint(tmp_path)
+    config_path = tmp_path / "hf_quant_config.json"
+    config = json.loads(config_path.read_text())
+    config["producer"]["name"] = "unknown"
+    config_path.write_text(json.dumps(config))
+
+    with pytest.raises(ValueError, match="requires a ModelOpt-produced"):
+        load_model_layers(["lm_head.weight"], str(tmp_path))
+
+
+@pytest.mark.smoke
+@pytest.mark.parametrize(
+    ("quant_algo", "group_size"),
+    [("FP8", 16), ("W4A16_NVFP4", 32)],
+)
+def test_packed_weight_rejects_unsupported_quantization(
+    tmp_path, quant_algo, group_size
+):
+    _write_nvfp4_checkpoint(tmp_path, quant_algo=quant_algo, group_size=group_size)
+
+    with pytest.raises(ValueError, match="only the verified unswizzled"):
+        load_model_layers(["lm_head.weight"], str(tmp_path))
+
+
+@pytest.mark.smoke
+def test_nvfp4_rejects_missing_scales(tmp_path):
+    tensors = _nvfp4_tensors()
+    del tensors["lm_head.weight_scale_2"]
+    _write_nvfp4_checkpoint(tmp_path, tensors=tensors)
+
+    with pytest.raises(ValueError, match="missing ModelOpt NVFP4 metadata"):
+        load_model_layers(["lm_head.weight"], str(tmp_path))
+
+
+@pytest.mark.smoke
+def test_nvfp4_rejects_non_matrix_packed_weight(tmp_path):
+    tensors = _nvfp4_tensors()
+    tensors["lm_head.weight"] = torch.zeros(16, dtype=torch.uint8)
+    _write_nvfp4_checkpoint(tmp_path, tensors=tensors)
+
+    with pytest.raises(ValueError, match="expects 2-D weight/scales"):
+        load_model_layers(["lm_head.weight"], str(tmp_path))
+
+
+@pytest.mark.smoke
+@pytest.mark.parametrize(
+    ("tensor_name", "replacement", "match"),
+    [
+        (
+            "lm_head.weight_scale",
+            torch.ones((4, 2), dtype=torch.float32),
+            "must use float8_e4m3fn",
+        ),
+        (
+            "lm_head.weight_scale_2",
+            torch.tensor(0.5, dtype=torch.bfloat16),
+            "must be a scalar float32",
+        ),
+        (
+            "lm_head.weight_scale_2",
+            torch.ones(1, dtype=torch.float32),
+            "must be a scalar float32",
+        ),
+        (
+            "lm_head.weight_scale",
+            torch.ones((3, 2), dtype=torch.float8_e4m3fn),
+            "row mismatch",
+        ),
+        (
+            "lm_head.weight_scale",
+            torch.ones((4, 1), dtype=torch.float8_e4m3fn),
+            "incompatible packed/scales shapes",
+        ),
+        (
+            "lm_head.weight_scale",
+            torch.ones(8, dtype=torch.float8_e4m3fn),
+            "expects 2-D weight/scales",
+        ),
+    ],
+)
+def test_nvfp4_rejects_invalid_scale_layout(tmp_path, tensor_name, replacement, match):
+    tensors = _nvfp4_tensors()
+    tensors[tensor_name] = replacement
+    _write_nvfp4_checkpoint(tmp_path, tensors=tensors)
+
+    with pytest.raises(ValueError, match=match):
+        load_model_layers(["lm_head.weight"], str(tmp_path))
+
+
+@pytest.mark.smoke
+@pytest.mark.parametrize(
+    "selector",
+    [
+        torch.tensor([[True, False, True, False]]),
+        torch.tensor([True, False]),
+        torch.tensor([4], dtype=torch.int64),
+        torch.tensor([0.0]),
+    ],
+)
+def test_load_model_layers_rejects_invalid_row_selector(tmp_path, selector):
+    _write_nvfp4_checkpoint(tmp_path)
+
+    with pytest.raises((IndexError, TypeError, ValueError)):
+        load_model_layers(
+            ["lm_head.weight"],
+            str(tmp_path),
+            row_indices={"lm_head.weight": selector},
+        )
+
+
+@pytest.mark.smoke
+def test_dequantize_unswizzled_nvfp4_matches_vllm_when_available():
+    try:
+        from vllm.model_executor.layers.quantization.utils.nvfp4_emulation_utils import (  # noqa: E501, PLC0415
+            dequantize_to_dtype,
+        )
+    except (ImportError, RuntimeError) as error:
+        pytest.skip(f"vLLM NVFP4 helper is unavailable: {error}")
+    if not torch.cuda.is_available():
+        pytest.skip("vLLM's NVFP4 parity helper requires CUDA tensors")
+
+    tensors = _nvfp4_tensors(rows=3, groups=4)
+    actual = _dequantize_unswizzled_nvfp4(
+        tensors["lm_head.weight"],
+        tensors["lm_head.weight_scale"],
+        tensors["lm_head.weight_scale_2"],
+        chunk_rows=2,
+    )
+    expected = dequantize_to_dtype(
+        tensors["lm_head.weight"].cuda(),
+        tensors["lm_head.weight_scale"].cuda(),
+        tensors["lm_head.weight_scale_2"].cuda(),
+        torch.bfloat16,
+        block_size=16,
+        swizzle=False,
+    ).cpu()
+
+    assert torch.equal(actual, expected)
