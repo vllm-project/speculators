@@ -62,6 +62,7 @@ Extracts conversation turns from a dataset, regenerates each assistant response 
 ### Features
 
 - **Multi-turn support** — detects `messages`/`conversations` fields and regenerates each assistant turn against the model's own prior responses
+- **Local file support** for JSON/JSONL prompt datasets
 - **Auto-detects model** from vLLM server (no need to specify `--model`)
 - **Resume capability** to skip already-processed conversations
 - **Async processing** with configurable concurrency
@@ -73,11 +74,40 @@ Extracts conversation turns from a dataset, regenerates each assistant response 
 python scripts/response_regeneration/script.py --dataset magpie
 ```
 
+### Local Files
+
+Use `--dataset-file` to regenerate responses from a local `.json` or `.jsonl` file. **JSONL is recommended for large datasets** because it can be read one row at a time; a regular JSON file may need to be loaded completely before iteration. Each JSONL line, or each object in a top-level JSON array, must use one of these schemas:
+
+- `prompt`: a non-empty string or a non-empty list of message objects.
+- `messages`: a non-empty list of message objects.
+- `conversations`: a non-empty list of message objects.
+
+Message objects may use OpenAI-style `role`/`content` keys or ShareGPT-style `from`/`value` keys. The recognized input roles are `system`, `user`, and `human`; `human` is normalized to `user`. Existing `assistant`/`gpt` turns are discarded and regenerated. `tool` messages are retained as cached results for tool-call regeneration.
+
+For example, `my_prompts.jsonl` may contain:
+
+```jsonl
+{"id":"prompt-1","prompt":"Explain speculative decoding."}
+{"id":"prompt-2","messages":[{"role":"system","content":"Be concise."},{"role":"user","content":"What is EAGLE?"}]}
+{"id":"prompt-3","conversations":[{"from":"human","value":"Compare EAGLE and DFlash."}]}
+```
+
+Run regeneration with:
+
+```bash
+python scripts/response_regeneration/script.py \
+  --dataset-file ./my_prompts.jsonl
+```
+
+Column names such as `instruction`, `question`, and `text` are not inferred. Convert those rows to one of the schemas above or use a registered dataset preset with a normalization function.
+
 ### Arguments
 
 #### Data Arguments
 
 - **`--dataset`** (str, default: `ultrachat`) Dataset preset to process (see [Supported Datasets](#supported-datasets)).
+
+- **`--dataset-file`** (str) Local JSON/JSONL file to process instead of a preset (see [Local Files](#local-files)). Mutually exclusive with `--dataset`; `--split` and `--subset` do not apply.
 
 - **`--split`** (str, default: preset-specific) Dataset split. Defaults to the preset's split.
 
@@ -105,7 +135,7 @@ python scripts/response_regeneration/script.py --dataset magpie
 
 #### Output Arguments
 
-- **`--outfile`** (str, default: auto-generated) Output JSONL path. If not specified, auto-generated as `{dataset}_{model}.jsonl`.
+- **`--outfile`** (str, default: auto-generated) Output JSONL path. If not specified, auto-generated as `{dataset-or-file-stem}_{model}.jsonl`.
 
 - **`--resume`** (flag) Skip conversations already present in the output file (matched by `primary_id`: the row's `id`/`uuid` if it has one, otherwise a content hash).
 
@@ -188,4 +218,4 @@ Tools are **not executed**. The target's *k*-th regenerated call is paired with 
 
 A conversation stops early — keeping the rows completed so far — when the target emits a call that cannot be paired 1:1 with a cached result: it has exhausted the cached results, emitted parallel calls in a single generation, or called a different tool than the next cached result answers. Such conversations are counted under `truncated` in the progress bar.
 
-If `--outfile` is not specified, the filename is auto-generated based on dataset and model (e.g., `magpie_Llama-3.3-70B-Instruct.jsonl`).
+If `--outfile` is not specified, the filename is auto-generated from the preset name or local file stem and model (e.g., `magpie_Llama-3.3-70B-Instruct.jsonl`).
