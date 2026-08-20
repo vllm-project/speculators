@@ -36,6 +36,10 @@ requires_accelerator = pytest.mark.skipif(
     DEVICE is None,
     reason="fused Triton losses require a CUDA or Ascend NPU accelerator",
 )
+requires_cuda = pytest.mark.skipif(
+    not torch.cuda.is_available(),
+    reason="memory accounting test uses torch.cuda APIs",
+)
 
 # (name, eager fn, fused fn name); fused resolved lazily so this file
 # collects on machines without Triton
@@ -202,9 +206,7 @@ def test_calculate_settings_respects_device_cap():
         (151936, 4096),
     )
     for vocab, expected in npu_cases:
-        block, _ = fused_losses._calculate_settings(
-            vocab, SimpleNamespace(type="npu")
-        )
+        block, _ = fused_losses._calculate_settings(vocab, SimpleNamespace(type="npu"))
         assert block == expected, (
             f"NPU cap: vocab={vocab} -> BLOCK_SIZE={block}, expected {expected}"
         )
@@ -217,9 +219,7 @@ def test_calculate_settings_respects_device_cap():
         (151936, 131072),
     )
     for vocab, expected in cuda_cases:
-        block, _ = fused_losses._calculate_settings(
-            vocab, SimpleNamespace(type="cuda")
-        )
+        block, _ = fused_losses._calculate_settings(vocab, SimpleNamespace(type="cuda"))
         assert block == expected, (
             f"CUDA cap: vocab={vocab} -> BLOCK_SIZE={block}, expected {expected}"
         )
