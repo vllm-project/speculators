@@ -1,10 +1,13 @@
 from scripts.launch_vllm import (
     CPUS_PER_API_SERVER,
-    RENDER_CLIENT_CONCURRENCY,
+    MAX_API_SERVERS,
     RENDERER_THREADS_PER_SERVER,
+    WORKERS_PER_API_SERVER,
+    _preprocessing_workers,
     _with_render_defaults,
     render_throughput_defaults,
 )
+from speculators.data_generation.preprocessing import default_preprocessing_workers
 
 
 def test_defaults_added_when_absent():
@@ -29,13 +32,27 @@ def test_underscore_and_equals_spellings_suppress_default():
     assert "--renderer-num-workers" not in args
 
 
+def test_worker_formula_matches_the_preprocessing_side():
+    # launch_vllm.py runs in the vLLM virtualenv and cannot import speculators
+    # (#958, #1008), so it carries its own copy of this formula. If the two ever
+    # drift the front end is sized for a client concurrency that never happens.
+    for cpus in (1, 2, 4, 8, 16, 32, 64, 128, 192, 384, 1024):
+        assert _preprocessing_workers(cpus) == default_preprocessing_workers(cpus)
+
+
+def test_front_end_tracks_client_concurrency():
+    # One API server per WORKERS_PER_API_SERVER renders in flight, so the front
+    # end grows with the clients rather than with the machine.
+    for cpus in (64, 128, 192, 384):
+        api = int(render_throughput_defaults(cpus)["--api-server-count"])
+        expected = _preprocessing_workers(cpus) // WORKERS_PER_API_SERVER
+        assert api == min(expected, MAX_API_SERVERS, cpus // CPUS_PER_API_SERVER)
+
+
 def test_small_hosts_get_fewer_front_ends():
-    # One front end per CPUS_PER_API_SERVER cores: on a small box the extra
-    # processes only take cores away from the preprocessing workers.
-    assert (
-        render_throughput_defaults(CPUS_PER_API_SERVER * 2)["--api-server-count"] == "2"
-    )
-    assert render_throughput_defaults(CPUS_PER_API_SERVER)["--api-server-count"] == "1"
+    # On a small box extra front ends only take cores from the workers.
+    assert render_throughput_defaults(4)["--api-server-count"] == "1"
+    assert render_throughput_defaults(16)["--api-server-count"] == "2"
 
 
 def test_never_fewer_than_one_front_end():
@@ -43,14 +60,10 @@ def test_never_fewer_than_one_front_end():
         assert render_throughput_defaults(cpus)["--api-server-count"] == "1"
 
 
-def test_large_hosts_stop_adding_front_ends():
-    # Only RENDER_CLIENT_CONCURRENCY renders are ever in flight, so past the
-    # point where the front end can serve them a bigger host gets the same
-    # config -- more API processes would be ~1 GB of RSS each for nothing.
-    big = render_throughput_defaults(4096)
-    assert big == render_throughput_defaults(64)
-    slots = int(big["--api-server-count"]) * RENDERER_THREADS_PER_SERVER
-    assert slots <= RENDER_CLIENT_CONCURRENCY
+def test_front_end_count_is_capped():
+    assert render_throughput_defaults(1_000_000)["--api-server-count"] == str(
+        MAX_API_SERVERS
+    )
 
 
 def test_defaults_never_decrease_with_more_cpus():

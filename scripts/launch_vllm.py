@@ -50,22 +50,36 @@ if "file" not in _backend_registry:
 # These flags only scale the HTTP front end (template + tokenize); the engine
 # and hidden-states connector are untouched.
 #
-# Sizing, measured on an H100 node (2x EPYC 9654, 384 CPUs). prepare_data
-# renders from --num-preprocessing-workers forked clients (default 8), each
-# blocking on one call at a time, so at most that many renders are ever in
-# flight and the front end needs about that many render slots -- a slot being
-# one renderer thread in one API process.
+# Sizing, measured on an H100 node (2x EPYC 9654, 384 CPUs), Qwen3-0.6B.
 #
-# How the slots are split matters more than how many there are. Eight threads in
-# one process reach only 1.2x stock, because chat-template rendering is Python
-# and serializes on the GIL; eight single-threaded processes cost ~1.2 GB RSS
-# each and still trail four processes of two threads (1390 vs 1702 renders/s).
-# Past the client's in-flight limit more front ends are memory for nothing, and
-# on a host with few cores they only take cores from the clients -- hence the
-# cap and the per-CPU scaling below.
-RENDER_CLIENT_CONCURRENCY = 8  # prepare_data --num-preprocessing-workers default
+# The front end is sized against the client, not the machine: prepare_data
+# renders from --num-preprocessing-workers forked processes, each blocking on
+# one call at a time, so that worker count is how many renders are ever in
+# flight. Both sides therefore derive from the same CPU count and stay paired
+# without this script having to read prepare_data's setting -- it cannot, since
+# it runs inside the vLLM virtualenv where speculators is not installed
+# (see #958 / #1008). Keep _preprocessing_workers below in sync with
+# speculators.data_generation.preprocessing.default_preprocessing_workers.
+#
+#   8 workers  +  4x2  ->  1,702 renders/s   (vLLM stock 1x1: 633)
+#  64 workers  + 16x2  ->  8,997
+# 128 workers  + 32x2  -> 16,878             <- where 384 CPUs lands
+# 256 workers  + 32x2  -> 15,400             (past the knee)
+#
+# Raising either side alone is worse than raising both: at 8 workers a 16x1
+# front end measured 1,586 renders/s against 1,702 for 4x2, at three times the
+# memory. How the slots are split matters too -- 8 threads in one process reach
+# only 1.2x stock, because chat-template rendering is Python and serializes on
+# the GIL, while 8 single-threaded processes cost ~1.2 GB RSS each and still
+# trail 4 processes of 2 threads.
 RENDERER_THREADS_PER_SERVER = 2
+WORKERS_PER_API_SERVER = 4
+MAX_API_SERVERS = 32
 CPUS_PER_API_SERVER = 4
+# Mirrors of the preprocessing-side constants; see the sync note above.
+MIN_PREPROCESSING_WORKERS = 8
+MAX_PREPROCESSING_WORKERS = 128
+CPUS_PER_PREPROCESSING_WORKER = 3
 
 
 def _usable_cpu_count() -> int:
@@ -82,17 +96,32 @@ def _usable_cpu_count() -> int:
     return os.cpu_count() or 1
 
 
+def _preprocessing_workers(cpus: int) -> int:
+    """What prepare_data will pick for --num-preprocessing-workers here."""
+    return max(
+        MIN_PREPROCESSING_WORKERS,
+        min(MAX_PREPROCESSING_WORKERS, cpus // CPUS_PER_PREPROCESSING_WORKER),
+    )
+
+
 def render_throughput_defaults(cpus: int | None = None) -> dict[str, str]:
     """Front-end sizing for this host.
 
-    Enough render slots to keep the default client concurrency busy, capped by
-    the CPUs actually available: past the client's in-flight limit extra front
-    ends buy nothing, and on a small host they only take cores from the clients.
+    One API server per WORKERS_PER_API_SERVER renders in flight, so the front
+    end grows with the clients rather than with the machine, and never past what
+    the local cores can run: on a small host extra front ends only take cores
+    away from the preprocessing workers.
     """
     if cpus is None:
         cpus = _usable_cpu_count()
-    max_useful = RENDER_CLIENT_CONCURRENCY // RENDERER_THREADS_PER_SERVER
-    api_servers = max(1, min(max_useful, cpus // CPUS_PER_API_SERVER))
+    api_servers = max(
+        1,
+        min(
+            MAX_API_SERVERS,
+            _preprocessing_workers(cpus) // WORKERS_PER_API_SERVER,
+            cpus // CPUS_PER_API_SERVER,
+        ),
+    )
     return {
         "--api-server-count": str(api_servers),
         "--renderer-num-workers": str(RENDERER_THREADS_PER_SERVER),
