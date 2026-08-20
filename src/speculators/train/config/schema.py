@@ -488,6 +488,27 @@ class DSparkArgs(_Group):
     )
 
 
+class DFlash2Args(_Group):
+    """DFlash2-exclusive: grouped dynamic causal convolutions + bilinear selector."""
+
+    conv_kernel_size: int = Field(
+        default=2,
+        description="Kernel size for grouped dynamic causal convolutions.",
+    )
+    conv_group_size: int = Field(
+        default=16,
+        description="Group size for grouped dynamic causal convolutions.",
+    )
+    selector_rank: int = Field(
+        default=256,
+        description="Rank of the bilinear candidate selector.",
+    )
+    selector_top_k: int = Field(
+        default=16,
+        description="Number of top-k candidates scored by the selector at inference.",
+    )
+
+
 class PEagleArgs(_Group):
     num_depths: int = Field(
         default=8,
@@ -525,6 +546,7 @@ _GROUPS: dict[str, type[_Group]] = {
     "trainer": TrainerArgs,
     "logging": LoggingArgs,
     "dflash": DFlashArgs,
+    "dflash2": DFlash2Args,
     "dspark": DSparkArgs,
     "peagle": PEagleArgs,
     "mtp": MTPArgs,
@@ -609,7 +631,7 @@ class TrainConfig(BaseSettings):
     speculator_type: str = Field(
         default="eagle3",
         description="Type of speculator model to train "
-        "(eagle3, dflash, dspark, peagle, mtp).",
+        "(eagle3, dflash, dflash2, dspark, peagle, mtp).",
     )
     dry_run: bool = Field(
         default=False,
@@ -634,6 +656,7 @@ class TrainConfig(BaseSettings):
     trainer: TrainerArgs = Field(default_factory=TrainerArgs)
     logging: LoggingArgs = Field(default_factory=LoggingArgs)
     dflash: DFlashArgs = Field(default_factory=DFlashArgs)
+    dflash2: DFlash2Args = Field(default_factory=DFlash2Args)
     dspark: DSparkArgs = Field(default_factory=DSparkArgs)
     peagle: PEagleArgs = Field(default_factory=PEagleArgs)
     mtp: MTPArgs = Field(default_factory=MTPArgs)
@@ -665,7 +688,7 @@ class TrainConfig(BaseSettings):
         untouched, so :meth:`from_flat` round-trips.
         """
         is_eagle3 = self.speculator_type == "eagle3"
-        is_dflash = self.speculator_type == "dflash"
+        is_dflash = self.speculator_type in ("dflash", "dflash2")
         if self.draft.draft_arch is None:
             self.draft.draft_arch = "llama" if is_eagle3 else "qwen3"
         if self.draft.norm_before_fc is None:

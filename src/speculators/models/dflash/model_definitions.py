@@ -2,6 +2,7 @@ from typing import TYPE_CHECKING
 
 import torch
 from torch import nn
+from torch.nn import functional as F  # noqa: N812
 from transformers.cache_utils import Cache
 from transformers.models.qwen3.modeling_qwen3 import (
     ALL_ATTENTION_FUNCTIONS,
@@ -42,6 +43,87 @@ def apply_rotary_pos_emb(
     q_embed = (q * cos[..., -q_len:, :]) + (_rotate_half(q) * sin[..., -q_len:, :])
     k_embed = (k * cos) + (_rotate_half(k) * sin)
     return q_embed, k_embed
+
+
+def _grouped_dynamic_convolve(
+    hidden: torch.Tensor,
+    dynamic: torch.Tensor,
+    base: torch.Tensor,
+    group_size: int,
+) -> torch.Tensor:
+    batch, length, hidden_size = hidden.shape
+    kernel_size = base.shape[0]
+    groups = hidden_size // group_size
+    blocks = hidden.view(batch, length, groups, group_size)
+    dynamic = dynamic.view(batch, length, kernel_size, groups, 1)
+
+    padded = F.pad(blocks, (0, 0, 0, 0, kernel_size - 1, 0))
+    # [B, L, G, gs, K] -> flip + permute -> [B, L, K, G, gs]
+    # where windows[:, t, k] = blocks[t - k] (zero-padded for t - k < 0)
+    windows = padded.unfold(1, kernel_size, 1).flip(-1).permute(0, 1, 4, 2, 3)
+
+    kernel = base.view(1, 1, kernel_size, groups, group_size).to(hidden.dtype) + dynamic
+    return (kernel * windows).sum(dim=2).view_as(hidden)
+
+
+class GroupedDynamicCausalConv(nn.Module):
+    def __init__(
+        self,
+        hidden_size: int,
+        kernel_size: int,
+        group_size: int,
+        block_size: int,
+    ):
+        super().__init__()
+        self.kernel_size = kernel_size
+        self.group_size = group_size
+        self.block_size = block_size
+        groups = hidden_size // group_size
+        self.base_kernel = nn.Parameter(torch.zeros(2, kernel_size, hidden_size))
+        self.kernel_projection = nn.Linear(
+            hidden_size, 2 * kernel_size * groups, bias=False
+        )
+
+    def prepare(self, hidden: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+        shape = hidden.shape
+        hidden = hidden.view(-1, self.block_size, shape[-1])
+        groups = shape[-1] // self.group_size
+        dynamic = self.kernel_projection(hidden).view(
+            *hidden.shape[:-1], 2, self.kernel_size, groups
+        )
+        convolved = _grouped_dynamic_convolve(
+            hidden, dynamic[..., 0, :, :], self.base_kernel[0], self.group_size
+        )
+        return convolved.view(shape), dynamic[..., 1, :, :]
+
+    def finish(self, hidden: torch.Tensor, dynamic: torch.Tensor) -> torch.Tensor:
+        shape = hidden.shape
+        hidden = hidden.view(-1, self.block_size, shape[-1])
+        convolved = _grouped_dynamic_convolve(
+            hidden, dynamic, self.base_kernel[1], self.group_size
+        )
+        return convolved.view(shape)
+
+
+class CandidateSelector(nn.Module):
+    def __init__(self, vocab_size: int, hidden_size: int, rank: int, top_k: int):
+        super().__init__()
+        self.top_k = top_k
+        self.predecessor_codebook = nn.Embedding(vocab_size, rank)
+        self.successor_codebook = nn.Embedding(vocab_size, rank)
+        self.hidden_projection = nn.Linear(hidden_size, rank, bias=False)
+
+    def score(
+        self,
+        hidden: torch.Tensor,
+        predecessor_ids: torch.Tensor,
+        candidate_ids: torch.Tensor,
+    ) -> torch.Tensor:
+        context = self.predecessor_codebook(predecessor_ids) * self.hidden_projection(
+            hidden
+        )
+        successor_emb = self.successor_codebook(candidate_ids)
+        return torch.einsum("...r,...kr->...k", context, successor_emb)
 
 
 class Qwen3DFlashAttention(nn.Module):
@@ -156,7 +238,14 @@ class Qwen3DFlashAttention(nn.Module):
 
 
 class Qwen3DFlashDecoderLayer(GradientCheckpointingLayer):
-    def __init__(self, config: Qwen3Config, layer_idx: int):
+    def __init__(
+        self,
+        config: Qwen3Config,
+        layer_idx: int,
+        conv_kernel_size: int | None = None,
+        conv_group_size: int | None = None,
+        block_size: int | None = None,
+    ):
         super().__init__()
         self.hidden_size = config.hidden_size
         self.self_attn = Qwen3DFlashAttention(config=config, layer_idx=layer_idx)
@@ -166,6 +255,16 @@ class Qwen3DFlashDecoderLayer(GradientCheckpointingLayer):
             config.hidden_size,
             eps=config.rms_norm_eps,  # type: ignore[arg-type]
         )
+        self.attention_conv: GroupedDynamicCausalConv | None = None
+        self.mlp_conv: GroupedDynamicCausalConv | None = None
+        if conv_kernel_size is not None and conv_group_size is not None:
+            assert block_size is not None  # noqa: S101
+            self.attention_conv = GroupedDynamicCausalConv(
+                config.hidden_size, conv_kernel_size, conv_group_size, block_size
+            )
+            self.mlp_conv = GroupedDynamicCausalConv(
+                config.hidden_size, conv_kernel_size, conv_group_size, block_size
+            )
 
     def forward(
         self,
@@ -177,17 +276,15 @@ class Qwen3DFlashDecoderLayer(GradientCheckpointingLayer):
         output_attentions: bool | None = False,
         use_cache: bool | None = False,
         cache_position: torch.LongTensor | None = None,
-        # necessary, but kept here for BC
         position_embeddings: tuple[torch.Tensor, torch.Tensor] | None = None,
         **kwargs: Unpack[FlashAttentionKwargs],
     ) -> tuple[torch.FloatTensor, tuple[torch.FloatTensor, torch.FloatTensor] | None]:
-        # The main difference between this method and the qwen 3 layer it is
-        # built from is that it
-        # passes the extra hidden states to the self attention from the verifier model.
-        # Note that target_hidden is not modified here.
         assert hidden_states is not None  # noqa: S101
         residual = hidden_states
         hidden_states = self.input_layernorm(hidden_states)
+        attention_kernel = None
+        if self.attention_conv is not None:
+            hidden_states, attention_kernel = self.attention_conv.prepare(hidden_states)
         hidden_states = self.self_attn(
             hidden_states=hidden_states,
             target_hidden=target_hidden,
@@ -200,8 +297,17 @@ class Qwen3DFlashDecoderLayer(GradientCheckpointingLayer):
             position_embeddings=position_embeddings,
             **kwargs,
         )[0]
+        if attention_kernel is not None:
+            hidden_states = self.attention_conv.finish(  # type: ignore[union-attr]
+                hidden_states, attention_kernel
+            )
         hidden_states = residual + hidden_states  # type: ignore[operator]
         residual = hidden_states
         hidden_states = self.post_attention_layernorm(hidden_states)
+        mlp_kernel = None
+        if self.mlp_conv is not None:
+            hidden_states, mlp_kernel = self.mlp_conv.prepare(hidden_states)
         hidden_states = self.mlp(hidden_states)
+        if mlp_kernel is not None:
+            hidden_states = self.mlp_conv.finish(hidden_states, mlp_kernel)  # type: ignore[union-attr]
         return residual + hidden_states  # type: ignore[operator,return-value]
