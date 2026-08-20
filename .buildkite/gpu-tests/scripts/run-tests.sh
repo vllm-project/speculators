@@ -1,7 +1,14 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-TEST_TYPE="${1:?Usage: run-tests.sh <unit|integration>}"
+TEST_TYPE="${1:?Usage: run-tests.sh <unit|integration|smoke>}"
+
+case "${TEST_TYPE}" in
+  unit) TEST_PATH="tests/unit" ;;
+  integration) TEST_PATH="tests/integration" ;;
+  smoke) TEST_PATH="tests/e2e/smoke" ;;
+  *) echo "Unknown test type: ${TEST_TYPE}" >&2; exit 1 ;;
+esac
 
 echo "~~~ System info"
 cat /etc/issue
@@ -31,5 +38,17 @@ if [ -n "${TRANSFORMERS_VERSION:-}" ] && [ "${TRANSFORMERS_VERSION}" != "latest"
   uv pip install "transformers${TRANSFORMERS_VERSION}"
 fi
 
+if [ "${TEST_TYPE}" = "smoke" ]; then
+  echo "--- Setting up vLLM environment"
+  uv venv vllm_venv --python "${PYTHON_VERSION}"
+  VLLM_VENV_PYTHON="$PWD/vllm_venv/bin/python"
+  UV_TORCH_BACKEND=cu130 uv pip install --python "${VLLM_VENV_PYTHON}" vllm
+  export VLLM_PYTHON="${VLLM_VENV_PYTHON}"
+
+  # This image has no CUDA toolkit (nvcc), so FlashInfer can't JIT-compile its
+  # sampling kernel at startup. Fall back to vLLM's native sampler instead.
+  export VLLM_USE_FLASHINFER_SAMPLER=0
+fi
+
 echo "+++ Running tests"
-python -m pytest -ra "tests/${TEST_TYPE}"
+python -m pytest -ra "${TEST_PATH}"
