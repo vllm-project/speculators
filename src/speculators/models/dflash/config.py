@@ -53,6 +53,20 @@ class DFlashSpeculatorConfig(SpeculatorModelConfig):
         description="Hidden size of the target model (if different from draft model)",
     )
 
+    target_logit_scale: float = Field(
+        default=1.0,
+        description="Multiplier applied to reconstructed verifier logits",
+    )
+
+    target_logit_softcap: float | None = Field(
+        default=None,
+        gt=0.0,
+        description=(
+            "Optional tanh softcap applied after target_logit_scale when "
+            "reconstructing verifier logits"
+        ),
+    )
+
     aux_hidden_state_layer_ids: list[int] | None = Field(
         default=None,
         description="Layer IDs of the DFlash auxiliary hidden state layers",

@@ -17,17 +17,36 @@ def conditional_torch_compile(func=None, *args, **kwargs):
     return func
 
 
+def _text_config_from_dict(config: dict) -> PretrainedConfig:
+    model_type = config.get("model_type")
+    if not model_type:
+        return PretrainedConfig.from_dict(config)
+    try:
+        config_class = type(AutoConfig.for_model(model_type))
+    except ValueError:
+        return PretrainedConfig.from_dict(config)
+    return config_class.from_dict(config)
+
+
 def get_verifier_config(
     verifier_name_or_path: str,
     trust_remote_code: bool = False,
 ) -> PretrainedConfig:
-    verifier_config = AutoConfig.from_pretrained(
-        verifier_name_or_path,
-        trust_remote_code=trust_remote_code,
-    )
-    if hasattr(verifier_config, "text_config"):
-        verifier_config = verifier_config.text_config
-    return verifier_config
+    try:
+        verifier_config = AutoConfig.from_pretrained(
+            verifier_name_or_path,
+            trust_remote_code=trust_remote_code,
+        )
+        return getattr(verifier_config, "text_config", verifier_config)
+    except ValueError:
+        config_dict, _ = PretrainedConfig.get_config_dict(
+            verifier_name_or_path,
+            trust_remote_code=trust_remote_code,
+        )
+        text_config = config_dict.get("text_config")
+        if not isinstance(text_config, dict):
+            raise
+        return _text_config_from_dict(text_config)
 
 
 DEFAULT_TARGET_LAYER_IDS_WARNING = (
