@@ -221,7 +221,12 @@ class ThreadingHTTPServer(socketserver.ThreadingMixIn, http.server.HTTPServer):
 
     daemon_threads = True
     allow_reuse_address = True
-
+    
+    # OS-level TCP listen backlog (SOMAXCONN is typically 128 on Linux);
+    # set explicitly so the server can accept bursts of concurrent GET/DELETE
+    # requests without ECONNREFUSED when multiple trainer workers hit the
+    # same vLLM node simultaneously.
+    request_queue_size = 128
 
 def make_handler(root: Path, lock_timeout: float) -> type[HiddenStatesHandler]:
     return type(
