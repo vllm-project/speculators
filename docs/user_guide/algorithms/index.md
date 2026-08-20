@@ -1,6 +1,6 @@
 # Algorithms
 
-Speculators supports five speculative decoding algorithms. All are lossless -- they produce output from the same distribution as the target model.
+Speculators supports six speculative decoding algorithms. All are lossless -- they produce output from the same distribution as the target model.
 
 ## [Eagle-3](eagle3.md)
 
@@ -14,6 +14,10 @@ Extends Eagle-3 with parallel multi-token prediction across multiple depths, usi
 
 Predicts all draft tokens in a single forward pass using block-based prediction with Qwen3-style draft layers. Newer, with support improving rapidly.
 
+## [DFlash2](dflash2.md)
+
+Adds local dynamic convolutions and a predecessor-conditioned candidate selector to DFlash while retaining one parallel draft-model forward pass. Experimental training support.
+
 ## [DSpark](dspark.md)
 
 Extends DFlash with a Markov head for intra-block token dependencies and a confidence head predicting per-position acceptance. Newest, with support improving rapidly.
@@ -24,7 +28,10 @@ Finetunes the model's native multi-token prediction head on domain-specific data
 
 ## Choosing an Algorithm
 
-All algorithms can be paired with any supported verifier model. For help choosing between them, see the [Decision Guide](decision_guide.md).
+Most algorithms can be paired with any supported verifier model. DFlash2
+currently requires the verifier's full vocabulary and an unquantized
+language-model head; MTP requires a model with native MTP layers. For help
+choosing between them, see the [Decision Guide](decision_guide.md).
 
 ## Adding New Algorithms
 
