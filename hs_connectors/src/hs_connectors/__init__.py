@@ -15,3 +15,8 @@ __all__ = [
     "MooncakeBackend",
     "MooncakeTransfer",
 ]
+
+try:
+    from hs_connectors.version import version as __version__
+except ImportError:
+    __version__ = "unknown"

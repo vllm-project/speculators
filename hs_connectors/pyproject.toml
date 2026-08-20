@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools >= 82.0.1"]
+requires = ["setuptools >= 82.0.1", "setuptools-git-versioning>=2.0,<3", "packaging"]
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]
@@ -9,7 +9,8 @@ include = ["*"]
 [project]
 name = "hs-connectors"
 description = "Pluggable backends for transferring hidden states between vLLM and Speculators during online and offline training."
-version = "0.1.0"
+dynamic = ["version"]
+readme = { file = "README.md", content-type = "text/markdown" }
 requires-python = ">=3.10"
 keywords = [
     "hidden states",
@@ -25,6 +26,9 @@ keywords = [
     "mooncake",
     "distributed training"
 ]
+license = "Apache-2.0"
+license-files = ["LICENSE"]
+authors = [ { name = "Red Hat"} ]
 dependencies = [
     "safetensors",
     "torch",
