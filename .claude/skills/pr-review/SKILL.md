@@ -102,6 +102,7 @@ Apply path-specific focus based on which files changed:
 - **`src/speculators/data_generation/**`**: Hidden state extraction correctness, shift-based alignment (off-by-one), loss mask application before storage, vLLM client error handling.
 - **`src/speculators/convert/**`**: Weight mapping completeness, shape compatibility, key renaming correctness, legacy format assumptions.
 - **`src/speculators/config.py`**: Pydantic validators, serialization roundtrip, backward compat with saved checkpoints, registry auto-discovery.
+- **`scripts/launch_vllm.py`**: This script runs inside the vLLM virtualenv (`VLLM_PYTHON`), which does **not** have `speculators` installed. Make sure there's no `speculators` dependency and flag any such import with confidence 95+.
 - **`tests/**`**: Coverage of new code paths, edge cases for speculative decoding (vocab boundaries, multi-step loss), proper mocking of vLLM/GPU.
 
 Ignore: `**/*.pyc`, `**/build/**`, `**/.pytest_cache/**`, `**/.ruff_cache/**`, `**/__pycache__/**`, `**/*.egg-info/**`.

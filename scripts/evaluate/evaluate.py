@@ -292,13 +292,6 @@ def run_benchmark(args: argparse.Namespace) -> None:
 
     save_eval_provenance(output_dir)
 
-    if not (output_dir / "vllm_command.txt").exists():
-        logger.info(
-            "No vllm_command.txt found. To co-locate vLLM provenance "
-            "with eval results: launch_vllm.py --provenance-dir %s",
-            output_dir,
-        )
-
     acceptance_csv = None
     perf_csv = None
     all_max_tokens: dict[str, int] = {}

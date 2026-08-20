@@ -37,7 +37,7 @@ def _resolve_repo(repo_id: str, repo_type: str = "dataset") -> Path:
         )
 
 
-@requires_cadence("weekly")
+@requires_cadence("nightly")
 @pytest.mark.regression
 def test_eagle3_qwen3_8b_sharegpt(tmp_path: Path, prompts: list[list[dict[str, str]]]):
     save_path = tmp_path / "checkpoints"
@@ -69,7 +69,7 @@ def test_eagle3_qwen3_8b_sharegpt(tmp_path: Path, prompts: list[list[dict[str, s
     )
 
 
-@requires_cadence("weekly")
+@requires_cadence("nightly")
 @pytest.mark.regression
 def test_dflash_qwen3_8b_sharegpt(tmp_path: Path, prompts: list[list[dict[str, str]]]):
     save_path = tmp_path / "checkpoints"
@@ -114,7 +114,7 @@ def test_dflash_qwen3_8b_sharegpt(tmp_path: Path, prompts: list[list[dict[str, s
     )
 
 
-@requires_cadence("weekly")
+@requires_cadence("nightly")
 @pytest.mark.regression
 def test_dspark_qwen3_8b_sharegpt(tmp_path: Path, prompts: list[list[dict[str, str]]]):
     save_path = tmp_path / "checkpoints"
@@ -163,7 +163,7 @@ def test_dspark_qwen3_8b_sharegpt(tmp_path: Path, prompts: list[list[dict[str, s
     )
 
 
-@requires_cadence("weekly")
+@requires_cadence("nightly")
 @pytest.mark.regression
 def test_peagle_qwen3_8b_sharegpt(tmp_path: Path, prompts: list[list[dict[str, str]]]):
     save_path = tmp_path / "checkpoints"
