@@ -567,13 +567,23 @@ def _tool_call(call_id="call_1", name="get_weather", arguments='{"city": "Tokyo"
 
 
 def _response(
-    *, prompt_token_ids, token_ids, content=None, tool_calls=None, finish="stop"
+    *,
+    prompt_token_ids,
+    token_ids,
+    content=None,
+    tool_calls=None,
+    finish="stop",
+    reasoning=None,
 ):
     """A vLLM chat-completion response with ``return_token_ids`` populated."""
     return {
         "choices": [
             {
-                "message": {"content": content, "tool_calls": tool_calls},
+                "message": {
+                    "content": content,
+                    "tool_calls": tool_calls,
+                    "reasoning": reasoning,
+                },
                 "finish_reason": finish,
                 "token_ids": token_ids,
             }
@@ -728,6 +738,31 @@ def test_sample_from_response_rejects_empty_and_missing_token_ids():
             endpoint="ep",
             sampling_params={},
         )
+
+
+def test_reasoning_is_carried_into_the_tool_call_history():
+    # Kimi K2.5 preserves reasoning for exactly the in-flight tool loop and reads
+    # it only from this field, so dropping it silently changes the next prompt.
+    _, assistant_msg, _ = regen._sample_from_response(
+        _response(
+            prompt_token_ids=[1, 2],
+            token_ids=[3],
+            tool_calls=[_tool_call()],
+            reasoning="Need the weather tool.",
+        ),
+        detokenize=_detok,
+        conv_id="c",
+        sample_index=0,
+        idx=0,
+        endpoint="ep",
+        sampling_params={},
+    )
+    assert assistant_msg == {
+        "role": "assistant",
+        "content": "",
+        "tool_calls": [_tool_call()],
+        "reasoning_content": "Need the weather tool.",
+    }
 
 
 # --- the tool-call loop: splice, truncate, and the unchanged plain path ---
