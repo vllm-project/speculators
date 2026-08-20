@@ -139,6 +139,19 @@ def parse_args():
             f"(default: {DEFAULT_MAX_RETRIES})"
         ),
     )
+    parser.add_argument(
+        "--reasoning-effort-cycle",
+        default=None,
+        help=(
+            "Comma-separated reasoning effort levels to cycle through "
+            "per conversation, e.g. 'low,high,max'"
+        ),
+    )
+    parser.add_argument(
+        "--reverse",
+        action="store_true",
+        help="Iterate through the dataset in reverse order (loads into memory)",
+    )
     args = parser.parse_args()
     if args.max_retries < 0:
         parser.error("--max-retries must be >= 0")
@@ -150,6 +163,12 @@ def parse_args():
         parser.error(f"--sampling-params is not valid JSON: {e}")
     if not isinstance(args.sampling_params, dict):
         parser.error("--sampling-params must be a JSON object")
+    if args.reasoning_effort_cycle is not None:
+        args.reasoning_effort_cycle = [
+            level.strip() for level in args.reasoning_effort_cycle.split(",")
+        ]
+        if not args.reasoning_effort_cycle:
+            parser.error("--reasoning-effort-cycle must not be empty")
     return args
 
 
@@ -390,7 +409,7 @@ def build_detokenizer(model: str) -> Callable[[list[int]], str]:
     (the checkpoint, not a ``--served-model-name`` alias).
     """
     print(f"Loading tokenizer: {model}")
-    tokenizer = AutoTokenizer.from_pretrained(model)
+    tokenizer = AutoTokenizer.from_pretrained(model, trust_remote_code=True)
 
     def detokenize(token_ids: list[int]) -> str:
         # decode() is typed str | list[str]; a 1-D id list always yields str.
@@ -545,6 +564,7 @@ async def regenerate_conversation(
     sampling_params: dict[str, Any],
     samples: list[dict[str, Any]],
     detokenize: Callable[[list[int]], str],
+    reasoning_effort: str | None = None,
 ) -> bool:
     """Regenerate one conversation into per-generation boundary samples.
 
@@ -586,9 +606,18 @@ async def regenerate_conversation(
                 "max_tokens": max_tokens,
                 "return_token_ids": True,  # prompt_token_ids + completion token_ids
             }
+            if reasoning_effort is not None:
+                payload["reasoning_effort"] = reasoning_effort
             if tools:
                 payload["tools"] = tools
                 payload["tool_choice"] = "auto"
+
+            recorded_params = sampling_params
+            if reasoning_effort is not None:
+                recorded_params = {
+                    **sampling_params,
+                    "reasoning_effort": reasoning_effort,
+                }
 
             data = await post_fn(payload)
             sample, assistant_msg, tool_calls = _sample_from_response(
@@ -598,10 +627,19 @@ async def regenerate_conversation(
                 sample_index=len(samples),
                 idx=item["idx"],
                 endpoint=endpoint,
-                sampling_params=sampling_params,
+                sampling_params=recorded_params,
             )
             samples.append(sample)
             prefix.append(assistant_msg)
+
+            prompt_token_ids = data.get("prompt_token_ids")
+            completion_token_ids = data["choices"][0].get("token_ids")
+            total_tokens = len(prompt_token_ids or []) + len(
+                completion_token_ids or []
+            )
+            if total_tokens > max_tokens:
+                truncated = True
+                break
 
             if not tool_calls:
                 break  # final answer: this user turn is done
@@ -704,6 +742,7 @@ async def worker(
                 sampling_params=args.sampling_params,
                 samples=samples,
                 detokenize=detokenize,
+                reasoning_effort=item.get("reasoning_effort"),
             )
             # Written only after the conversation finishes -- a clean truncation
             # included, since rerunning it would truncate again. An exception
@@ -761,6 +800,10 @@ async def main():
         args.model = await detect_model(endpoint)
 
     print(f"Using model: {args.model}")
+    if args.reasoning_effort_cycle:
+        print(
+            f"Reasoning effort cycle: {' -> '.join(args.reasoning_effort_cycle)}"
+        )
 
     # Decoder for the review-only `text` twin; see build_detokenizer.
     detokenize = build_detokenizer(args.model)
@@ -792,7 +835,13 @@ async def main():
     print()
 
     seen_ids = load_seen(args.outfile) if args.resume else set()
-    dataset = load_dataset(dataset_id, name=subset, split=split, streaming=True)
+    if args.reverse:
+        dataset = load_dataset(dataset_id, name=subset, split=split)
+        row_iter = ((i, dataset[i]) for i in range(len(dataset) - 1, -1, -1))
+        print(f"Reverse mode: {len(dataset)} rows, iterating last to first")
+    else:
+        dataset = load_dataset(dataset_id, name=subset, split=split, streaming=True)
+        row_iter = enumerate(dataset)
 
     queue: asyncio.Queue = asyncio.Queue(maxsize=args.concurrency * 4)
 
@@ -847,7 +896,7 @@ async def main():
             ]
 
             processed_count = 0
-            for index, row in enumerate(dataset):
+            for index, row in row_iter:
                 if args.limit is not None and processed_count >= args.limit:
                     break
 
@@ -889,15 +938,18 @@ async def main():
                     progress.update(1)
                     continue
 
-                await queue.put(
-                    {
-                        "idx": index,
-                        "primary_id": primary_id,
-                        "turns": turns,
-                        "tools": tools,
-                        "tool_results": tool_results,
-                    }
-                )
+                queue_item: dict[str, Any] = {
+                    "idx": index,
+                    "primary_id": primary_id,
+                    "turns": turns,
+                    "tools": tools,
+                    "tool_results": tool_results,
+                }
+                if args.reasoning_effort_cycle is not None:
+                    queue_item["reasoning_effort"] = args.reasoning_effort_cycle[
+                        processed_count % len(args.reasoning_effort_cycle)
+                    ]
+                await queue.put(queue_item)
                 processed_count += 1
 
             # Signal workers to stop
