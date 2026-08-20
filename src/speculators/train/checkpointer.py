@@ -1,6 +1,7 @@
 import functools
 import json
 import logging
+import os
 import shutil
 from abc import abstractmethod
 from pathlib import Path
@@ -135,9 +136,19 @@ class BaseCheckpointer:
                     )
                     continue
                 try:
-                    last_checkpoint_num = max(last_checkpoint_num, int(d.name))
+                    epoch_num = int(d.name)
                 except ValueError:
                     continue
+                if not (d / self.COMPLETE_MARKER_FILENAME).exists():
+                    logger.warning(
+                        f"Skipping checkpoint at {d}: missing "
+                        f"'{self.COMPLETE_MARKER_FILENAME}' marker (save was "
+                        "interrupted, or the checkpoint predates this version). "
+                        "To resume from it anyway, create the marker: "
+                        f"'touch {d / self.COMPLETE_MARKER_FILENAME}'."
+                    )
+                    continue
+                last_checkpoint_num = max(last_checkpoint_num, epoch_num)
         return last_checkpoint_num
 
     def model_path(self, epoch: int | str):
@@ -159,6 +170,45 @@ class BaseCheckpointer:
         return self.path / str(epoch) / "val_metrics.json"
 
     TRAIN_COMMAND_FILENAME = "train_command.txt"
+    COMPLETE_MARKER_FILENAME = "checkpoint_complete"
+
+    def complete_marker_path(self, epoch: int | str) -> Path:
+        return self.path / str(epoch) / self.COMPLETE_MARKER_FILENAME
+
+    @staticmethod
+    def _fsync_directory(path: Path) -> None:
+        dir_fd = os.open(path, os.O_RDONLY)
+        try:
+            os.fsync(dir_fd)
+        finally:
+            os.close(dir_fd)
+
+    def clear_checkpoint_complete(self, epoch: int | str) -> None:
+        """Durably remove a stale marker before rewriting an epoch dir."""
+        epoch_dir = self.path / str(epoch)
+        marker = self.complete_marker_path(epoch)
+        if marker.exists():
+            marker.unlink()
+            self._fsync_directory(epoch_dir)
+
+    def mark_checkpoint_complete(self, epoch: int | str) -> None:
+        """Sync checkpoint files, then atomically publish the marker."""
+        epoch_dir = self.path / str(epoch)
+        for f in epoch_dir.rglob("*"):
+            if f.is_file() and not f.is_symlink():
+                with f.open("rb") as fh:
+                    os.fsync(fh.fileno())
+
+        marker = self.complete_marker_path(epoch)
+        temporary_marker = marker.with_name(f".{marker.name}.tmp")
+        try:
+            with temporary_marker.open("wb") as fh:
+                os.fsync(fh.fileno())
+            os.replace(temporary_marker, marker)
+            self._fsync_directory(epoch_dir)
+        except Exception:
+            temporary_marker.unlink(missing_ok=True)
+            raise
 
     def _copy_train_command(self, epoch: int | str) -> None:
         src = self.path / self.TRAIN_COMMAND_FILENAME
@@ -184,19 +234,41 @@ class BaseCheckpointer:
         except (json.JSONDecodeError, KeyError, ValueError, TypeError):
             return None
 
-    def read_best_epoch(self) -> int | None:
-        """Return the epoch that `checkpoint_best` points to."""
+    def _resolve_committed_best_epoch(self) -> tuple[int, Path] | None:
+        """Resolve `checkpoint_best` only when it names a committed local epoch."""
         best_path = self.best_path()
-        if not best_path.exists() or not best_path.is_symlink():
+        if not best_path.is_symlink():
             return None
         try:
-            target = best_path.readlink()
-        except OSError:
+            checkpoint_root = self.path.resolve(strict=True)
+            target = best_path.resolve(strict=True)
+        except (OSError, RuntimeError):
+            logger.warning("Ignoring unreadable checkpoint_best link at %s", best_path)
+            return None
+
+        if not target.is_dir() or target.parent != checkpoint_root:
+            logger.warning(
+                "Ignoring checkpoint_best target outside the checkpoint root: %s", target
+            )
             return None
         try:
-            return int(Path(target).name)
+            epoch = int(target.name)
         except ValueError:
+            logger.warning("Ignoring non-epoch checkpoint_best target: %s", target)
             return None
+        if epoch < 0 or not (target / self.COMPLETE_MARKER_FILENAME).is_file():
+            logger.warning(
+                "Ignoring incomplete checkpoint_best target at %s: missing '%s' marker",
+                target,
+                self.COMPLETE_MARKER_FILENAME,
+            )
+            return None
+        return epoch, target
+
+    def read_best_epoch(self) -> int | None:
+        """Return the committed local epoch that `checkpoint_best` points to."""
+        resolved = self._resolve_committed_best_epoch()
+        return None if resolved is None else resolved[0]
 
     def load_model_state_dict_for_epoch(
         self, model: PreTrainedModel, epoch: int, float_dtype: torch.dtype | None = None
@@ -211,6 +283,12 @@ class BaseCheckpointer:
 
     @_rank0_only
     def update_best_symlink(self, epoch: int):
+        if not self.complete_marker_path(epoch).is_file():
+            raise FileNotFoundError(
+                f"Cannot publish checkpoint_best for incomplete epoch {epoch}: missing "
+                f"'{self.COMPLETE_MARKER_FILENAME}' marker"
+            )
+
         best_path = self.best_path()
         target = Path(str(epoch))  # relative symlink inside checkpoint root
 
@@ -233,6 +311,12 @@ class BaseCheckpointer:
         # Safety checks
         if not keep_dir.exists() or not keep_dir.is_dir():
             raise FileNotFoundError(f"Best epoch dir does not exist: {keep_dir}")
+        resolved_best = self._resolve_committed_best_epoch()
+        if resolved_best is None or resolved_best[0] != best_epoch:
+            raise ValueError(
+                "Refusing cleanup without checkpoint_best pointing to the requested "
+                "committed epoch"
+            )
 
         train_cmd_file = self.path / self.TRAIN_COMMAND_FILENAME
 
