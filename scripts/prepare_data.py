@@ -56,6 +56,7 @@ PREPARE_DATA_OVERWRITE_ALLOWED_FILES = {
     "token_freq.pt",
 }
 
+
 def assert_safe_to_overwrite(output: Path, token_freq_path: Path) -> None:
     """Refuse to ``--overwrite`` a directory holding non-artifact files.
 
