@@ -38,5 +38,13 @@ if [ -n "${TRANSFORMERS_VERSION:-}" ] && [ "${TRANSFORMERS_VERSION}" != "latest"
   uv pip install "transformers${TRANSFORMERS_VERSION}"
 fi
 
+if [ "${TEST_TYPE}" = "smoke" ]; then
+  echo "--- Setting up vLLM environment"
+  uv venv vllm_venv --python "${PYTHON_VERSION}"
+  VLLM_VENV_PYTHON="$PWD/vllm_venv/bin/python"
+  UV_TORCH_BACKEND=cu130 uv pip install --python "${VLLM_VENV_PYTHON}" vllm
+  export VLLM_PYTHON="${VLLM_VENV_PYTHON}"
+fi
+
 echo "+++ Running tests"
 python -m pytest -ra "${TEST_PATH}"
