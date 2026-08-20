@@ -45,6 +45,8 @@ See [vLLM CLI documentation](https://docs.vllm.ai/en/latest/cli/) for full list 
 
 `launch_vllm.py` therefore injects `--api-server-count` and `--renderer-num-workers`, sized from the CPUs actually available to the process. Pass either flag after `--` to choose your own value; an explicit flag always wins.
 
+The front end is sized against the client rather than the machine: `prepare_data` renders from `--num-preprocessing-workers` forked processes, each blocking on one call at a time, so that worker count is how many renders are ever in flight. Both defaults derive from the same CPU count — one API server per 4 workers — so they stay matched when both run on the same node. If you point `--render-endpoint` at a server on a different host, or override either flag by hand, keep that ratio yourself.
+
 Both flags scale only the HTTP front end (chat-template application and tokenization). The engine and the hidden-states connector are unaffected.
 
 ## Full Example

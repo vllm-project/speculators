@@ -38,6 +38,9 @@ import typer
 
 from speculators.data_generation.logging_utils import PipelineLogger
 from speculators.data_generation.preprocessing import (
+    MAX_PREPROCESSING_WORKERS,
+    MIN_PREPROCESSING_WORKERS,
+    default_preprocessing_workers,
     load_and_preprocess_dataset,
 )
 
@@ -120,9 +123,18 @@ def prepare_data(
         typer.Option(help="Random seed"),
     ] = 0,
     num_preprocessing_workers: Annotated[
-        int,
-        typer.Option(help="Number of CPU processes for dataset preprocessing"),
-    ] = 8,
+        int | None,
+        typer.Option(
+            help=(
+                "Number of CPU processes for dataset preprocessing. Each one "
+                "blocks on a single render call at a time, so this is also the "
+                "render concurrency. Defaults to a third of the available CPUs, "
+                f"at least {MIN_PREPROCESSING_WORKERS} and at most "
+                f"{MAX_PREPROCESSING_WORKERS} "
+                f"(this host: {default_preprocessing_workers()})."
+            ),
+        ),
+    ] = None,
     minimum_valid_tokens: Annotated[
         int | None,
         typer.Option(
@@ -205,7 +217,11 @@ def prepare_data(
         target_model_path=model,
         train_data_paths=data,
         seq_length=seq_length,
-        build_dataset_num_proc=num_preprocessing_workers,
+        build_dataset_num_proc=(
+            num_preprocessing_workers
+            if num_preprocessing_workers is not None
+            else default_preprocessing_workers()
+        ),
         seed=seed,
         max_samples=max_samples,
         token_freq_path=resolved_token_freq_path,
