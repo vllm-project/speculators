@@ -270,7 +270,7 @@ speculators generate-data \
 # Press Ctrl+C in the vLLM terminal
 ```
 
-**Note:** For more information on usage, please see the [data_generation_offline.py cli reference](/cli/data_generation_offline.md).
+**Note:** For more information on usage, please see the [generate-data cli reference](/cli/data_generation_offline.md).
 
 ///
 
