@@ -8,8 +8,8 @@ import typer
 from speculators.cli.regenerate_responses import regenerate_responses
 
 warnings.warn(
-    "scripts/response_regeneration/script.py is deprecated. "
-    "Use 'speculators regenerate-responses' instead.",
+    "scripts/response_regeneration/script.py is deprecated and will be "
+    "removed in v0.9.0. Use 'speculators regenerate-responses' instead.",
     DeprecationWarning,
     stacklevel=1,
 )
