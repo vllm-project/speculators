@@ -1,4 +1,23 @@
-"""Stitch command — merge finetuned MTP weights back into a verifier checkpoint."""
+"""
+Stitch finetuned MTP weights back into a verifier checkpoint.
+
+Takes a finetuned MTP speculator checkpoint (speculators format) and merges
+the trained weights back into the original verifier checkpoint, producing a
+self-contained checkpoint directory deployable on vLLM.
+
+Frozen weights (embed_tokens, lm_head) are skipped -- only the MTP layer
+weights are replaced.
+
+Usage::
+
+    speculators stitch-mtp ./finetuned-mtp ./Qwen3-Next-80B-A3B-Instruct
+
+    # verifier can be a HuggingFace model ID:
+    speculators stitch-mtp ./finetuned-mtp Qwen/Qwen3-Next-80B-A3B-Instruct
+
+    # custom output path (defaults to {verifier-name}-stitched):
+    speculators stitch-mtp ./finetuned-mtp ./verifier --output-path ./out
+"""
 
 import json
 import re
@@ -55,6 +74,7 @@ def _bar() -> Progress:
 
 
 def _remap_key(key: str) -> str:
+    """Map a speculators-format weight key back to its native HF name."""
     if key in INVERSE_MTP_EXACT_REMAP:
         return INVERSE_MTP_EXACT_REMAP[key]
     for src, dst in INVERSE_MTP_PREFIX_REMAP:
@@ -83,9 +103,9 @@ def _unfuse_moe_experts(  # noqa: C901
     for key, tensor in weights.items():
         m_gu = _FUSED_GATE_UP_PATTERN.match(key)
         m_d = _FUSED_DOWN_PATTERN.match(key)
-        if m_gu:
+        if m_gu is not None:
             gate_up_keys[m_gu.group(1)] = tensor
-        elif m_d:
+        elif m_d is not None:
             down_keys[m_d.group(1)] = tensor
         else:
             result[key] = tensor
