@@ -1,10 +1,12 @@
 """Unit tests for mid-epoch checkpoint save and resume."""
 
 import json
+import random
 import tempfile
 from pathlib import Path
 from typing import Protocol, cast
 
+import numpy as np
 import pytest
 import torch
 from torch import nn
@@ -100,6 +102,7 @@ class _MockTrainer(Trainer):
         if epoch == getattr(self, "current_epoch", epoch):
             skip_steps = getattr(self, "_resume_local_step", 0)
             self._resume_local_step = 0
+        self._maybe_restore_rng_state()
 
         num_steps = len(self.train_loader)
         step_interval = (
@@ -301,6 +304,90 @@ def test_distributed_mid_epoch_checkpoint_rank_gate(
         link_rank1 = Path(tmpdir) / f"epoch0_step{step_interval}"
         assert not state_rank1.exists()
         assert not link_rank1.exists()
+        # RNG state is per rank: every rank writes its own file.
+        assert (Path(tmpdir) / "0" / "rng_state_rank1.pt").exists()
+
+
+def _draw_all() -> tuple[torch.Tensor, float, float]:
+    return torch.rand(4), random.random(), np.random.rand()  # noqa: NPY002
+
+
+def test_checkpoint_saves_rng_state(
+    trained_steps: list[tuple[int, int, int]],
+) -> None:
+    """Every integer-epoch checkpoint stores a weights_only-loadable RNG snapshot."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        t = _make_trainer(tmpdir, trained_steps=trained_steps)
+        t.maybe_save_checkpoint(0, local_step=3)
+        rng_file = Path(tmpdir) / "0" / "rng_state_rank0.pt"
+        assert rng_file.exists()
+        state = torch.load(rng_file, map_location="cpu", weights_only=True)
+        assert set(state) >= {"python", "numpy", "torch_cpu", "device_type"}
+        assert torch.equal(state["torch_cpu"], torch.get_rng_state())
+
+        t.maybe_save_checkpoint("interrupted")
+        assert not (Path(tmpdir) / "interrupted" / "rng_state_rank0.pt").exists()
+
+
+def test_mid_epoch_resume_replays_random_draws(
+    trained_steps: list[tuple[int, int, int]],
+) -> None:
+    """A resumed run continues the interrupted run's RNG streams exactly."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        t1 = _make_trainer(tmpdir, trained_steps=trained_steps)
+        torch.manual_seed(1234)
+        random.seed(5)
+        np.random.seed(7)  # noqa: NPY002
+        t1.maybe_save_checkpoint(0, local_step=3)
+        # What the uninterrupted run would draw next: the loader iterator
+        # takes its base seed from the CPU generator, then the step draws.
+        iter(t1.train_loader)
+        expected = _draw_all()
+
+        # Perturb every generator before resuming.
+        torch.manual_seed(0)
+        random.seed(0)
+        np.random.seed(0)  # noqa: NPY002
+
+        t2 = _make_trainer(tmpdir, trained_steps=[], resume=True)
+        assert t2._pending_rng_state is not None
+        t2.train_epoch(t2.current_epoch)  # restores, then iterates the loader once
+        assert t2._pending_rng_state is None
+        got = _draw_all()
+        assert torch.equal(got[0], expected[0])
+        assert got[1] == expected[1]
+        assert got[2] == expected[2]
+
+
+def test_end_of_epoch_resume_restores_rng_state(
+    trained_steps: list[tuple[int, int, int]],
+) -> None:
+    """End-of-epoch resume restores the state saved with the previous epoch."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        t1 = _make_trainer(tmpdir, trained_steps=trained_steps, epochs=2)
+        torch.manual_seed(99)
+        t1.maybe_save_checkpoint(0, local_step=0)
+        expected = torch.rand(4)
+
+        torch.manual_seed(0)
+        t2 = _make_trainer(tmpdir, trained_steps=[], resume=True, epochs=2)
+        assert t2.current_epoch == 1
+        t2._maybe_restore_rng_state()
+        assert torch.equal(torch.rand(4), expected)
+
+
+def test_resume_without_rng_state_file_still_works(
+    trained_steps: list[tuple[int, int, int]],
+) -> None:
+    """Checkpoints written before this feature resume with a warning, not a crash."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        t1 = _make_trainer(tmpdir, trained_steps=trained_steps)
+        t1.maybe_save_checkpoint(0, local_step=3)
+        (Path(tmpdir) / "0" / "rng_state_rank0.pt").unlink()
+
+        t2 = _make_trainer(tmpdir, trained_steps=[], resume=True)
+        assert t2._pending_rng_state is None
+        t2._maybe_restore_rng_state()  # no-op
 
 
 class _CountingDataset(Dataset):

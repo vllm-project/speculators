@@ -1,10 +1,12 @@
 import json
 import logging
+import random
 import time
 import warnings
 from pathlib import Path
 from typing import Literal, NamedTuple
 
+import numpy as np
 import torch
 import torch.distributed as dist
 from torch.distributed.checkpoint.state_dict import (
@@ -163,7 +165,60 @@ def _resolve_scheduler_steps(
     return scheduler_warmup_steps, scheduler_total_steps
 
 
+def _collect_rng_state(device_type: str, device_index: int) -> dict:
+    """Snapshot every RNG a training step can draw from, as torch.save-able data.
+
+    Only primitives and tensors are stored so the file loads back with
+    ``weights_only=True``.
+    """
+    np_name, np_keys, np_pos, np_has_gauss, np_cached = np.random.get_state()  # noqa: NPY002
+    state: dict = {
+        "python": random.getstate(),
+        "numpy": {
+            "name": np_name,
+            "keys": torch.from_numpy(np_keys.copy()),
+            "pos": int(np_pos),
+            "has_gauss": int(np_has_gauss),
+            "cached_gaussian": float(np_cached),
+        },
+        "torch_cpu": torch.get_rng_state(),
+        "device_type": device_type,
+        "device_index": device_index,
+        "device": None,
+    }
+    device_module = getattr(torch, device_type, None)
+    if (
+        device_module is not None
+        and hasattr(device_module, "get_rng_state")
+        and getattr(device_module, "is_available", lambda: False)()
+    ):
+        state["device"] = device_module.get_rng_state(device_index).cpu()
+    return state
+
+
+def _apply_rng_state(state: dict) -> None:
+    """Restore a snapshot produced by :func:`_collect_rng_state`."""
+    random.setstate(state["python"])
+    np_state = state["numpy"]
+    np.random.set_state(  # noqa: NPY002
+        (
+            np_state["name"],
+            np_state["keys"].numpy(),
+            np_state["pos"],
+            np_state["has_gauss"],
+            np_state["cached_gaussian"],
+        )
+    )
+    torch.set_rng_state(state["torch_cpu"])
+    if state.get("device") is not None:
+        device_module = getattr(torch, state["device_type"])
+        device_module.set_rng_state(state["device"], state["device_index"])
+
+
 class Trainer:
+    # RNG snapshot loaded for resume; applied once by _maybe_restore_rng_state().
+    _pending_rng_state: dict | None = None
+
     def __init__(
         self,
         model: SpeculatorModel,
@@ -218,7 +273,50 @@ class Trainer:
                 root_logger.warning(f"Failed to read training state {p}: {e}")
         return {}
 
+    def _rng_state_path(self, epoch: int) -> Path:
+        rank = dist.get_rank() if self.is_distributed else 0
+        return self.checkpointer.path / str(epoch) / f"rng_state_rank{rank}.pt"
+
+    def _save_rng_state(self, epoch: int) -> None:
+        """Persist this rank's RNG state next to the checkpoint.
+
+        Every rank writes its own file: anchor sampling, noise augmentation and
+        dropout draw from per-rank generators, so a resumed run can only replay
+        the interrupted run's random draws if each rank restores its own state.
+        """
+        p = self._rng_state_path(epoch)
+        p.parent.mkdir(parents=True, exist_ok=True)
+        torch.save(_collect_rng_state(self.device_type, self.local_rank), p)
+
+    def _load_rng_state(self) -> dict | None:
+        p = self._rng_state_path(self.checkpointer.previous_epoch)
+        if not p.exists():
+            root_logger.warning(
+                f"No RNG state found at {p}; the resumed run will not replay the "
+                "interrupted run's random draws exactly."
+            )
+            return None
+        try:
+            return torch.load(p, map_location="cpu", weights_only=True)
+        except (RuntimeError, OSError, KeyError, ValueError) as e:
+            root_logger.warning(f"Failed to load RNG state {p}: {e}")
+            return None
+
+    def _maybe_restore_rng_state(self) -> None:
+        """Restore the RNG state loaded for resume, once, before the first step."""
+        state = self._pending_rng_state
+        if state is None:
+            return
+        self._pending_rng_state = None
+        try:
+            _apply_rng_state(state)
+        except (RuntimeError, TypeError, ValueError) as e:
+            root_logger.warning(f"Failed to restore RNG state: {e}")
+            return
+        root_logger.info("Restored RNG state from checkpoint.")
+
     def setup_trainer(self):
+        self._pending_rng_state = None
         if self.checkpointer.previous_epoch != -1:
             root_logger.info(f"Found checkpoint at {self.checkpointer.prev_path}.")
             self.current_epoch = self.checkpointer.previous_epoch + 1
@@ -249,6 +347,7 @@ class Trainer:
                     root_logger.info(
                         f"Resuming training on epoch {self.current_epoch}."
                     )
+                self._pending_rng_state = self._load_rng_state()
             else:
                 root_logger.warning(
                     "`resume_from_checkpoint` is False, starting "
@@ -431,6 +530,10 @@ class Trainer:
 
         # Determine how many batches to skip for mid-epoch resume.
         skip_steps = self._prepare_resume_skip(epoch)
+        # Skipped batches consume no RNG, so the saved state is restored right
+        # before the first resumed step (and before the loader iterator draws
+        # its base seed).
+        self._maybe_restore_rng_state()
 
         train_loader = self.train_loader
         if self.rank == 0:
@@ -597,6 +700,7 @@ class Trainer:
             self.checkpointer.save_scheduler_state_dict(self.schedulers, epoch)
         if isinstance(epoch, int):
             self._save_training_state(epoch, local_step)
+            self._save_rng_state(epoch)
             # Create a human-readable symlink for checkpoint readability.
             # e.g. epoch0_step16626 -> 0/ (mid) or epoch0_end -> 0/ (end)
             if not self.is_distributed or dist.get_rank() == 0:

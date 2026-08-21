@@ -114,7 +114,7 @@ torchrun --standalone --nproc_per_node=4 scripts/train.py \
 
 - **`--train-data-ratio`** (float, default: `0.9`) Ratio of data to use for training, the rest of the provided data will be used for validation.
 
-- **`--no-resume-from-checkpoint`** (flag) Disable automatic checkpoint resumption. Without this flag, this script will automatically load the latest checkpoint in `{save-path}` if one exists.
+- **`--no-resume-from-checkpoint`** (flag) Disable automatic checkpoint resumption. Without this flag, this script will automatically load the latest checkpoint in `{save-path}` if one exists. Each integer-epoch checkpoint also stores a per-rank RNG snapshot (`rng_state_rank{N}.pt`: Python, NumPy, torch CPU and accelerator generators), which is restored right before the first resumed step so anchor sampling, noise augmentation and dropout continue the interrupted run's random draws exactly. Checkpoints written without the snapshot still resume (with a warning). Data-loader worker generators are not checkpointed, so bit-exact replay requires `--num-workers 0`.
 
 - **`--logger`** (str, default: `""`) Metric logging backend(s). Options: `trackio`, `wandb`, `tensorboard`, `mlflow` Can specify multiple comma-separated: `--logger tensorboard,wandb`. **Warning:** backend must be pip installed before using.
 
