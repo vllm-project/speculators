@@ -22,6 +22,11 @@ class TestRootApp:
         assert result.exit_code == 0
         assert "speculators version:" in result.output
 
+    def test_pipeline_commands_in_help(self):
+        result = runner.invoke(app, ["--help"])
+        assert result.exit_code == 0
+        assert "train" in result.output
+
     def test_tools_commands_in_help(self):
         result = runner.invoke(app, ["--help"])
         assert result.exit_code == 0
@@ -44,3 +49,17 @@ class TestConvertCommand:
     def test_missing_required_args(self):
         result = runner.invoke(app, ["convert"])
         assert result.exit_code != 0
+
+
+class TestTrainCommand:
+    def test_help(self):
+        result = runner.invoke(app, ["train", "--help"])
+        assert result.exit_code == 0
+        assert "--verifier-name-or-path" in result.output
+        assert "--config" in result.output
+        assert "--speculator-type" in result.output
+
+    def test_train_appears_in_pipeline_panel(self):
+        result = runner.invoke(app, ["--help"])
+        assert result.exit_code == 0
+        assert "train" in result.output
