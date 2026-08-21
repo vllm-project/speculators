@@ -12,8 +12,8 @@ from speculators.train.cli import main
 from speculators.train.config import TrainConfig
 
 warnings.warn(
-    "scripts/train.py is deprecated. Use 'speculators train' or "
-    "'torchrun -m speculators.train' instead.",
+    "scripts/train.py is deprecated and will be removed in v0.9.0. "
+    "Use 'speculators train' or 'torchrun -m speculators.train' instead.",
     DeprecationWarning,
     stacklevel=1,
 )

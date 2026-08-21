@@ -33,7 +33,11 @@ from speculators.train.distributed import (
     maybe_destroy_distributed,
     maybe_setup_distributed,
 )
-from speculators.train.logger import setup_metric_logger, setup_root_logger
+from speculators.train.logger import (
+    log_run_config,
+    setup_metric_logger,
+    setup_root_logger,
+)
 from speculators.train.trainer import Trainer, TrainerConfig
 from speculators.train.utils import resolve_mask_token_id
 from speculators.train.vocab_mapping import (
@@ -527,6 +531,9 @@ def main(cfg: TrainConfig):  # noqa: C901
 
     # Setup distributed training
     maybe_setup_distributed()
+
+    # Publish train config to metric backends that support hyperparameter logging
+    log_run_config(cfg)
 
     if args.fsdp_shard and not is_distributed():
         raise ValueError(
