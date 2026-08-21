@@ -58,6 +58,8 @@ class TestGenerateDataCommand:
         assert "--endpoint" in result.output
         assert "--preprocessed-data" in result.output
         assert "--concurrency" in result.output
+        assert "--world-size" in result.output
+        assert "--rank" in result.output
 
     def test_fail_on_error_in_help(self):
         result = runner.invoke(app, ["generate-data", "--help"])
