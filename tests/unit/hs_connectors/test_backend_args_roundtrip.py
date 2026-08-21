@@ -42,6 +42,30 @@ def test_file_backend_defaults_backfilled():
     assert flat["hidden_states_path"] is None  # FileBackend default
 
 
+def test_fp8_backend_defaults_backfilled():
+    cfg = TrainConfig.from_sources(
+        cli={"verifier_name_or_path": "m", "hidden_states_backend": "fp8"},
+        argv=["train.py"],
+    )
+    flat = cfg.flatten()
+    assert flat["fp8_hidden_states_path"] is None  # FP8Backend default
+
+
+def test_resolve_fp8_backend_hidden_states_path():
+    cfg = TrainConfig.resolve(
+        [
+            "--verifier-name-or-path",
+            "m",
+            "--hidden-states-backend",
+            "fp8",
+            "--fp8-hidden-states-path",
+            "/data/hs-fp8",
+        ]
+    )
+    flat = cfg.flatten()
+    assert flat["fp8_hidden_states_path"] == "/data/hs-fp8"
+
+
 def test_unselected_backend_args_not_backfilled():
     cfg = TrainConfig.from_sources(
         cli={"verifier_name_or_path": "m", "hidden_states_backend": "file"},
