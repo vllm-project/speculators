@@ -159,7 +159,7 @@ vllm serve "meta-llama/Llama-3.3-70B-Instruct" \
   --port 8000
 
 # 2. Run regeneration (model auto-detected from server)
-python scripts/response_regeneration/script.py \
+speculators regenerate-responses \
   --dataset magpie \
   --limit 1000
 
@@ -171,7 +171,7 @@ python scripts/response_regeneration/script.py \
 If processing is interrupted, use the `--resume` flag to skip already-processed rows:
 
 ```bash
-python scripts/response_regeneration/script.py \
+speculators regenerate-responses \
   --dataset magpie \
   --outfile magpie_Llama-3.3-70B-Instruct.jsonl \
   --resume
@@ -188,7 +188,7 @@ Use `--keep-server` with `run_all.sh` to leave the vLLM server running after pro
   --dataset magpie --keep-server
 
 # Second run - use the already-running server directly
-python scripts/response_regeneration/script.py --dataset ultrachat
+speculators regenerate-responses --dataset ultrachat
 ```
 
 ## Next Steps
