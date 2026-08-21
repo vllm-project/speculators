@@ -1,5 +1,9 @@
 [build-system]
-requires = ["setuptools >= 82.0.1", "setuptools-git-versioning>=2.0,<3"]
+requires = [
+    "setuptools >= 82.0.1",
+    "setuptools-git-versioning>=2.0,<3",
+    "tomli>=2.0; python_version < '3.11'",
+]
 build-backend = "setuptools.build_meta"
 
 [tool.uv.workspace]
@@ -17,7 +21,7 @@ include = ["*"]
 # ************************************************
 
 [project]
-dynamic = ["version"]
+dynamic = ["version", "dependencies"]
 name = "speculators"
 description = "A unified library for creating, representing, and storing speculative decoding algorithms for LLM serving such as in vLLM."
 readme = { file = "README.md", content-type = "text/markdown" }
@@ -41,10 +45,18 @@ keywords = [
     "decoding algorithms",
     "inference server"
 ]
-dependencies = [
+
+# Base (non-hs-connectors) dependencies live in [tool.speculators.dependencies]
+# below rather than here, since `hs-connectors` itself must be resolved at build
+# time (see get_hs_connectors_requirement() in setup.py) based on build type
+# (dev/nightly/release), which requires the whole `dependencies` field to be
+# dynamic per PEP 621. setup.py reads the base list back out of this file and
+# appends the computed hs-connectors requirement before calling setup().
+
+[tool.speculators.dependencies]
+base = [
     "click",
     "datasets>=4.0.0,<=5.0.1",
-    "hs-connectors",
     "httpx",
     "huggingface-hub",
     "loguru>=0.7.2,<=0.7.3",
