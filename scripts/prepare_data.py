@@ -8,7 +8,8 @@ import typer
 from speculators.cli.prepare_data import prepare_data
 
 warnings.warn(
-    "scripts/prepare_data.py is deprecated. Use 'speculators prepare-data' instead.",
+    "scripts/prepare_data.py is deprecated and will be removed in v0.9.0. "
+    "Use 'speculators prepare-data' instead.",
     DeprecationWarning,
     stacklevel=1,
 )
