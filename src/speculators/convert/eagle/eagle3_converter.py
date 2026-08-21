@@ -163,7 +163,11 @@ class Eagle3Converter:
             intermediate_size=eagle_config.get("intermediate_size", 11008),
             num_hidden_layers=eagle_config.get("num_hidden_layers", 1),
             num_attention_heads=eagle_config.get("num_attention_heads", 32),
-            num_key_value_heads=eagle_config.get("num_key_value_heads", 8),
+            # Mirror the Eagle1 converter: when the draft config omits
+            # num_key_value_heads, leave it None so LlamaConfig falls back to
+            # num_attention_heads (standard MHA) instead of silently forcing
+            # GQA with a hardcoded group count.
+            num_key_value_heads=eagle_config.get("num_key_value_heads"),
             hidden_act=eagle_config.get("hidden_act", "silu"),
             # Ensure max_position_embeddings match between Eagle3 and target configs
             max_position_embeddings=max(
