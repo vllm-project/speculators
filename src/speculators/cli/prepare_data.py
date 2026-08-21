@@ -31,7 +31,6 @@ Usage::
 
 import logging
 import shutil
-import sys
 from pathlib import Path
 from typing import Annotated
 
@@ -193,7 +192,7 @@ def prepare_data(
                 "Dataset files already exist in output directory, skipping "
                 "preprocessing. To overwrite existing files use --overwrite."
             )
-            sys.exit(0)
+            raise typer.Exit
         if overwrite:
             assert_safe_to_overwrite(output_path, resolved_token_freq_path)
             log.warning(f"Removing existing output directory: {output_path}")

@@ -115,15 +115,10 @@ speculators prepare-data \
 If your generation pipeline saves natural-language conversations instead, start the target model's vLLM server as described in Step 2, then use its render endpoint to convert those responses into speculator format:
 
 ```bash
-# in speculators venv
-hf download \
-  inference-optimization/Qwen3.5-9B-responses gsm8k.jsonl \
-  --repo-type dataset \
-  --local-dir ./output/dataset
-
 speculators prepare-data \
-  --model Qwen/Qwen3.5-9B \
-  --data ./output/dataset/gsm8k.jsonl \
+  --model Qwen/Qwen3-8B \
+  --data ./on_policy_conversations.jsonl \
+  --render-endpoint http://localhost:8000 \
   --output ./output \
   --max-samples 5000 \
   --seq-length 8192
