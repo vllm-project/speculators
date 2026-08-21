@@ -8,7 +8,8 @@ import typer
 from speculators.cli.stitch import stitch_command
 
 warnings.warn(
-    "scripts/stitch_mtp.py is deprecated. Use 'speculators stitch-mtp' instead.",
+    "scripts/stitch_mtp.py is deprecated and will be removed in v0.9.0. "
+    "Use 'speculators stitch-mtp' instead.",
     DeprecationWarning,
     stacklevel=1,
 )
