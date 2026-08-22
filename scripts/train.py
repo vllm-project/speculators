@@ -72,13 +72,15 @@ def _release_accelerator_cache():
 
 
 def set_seed(seed: int, deterministic: bool = False):
-    """Set random seeds for reproducibility."""
+    """Set random seeds for reproducibility.
+
+    ``torch.manual_seed`` seeds the CPU generator and every device generator
+    (CUDA, XPU, MPS and PrivateUse1 backends such as Ascend NPU), so no
+    per-device call is needed.
+    """
     random.seed(seed)
     np.random.seed(seed)  # noqa: NPY002
     torch.manual_seed(seed)
-    device_module = _accelerator_module()
-    if device_module is not None and hasattr(device_module, "manual_seed_all"):
-        device_module.manual_seed_all(seed)
 
     if deterministic:
         # For deterministic behavior (may impact performance)

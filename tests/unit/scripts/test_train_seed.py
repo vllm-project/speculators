@@ -1,8 +1,9 @@
-"""Unit tests for accelerator-agnostic seeding and cache release in scripts/train.py.
+"""Unit tests for seeding and accelerator cache release in scripts/train.py.
 
 The script is not a package, so it is imported by path.
 """
 
+import inspect
 import sys
 from pathlib import Path
 from types import SimpleNamespace
@@ -48,20 +49,20 @@ def test_accelerator_module_checks_runtime_availability(monkeypatch):
     assert seen["kwargs"] == {"check_available": True}
 
 
-def test_set_seed_without_accelerator_is_reproducible(monkeypatch):
-    """Seeding must not require torch.cuda when no accelerator is present."""
-    monkeypatch.setattr(torch.accelerator, "current_accelerator", _no_accelerator)
+def test_set_seed_is_reproducible_and_device_agnostic():
+    """Seeding relies on torch.manual_seed (which seeds every device generator)."""
+    assert "torch.cuda" not in inspect.getsource(set_seed)
     set_seed(123)
     first = torch.rand(4)
     set_seed(123)
     assert torch.equal(first, torch.rand(4))
 
 
-def test_set_seed_seeds_current_accelerator_module(monkeypatch):
-    """The device module of the current accelerator is seeded, not torch.cuda."""
-    seeds: list[int] = []
+def test_release_accelerator_cache_calls_device_module(monkeypatch):
+    """Cache release goes through the current accelerator's empty_cache."""
+    calls: list[str] = []
     requested: list[str] = []
-    fake_module = SimpleNamespace(manual_seed_all=seeds.append)
+    fake_module = SimpleNamespace(empty_cache=lambda: calls.append("empty_cache"))
 
     def get_device_module(device_type):
         requested.append(device_type)
@@ -70,19 +71,8 @@ def test_set_seed_seeds_current_accelerator_module(monkeypatch):
     current_accelerator, _ = _fake_accelerator("npu")
     monkeypatch.setattr(torch.accelerator, "current_accelerator", current_accelerator)
     monkeypatch.setattr(torch, "get_device_module", get_device_module)
-    set_seed(7)
-    assert requested == ["npu"]
-    assert seeds == [7]
-
-
-def test_release_accelerator_cache_calls_device_module(monkeypatch):
-    """Cache release goes through the current accelerator's empty_cache."""
-    calls: list[str] = []
-    fake_module = SimpleNamespace(empty_cache=lambda: calls.append("empty_cache"))
-    current_accelerator, _ = _fake_accelerator("npu")
-    monkeypatch.setattr(torch.accelerator, "current_accelerator", current_accelerator)
-    monkeypatch.setattr(torch, "get_device_module", lambda _t: fake_module)
     _release_accelerator_cache()
+    assert requested == ["npu"]
     assert calls == ["empty_cache"]
 
 
