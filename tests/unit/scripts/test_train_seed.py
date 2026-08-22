@@ -12,17 +12,45 @@ import torch
 # Add scripts/ to the import path the same way the other script tests do.
 sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "scripts"))
 
-from train import _accelerator_module, set_seed  # type: ignore[import-not-found]
+from train import (  # type: ignore[import-not-found]
+    _accelerator_module,
+    _release_accelerator_cache,
+    set_seed,
+)
+
+
+def _no_accelerator(**_kwargs):
+    return None
+
+
+def _fake_accelerator(device_type: str):
+    seen: dict[str, object] = {}
+
+    def current_accelerator(**kwargs):
+        seen["kwargs"] = kwargs
+        return SimpleNamespace(type=device_type)
+
+    return current_accelerator, seen
 
 
 def test_accelerator_module_is_none_without_accelerator(monkeypatch):
-    monkeypatch.setattr(torch.accelerator, "current_accelerator", lambda: None)
+    """No runtime accelerator means no device module (and no torch.cuda call)."""
+    monkeypatch.setattr(torch.accelerator, "current_accelerator", _no_accelerator)
     assert _accelerator_module() is None
+
+
+def test_accelerator_module_checks_runtime_availability(monkeypatch):
+    """The accelerator is resolved with check_available=True, not compile-time only."""
+    current_accelerator, seen = _fake_accelerator("npu")
+    monkeypatch.setattr(torch.accelerator, "current_accelerator", current_accelerator)
+    monkeypatch.setattr(torch, "get_device_module", lambda _t: SimpleNamespace())
+    _accelerator_module()
+    assert seen["kwargs"] == {"check_available": True}
 
 
 def test_set_seed_without_accelerator_is_reproducible(monkeypatch):
     """Seeding must not require torch.cuda when no accelerator is present."""
-    monkeypatch.setattr(torch.accelerator, "current_accelerator", lambda: None)
+    monkeypatch.setattr(torch.accelerator, "current_accelerator", _no_accelerator)
     set_seed(123)
     first = torch.rand(4)
     set_seed(123)
@@ -31,11 +59,37 @@ def test_set_seed_without_accelerator_is_reproducible(monkeypatch):
 
 def test_set_seed_seeds_current_accelerator_module(monkeypatch):
     """The device module of the current accelerator is seeded, not torch.cuda."""
-    calls: list[int] = []
-    fake_module = SimpleNamespace(manual_seed_all=calls.append)
-    monkeypatch.setattr(
-        torch.accelerator, "current_accelerator", lambda: SimpleNamespace(type="npu")
-    )
-    monkeypatch.setattr(torch, "get_device_module", lambda _device_type: fake_module)
+    seeds: list[int] = []
+    requested: list[str] = []
+    fake_module = SimpleNamespace(manual_seed_all=seeds.append)
+
+    def get_device_module(device_type):
+        requested.append(device_type)
+        return fake_module
+
+    current_accelerator, _ = _fake_accelerator("npu")
+    monkeypatch.setattr(torch.accelerator, "current_accelerator", current_accelerator)
+    monkeypatch.setattr(torch, "get_device_module", get_device_module)
     set_seed(7)
-    assert calls == [7]
+    assert requested == ["npu"]
+    assert seeds == [7]
+
+
+def test_release_accelerator_cache_calls_device_module(monkeypatch):
+    """Cache release goes through the current accelerator's empty_cache."""
+    calls: list[str] = []
+    fake_module = SimpleNamespace(empty_cache=lambda: calls.append("empty_cache"))
+    current_accelerator, _ = _fake_accelerator("npu")
+    monkeypatch.setattr(torch.accelerator, "current_accelerator", current_accelerator)
+    monkeypatch.setattr(torch, "get_device_module", lambda _t: fake_module)
+    _release_accelerator_cache()
+    assert calls == ["empty_cache"]
+
+
+def test_release_accelerator_cache_is_noop_without_accelerator(monkeypatch):
+    """Without an accelerator the cache release is skipped entirely."""
+    monkeypatch.setattr(torch.accelerator, "current_accelerator", _no_accelerator)
+    monkeypatch.setattr(
+        torch, "get_device_module", lambda _t: (_ for _ in ()).throw(AssertionError)
+    )
+    _release_accelerator_cache()
