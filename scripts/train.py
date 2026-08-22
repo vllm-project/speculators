@@ -53,12 +53,34 @@ DRAFT_ARCH_CONFIGS: dict[str, type] = {
 MROPE_INVERSE_TOLERANCE = 1e-6
 
 
+def _accelerator_module():
+    """Return the torch device module for the current accelerator, if any.
+
+    ``check_available=True`` so a build with compile-time accelerator support but
+    no usable device at runtime (e.g. a CUDA build on a CPU-only host) yields
+    ``None`` instead of an unusable device module.
+    """
+    acc = torch.accelerator.current_accelerator(check_available=True)
+    return torch.get_device_module(acc.type) if acc is not None else None
+
+
+def _release_accelerator_cache():
+    """Release cached accelerator memory, if an accelerator is in use."""
+    device_module = _accelerator_module()
+    if device_module is not None and hasattr(device_module, "empty_cache"):
+        device_module.empty_cache()
+
+
 def set_seed(seed: int, deterministic: bool = False):
-    """Set random seeds for reproducibility."""
+    """Set random seeds for reproducibility.
+
+    ``torch.manual_seed`` seeds the CPU generator and every device generator
+    (CUDA, XPU, MPS and PrivateUse1 backends such as Ascend NPU), so no
+    per-device call is needed.
+    """
     random.seed(seed)
     np.random.seed(seed)  # noqa: NPY002
     torch.manual_seed(seed)
-    torch.cuda.manual_seed_all(seed)
 
     if deterministic:
         # For deterministic behavior (may impact performance)
@@ -712,8 +734,7 @@ def main(cfg: TrainConfig):  # noqa: C901
     # Cleanup
     del trainer, draft_model
     gc.collect()
-    if torch.cuda.is_available():
-        torch.cuda.empty_cache()
+    _release_accelerator_cache()
     maybe_destroy_distributed()
 
 
