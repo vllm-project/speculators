@@ -102,7 +102,6 @@ class _MockTrainer(Trainer):
         if epoch == getattr(self, "current_epoch", epoch):
             skip_steps = getattr(self, "_resume_local_step", 0)
             self._resume_local_step = 0
-        self._maybe_restore_rng_state()
 
         num_steps = len(self.train_loader)
         step_interval = (
@@ -111,7 +110,7 @@ class _MockTrainer(Trainer):
             else None
         )
 
-        for local_step, _batch in enumerate(self.train_loader, 1):
+        for local_step, _batch in enumerate(self._epoch_iterator(skip_steps), 1):
             if local_step <= skip_steps:
                 continue
             self._trained_steps.append((epoch, local_step, self.global_step))
@@ -283,6 +282,7 @@ def test_distributed_mid_epoch_checkpoint_rank_gate(
         )
         rank0.is_distributed = True
         monkeypatch.setattr(torch.distributed, "get_rank", lambda: 0)
+        monkeypatch.setattr(torch.distributed, "barrier", lambda *a, **k: None)
         rank0.maybe_save_checkpoint(0, local_step=step_interval)
 
         state_rank0 = Path(tmpdir) / "0" / "training_state.json"
@@ -312,10 +312,46 @@ def _draw_all() -> tuple[torch.Tensor, float, float]:
     return torch.rand(4), random.random(), np.random.rand()  # noqa: NPY002
 
 
-def test_checkpoint_saves_rng_state(
+class _NoisyDataset(Dataset):
+    """Every fetch draws from the CPU generator, like a noise transform does."""
+
+    def __init__(self, n_items: int = 10):
+        self.n_items = n_items
+
+    def __len__(self) -> int:
+        return self.n_items
+
+    def __getitem__(self, idx: int) -> dict:
+        return {"input_ids": torch.tensor([idx]), "noise": torch.rand(3)}
+
+
+def _noisy_fast_skip_loader(n_items: int = 10) -> DataLoader:
+    return DataLoader(
+        _NoisyDataset(n_items), batch_sampler=_FastSkipBatchSampler(n_items)
+    )
+
+
+def _make_trainer_with_loader(
+    save_path: str, loader: DataLoader, resume: bool = False, epochs: int = 1
+) -> _MockTrainer:
+    cfg = TrainerConfig(
+        save_path=save_path,
+        num_epochs=epochs,
+        lr=1e-4,
+        resume_from_checkpoint=resume,
+        checkpoint_freq=0.3,
+        log_freq=1,
+        scheduler_type="none",
+    )
+    trainer = _MockTrainer(_dummy_model(), cfg, loader)
+    trainer._trained_steps = []
+    return trainer
+
+
+def test_mid_epoch_checkpoint_saves_rng_state(
     trained_steps: list[tuple[int, int, int]],
 ) -> None:
-    """Every integer-epoch checkpoint stores a weights_only-loadable RNG snapshot."""
+    """Mid-epoch checkpoints store a weights_only-loadable RNG snapshot at save time."""
     with tempfile.TemporaryDirectory() as tmpdir:
         t = _make_trainer(tmpdir, trained_steps=trained_steps)
         t.maybe_save_checkpoint(0, local_step=3)
@@ -329,51 +365,126 @@ def test_checkpoint_saves_rng_state(
         assert not (Path(tmpdir) / "interrupted" / "rng_state_rank0.pt").exists()
 
 
-def test_mid_epoch_resume_replays_random_draws(
+def test_end_of_epoch_rng_state_is_written_after_validation(
     trained_steps: list[tuple[int, int, int]],
 ) -> None:
-    """A resumed run continues the interrupted run's RNG streams exactly."""
+    """End-of-epoch checkpoints snapshot RNG at the end of the epoch loop, not."""
     with tempfile.TemporaryDirectory() as tmpdir:
-        t1 = _make_trainer(tmpdir, trained_steps=trained_steps)
+        t = _make_trainer(tmpdir, trained_steps=trained_steps)
+        t.maybe_save_checkpoint(0, local_step=0)
+        rng_file = Path(tmpdir) / "0" / "rng_state_rank0.pt"
+        assert not rng_file.exists()  # validation has not run yet
+        torch.rand(2)  # whatever validation consumes
+        t._save_end_of_epoch_rng_state(0)
+        assert rng_file.exists()
+        state = torch.load(rng_file, map_location="cpu", weights_only=True)
+        assert torch.equal(state["torch_cpu"], torch.get_rng_state())
+        # Idempotent: no checkpoint written for epoch 1 -> nothing to snapshot.
+        t._save_end_of_epoch_rng_state(1)
+        assert not (Path(tmpdir) / "1" / "rng_state_rank0.pt").exists()
+
+
+def test_save_best_checkpoint_gets_rng_state(
+    trained_steps: list[tuple[int, int, int]],
+) -> None:
+    """save_best=True checkpoints (from maybe_update_best) get the snapshot too."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        cfg = TrainerConfig(
+            save_path=tmpdir,
+            num_epochs=1,
+            lr=1e-4,
+            resume_from_checkpoint=False,
+            checkpoint_freq=1,
+            save_best=True,
+            log_freq=1,
+            scheduler_type="none",
+        )
+        t = _MockTrainer(_dummy_model(), cfg, _make_loader())
+        t._trained_steps = trained_steps
+        t.maybe_save_checkpoint(0)  # returns early under save_best
+        assert not (Path(tmpdir) / "0").exists()
+        t.maybe_update_best(0, {"loss_epoch": 0.5})
+        t._save_end_of_epoch_rng_state(0)
+        assert (Path(tmpdir) / "0" / "rng_state_rank0.pt").exists()
+
+
+def test_mid_epoch_resume_continues_the_interrupted_iterator_exactly() -> None:
+    """A new process resuming mid-epoch draws what the live iterator would have drawn.
+
+    The uninterrupted run keeps its existing DataLoader iterator after the
+    checkpoint; the resumed run must create a new one (which draws a base seed
+    from the CPU generator) *before* the snapshot is applied, or the two diverge.
+    """
+    with tempfile.TemporaryDirectory() as tmpdir:
+        # Uninterrupted run: iterator alive, one step done, checkpoint, continue.
+        t1 = _make_trainer_with_loader(tmpdir, _noisy_fast_skip_loader())
         torch.manual_seed(1234)
         random.seed(5)
         np.random.seed(7)  # noqa: NPY002
-        t1.maybe_save_checkpoint(0, local_step=3)
-        # What the uninterrupted run would draw next: the loader iterator
-        # takes its base seed from the CPU generator, then the step draws.
-        iter(t1.train_loader)
+        it1 = t1._epoch_iterator(t1._prepare_resume_skip(0))
+        next(it1)
+        t1.global_step = 1
+        t1.maybe_save_checkpoint(0, local_step=1)
+        expected_batch = next(it1)  # the live iterator fetches step 2
         expected = _draw_all()
 
-        # Perturb every generator before resuming.
+        # Perturb every generator, then resume in a fresh trainer/loader.
         torch.manual_seed(0)
         random.seed(0)
         np.random.seed(0)  # noqa: NPY002
-
-        t2 = _make_trainer(tmpdir, trained_steps=[], resume=True)
+        t2 = _make_trainer_with_loader(tmpdir, _noisy_fast_skip_loader(), resume=True)
+        assert t2.current_epoch == 0
         assert t2._pending_rng_state is not None
-        t2.train_epoch(t2.current_epoch)  # restores, then iterates the loader once
+        skip = t2._prepare_resume_skip(0)
+        assert skip == 1
+        it2 = t2._epoch_iterator(skip)
         assert t2._pending_rng_state is None
+        got_batch = next(it2)  # first resumed fetch is step 2
         got = _draw_all()
+
+        assert torch.equal(got_batch["input_ids"], expected_batch["input_ids"])
+        assert torch.equal(got_batch["noise"], expected_batch["noise"])
         assert torch.equal(got[0], expected[0])
         assert got[1] == expected[1]
         assert got[2] == expected[2]
 
 
-def test_end_of_epoch_resume_restores_rng_state(
-    trained_steps: list[tuple[int, int, int]],
-) -> None:
-    """End-of-epoch resume restores the state saved with the previous epoch."""
+def test_end_of_epoch_resume_continues_the_next_epoch_exactly() -> None:
+    """Resuming at an epoch boundary reproduces the next epoch's first fetch/draws."""
     with tempfile.TemporaryDirectory() as tmpdir:
-        t1 = _make_trainer(tmpdir, trained_steps=trained_steps, epochs=2)
+        t1 = _make_trainer_with_loader(tmpdir, _noisy_fast_skip_loader(), epochs=2)
         torch.manual_seed(99)
         t1.maybe_save_checkpoint(0, local_step=0)
+        torch.rand(2)  # validation
+        t1._save_end_of_epoch_rng_state(0)
+        # Uninterrupted run starts epoch 1: new iterator (base seed draw) + fetch.
+        t1.current_epoch = 1
+        it1 = t1._epoch_iterator(t1._prepare_resume_skip(1))
+        expected_batch = next(it1)
         expected = torch.rand(4)
 
         torch.manual_seed(0)
-        t2 = _make_trainer(tmpdir, trained_steps=[], resume=True, epochs=2)
+        t2 = _make_trainer_with_loader(
+            tmpdir, _noisy_fast_skip_loader(), resume=True, epochs=2
+        )
         assert t2.current_epoch == 1
-        t2._maybe_restore_rng_state()
+        it2 = t2._epoch_iterator(t2._prepare_resume_skip(1))
+        got_batch = next(it2)
+        assert torch.equal(got_batch["noise"], expected_batch["noise"])
         assert torch.equal(torch.rand(4), expected)
+
+
+def test_mock_train_epoch_consumes_pending_rng_state(
+    trained_steps: list[tuple[int, int, int]],
+) -> None:
+    """train_epoch applies the pending snapshot exactly once."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        t1 = _make_trainer(tmpdir, trained_steps=trained_steps)
+        t1.maybe_save_checkpoint(0, local_step=3)
+        t2 = _make_trainer(tmpdir, trained_steps=[], resume=True)
+        assert t2._pending_rng_state is not None
+        t2.train_epoch(t2.current_epoch)
+        assert t2._pending_rng_state is None
 
 
 def test_resume_without_rng_state_file_still_works(
@@ -458,7 +569,7 @@ class _FastSkipMockTrainer(_MockTrainer):
             remaining = all_batches[skip_steps:]
             fast_skip_sampler._cached_generated_batches = (epoch, remaining)
 
-        for local_step_rel, _batch in enumerate(self.train_loader, 1):
+        for local_step_rel, _batch in enumerate(self._epoch_iterator(skip_steps), 1):
             local_step = local_step_rel + skip_steps
             self._trained_steps.append((epoch, local_step, self.global_step))
             self.global_step += 1

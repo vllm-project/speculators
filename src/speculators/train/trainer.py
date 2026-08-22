@@ -218,6 +218,9 @@ def _apply_rng_state(state: dict) -> None:
 class Trainer:
     # RNG snapshot loaded for resume; applied once by _maybe_restore_rng_state().
     _pending_rng_state: dict | None = None
+    # Set when an end-of-epoch checkpoint was written for the current epoch, by
+    # either checkpoint path, so the RNG snapshot can follow after validation.
+    _epoch_checkpoint_written: bool = False
 
     def __init__(
         self,
@@ -287,6 +290,41 @@ class Trainer:
         p = self._rng_state_path(epoch)
         p.parent.mkdir(parents=True, exist_ok=True)
         torch.save(_collect_rng_state(self.device_type, self.local_rank), p)
+        if self.is_distributed:
+            # A checkpoint is only resumable exactly once every rank's file exists.
+            dist.barrier()
+
+    def _save_end_of_epoch_rng_state(self, epoch: int) -> None:
+        """Snapshot RNG state for an end-of-epoch checkpoint, whichever path wrote it.
+
+        Called at the end of the epoch loop, after validation and the best-checkpoint
+        update, i.e. at the point the next epoch would start. A resume from this
+        checkpoint therefore continues the generators exactly where an
+        uninterrupted run would, including whatever validation consumed. Covers
+        both the ``checkpoint_freq`` path (``maybe_save_checkpoint``) and the
+        ``save_best`` path (``maybe_update_best``).
+        """
+        if not self._epoch_checkpoint_written:
+            return
+        self._epoch_checkpoint_written = False
+        self._save_rng_state(epoch)
+
+    def _epoch_iterator(self, skip_steps: int):
+        """Create the epoch's loader iterator, restoring RNG state at the right point.
+
+        The snapshot must be applied where the interrupted run's timeline was cut.
+        An end-of-epoch checkpoint precedes the next epoch's iterator, whose
+        creation draws the loader base seed from the CPU generator, so the state
+        is restored first. A mid-epoch checkpoint was taken with that epoch's
+        iterator already alive, so the resumed iterator is created first and the
+        state applied after it; the fast-skipped batches themselves consume no RNG.
+        """
+        if skip_steps == 0:
+            self._maybe_restore_rng_state()
+        loader_iter = iter(self.train_loader)
+        if skip_steps > 0:
+            self._maybe_restore_rng_state()
+        return loader_iter
 
     def _load_rng_state(self) -> dict | None:
         p = self._rng_state_path(self.checkpointer.previous_epoch)
@@ -530,14 +568,12 @@ class Trainer:
 
         # Determine how many batches to skip for mid-epoch resume.
         skip_steps = self._prepare_resume_skip(epoch)
-        # Skipped batches consume no RNG, so the saved state is restored right
-        # before the first resumed step (and before the loader iterator draws
-        # its base seed).
-        self._maybe_restore_rng_state()
 
-        train_loader = self.train_loader
+        train_loader = self._epoch_iterator(skip_steps)
         if self.rank == 0:
-            train_loader = tqdm(train_loader, desc=f"Epoch {epoch}")  # type: ignore[assignment]
+            train_loader = tqdm(  # type: ignore[assignment]
+                train_loader, desc=f"Epoch {epoch}", total=len(self.train_loader)
+            )
 
         step_interval = (
             max(1, round(num_steps * self.config.checkpoint_freq))
@@ -700,7 +736,13 @@ class Trainer:
             self.checkpointer.save_scheduler_state_dict(self.schedulers, epoch)
         if isinstance(epoch, int):
             self._save_training_state(epoch, local_step)
-            self._save_rng_state(epoch)
+            if local_step > 0:
+                # Mid-epoch: training continues from exactly the state at save time.
+                self._save_rng_state(epoch)
+            else:
+                # End-of-epoch: snapshot after validation, see
+                # _save_end_of_epoch_rng_state.
+                self._epoch_checkpoint_written = True
             # Create a human-readable symlink for checkpoint readability.
             # e.g. epoch0_step16626 -> 0/ (mid) or epoch0_end -> 0/ (end)
             if not self.is_distributed or dist.get_rank() == 0:
@@ -725,6 +767,7 @@ class Trainer:
             self.checkpointer.save_checkpoint(self.model, self.optimizers, epoch)
             if self.schedulers:
                 self.checkpointer.save_scheduler_state_dict(self.schedulers, epoch)
+            self._epoch_checkpoint_written = True
         elif self.config.checkpoint_freq >= 1 and not (
             epoch == 0 or (epoch + 1) % int(self.config.checkpoint_freq) == 0
         ):
@@ -771,3 +814,5 @@ class Trainer:
 
             if self.is_distributed:
                 dist.barrier()
+
+            self._save_end_of_epoch_rng_state(epoch)
