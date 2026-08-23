@@ -256,7 +256,7 @@ class Trainer:
         p.parent.mkdir(parents=True, exist_ok=True)
         torch.save(_collect_rng_state(self.device_type, self.local_rank), p)
         if self.is_distributed:
-            dist.barrier()  # resumable only once every rank's file exists
+            dist.barrier()
 
     def _save_end_of_epoch_rng_state(self, epoch: int) -> None:
         """Snapshot after validation for either end-of-epoch save path."""
@@ -289,7 +289,6 @@ class Trainer:
             self._pending_rng_state = None
 
     def setup_trainer(self):
-        self._pending_rng_state = None
         if self.checkpointer.previous_epoch != -1:
             root_logger.info(f"Found checkpoint at {self.checkpointer.prev_path}.")
             self.current_epoch = self.checkpointer.previous_epoch + 1
