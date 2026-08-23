@@ -200,6 +200,7 @@ def test_mid_epoch_resume_restores_epoch_and_step(
         assert t2.global_step == step_interval
 
         t2.train_epoch(t2.current_epoch)
+        assert t2._pending_rng_state is None  # RNG snapshot applied exactly once
 
         expected = num_steps - step_interval
         assert len(run2_steps) == expected
@@ -463,19 +464,6 @@ def test_end_of_epoch_resume_continues_the_next_epoch_exactly() -> None:
         got_batch = next(it2)
         assert torch.equal(got_batch["noise"], expected_batch["noise"])
         assert torch.equal(torch.rand(4), expected)
-
-
-def test_mock_train_epoch_consumes_pending_rng_state(
-    trained_steps: list[tuple[int, int, int]],
-) -> None:
-    """train_epoch applies the pending snapshot exactly once."""
-    with tempfile.TemporaryDirectory() as tmpdir:
-        t1 = _make_trainer(tmpdir, trained_steps=trained_steps)
-        t1.maybe_save_checkpoint(0, local_step=3)
-        t2 = _make_trainer(tmpdir, trained_steps=[], resume=True)
-        assert t2._pending_rng_state is not None
-        t2.train_epoch(t2.current_epoch)
-        assert t2._pending_rng_state is None
 
 
 def test_resume_without_rng_state_file_still_works(

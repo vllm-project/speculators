@@ -171,12 +171,8 @@ def _collect_rng_state(device_type: str, device_index: int) -> dict:
         "device_index": device_index,
         "device": None,
     }
-    device_module = getattr(torch, device_type, None)
-    if (
-        device_module is not None
-        and hasattr(device_module, "get_rng_state")
-        and getattr(device_module, "is_available", lambda: False)()
-    ):
+    if torch.accelerator.is_available():
+        device_module = torch.get_device_module(device_type)
         state["device"] = device_module.get_rng_state(device_index).cpu()
     return state
 
@@ -184,8 +180,8 @@ def _collect_rng_state(device_type: str, device_index: int) -> dict:
 def _apply_rng_state(state: dict) -> None:
     """Restore a snapshot produced by :func:`_collect_rng_state`."""
     torch.set_rng_state(state["torch_cpu"])
-    if state.get("device") is not None:
-        getattr(torch, state["device_type"]).set_rng_state(
+    if state["device"] is not None:
+        torch.get_device_module(state["device_type"]).set_rng_state(
             state["device"], state["device_index"]
         )
 
@@ -260,15 +256,13 @@ class Trainer:
         p.parent.mkdir(parents=True, exist_ok=True)
         torch.save(_collect_rng_state(self.device_type, self.local_rank), p)
         if self.is_distributed:
-            # Keep ranks synchronized after writing their snapshots.
-            dist.barrier()
+            dist.barrier()  # resumable only once every rank's file exists
 
     def _save_end_of_epoch_rng_state(self, epoch: int) -> None:
         """Snapshot after validation for either end-of-epoch save path."""
-        if not self._epoch_checkpoint_written:
-            return
-        self._epoch_checkpoint_written = False
-        self._save_rng_state(epoch)
+        if self._epoch_checkpoint_written:
+            self._epoch_checkpoint_written = False
+            self._save_rng_state(epoch)
 
     def _epoch_iterator(self, skip_steps: int):
         """Restore before a new epoch's iterator, or after a resumed one."""
@@ -283,28 +277,16 @@ class Trainer:
         p = self._rng_state_path(self.checkpointer.previous_epoch)
         if not p.exists():
             root_logger.warning(
-                f"No RNG state found at {p}; the resumed run will not replay the "
-                "interrupted run's random draws exactly."
+                f"No RNG state at {p}; the resumed run will not replay random draws."
             )
             return None
-        try:
-            return torch.load(p, map_location="cpu", weights_only=True)
-        except (RuntimeError, OSError, KeyError, ValueError) as e:
-            root_logger.warning(f"Failed to load RNG state {p}: {e}")
-            return None
+        return torch.load(p, map_location="cpu", weights_only=True)
 
     def _maybe_restore_rng_state(self) -> None:
-        """Restore the RNG state loaded for resume, once, before the first step."""
-        state = self._pending_rng_state
-        if state is None:
-            return
-        self._pending_rng_state = None
-        try:
-            _apply_rng_state(state)
-        except (RuntimeError, TypeError, ValueError) as e:
-            root_logger.warning(f"Failed to restore RNG state: {e}")
-            return
-        root_logger.info("Restored RNG state from checkpoint.")
+        """Apply the RNG state loaded for resume, once."""
+        if self._pending_rng_state is not None:
+            _apply_rng_state(self._pending_rng_state)
+            self._pending_rng_state = None
 
     def setup_trainer(self):
         self._pending_rng_state = None
@@ -690,12 +672,9 @@ class Trainer:
         if isinstance(epoch, int):
             self._save_training_state(epoch, local_step)
             if local_step > 0:
-                # Mid-epoch: training continues from exactly the state at save time.
-                self._save_rng_state(epoch)
+                self._save_rng_state(epoch)  # mid-epoch: resume continues from here
             else:
-                # End-of-epoch: snapshot after validation, see
-                # _save_end_of_epoch_rng_state.
-                self._epoch_checkpoint_written = True
+                self._epoch_checkpoint_written = True  # snapshot after validation
             # Create a human-readable symlink for checkpoint readability.
             # e.g. epoch0_step16626 -> 0/ (mid) or epoch0_end -> 0/ (end)
             if not self.is_distributed or dist.get_rank() == 0:
