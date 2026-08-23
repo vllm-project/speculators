@@ -43,6 +43,10 @@ def resolve_target_layer_ids(
     trust_remote_code: bool = False,
 ) -> list[int]:
     if target_layer_ids is not None:
+        if len(set(target_layer_ids)) != len(target_layer_ids):
+            raise ValueError(
+                f"target_layer_ids must be distinct, got {target_layer_ids}"
+            )
         return target_layer_ids
 
     num_layers = get_verifier_config(
@@ -50,6 +54,11 @@ def resolve_target_layer_ids(
         trust_remote_code=trust_remote_code,
     ).num_hidden_layers
     target_layer_ids = [2, num_layers // 2, num_layers - 3]
+    if min(target_layer_ids) < 0 or len(set(target_layer_ids)) != len(target_layer_ids):
+        raise ValueError(
+            f"Default target layer ids {target_layer_ids} are invalid for a verifier "
+            f"with {num_layers} hidden layers; pass --target-layer-ids explicitly."
+        )
     warnings.warn(
         DEFAULT_TARGET_LAYER_IDS_WARNING.format(target_layer_ids=target_layer_ids),
         stacklevel=3,
