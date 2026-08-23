@@ -164,12 +164,7 @@ def _resolve_scheduler_steps(
 
 
 def _collect_rng_state(device_type: str, device_index: int) -> dict:
-    """Snapshot the torch CPU generator and this rank's device generator.
-
-    The trainer's own random draws (anchor sampling, noise augmentation, dropout)
-    all come from torch generators. Only tensors and primitives are stored so the
-    file loads back with ``weights_only=True``.
-    """
+    """Snapshot the torch CPU and current-device generators."""
     state: dict = {
         "torch_cpu": torch.get_rng_state(),
         "device_type": device_type,
@@ -196,10 +191,9 @@ def _apply_rng_state(state: dict) -> None:
 
 
 class Trainer:
-    # RNG snapshot loaded for resume; applied once by _maybe_restore_rng_state().
+    # Loaded on resume and applied once by _maybe_restore_rng_state().
     _pending_rng_state: dict | None = None
-    # Set when an end-of-epoch checkpoint was written for the current epoch, by
-    # either checkpoint path, so the RNG snapshot can follow after validation.
+    # Delay an end-of-epoch snapshot until validation has finished.
     _epoch_checkpoint_written: bool = False
 
     def __init__(
@@ -261,44 +255,23 @@ class Trainer:
         return self.checkpointer.path / str(epoch) / f"rng_state_rank{rank}.pt"
 
     def _save_rng_state(self, epoch: int) -> None:
-        """Persist this rank's RNG state next to the checkpoint.
-
-        Every rank writes its own file: anchor sampling, noise augmentation and
-        dropout draw from per-rank generators, so a resumed run can only replay
-        the interrupted run's random draws if each rank restores its own state.
-        """
+        """Persist this rank's RNG state next to the checkpoint."""
         p = self._rng_state_path(epoch)
         p.parent.mkdir(parents=True, exist_ok=True)
         torch.save(_collect_rng_state(self.device_type, self.local_rank), p)
         if self.is_distributed:
-            # A checkpoint is only resumable exactly once every rank's file exists.
+            # Keep ranks synchronized after writing their snapshots.
             dist.barrier()
 
     def _save_end_of_epoch_rng_state(self, epoch: int) -> None:
-        """Snapshot RNG state for an end-of-epoch checkpoint, whichever path wrote it.
-
-        Called at the end of the epoch loop, after validation and the best-checkpoint
-        update, i.e. at the point the next epoch would start. A resume from this
-        checkpoint therefore continues the generators exactly where an
-        uninterrupted run would, including whatever validation consumed. Covers
-        both the ``checkpoint_freq`` path (``maybe_save_checkpoint``) and the
-        ``save_best`` path (``maybe_update_best``).
-        """
+        """Snapshot after validation for either end-of-epoch save path."""
         if not self._epoch_checkpoint_written:
             return
         self._epoch_checkpoint_written = False
         self._save_rng_state(epoch)
 
     def _epoch_iterator(self, skip_steps: int):
-        """Create the epoch's loader iterator, restoring RNG state at the right point.
-
-        The snapshot must be applied where the interrupted run's timeline was cut.
-        An end-of-epoch checkpoint precedes the next epoch's iterator, whose
-        creation draws the loader base seed from the CPU generator, so the state
-        is restored first. A mid-epoch checkpoint was taken with that epoch's
-        iterator already alive, so the resumed iterator is created first and the
-        state applied after it; the fast-skipped batches themselves consume no RNG.
-        """
+        """Restore before a new epoch's iterator, or after a resumed one."""
         if skip_steps == 0:
             self._maybe_restore_rng_state()
         loader_iter = iter(self.train_loader)

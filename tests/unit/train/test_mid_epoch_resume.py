@@ -366,7 +366,7 @@ def test_mid_epoch_checkpoint_saves_rng_state(
 def test_end_of_epoch_rng_state_is_written_after_validation(
     trained_steps: list[tuple[int, int, int]],
 ) -> None:
-    """End-of-epoch checkpoints snapshot RNG at the end of the epoch loop, not."""
+    """End-of-epoch RNG is captured only after validation."""
     with tempfile.TemporaryDirectory() as tmpdir:
         t = _make_trainer(tmpdir, trained_steps=trained_steps)
         t.maybe_save_checkpoint(0, local_step=0)
