@@ -1,12 +1,10 @@
 import json
 import logging
-import random
 import time
 import warnings
 from pathlib import Path
 from typing import Literal, NamedTuple
 
-import numpy as np
 import torch
 import torch.distributed as dist
 from torch.distributed.checkpoint.state_dict import (
@@ -166,21 +164,13 @@ def _resolve_scheduler_steps(
 
 
 def _collect_rng_state(device_type: str, device_index: int) -> dict:
-    """Snapshot every RNG a training step can draw from, as torch.save-able data.
+    """Snapshot the torch CPU generator and this rank's device generator.
 
-    Only primitives and tensors are stored so the file loads back with
-    ``weights_only=True``.
+    The trainer's own random draws (anchor sampling, noise augmentation, dropout)
+    all come from torch generators. Only tensors and primitives are stored so the
+    file loads back with ``weights_only=True``.
     """
-    np_name, np_keys, np_pos, np_has_gauss, np_cached = np.random.get_state()  # noqa: NPY002
     state: dict = {
-        "python": random.getstate(),
-        "numpy": {
-            "name": np_name,
-            "keys": torch.from_numpy(np_keys.copy()),
-            "pos": int(np_pos),
-            "has_gauss": int(np_has_gauss),
-            "cached_gaussian": float(np_cached),
-        },
         "torch_cpu": torch.get_rng_state(),
         "device_type": device_type,
         "device_index": device_index,
@@ -198,21 +188,11 @@ def _collect_rng_state(device_type: str, device_index: int) -> dict:
 
 def _apply_rng_state(state: dict) -> None:
     """Restore a snapshot produced by :func:`_collect_rng_state`."""
-    random.setstate(state["python"])
-    np_state = state["numpy"]
-    np.random.set_state(  # noqa: NPY002
-        (
-            np_state["name"],
-            np_state["keys"].numpy(),
-            np_state["pos"],
-            np_state["has_gauss"],
-            np_state["cached_gaussian"],
-        )
-    )
     torch.set_rng_state(state["torch_cpu"])
     if state.get("device") is not None:
-        device_module = getattr(torch, state["device_type"])
-        device_module.set_rng_state(state["device"], state["device_index"])
+        getattr(torch, state["device_type"]).set_rng_state(
+            state["device"], state["device_index"]
+        )
 
 
 class Trainer:

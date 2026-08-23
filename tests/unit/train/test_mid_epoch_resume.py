@@ -1,12 +1,10 @@
 """Unit tests for mid-epoch checkpoint save and resume."""
 
 import json
-import random
 import tempfile
 from pathlib import Path
 from typing import Protocol, cast
 
-import numpy as np
 import pytest
 import torch
 from torch import nn
@@ -308,8 +306,8 @@ def test_distributed_mid_epoch_checkpoint_rank_gate(
         assert (Path(tmpdir) / "0" / "rng_state_rank1.pt").exists()
 
 
-def _draw_all() -> tuple[torch.Tensor, float, float]:
-    return torch.rand(4), random.random(), np.random.rand()  # noqa: NPY002
+def _draw() -> torch.Tensor:
+    return torch.rand(4)
 
 
 class _NoisyDataset(Dataset):
@@ -358,7 +356,7 @@ def test_mid_epoch_checkpoint_saves_rng_state(
         rng_file = Path(tmpdir) / "0" / "rng_state_rank0.pt"
         assert rng_file.exists()
         state = torch.load(rng_file, map_location="cpu", weights_only=True)
-        assert set(state) >= {"python", "numpy", "torch_cpu", "device_type"}
+        assert set(state) >= {"torch_cpu", "device_type"}
         assert torch.equal(state["torch_cpu"], torch.get_rng_state())
 
         t.maybe_save_checkpoint("interrupted")
@@ -419,19 +417,15 @@ def test_mid_epoch_resume_continues_the_interrupted_iterator_exactly() -> None:
         # Uninterrupted run: iterator alive, one step done, checkpoint, continue.
         t1 = _make_trainer_with_loader(tmpdir, _noisy_fast_skip_loader())
         torch.manual_seed(1234)
-        random.seed(5)
-        np.random.seed(7)  # noqa: NPY002
         it1 = t1._epoch_iterator(t1._prepare_resume_skip(0))
         next(it1)
         t1.global_step = 1
         t1.maybe_save_checkpoint(0, local_step=1)
         expected_batch = next(it1)  # the live iterator fetches step 2
-        expected = _draw_all()
+        expected = _draw()
 
-        # Perturb every generator, then resume in a fresh trainer/loader.
+        # Perturb the generator, then resume in a fresh trainer/loader.
         torch.manual_seed(0)
-        random.seed(0)
-        np.random.seed(0)  # noqa: NPY002
         t2 = _make_trainer_with_loader(tmpdir, _noisy_fast_skip_loader(), resume=True)
         assert t2.current_epoch == 0
         assert t2._pending_rng_state is not None
@@ -440,13 +434,10 @@ def test_mid_epoch_resume_continues_the_interrupted_iterator_exactly() -> None:
         it2 = t2._epoch_iterator(skip)
         assert t2._pending_rng_state is None
         got_batch = next(it2)  # first resumed fetch is step 2
-        got = _draw_all()
 
         assert torch.equal(got_batch["input_ids"], expected_batch["input_ids"])
         assert torch.equal(got_batch["noise"], expected_batch["noise"])
-        assert torch.equal(got[0], expected[0])
-        assert got[1] == expected[1]
-        assert got[2] == expected[2]
+        assert torch.equal(_draw(), expected)
 
 
 def test_end_of_epoch_resume_continues_the_next_epoch_exactly() -> None:
