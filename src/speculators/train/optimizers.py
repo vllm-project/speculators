@@ -225,6 +225,9 @@ def _build_dion3(model: Module, config) -> list[torch.optim.Optimizer]:
         param_groups,
         lr=config.muon_lr,
         mu=config.muon_momentum,
+        # Preserve the torch.optim.AdamW defaults used by Muon's scalar group.
+        # Dion3 otherwise defaults beta2 to 0.95 instead of torch's 0.999.
+        betas=(0.9, 0.999),
         weight_decay=config.muon_weight_decay,
         fraction=config.dion_fraction,
         # dion's "rms_norm" is 0.2*sqrt(max(fan_out, fan_in)), the same expression

@@ -83,13 +83,14 @@ def test_dion3_reuses_the_muon_parameter_split():
     assert not matrix_names & scalar_names
 
 
-def test_dion3_is_constructed_with_matched_lr_convention():
-    """dion's default adjust_lr is a different scale from speculators' Muon.
+def test_dion3_is_constructed_with_matched_optimizer_conventions():
+    """Dion's defaults differ from the existing Muon and scalar AdamW paths.
 
     ``rms_norm`` is ``0.2*sqrt(max(fan_out, fan_in))``, the same expression as
     torch Muon's ``match_rms_adamw``. Getting this wrong silently changes the
     effective learning rate, which would make any Muon-vs-Dion3 comparison
-    meaningless.
+    meaningless. Dion also defaults AdamW beta2 to 0.95, while the existing
+    scalar optimizer uses torch's 0.999 default.
     """
     pytest.importorskip("dion", reason="optional dependency, install from git")
     captured = {}
@@ -107,9 +108,12 @@ def test_dion3_is_constructed_with_matched_lr_convention():
 
     assert len(optimizers) == 1
     assert captured["adjust_lr"] == "rms_norm"
+    assert captured["betas"] == (0.9, 0.999)
     assert captured["fraction"] == 0.25
     assert captured["selection_scope"] == "global"
     assert captured["groups"] == ["nordion2", "adamw"]
+    adamw_group = optimizers[0].param_groups[1]
+    assert (adamw_group["beta1"], adamw_group["beta2"]) == (0.9, 0.999)
 
 
 def test_step_is_wrapped_for_static_shapes():
