@@ -113,15 +113,22 @@ def test_dion3_is_constructed_with_matched_lr_convention():
 
 
 def test_step_is_wrapped_for_static_shapes():
-    """The torch 2.13 workaround must be scoped, not process-global."""
+    """The workaround must be scoped, not process-global, and version-gated.
+
+    torch 2.13 regressed inductor here; 2.12.x is unaffected and should not pay
+    the extra recompiles that pinning shapes static costs.
+    """
     pytest.importorskip("dion", reason="optional dependency, install from git")
     dynamo_config = torch._dynamo.config
     before = dynamo_config.automatic_dynamic_shapes
     optimizers = build_optimizers(_Tiny(), _config())
     # constructing must not touch the global flag
     assert dynamo_config.automatic_dynamic_shapes is before
-    # and step must be the instance-level wrapper, not the class method
-    assert "step" in optimizers[0].__dict__
+    # and step must be the instance-level wrapper on the affected torch versions
+    from torch.torch_version import TorchVersion  # noqa: PLC0415
+
+    affected = TorchVersion(torch.__version__) >= (2, 13)
+    assert ("step" in optimizers[0].__dict__) is affected
 
 
 def test_muon_path_is_unchanged():

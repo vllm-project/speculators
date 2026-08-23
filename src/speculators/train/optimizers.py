@@ -26,6 +26,7 @@ import logging
 import torch
 from torch import Tensor
 from torch.nn import Module
+from torch.torch_version import TorchVersion
 
 logger = logging.getLogger("speculators")
 
@@ -140,18 +141,25 @@ def _device_mesh_of(params: list[Tensor]) -> object | None:
 def _static_shape_step(optimizer: torch.optim.Optimizer) -> torch.optim.Optimizer:
     """Run ``optimizer.step`` with dynamic shapes disabled.
 
-    torch 2.13's inductor miscompiles Dion3's ``@torch.compile(fullgraph=True)``
-    per-neuron normalization once dynamo promotes its shapes to dynamic, which
-    happens on the second distinct matrix shape in a step: the generated Triton
-    kernel reads a value defined inside the reduction loop from the epilogue
-    after that loop closes, and fails to compile with
-    ``NameError: tmp<N> is not defined``.
+    torch 2.13 regressed inductor's handling of Dion3's
+    ``@torch.compile(fullgraph=True)`` per-neuron normalization: once dynamo
+    promotes its shapes to dynamic -- which happens on the second distinct matrix
+    shape in a step -- the generated Triton kernel reuses a value emitted inside
+    the reduction loop from the epilogue after that loop closes. A ``tl.range``
+    body is a separate scope, so it fails to compile with
+    ``NameError: tmp<N> is not defined``. torch 2.12.1 and 2.12.0 emit a
+    self-contained epilogue and are unaffected, so this is gated to >= 2.13.
 
     An optimizer's shapes are fixed by the parameter list, so there is nothing to
     gain from dynamic shapes here. Scoping the setting to ``step`` rather than
     setting it process-wide leaves the model's own ``torch.compile`` alone --
-    setting it globally measurably inflates the forward pass.
+    setting it globally measurably inflates the forward pass. Pinning shapes
+    static does cost extra recompiles, hence the raised ``cache_size_limit``
+    (cf. microsoft/dion#23).
     """
+    if TorchVersion(torch.__version__) < (2, 13):
+        return optimizer
+
     inner = optimizer.step
 
     @functools.wraps(inner)
