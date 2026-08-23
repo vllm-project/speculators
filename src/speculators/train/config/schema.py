@@ -323,10 +323,12 @@ class LossArgs(_Group):
 
 
 class OptimizerArgs(_Group):
-    optimizer: Literal["adamw", "muon"] = Field(
+    optimizer: Literal["adamw", "muon", "dion3"] = Field(
         default="muon",
         description="Optimizer to use. 'muon' applies Muon to 2D weight matrices and "
-        "AdamW to the remaining params (norms, biases, embeddings, lm_head).",
+        "AdamW to the remaining params (norms, biases, embeddings, lm_head). 'dion3' "
+        "substitutes Dion3 (microsoft/dion) for Muon on the same split; it requires "
+        "the optional `dion` package.",
     )
     lr: float = Field(default=1e-4, description="Learning rate (AdamW / base group).")
     weight_decay: float = Field(
@@ -351,6 +353,21 @@ class OptimizerArgs(_Group):
     muon_adjust_lr_fn: Literal["original", "match_rms_adamw"] = Field(
         default="match_rms_adamw",
         description="Muon LR adjustment. 'match_rms_adamw' matches AdamW's update RMS.",
+    )
+    dion_fraction: float = Field(
+        default=0.25,
+        gt=0.0,
+        le=1.0,
+        description="Fraction of momentum-matrix rows Dion3 orthogonalizes per step. "
+        "This is the knob that buys Dion3 its speed; 1.0 disables compression and is "
+        "slower than Muon. Only used with --optimizer dion3.",
+    )
+    dion_selection_scope: Literal["local", "global"] = Field(
+        default="global",
+        description="How Dion3 picks rows when parameters are sharded. 'global' takes "
+        "the exact top-k on the assembled matrix, so the update does not depend on the "
+        "world size; 'local' takes a cheaper per-rank top-k whose result varies with "
+        "sharding. Only used with --optimizer dion3.",
     )
 
 

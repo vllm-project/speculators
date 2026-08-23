@@ -692,6 +692,8 @@ def main(cfg: TrainConfig):  # noqa: C901
         muon_weight_decay=args.muon_weight_decay,
         muon_ns_steps=args.muon_ns_steps,
         muon_adjust_lr_fn=args.muon_adjust_lr_fn,
+        dion_fraction=args.dion_fraction,
+        dion_selection_scope=args.dion_selection_scope,
         scheduler_type=args.scheduler_type,
         scheduler_warmup_steps=args.scheduler_warmup_steps,
         scheduler_warmup_ratio=args.scheduler_warmup_ratio,
