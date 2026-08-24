@@ -9,7 +9,10 @@ from speculators.model import SpeculatorModel
 from speculators.models.dflash.config import DFlashSpeculatorConfig
 from speculators.models.dflash.core import DFlashDraftModel
 from speculators.models.dflash2.config import DFlash2SpeculatorConfig
-from speculators.models.dflash2.metrics import compute_metrics
+from speculators.models.dflash2.metrics import (
+    compute_metrics,
+    selector_training_candidates,
+)
 from speculators.models.dflash2.model_definitions import (
     CandidateSelector,
     Qwen3DFlash2DecoderLayer,
@@ -119,12 +122,12 @@ class DFlash2DraftModel(DFlashDraftModel):
 
     def _predecessor_ids(
         self,
-        input_ids: torch.Tensor, # shape: [1, total_seq_len]
-        anchored_block_indices: torch.Tensor, # shape: [num_anchors*block_size]
+        input_ids: torch.Tensor,  # shape: [1, total_seq_len]
+        anchored_block_indices: torch.Tensor,  # shape: [num_anchors*block_size]
     ) -> torch.Tensor:
         block_tokens = input_ids[0, anchored_block_indices].view(
             -1, self.block_size
-        ) # shape: [num_anchors, block_size]
+        )  # shape: [num_anchors, block_size]
         if self.config.sample_from_anchor:
             return block_tokens
         # For token sequence 0 1 2 3 return previous token ids 0 0 1 2
@@ -161,15 +164,31 @@ class DFlash2DraftModel(DFlashDraftModel):
             )
         )
         predecessor_ids = self._predecessor_ids(input_ids, block_indices)
+
+        target_ids = targets.argmax(dim=-1)
+        # shape: [1, num_anchors*block_size]
+        candidate_ids = unary_logits.topk(self.candidate_selector.top_k, dim=-1).indices
+        # shape: [1, num_anchors*block_size, top_k]
+        training_candidate_ids, target_positions, contains_target = (
+            selector_training_candidates(candidate_ids, target_ids)
+        )
+        candidate_logits = self.candidate_selector.score_candidates(
+            unary_logits,
+            hidden,
+            predecessor_ids.reshape(1, -1),
+            training_candidate_ids,
+        )
+
         loss, metrics = compute_metrics(
             unary_logits=unary_logits,
             targets=targets,
-            hidden_states=hidden,
-            teacher_forced_predecessor_ids=predecessor_ids.reshape(1, -1),
-            verified_anchor_ids=predecessor_ids[:, 0],
-            selector=self.candidate_selector,
+            training_candidate_ids=training_candidate_ids,
+            candidate_logits=candidate_logits,
+            target_positions=target_positions,
+            contains_target=contains_target,
             loss_mask=aligned_loss_mask,
             block_size=self.block_size,
+            top_k=self.candidate_selector.top_k,
             loss_config=loss_config or _DEFAULT_LOSS_CONFIG,
             tv_loss_fn=tv_loss_fn,
             gamma=gamma,

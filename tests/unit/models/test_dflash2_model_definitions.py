@@ -322,7 +322,6 @@ def test_predecessor_ids_shift_each_block_from_its_anchor():
     predecessor_ids = model._predecessor_ids(
         input_ids,
         anchored_block_indices,
-        num_blocks=2,
     )
 
     expected = torch.tensor([[2, 2, 3, 4], [8, 8, 9, 10]])
@@ -337,14 +336,17 @@ def test_selector_training_candidates_keep_strict_top_k_and_inject_missing_targe
     original_candidate_ids = strict_candidate_ids.clone()
     target_ids = torch.tensor([[4, 0]])
 
-    training_candidate_ids, target_positions = selector_training_candidates(
-        strict_candidate_ids,
-        target_ids,
+    training_candidate_ids, target_positions, contains_target = (
+        selector_training_candidates(
+            strict_candidate_ids,
+            target_ids,
+        )
     )
 
     assert strict_candidate_ids.tolist() == [[[5, 4, 3], [5, 4, 3]]]
     assert training_candidate_ids.tolist() == [[[5, 4, 3], [5, 4, 0]]]
     assert target_positions.tolist() == [[1, 2]]
+    assert contains_target.tolist() == [[True, False]]
     torch.testing.assert_close(strict_candidate_ids, original_candidate_ids)
 
 
@@ -401,15 +403,24 @@ def test_selector_loss_alpha_zero_preserves_unary_objective():
         dpace_alpha=0.5,
         sample_from_anchor=False,
     )
+    target_ids = targets.argmax(dim=-1)
+    candidate_ids = unary_logits.topk(selector.top_k, dim=-1).indices
+    training_candidate_ids, target_positions, contains_target = (
+        selector_training_candidates(candidate_ids, target_ids)
+    )
+    candidate_logits = selector.score_candidates(
+        unary_logits, hidden_states, predecessor_ids, training_candidate_ids
+    )
     actual, metrics = compute_dflash2_metrics(
         unary_logits=unary_logits,
         targets=targets,
-        hidden_states=hidden_states,
-        teacher_forced_predecessor_ids=predecessor_ids,
-        verified_anchor_ids=predecessor_ids[:, 0],
-        selector=selector,
+        training_candidate_ids=training_candidate_ids,
+        candidate_logits=candidate_logits,
+        target_positions=target_positions,
+        contains_target=contains_target,
         loss_mask=loss_mask,
         block_size=4,
+        top_k=selector.top_k,
         loss_config=loss_config,
         tv_loss_fn=tv_loss_fn,
         selector_loss_alpha=0.0,
@@ -431,14 +442,16 @@ def test_selector_loss_reaches_every_selector_parameter():
         loss_mask,
     ) = _selector_objective_inputs()
     candidate_ids = unary_logits.topk(selector.top_k, dim=-1).indices
+    training_candidate_ids, target_positions, _contains_target = (
+        selector_training_candidates(candidate_ids, target_ids)
+    )
+    candidate_logits = selector.score_candidates(
+        unary_logits, hidden_states, predecessor_ids, training_candidate_ids
+    )
 
     loss = compute_selector_loss(
-        selector,
-        unary_logits,
-        hidden_states,
-        predecessor_ids,
-        candidate_ids,
-        target_ids,
+        candidate_logits,
+        target_positions,
         loss_mask,
         4,
         gamma=4.0,
@@ -451,62 +464,6 @@ def test_selector_loss_reaches_every_selector_parameter():
         assert parameter.grad is not None, f"missing gradient for {name}"
         assert torch.isfinite(parameter.grad).all(), f"non-finite gradient for {name}"
         assert torch.count_nonzero(parameter.grad), f"zero gradient for {name}"
-
-
-class _RecordingSelector:
-    top_k = 2
-
-    def __init__(self):
-        self.path_predecessors = []
-
-    def score_candidates(
-        self,
-        unary_logits,
-        hidden_states,
-        predecessor_ids,
-        candidate_ids,
-    ):
-        del hidden_states
-        if predecessor_ids.ndim == 1:
-            self.path_predecessors.append(predecessor_ids.clone())
-        return unary_logits.gather(-1, candidate_ids)
-
-
-def test_self_conditioned_path_starts_at_anchor_and_uses_selected_predecessors():
-    selector = _RecordingSelector()
-    unary_logits = torch.full((1, 4, 6), -10.0)
-    expected_ids = torch.tensor([[2, 3, 4, 5]])
-    for position, token_id in enumerate(expected_ids[0]):
-        unary_logits[0, position, token_id] = 5.0
-        unary_logits[0, position, (token_id + 1) % 6] = 4.0
-    targets = torch.full_like(unary_logits, -10.0)
-    targets.scatter_(-1, expected_ids.unsqueeze(-1), 10.0)
-    loss_mask = torch.tensor([[0.0, 1.0, 1.0, 1.0]])
-    loss_config = resolve_loss_config("ce", "eager")
-    tv_loss_fn = resolve_loss_config("tv", "eager")["tv"][0]
-
-    _, metrics = compute_dflash2_metrics(
-        unary_logits=unary_logits,
-        targets=targets,
-        hidden_states=torch.zeros(1, 4, 3),
-        teacher_forced_predecessor_ids=torch.tensor([[2, 2, 3, 4]]),
-        verified_anchor_ids=torch.tensor([2]),
-        selector=selector,  # type: ignore[arg-type]
-        loss_mask=loss_mask,
-        block_size=4,
-        loss_config=loss_config,
-        tv_loss_fn=tv_loss_fn,
-    )
-
-    assert [ids.tolist() for ids in selector.path_predecessors] == [[2], [3], [4]]
-    for position in range(1, 4):
-        prefix = f"self_conditioned_path_position_{position}_conditional_acc"
-        assert metrics[f"{prefix}_sum"] == 1
-        assert metrics[f"{prefix}_total"] == 1
-    assert metrics["self_conditioned_path_accepted_length_sum"] == 4
-    assert metrics["self_conditioned_path_accepted_length_total"] == 1
-    assert metrics["unary_top_2_oracle_accepted_length_sum"] == 4
-    assert metrics["unary_top_2_oracle_accepted_length_total"] == 1
 
 
 def test_trainer_kwargs_include_selector_loss_alpha():
