@@ -1,5 +1,7 @@
 """Unit tests for DFlash2 convolution and candidate selection."""
 
+from typing import Any
+
 import pytest
 import torch
 from transformers.models.qwen3.modeling_qwen3 import Qwen3Config
@@ -234,7 +236,7 @@ def test_candidate_codebooks_use_adamw_under_muon_optimizer():
     }
 
 
-def _tiny_config(**overrides):
+def _tiny_config(**overrides) -> DFlash2SpeculatorConfig:
     transformer_config = Qwen3Config(
         hidden_size=16,
         intermediate_size=32,
@@ -243,9 +245,9 @@ def _tiny_config(**overrides):
         num_key_value_heads=1,
         head_dim=8,
         vocab_size=64,
-        _attn_implementation="eager",
+        _attn_implementation="eager",  # type: ignore[call-arg]
     )
-    values = {
+    values: dict[str, Any] = {
         "transformer_layer_config": transformer_config,
         "draft_vocab_size": 64,
         "block_size": 4,
@@ -522,7 +524,7 @@ def test_trainer_kwargs_include_selector_loss_alpha():
 def test_tiny_gpu_forward_backward_reaches_all_new_parameters():
     """A real training step must update every convolution and selector tensor."""
     torch.manual_seed(0)
-    model = DFlash2DraftModel(_tiny_config()).to(
+    model = DFlash2DraftModel(_tiny_config()).to(  # type: ignore[call-arg]
         device="cuda",
         dtype=torch.bfloat16,
     )
@@ -560,7 +562,7 @@ def test_tiny_gpu_forward_backward_reaches_all_new_parameters():
     eager_kl = resolve_loss_config("kl_div", "eager")
     eager_tv = resolve_loss_config("tv", "eager")["tv"][0]
 
-    _, loss, _ = model(
+    _, loss, _ = model(  # type: ignore[call-arg]
         **inputs,
         max_anchors=4,
         loss_config=eager_kl,

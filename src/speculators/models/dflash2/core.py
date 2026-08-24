@@ -6,6 +6,7 @@ from transformers import PretrainedConfig
 
 from speculators.losses import LossConfig, kl_div_loss, resolve_loss_config, tv_loss
 from speculators.model import SpeculatorModel
+from speculators.models.dflash.config import DFlashSpeculatorConfig
 from speculators.models.dflash.core import DFlashDraftModel
 from speculators.models.dflash2.config import DFlash2SpeculatorConfig
 from speculators.models.dflash2.metrics import compute_metrics
@@ -49,8 +50,9 @@ class DFlash2DraftModel(DFlashDraftModel):
             )
         super().__init__(config=config)
 
-        for layer in self.layers:
-            layer.reset_convolutions()
+        for layer_ in self.layers:
+            assert isinstance(layer_, Qwen3DFlash2DecoderLayer)  # noqa: S101
+            layer_.reset_convolutions()
 
         initializer_range = getattr(
             config.transformer_layer_config, "initializer_range", 0.02
@@ -64,8 +66,9 @@ class DFlash2DraftModel(DFlashDraftModel):
         )
 
     def _make_decoder_layer(
-        self, config: DFlash2SpeculatorConfig, layer_idx: int
+        self, config: DFlashSpeculatorConfig, layer_idx: int
     ) -> Qwen3DFlash2DecoderLayer:
+        assert isinstance(config, DFlash2SpeculatorConfig)  # noqa: S101
         return Qwen3DFlash2DecoderLayer(
             config.transformer_layer_config,  # type: ignore[arg-type]
             layer_idx,
