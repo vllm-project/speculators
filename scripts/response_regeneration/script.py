@@ -158,6 +158,14 @@ def parse_args():
             "per conversation, e.g. 'low,high,max'"
         ),
     )
+    parser.add_argument(
+        "--temperature-cycle",
+        default=None,
+        help=(
+            "Comma-separated temperature values to cycle through "
+            "per conversation, e.g. '0.6,0.8,1.0'"
+        ),
+    )
     args = parser.parse_args()
     if args.dataset not in REGEN_DATASETS and (
         args.split is not None or args.subset is not None
@@ -180,6 +188,15 @@ def parse_args():
         ]
         if not args.reasoning_effort_cycle:
             parser.error("--reasoning-effort-cycle must not be empty")
+    if args.temperature_cycle is not None:
+        try:
+            args.temperature_cycle = [
+                float(t.strip()) for t in args.temperature_cycle.split(",")
+            ]
+        except ValueError:
+            parser.error("--temperature-cycle values must be numbers")
+        if not args.temperature_cycle:
+            parser.error("--temperature-cycle must not be empty")
     return args
 
 
@@ -578,6 +595,7 @@ async def regenerate_conversation(
     samples: list[dict[str, Any]],
     detokenize: Callable[[list[int]], str],
     reasoning_effort: str | None = None,
+    temperature: float | None = None,
 ) -> bool:
     """Regenerate one conversation into per-generation boundary samples.
 
@@ -621,16 +639,19 @@ async def regenerate_conversation(
             }
             if reasoning_effort is not None:
                 payload["reasoning_effort"] = reasoning_effort
+            if temperature is not None:
+                payload["temperature"] = temperature
             if tools:
                 payload["tools"] = tools
                 payload["tool_choice"] = "auto"
 
             recorded_params = sampling_params
-            if reasoning_effort is not None:
-                recorded_params = {
-                    **sampling_params,
-                    "reasoning_effort": reasoning_effort,
-                }
+            if reasoning_effort is not None or temperature is not None:
+                recorded_params = {**sampling_params}
+                if reasoning_effort is not None:
+                    recorded_params["reasoning_effort"] = reasoning_effort
+                if temperature is not None:
+                    recorded_params["temperature"] = temperature
 
             data = await post_fn(payload)
             sample, assistant_msg, tool_calls = _sample_from_response(
@@ -756,6 +777,7 @@ async def worker(
                 samples=samples,
                 detokenize=detokenize,
                 reasoning_effort=item.get("reasoning_effort"),
+                temperature=item.get("temperature"),
             )
             # Written only after the conversation finishes -- a clean truncation
             # included, since rerunning it would truncate again. An exception
@@ -837,6 +859,10 @@ async def main():
     if args.reasoning_effort_cycle:
         print(
             f"Reasoning effort cycle: {' -> '.join(args.reasoning_effort_cycle)}"
+        )
+    if args.temperature_cycle:
+        print(
+            f"Temperature cycle: {' -> '.join(str(t) for t in args.temperature_cycle)}"
         )
 
     # Decoder for the review-only `text` twin; see build_detokenizer.
@@ -969,6 +995,10 @@ async def main():
                 if args.reasoning_effort_cycle is not None:
                     queue_item["reasoning_effort"] = args.reasoning_effort_cycle[
                         processed_count % len(args.reasoning_effort_cycle)
+                    ]
+                if args.temperature_cycle is not None:
+                    queue_item["temperature"] = args.temperature_cycle[
+                        processed_count % len(args.temperature_cycle)
                     ]
                 await queue.put(queue_item)
                 processed_count += 1
