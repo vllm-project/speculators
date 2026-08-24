@@ -54,7 +54,7 @@ torchrun --standalone --nproc_per_node=4 scripts/train.py \
 
 - **`--dry-run`** (flag) Build the speculator, initialize weights, save a checkpoint to `--save-path`, then exit before training. Useful to validate the config/weights in vLLM before launching a full run; the saved checkpoint can be fed straight back via `--from-pretrained`.
 
-- **`--num-layers`** (int, default: `5` for dflash, `1` otherwise) Number of transformer layers in the draft model.
+- **`--num-layers`** (int, default: `5` for dflash/dspark/dflash2, `1` otherwise) Number of transformer layers in the draft model.
 
 - **`--draft-arch`** (str, default: `"llama"`) Architecture for the synthesized draft decoder layers. Options: `llama`, `qwen3`. Used by Eagle3 and P-EAGLE, which select the decoder layer class from this value; DFlash always uses a Qwen3-style decoder regardless. Both are supported in vLLM for inference, and the target and draft architectures do not have to match.
 
