@@ -11,18 +11,21 @@ from safetensors import safe_open
 _WEIGHT_ALIASES: dict[str, list[str]] = {
     "embed_tokens.weight": ["tok_embeddings.weight", "llm.embed.weight"],
     "lm_head.weight": ["output.weight", "llm.unembed.weight"],
-    "model.norm.weight": ["norm.weight"],
+    "model.norm.weight": ["llm.norm.weight", "norm.weight"],
 }
 
 
 def _resolve_key(name: str, weight_map: dict[str, str]) -> str | None:
-    """Try exact match, then suffix match, then known aliases."""
+    """Try exact match, then suffix match, then known aliases.
+
+    When multiple keys share a suffix, the shortest key wins (most specific).
+    """
     for candidate in [name, *_WEIGHT_ALIASES.get(name, [])]:
         if candidate in weight_map:
             return candidate
-        matched = next((k for k in weight_map if k.endswith(candidate)), None)
-        if matched:
-            return matched
+        matches = [k for k in weight_map if k.endswith(candidate)]
+        if matches:
+            return min(matches, key=len)
     return None
 
 

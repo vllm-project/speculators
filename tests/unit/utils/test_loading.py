@@ -118,6 +118,30 @@ def test_resolve_key_prefers_exact_over_alias():
     assert _resolve_key("embed_tokens.weight", wm) == "embed_tokens.weight"
 
 
+@pytest.mark.smoke
+def test_resolve_key_prefers_shortest_suffix():
+    """When multiple keys share a suffix, the shortest (most specific) wins."""
+    wm = {
+        "model.audio.final_norm.weight": "shard-a.safetensors",
+        "model.llm.layers.0.attn_norm.weight": "shard-b.safetensors",
+        "model.llm.norm.weight": "shard-c.safetensors",
+    }
+    assert _resolve_key("model.norm.weight", wm) == "model.llm.norm.weight"
+
+
+@pytest.mark.smoke
+def test_resolve_key_llm_aliases():
+    """Inkling-style keys with llm. prefix resolve correctly."""
+    wm = {
+        "model.llm.embed.weight": "shard-0.safetensors",
+        "model.llm.unembed.weight": "shard-1.safetensors",
+        "model.llm.norm.weight": "shard-2.safetensors",
+    }
+    assert _resolve_key("embed_tokens.weight", wm) == "model.llm.embed.weight"
+    assert _resolve_key("lm_head.weight", wm) == "model.llm.unembed.weight"
+    assert _resolve_key("model.norm.weight", wm) == "model.llm.norm.weight"
+
+
 # _resolve_file Tests
 
 
