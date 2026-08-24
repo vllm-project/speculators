@@ -138,9 +138,11 @@ steps:
             transformers: ["latest"]
 
   - block: ":vertical_traffic_light: Run Smoke Tests (H100)?"
+    key: "block-smoke-tests-h100"
     prompt: "Smoke tests are optional and not required to merge. Click Continue to run them for this build."
 
   - group: ":test_tube: Smoke Tests (H100)"
+    depends_on: "block-smoke-tests-h100"
     steps:
       - label: ":python: Smoke Tests py{{matrix.python}}"
         agents:
