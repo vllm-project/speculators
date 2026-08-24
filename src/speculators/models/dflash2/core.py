@@ -119,15 +119,15 @@ class DFlash2DraftModel(DFlashDraftModel):
 
     def _predecessor_ids(
         self,
-        input_ids: torch.Tensor,
-        anchored_block_indices: torch.Tensor,
-        num_blocks: int,
+        input_ids: torch.Tensor, # shape: [1, total_seq_len]
+        anchored_block_indices: torch.Tensor, # shape: [num_anchors*block_size]
     ) -> torch.Tensor:
         block_tokens = input_ids[0, anchored_block_indices].view(
-            num_blocks, self.block_size
-        )
+            -1, self.block_size
+        ) # shape: [num_anchors, block_size]
         if self.config.sample_from_anchor:
             return block_tokens
+        # For token sequence 0 1 2 3 return previous token ids 0 0 1 2
         return torch.cat([block_tokens[:, :1], block_tokens[:, :-1]], dim=1)
 
     @conditional_torch_compile
@@ -160,8 +160,7 @@ class DFlash2DraftModel(DFlashDraftModel):
                 **kwargs,
             )
         )
-        num_blocks = hidden.shape[1] // self.block_size
-        predecessor_ids = self._predecessor_ids(input_ids, block_indices, num_blocks)
+        predecessor_ids = self._predecessor_ids(input_ids, block_indices)
         loss, metrics = compute_metrics(
             unary_logits=unary_logits,
             targets=targets,
