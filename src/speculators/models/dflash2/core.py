@@ -1,5 +1,5 @@
 from collections.abc import Callable
-from typing import ClassVar
+from typing import Any, ClassVar
 
 import torch
 from transformers import PretrainedConfig
@@ -130,12 +130,12 @@ class DFlash2DraftModel(DFlashDraftModel):
     @conditional_torch_compile
     def forward(
         self,
-        hidden_states: torch.Tensor,
-        input_ids: torch.Tensor,
-        loss_mask: torch.Tensor,
-        verifier_last_hidden_states: torch.Tensor,
-        document_ids: torch.Tensor,
-        position_ids: torch.Tensor | None = None,
+        hidden_states: torch.Tensor,  # shape: [1, total_seq_len,num_hidden*hidden_size]
+        input_ids: torch.Tensor,  # shape: [1, total_seq_len]
+        loss_mask: torch.Tensor,  # shape: [1, total_seq_len]
+        verifier_last_hidden_states: torch.Tensor,  # shape: [1, total_seq_len, hidden_size] # noqa: E501
+        document_ids: torch.Tensor,  # shape: [1, total_seq_len]
+        position_ids: torch.Tensor | None = None,  # shape: [1, total_seq_len]
         loss_config: LossConfig | None = None,
         tv_loss_fn: Callable[[torch.Tensor, torch.Tensor], torch.Tensor] = tv_loss,
         gamma: float = 4.0,
@@ -144,7 +144,7 @@ class DFlash2DraftModel(DFlashDraftModel):
         per_position_loss_weight: str = "fixed-exp-decay",
         dpace_alpha: float = 0.5,
         **kwargs,
-    ):
+    ) -> tuple[None, torch.Tensor, dict[str, Any]]:
         hidden, unary_logits, targets, aligned_loss_mask, block_indices = (
             self._backbone_forward(
                 hidden_states,

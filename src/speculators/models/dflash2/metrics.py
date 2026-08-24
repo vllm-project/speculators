@@ -25,8 +25,8 @@ __all__ = [
 
 
 def selector_training_candidates(
-    candidate_ids: torch.Tensor,
-    target_ids: torch.Tensor,
+    candidate_ids: torch.Tensor,  # [*, top_k]
+    target_ids: torch.Tensor,  # [*]
 ) -> tuple[torch.Tensor, torch.Tensor]:
     """Build top-k selector candidates, injecting a missing target at rank K.
 
@@ -55,7 +55,8 @@ def selector_training_candidates(
 
 
 def _candidate_cross_entropy(
-    logits: torch.Tensor, target_positions: torch.Tensor
+    logits: torch.Tensor,  # [*, top_k]
+    target_positions: torch.Tensor,  # [*]
 ) -> torch.Tensor:
     return functional.cross_entropy(
         logits.flatten(0, -2),
@@ -66,12 +67,12 @@ def _candidate_cross_entropy(
 
 def compute_selector_loss(
     selector: CandidateSelector,
-    unary_logits: torch.Tensor,
-    hidden_states: torch.Tensor,
-    predecessor_ids: torch.Tensor,
-    candidate_ids: torch.Tensor,
-    target_ids: torch.Tensor,
-    loss_mask: torch.Tensor,
+    unary_logits: torch.Tensor,  # [1, num_anchors*block_size, draft_vocab_size]
+    hidden_states: torch.Tensor,  # [1, num_anchors*block_size, hidden_size]
+    predecessor_ids: torch.Tensor,  # [1, num_anchors*block_size]
+    candidate_ids: torch.Tensor,  # [1, num_anchors*block_size, top_k]
+    target_ids: torch.Tensor,  # [1, num_anchors*block_size]
+    loss_mask: torch.Tensor,  # [1, num_anchors*block_size]
     block_size: int,
     *,
     gamma: float,
@@ -120,14 +121,14 @@ def _add_selector_metrics(
     metrics: dict[str, Any],
     *,
     selector: CandidateSelector,
-    unary_logits: torch.Tensor,
-    hidden_states: torch.Tensor,
-    teacher_forced_predecessor_ids: torch.Tensor,
-    verified_anchor_ids: torch.Tensor,
-    candidate_ids: torch.Tensor,
-    target_ids: torch.Tensor,
-    targets: torch.Tensor,
-    loss_mask: torch.Tensor,
+    unary_logits: torch.Tensor,  # [1, num_anchors*block_size, draft_vocab_size]
+    hidden_states: torch.Tensor,  # [1, num_anchors*block_size, hidden_size]
+    teacher_forced_predecessor_ids: torch.Tensor,  # [1, num_anchors*block_size]
+    verified_anchor_ids: torch.Tensor,  # [num_anchors]
+    candidate_ids: torch.Tensor,  # [1, num_anchors*block_size, top_k]
+    target_ids: torch.Tensor,  # [1, num_anchors*block_size]
+    targets: torch.Tensor,  # [1, num_anchors*block_size, draft_vocab_size]
+    loss_mask: torch.Tensor,  # [1, num_anchors*block_size]
     block_size: int,
 ) -> None:
     """Add strict-candidate, teacher-forced, and self-conditioned metrics."""
@@ -222,13 +223,13 @@ def _add_selector_metrics(
 
 
 def compute_metrics(
-    unary_logits: torch.Tensor,
-    targets: torch.Tensor,
-    hidden_states: torch.Tensor,
-    teacher_forced_predecessor_ids: torch.Tensor,
-    verified_anchor_ids: torch.Tensor,
+    unary_logits: torch.Tensor,  # [1, num_anchors*block_size, draft_vocab_size]
+    targets: torch.Tensor,  # [1, num_anchors*block_size, draft_vocab_size]
+    hidden_states: torch.Tensor,  # [1, num_anchors*block_size, hidden_size]
+    teacher_forced_predecessor_ids: torch.Tensor,  # [1, num_anchors*block_size]
+    verified_anchor_ids: torch.Tensor,  # [num_anchors]
     selector: CandidateSelector,
-    loss_mask: torch.Tensor,
+    loss_mask: torch.Tensor,  # [1, num_anchors*block_size]
     block_size: int,
     *,
     loss_config: LossConfig,
