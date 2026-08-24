@@ -791,9 +791,7 @@ def test_temperature_reaches_request_and_metadata():
     item = {"idx": 0, "primary_id": "u", "turns": [{"role": "user", "content": "hi"}]}
     responses = [_response(prompt_token_ids=[1, 2], token_ids=[3], content="hello")]
     params = {"top_p": 0.95}
-    samples, _, sent = _regen(
-        item, responses, sampling_params=params, temperature=0.6
-    )
+    samples, _, sent = _regen(item, responses, sampling_params=params, temperature=0.6)
 
     assert sent[0]["temperature"] == 0.6
     assert samples[0]["metadata"]["sampling_params"] == {
@@ -814,9 +812,7 @@ def test_temperature_absent_by_default():
 def test_temperature_and_reasoning_effort_both_recorded():
     item = {"idx": 0, "primary_id": "u", "turns": [{"role": "user", "content": "hi"}]}
     responses = [_response(prompt_token_ids=[1, 2], token_ids=[3], content="hello")]
-    samples, _, sent = _regen(
-        item, responses, reasoning_effort="high", temperature=0.8
-    )
+    samples, _, sent = _regen(item, responses, reasoning_effort="high", temperature=0.8)
 
     assert sent[0]["reasoning_effort"] == "high"
     assert sent[0]["temperature"] == 0.8

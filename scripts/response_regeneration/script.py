@@ -584,7 +584,7 @@ def _sample_from_response(
     return sample, assistant_msg, tool_calls
 
 
-async def regenerate_conversation(
+async def regenerate_conversation(  # noqa: C901
     post_fn,
     item: dict[str, Any],
     *,
@@ -668,9 +668,7 @@ async def regenerate_conversation(
 
             prompt_token_ids = data.get("prompt_token_ids")
             completion_token_ids = data["choices"][0].get("token_ids")
-            total_tokens = len(prompt_token_ids or []) + len(
-                completion_token_ids or []
-            )
+            total_tokens = len(prompt_token_ids or []) + len(completion_token_ids or [])
             if total_tokens > max_tokens:
                 truncated = True
                 break
@@ -844,7 +842,7 @@ def load_input_dataset(args: argparse.Namespace) -> tuple[DatasetConfig, Any, st
     return config, dataset, split
 
 
-async def main():
+async def main():  # noqa: C901
     """Main async function to process dataset through vLLM endpoints."""
     args = parse_args()
 
@@ -857,9 +855,7 @@ async def main():
 
     print(f"Using model: {args.model}")
     if args.reasoning_effort_cycle:
-        print(
-            f"Reasoning effort cycle: {' -> '.join(args.reasoning_effort_cycle)}"
-        )
+        print(f"Reasoning effort cycle: {' -> '.join(args.reasoning_effort_cycle)}")
     if args.temperature_cycle:
         print(
             f"Temperature cycle: {' -> '.join(str(t) for t in args.temperature_cycle)}"
