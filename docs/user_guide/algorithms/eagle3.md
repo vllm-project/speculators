@@ -43,4 +43,4 @@ Eagle-3 is based on research from SafeAI Lab: [EAGLE Repository](https://github.
 
 ## See Also
 
-- [Train a Speculator](../tutorials/train.md) -- Step-by-step training guide (select Eagle-3, then online, offline, or hybrid)
+- [Train a Speculator](../tutorials/train.md) -- Step-by-step training guide (select Eagle-3, then online or offline)
