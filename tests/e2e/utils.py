@@ -419,8 +419,16 @@ def run_training(
         train_cmd += extra_train_args
 
     logger.info("Running training: {}", " ".join(train_cmd))
+    # Enable expandable segments to reduce CUDA memory fragmentation during training
+    train_env = os.environ.copy()
+    train_env["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
     result = subprocess.run(  # noqa: S603
-        train_cmd, stderr=subprocess.PIPE, text=True, check=False, timeout=timeout
+        train_cmd,
+        stderr=subprocess.PIPE,
+        text=True,
+        check=False,
+        timeout=timeout,
+        env=train_env,
     )
     assert result.returncode == 0, f"train.py failed:\n{result.stderr}"
 
