@@ -360,6 +360,27 @@ CUDA_VISIBLE_DEVICES=2,3 torchrun --standalone --nproc_per_node 2 \
 
 ///
 
+/// tab | DFlash2
+
+```bash
+# in speculators venv
+CUDA_VISIBLE_DEVICES=2,3 torchrun --standalone --nproc_per_node 2 \
+  scripts/train.py \
+  --verifier-name-or-path Qwen/Qwen3-8B \
+  --data-path ./output \
+  --save-path ./output/checkpoints \
+  --epochs 5 \
+  --total-seq-len 8192 \
+  --speculator-type dflash2 \
+  --num-layers 5 \
+  --lr 3e-4 \
+  --vllm-endpoint http://localhost:8000/v1 \
+  --on-missing generate \
+  --on-generate delete
+```
+
+///
+
 /// tab | DSpark
 
 ```bash
@@ -481,6 +502,26 @@ CUDA_VISIBLE_DEVICES=0,1,2,3 torchrun --standalone --nproc_per_node 4 \
   --epochs 5 \
   --total-seq-len 8192 \
   --speculator-type dflash \
+  --num-layers 5 \
+  --lr 3e-4 \
+  --hidden-states-path ./output/hidden_states \
+  --on-missing raise
+```
+
+///
+
+/// tab | DFlash2
+
+```bash
+# in speculators venv
+CUDA_VISIBLE_DEVICES=0,1,2,3 torchrun --standalone --nproc_per_node 4 \
+  scripts/train.py \
+  --verifier-name-or-path Qwen/Qwen3-8B \
+  --data-path ./output \
+  --save-path ./output/checkpoints \
+  --epochs 5 \
+  --total-seq-len 8192 \
+  --speculator-type dflash2 \
   --num-layers 5 \
   --lr 3e-4 \
   --hidden-states-path ./output/hidden_states \
@@ -611,6 +652,28 @@ CUDA_VISIBLE_DEVICES=2,3 torchrun --standalone --nproc_per_node 2 \
   --epochs 5 \
   --total-seq-len 8192 \
   --speculator-type dflash \
+  --num-layers 5 \
+  --lr 3e-4 \
+  --hidden-states-path ./output/hidden_states \
+  --vllm-endpoint http://localhost:8000/v1 \
+  --on-missing generate \
+  --on-generate cache
+```
+
+///
+
+/// tab | DFlash2
+
+```bash
+# in speculators venv
+CUDA_VISIBLE_DEVICES=2,3 torchrun --standalone --nproc_per_node 2 \
+  scripts/train.py \
+  --verifier-name-or-path Qwen/Qwen3-8B \
+  --data-path ./output \
+  --save-path ./output/checkpoints \
+  --epochs 5 \
+  --total-seq-len 8192 \
+  --speculator-type dflash2 \
   --num-layers 5 \
   --lr 3e-4 \
   --hidden-states-path ./output/hidden_states \
@@ -883,6 +946,7 @@ Each of these runs the full pipeline end to end:
 - [`peagle_qwen3_8b_sharegpt_online_5k.sh`](https://github.com/vllm-project/speculators/blob/main/examples/train/peagle_qwen3_8b_sharegpt_online_5k.sh) -- P-EAGLE
 - [`dflash_qwen3_8b_sharegpt_online_5k.sh`](https://github.com/vllm-project/speculators/blob/main/examples/train/dflash_qwen3_8b_sharegpt_online_5k.sh) -- DFlash, online
 - [`dflash_qwen3_8b_ultrachat_online_5k_bestpractices.sh`](https://github.com/vllm-project/speculators/blob/main/examples/train/dflash_qwen3_8b_ultrachat_online_5k_bestpractices.sh) -- DFlash, online, with the [best-practices recipe](https://github.com/vllm-project/speculators/issues/979) (D-PACE, block_size=16)
+- [`dflash2_qwen3_8b_sharegpt_online_5k.sh`](https://github.com/vllm-project/speculators/blob/main/examples/train/dflash2_qwen3_8b_sharegpt_online_5k.sh) -- DFlash2, online
 - [`dspark_qwen3_0_6b_sharegpt_online.sh`](https://github.com/vllm-project/speculators/blob/main/examples/train/dspark_qwen3_0_6b_sharegpt_online.sh) -- DSpark, online (targets Qwen3-0.6B)
 - [`mtp_qwen3_5_9b_gsm8k_online.sh`](https://github.com/vllm-project/speculators/blob/main/examples/train/mtp_qwen3_5_9b_gsm8k_online.sh) -- MTP, online
 

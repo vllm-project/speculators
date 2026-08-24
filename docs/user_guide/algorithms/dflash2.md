@@ -49,7 +49,7 @@ This experimental implementation directly trains full-vocabulary predecessor and
 
 All [DFlash](dflash.md) backbone parameters also apply. DFlash2 defaults to five draft layers, block size 8, `sample_from_anchor: False`, fixed exponential position weighting, and KL divergence loss. Set all shared knobs explicitly when comparing it with another algorithm.
 
-For a paired offline DFlash2/DSpark smoke run, see `examples/train/dflash2_dspark_qwen3_4b_offline_smoke.sh`.
+To train your own, see `examples/train/dflash2_qwen3_8b_sharegpt_online_5k.sh`.
 
 ## Serving
 
