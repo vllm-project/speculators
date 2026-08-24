@@ -77,6 +77,7 @@ def compute_selector_loss(
     gamma: float,
     per_position_loss_weight: str,
     dpace_alpha: float,
+    sample_from_anchor: bool = False,
 ) -> torch.Tensor:
     """Compute teacher-forced hard CE over the runtime-sized candidate set."""
     pos_idx = (
@@ -94,7 +95,7 @@ def compute_selector_loss(
         decay_fn = partial(
             dflash_loss_decay,
             gamma=gamma,
-            sample_from_anchor=False,
+            sample_from_anchor=sample_from_anchor,
         )
     return loss_function(
         candidate_logits,
@@ -116,6 +117,7 @@ def compute_metrics(
     loss_mask: torch.Tensor,  # [1, num_anchors*block_size]
     block_size: int,
     top_k: int,
+    sample_from_anchor: bool = False,
     *,
     loss_config: LossConfig,
     tv_loss_fn: Callable[[torch.Tensor, torch.Tensor], torch.Tensor] = tv_loss,
@@ -137,7 +139,7 @@ def compute_metrics(
         confidence_head_alpha=0.0,
         per_position_loss_weight=per_position_loss_weight,
         dpace_alpha=dpace_alpha,
-        sample_from_anchor=False,
+        sample_from_anchor=sample_from_anchor,
     )
     selector_loss = compute_selector_loss(
         candidate_logits,
@@ -147,6 +149,7 @@ def compute_metrics(
         gamma=gamma,
         per_position_loss_weight=per_position_loss_weight,
         dpace_alpha=dpace_alpha,
+        sample_from_anchor=sample_from_anchor,
     )
     loss = unary_loss + selector_loss_alpha * selector_loss
 
@@ -170,9 +173,7 @@ def compute_metrics(
         metrics[f"unary_candidate_recall_at_{top_k}_total"] = valid_total
 
         target_log_normalizer = torch.logsumexp(targets.float(), dim=-1)
-        candidate_target_logits = targets.gather(
-            -1, training_candidate_ids
-        ).float()
+        candidate_target_logits = targets.gather(-1, training_candidate_ids).float()
         candidate_mass = torch.exp(
             torch.logsumexp(candidate_target_logits, dim=-1) - target_log_normalizer
         )

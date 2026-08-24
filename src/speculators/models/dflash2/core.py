@@ -34,11 +34,6 @@ class DFlash2DraftModel(DFlashDraftModel):
     _no_split_modules = ["Qwen3DFlash2DecoderLayer"]
 
     def __init__(self, config: DFlash2SpeculatorConfig) -> None:
-        if config.sample_from_anchor:
-            raise ValueError(
-                "DFlash2 requires sample_from_anchor=False because supported "
-                "serving runtimes use the anchor as the bonus token."
-            )
         target_vocab_size = config.transformer_layer_config.vocab_size
         if config.draft_vocab_size != target_vocab_size:
             raise ValueError(
@@ -189,6 +184,7 @@ class DFlash2DraftModel(DFlashDraftModel):
             loss_mask=aligned_loss_mask,
             block_size=self.block_size,
             top_k=self.candidate_selector.top_k,
+            sample_from_anchor=self.config.sample_from_anchor,
             loss_config=loss_config or _DEFAULT_LOSS_CONFIG,
             tv_loss_fn=tv_loss_fn,
             gamma=gamma,

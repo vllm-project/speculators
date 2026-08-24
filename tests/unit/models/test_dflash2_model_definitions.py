@@ -309,11 +309,6 @@ def test_model_rejects_pruned_draft_vocabulary():
         DFlash2DraftModel(_tiny_config(draft_vocab_size=32))
 
 
-def test_model_rejects_sampling_from_anchor():
-    with pytest.raises(ValueError, match="sample_from_anchor=False"):
-        DFlash2DraftModel(_tiny_config(sample_from_anchor=True))
-
-
 def test_predecessor_ids_shift_each_block_from_its_anchor():
     model = DFlash2DraftModel(_tiny_config())
     input_ids = torch.arange(16).unsqueeze(0)
@@ -325,6 +320,20 @@ def test_predecessor_ids_shift_each_block_from_its_anchor():
     )
 
     expected = torch.tensor([[2, 2, 3, 4], [8, 8, 9, 10]])
+    torch.testing.assert_close(predecessor_ids, expected)
+
+
+def test_predecessor_ids_sample_from_anchor():
+    model = DFlash2DraftModel(_tiny_config(sample_from_anchor=True))
+    input_ids = torch.arange(16).unsqueeze(0)
+    anchored_block_indices = torch.tensor([2, 3, 4, 5, 8, 9, 10, 11])
+
+    predecessor_ids = model._predecessor_ids(
+        input_ids,
+        anchored_block_indices,
+    )
+
+    expected = torch.tensor([[2, 3, 4, 5], [8, 9, 10, 11]])
     torch.testing.assert_close(predecessor_ids, expected)
 
 
