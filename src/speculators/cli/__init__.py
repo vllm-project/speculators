@@ -11,7 +11,9 @@ from importlib.metadata import version as pkg_version
 import typer
 
 from speculators.cli.convert import convert
+from speculators.cli.prepare_data import prepare_data
 from speculators.cli.regenerate_responses import regenerate_responses
+from speculators.cli.stitch import stitch_command
 
 __all__ = ["app"]
 
@@ -39,5 +41,7 @@ def _main(
     pass
 
 
+app.command(rich_help_panel="Pipeline")(prepare_data)
+app.command(name="stitch-mtp", rich_help_panel="Pipeline")(stitch_command)
 app.command(rich_help_panel="Pipeline")(regenerate_responses)
 app.command(rich_help_panel="Tools")(convert)
