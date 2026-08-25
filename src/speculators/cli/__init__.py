@@ -11,6 +11,8 @@ from importlib.metadata import version as pkg_version
 import typer
 
 from speculators.cli.convert import convert
+from speculators.cli.prepare_data import prepare_data
+from speculators.cli.stitch import stitch_command
 from speculators.cli.train import train_command
 
 __all__ = ["app"]
@@ -39,6 +41,8 @@ def _main(
     pass
 
 
+app.command(rich_help_panel="Pipeline")(prepare_data)
+app.command(name="stitch-mtp", rich_help_panel="Pipeline")(stitch_command)
 app.command(
     name="train",
     rich_help_panel="Pipeline",

@@ -64,7 +64,7 @@ Hidden states are generated on demand during epoch 0, cached, then reused. Use w
 
 ## Step 0: Setup Your Environment
 
-This tutorial drives the pipeline through the scripts in the repository (`scripts/prepare_data.py`, `scripts/train.py`, and so on). Those are not part of the published PyPI package, so start by cloning the repo -- every command below is run from its root:
+This tutorial drives the pipeline through CLI commands (`speculators prepare-data`, `speculators train`, and so on). Start by cloning the repo -- every command below is run from its root:
 
 ```bash
 git clone https://github.com/vllm-project/speculators.git
@@ -104,7 +104,7 @@ Response Regeneration writes speculator-format rows containing `input_ids` and `
 
 ```bash
 # in speculators venv
-python scripts/prepare_data.py \
+speculators prepare-data \
   --model Qwen/Qwen3-8B \
   --data ./target_responses.jsonl \
   --output ./output \
@@ -115,7 +115,7 @@ python scripts/prepare_data.py \
 If your generation pipeline saves natural-language conversations instead, start the target model's vLLM server as described in Step 2, then use its render endpoint to convert those responses into speculator format:
 
 ```bash
-python scripts/prepare_data.py \
+speculators prepare-data \
   --model Qwen/Qwen3-8B \
   --data ./on_policy_conversations.jsonl \
   --render-endpoint http://localhost:8000 \
@@ -148,7 +148,7 @@ output/
 
 **Time:** ~15 seconds to ~2 minutes for 5K samples, depending on dataset and tokenizer.
 
-**Note:** This step sets up the dataset used to train your model and is the same for every algorithm and mode. It's important that any data configuration choices are made at this stage. For example, limiting the data sample length, filtering out samples with limited assistant response tokens, handling multi-turn conversation responses, etc. For more information please see the [prepare_data.py cli reference](/cli/prepare_data.md).
+**Note:** This step sets up the dataset used to train your model and is the same for every algorithm and mode. It's important that any data configuration choices are made at this stage. For example, limiting the data sample length, filtering out samples with limited assistant response tokens, handling multi-turn conversation responses, etc. For more information please see the [prepare-data CLI reference](/cli/prepare_data.md).
 
 ## Step 2: Launch vLLM Server
 
@@ -398,7 +398,7 @@ CUDA_VISIBLE_DEVICES=2,3 torchrun --standalone --nproc_per_node 2 \
 Then stitch the finetuned MTP weights back into the verifier checkpoint. This produces a self-contained checkpoint deployable on vLLM with native MTP speculative decoding:
 
 ```bash
-python scripts/stitch_mtp.py \
+speculators stitch-mtp \
   ./output/checkpoints/checkpoint_best \
   Qwen/Qwen3.5-9B \
   --output-path ./output/stitched
@@ -525,7 +525,7 @@ CUDA_VISIBLE_DEVICES=0,1,2,3 torchrun --standalone --nproc_per_node 4 \
 Then stitch the finetuned MTP weights back into the verifier checkpoint. This produces a self-contained checkpoint deployable on vLLM with native MTP speculative decoding:
 
 ```bash
-python scripts/stitch_mtp.py \
+speculators stitch-mtp \
   ./output/checkpoints/checkpoint_best \
   Qwen/Qwen3.5-9B \
   --output-path ./output/stitched
@@ -661,7 +661,7 @@ CUDA_VISIBLE_DEVICES=2,3 torchrun --standalone --nproc_per_node 2 \
 Then stitch the finetuned MTP weights back into the verifier checkpoint. This produces a self-contained checkpoint deployable on vLLM with native MTP speculative decoding:
 
 ```bash
-python scripts/stitch_mtp.py \
+speculators stitch-mtp \
   ./output/checkpoints/checkpoint_best \
   Qwen/Qwen3.5-9B \
   --output-path ./output/stitched
