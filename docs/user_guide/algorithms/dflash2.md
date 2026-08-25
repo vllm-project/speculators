@@ -51,6 +51,31 @@ All [DFlash](dflash.md) backbone parameters also apply. DFlash2 defaults to five
 
 To train your own, see `examples/train/dflash2_qwen3_8b_sharegpt_online_5k.sh`.
 
+## Ascend NPU
+
+DFlash2 trains on Ascend NPUs (torch_npu) with two required switches:
+
+- `--draft-attn-impl sdpa` (or `eager`). The default `simple_flex_attention`
+  is not available on NPU: `flex_attention` is only implemented for CUDA, CPU
+  and HPU upstream
+  ([issue #531](https://github.com/vllm-project/speculators/issues/531)), and
+  its `create_block_mask` build step cannot be traced by the BiSheng
+  compiler. With `sdpa`/`eager` the draft layers consume a dense mask built
+  eagerly, and the DFlash2 convolution and candidate selector are plain
+  PyTorch ops that run unmodified.
+- `--loss-implementation eager`. The default `fused` loss is a Triton kernel,
+  which is unavailable on NPU.
+
+Non-CUDA hosts automatically skip `torch.compile` for the mask builder and the
+model forward (they fall back to eager execution), so no extra flag is needed
+for that. Known limitations versus CUDA: the eager loss uses more memory
+(watch for OOM at large `--total-seq-len`/`--max-anchors`), and the dense
+attention mask is materialized per step instead of block-sparse. Distributed
+setup uses HCCL via `torch.accelerator`; set `ASCEND_RT_VISIBLE_DEVICES` and
+serve the verifier with vllm-ascend so verifier numerics match. For a
+single-node online run, see
+`examples/train/dflash2_qwen3_4b_online_npu.sh`.
+
 ## Serving
 
 Checkpoints emitted here follow the public Z Lab weight contract but use a speculators config. They can be served in vLLM using `vllm serve ./checkpoint`.
