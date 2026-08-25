@@ -275,6 +275,21 @@ def load_safetensors_state_dict(path: Path, device: str) -> dict[str, torch.Tens
     return full_state_dict
 
 
+def state_dict_from_checkpoint(model: PreTrainedModel, state_dict: dict) -> dict:
+    """Let a model translate its own on-disk layout back into module names.
+
+    A speculators checkpoint is also the artifact the inference engine loads, so a
+    model may deliberately write keys that are not its parameter names -- the DSV4
+    DSpark draft writes the released ``mtp.*`` per-expert layout so vLLM can load it
+    unconverted. Resume reads those keys raw, so it has to ask rather than assume.
+
+    A model that does not define the method gets back the object it passed in.
+    """
+    raw_model = model.module if isinstance(model, DistributedDataParallel) else model
+    hook = getattr(raw_model, "state_dict_from_checkpoint", None)
+    return state_dict if hook is None else hook(state_dict)
+
+
 def patch_config_dtype(config_path: Path, float_dtype: torch.dtype) -> None:
     """Patch config.json to match the actual on-disk tensor dtype.
 
@@ -304,6 +319,7 @@ class SingleGPUCheckpointer(BaseCheckpointer):
             self.model_path(self.previous_epoch),
             device,
         )
+        full_state_dict = state_dict_from_checkpoint(model, full_state_dict)
         full_state_dict = convert_float_dtype(
             full_state_dict, float_dtype or model.dtype
         )
@@ -363,6 +379,7 @@ class DistributedCheckpointer(BaseCheckpointer):
         full_state_dict = load_safetensors_state_dict(
             self.model_path(self.previous_epoch), "cpu"
         )
+        full_state_dict = state_dict_from_checkpoint(model, full_state_dict)
         full_state_dict = convert_float_dtype(
             full_state_dict, float_dtype or model.dtype
         )
