@@ -67,9 +67,9 @@ def get_next_version(
     version = max(version, LAST_RELEASE_VERSION)
 
     if build_type == "release":
-        #if not tag:
+        # if not tag:
         #    raise ValueError("RELEASE build requires a vX.Y.Z tag")
-        #if commits_since_last:
+        # if commits_since_last:
         #    raise ValueError(
         #        f"HEAD is {commits_since_last} commit(s) ahead"
         #    )
