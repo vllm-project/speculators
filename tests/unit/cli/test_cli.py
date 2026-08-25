@@ -15,6 +15,7 @@ class TestRootApp:
     def test_help(self):
         result = runner.invoke(app, ["--help"])
         assert result.exit_code == 0
+        assert "Pipeline" in result.output
         assert "Tools" in result.output
 
     def test_version(self):
@@ -26,6 +27,7 @@ class TestRootApp:
         result = runner.invoke(app, ["--help"])
         assert result.exit_code == 0
         assert "prepare-data" in result.output
+        assert "stitch-mtp" in result.output
 
     def test_tools_commands_in_help(self):
         result = runner.invoke(app, ["--help"])
@@ -78,3 +80,15 @@ class TestPrepareDataCommand:
         result = runner.invoke(app, ["prepare-data", "--help"])
         assert result.exit_code == 0
         assert "--render-endpoint" in result.output
+
+
+class TestStitchCommand:
+    def test_help(self):
+        result = runner.invoke(app, ["stitch-mtp", "--help"])
+        assert result.exit_code == 0
+        assert "finetuned_checkpoint" in result.output
+        assert "verifier_path" in result.output
+
+    def test_missing_required_args(self):
+        result = runner.invoke(app, ["stitch-mtp"])
+        assert result.exit_code != 0
