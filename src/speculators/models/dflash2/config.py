@@ -14,7 +14,7 @@ __all__ = [
 class DFlash2SpeculatorConfig(DFlashSpeculatorConfig):
     """DFlash configuration with local convolutions and a candidate selector."""
 
-    speculators_model_type: Literal["dflash"] = "dflash"  # type: ignore[assignment]
+    speculators_model_type: Literal["dflash2"] = "dflash2"  # type: ignore[assignment]
     architectures: list[str] = Field(
         default_factory=lambda: ["DFlash2DraftModel"],
         description="Model architectures that can load these weights",

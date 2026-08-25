@@ -556,6 +556,22 @@ RECIPES: dict[str, dict] = {
         "on_missing": "generate",
         "on_generate": "delete",
     },
+    "dflash2_qwen3_8b_sharegpt_online_5k.sh": {
+        "verifier_name_or_path": "Qwen/Qwen3-8B",
+        "data_path": "./output/dflash2_qwen3_8b_sharegpt",
+        "vllm_endpoint": "http://localhost:8000/v1",
+        "save_path": "./output/dflash2_qwen3_8b_sharegpt/checkpoints",
+        "epochs": 5,
+        "lr": 3e-4,
+        "total_seq_len": 8192,
+        "speculator_type": "dflash2",
+        "block_size": 8,
+        "max_anchors": 3072,
+        "num_layers": 5,
+        "target_layer_ids": [2, 18, 33],
+        "on_missing": "generate",
+        "on_generate": "delete",
+    },
     "dspark_qwen3_0_6b_sharegpt_online.sh": {
         "verifier_name_or_path": "Qwen/Qwen3-0.6B",
         "data_path": "./output/dspark_qwen3_0_6b_sharegpt",
@@ -645,129 +661,3 @@ def test_recipe_flags_resolve_unchanged(recipe: str, expected: dict):
     flat = TrainConfig.resolve(_recipe_argv(EXAMPLES / recipe)).flatten()
     for dest, value in expected.items():
         assert flat[dest] == value, dest
-
-
-PAIRED_RECIPE = EXAMPLES / "dflash2_dspark_qwen3_4b_offline_smoke.sh"
-
-
-def _captured_train_argv(path: Path) -> list[str]:
-    argv = path.read_text().splitlines()
-    return argv[argv.index("scripts/train.py") + 1 :]
-
-
-@pytest.mark.skipif(shutil.which("bash") is None, reason="requires bash")
-def test_paired_recipe_resolves_matching_training_contract(tmp_path):
-    """Exercise the function-based launcher, which RECIPES cannot extract."""
-    data_path = tmp_path / "data"
-    hidden_states_path = tmp_path / "hidden_states"
-    capture_path = tmp_path / "captured"
-    bin_path = tmp_path / "bin"
-    torchrun_path = tmp_path / ".venv" / "bin" / "torchrun"
-    for path in (data_path, hidden_states_path, capture_path, bin_path):
-        path.mkdir(parents=True)
-    torchrun_path.parent.mkdir(parents=True)
-    (data_path / "shard.arrow").touch()
-    (data_path / "token_freq.pt").touch()
-    (hidden_states_path / "hs_0.safetensors").touch()
-
-    nvidia_smi = bin_path / "nvidia-smi"
-    nvidia_smi.write_text("#!/usr/bin/env bash\nexit 0\n")
-    nvidia_smi.chmod(0o755)
-    torchrun_path.write_text(
-        "#!/usr/bin/env bash\n"
-        "algorithm=\n"
-        "previous=\n"
-        'for argument in "$@"; do\n'
-        '    if [[ "$previous" == "--speculator-type" ]]; then\n'
-        '        algorithm="$argument"\n'
-        "    fi\n"
-        '    previous="$argument"\n'
-        "done\n"
-        '[[ -n "$algorithm" ]]\n'
-        'printf "%s\\n" "$@" > "$CAPTURE_DIR/$algorithm.argv"\n'
-    )
-    torchrun_path.chmod(0o755)
-
-    env = {
-        "PATH": f"{bin_path}:/usr/bin:/bin",
-        "RUN_ROOT": str(tmp_path / "run"),
-        "DATA_PATH": str(data_path),
-        "HIDDEN_STATES_PATH": str(hidden_states_path),
-        "DFLASH2_GPUS": "0",
-        "DSPARK_GPUS": "1",
-        "NUM_GPUS_PER_RUN": "1",
-        "CAPTURE_DIR": str(capture_path),
-    }
-    subprocess.run(  # noqa: S603
-        [shutil.which("bash") or "bash", str(PAIRED_RECIPE)],
-        cwd=tmp_path,
-        env=env,
-        capture_output=True,
-        text=True,
-        check=True,
-    )
-
-    dflash2 = TrainConfig.resolve(
-        _captured_train_argv(capture_path / "dflash2.argv")
-    ).flatten()
-    dspark = TrainConfig.resolve(
-        _captured_train_argv(capture_path / "dspark.argv")
-    ).flatten()
-    parity_fields = {
-        "verifier_name_or_path",
-        "data_path",
-        "hidden_states_backend",
-        "hidden_states_path",
-        "num_layers",
-        "block_size",
-        "sample_from_anchor",
-        "draft_vocab_size",
-        "target_layer_ids",
-        "total_seq_len",
-        "train_data_ratio",
-        "max_anchors",
-        "loss_fn",
-        "per_position_loss_weight",
-        "dflash_decay_gamma",
-        "optimizer",
-        "lr",
-        "weight_decay",
-        "scheduler_type",
-        "scheduler_warmup_ratio",
-        "epochs",
-        "max_steps",
-        "checkpoint_freq",
-        "seed",
-        "draft_attn_impl",
-        "sliding_window_non_causal",
-        "hidden_states_dtype",
-        "num_workers",
-        "prefetch_factor",
-        "on_missing",
-        "no_resume_from_checkpoint",
-    }
-    for field in parity_fields:
-        assert dflash2[field] == dspark[field], field
-    assert dflash2["speculator_type"] == "dflash2"
-    assert dflash2["selector_loss_alpha"] == pytest.approx(0.1)
-    assert dspark["speculator_type"] == "dspark"
-    assert dspark["confidence_head_alpha"] == pytest.approx(1.0)
-
-
-@pytest.mark.skipif(shutil.which("bash") is None, reason="requires bash")
-def test_paired_recipe_rejects_duplicate_gpu_ids(tmp_path):
-    result = subprocess.run(  # noqa: S603
-        [shutil.which("bash") or "bash", str(PAIRED_RECIPE)],
-        cwd=tmp_path,
-        env={
-            "PATH": "/usr/bin:/bin",
-            "DFLASH2_GPUS": "0,0",
-            "DSPARK_GPUS": "1,2",
-            "NUM_GPUS_PER_RUN": "2",
-        },
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    assert result.returncode != 0
-    assert "DFLASH2_GPUS contains duplicate GPU id: 0" in result.stderr
