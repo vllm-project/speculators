@@ -30,7 +30,14 @@ MM_MODEL = "Qwen/Qwen3-VL-2B-Instruct"
 @pytest.mark.e2e
 @pytest.mark.slow
 @pytest.mark.parametrize(
-    ("model", "dataset", "speculator_type", "extra_train_args", "target_layer_ids"),
+    (
+        "model",
+        "dataset",
+        "speculator_type",
+        "extra_train_args",
+        "target_layer_ids",
+        "draft_vocab_size",
+    ),
     [
         (
             TEXT_MODEL,
@@ -38,15 +45,25 @@ MM_MODEL = "Qwen/Qwen3-VL-2B-Instruct"
             "eagle3",
             [],
             None,
+            8192,
         ),
-        (MM_MODEL, "sharegpt4v_coco", "eagle3", [], None),  # Multimodal
+        (MM_MODEL, "sharegpt4v_coco", "eagle3", [], None, 8192),  # Multimodal
         (
             TEXT_MODEL,
             "hf:inference-optimization/speculators-ci-datasets:smoke_regen",
             "dflash",
             ["--block-size", "8", "--max-anchors", "256", "--num-layers", "3"],
             [1, 13, 25],
+            8192,
         ),  # DFlash with 3 layers + verifier last layer
+        (
+            TEXT_MODEL,
+            "hf:inference-optimization/speculators-ci-datasets:smoke_regen",
+            "dflash2",
+            ["--block-size", "8", "--max-anchors", "256", "--num-layers", "3"],
+            [1, 13, 25],
+            151936,
+        ),  # DFlash2 with convolution + candidate selector
         (
             TEXT_MODEL,
             "hf:inference-optimization/speculators-ci-datasets:smoke_regen",
@@ -63,6 +80,7 @@ MM_MODEL = "Qwen/Qwen3-VL-2B-Instruct"
                 "--no-norm-before-residual",
             ],
             None,
+            8192,
         ),  # P-EAGLE with parallel multi-token prediction
         (
             TEXT_MODEL,
@@ -87,6 +105,7 @@ MM_MODEL = "Qwen/Qwen3-VL-2B-Instruct"
                 '{"ce": 0.1, "tv": 0.9}',
             ],
             [1, 13, 25],
+            8192,
         ),  # DSpark with Markov + confidence heads
     ],
 )
@@ -99,6 +118,7 @@ def test_offline_smoke(
     speculator_type: str,
     extra_train_args: list[str],
     target_layer_ids: list[int] | None,
+    draft_vocab_size: int,
 ):
     if dataset == "sharegpt4v_coco":
         coco_dir = tmp_path / "coco"
@@ -123,6 +143,7 @@ def test_offline_smoke(
         speculator_type=speculator_type,
         extra_train_args=extra_train_args,
         target_layer_ids=target_layer_ids,
+        draft_vocab_size=draft_vocab_size,
     )
 
 
