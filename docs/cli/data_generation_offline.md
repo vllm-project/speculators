@@ -29,7 +29,7 @@ python scripts/data_generation_offline.py \
 
 ### Data Arguments
 
-- **`--preprocessed-data`** (str, required) Path to preprocessed dataset (produced by [prepare_data.py](prepare_data.md)).
+- **`--preprocessed-data`** (str, required) Path to preprocessed dataset (produced by [prepare-data](prepare_data.md)).
 
 - **`--max-samples`** (int, default: `None`) Maximum number of samples to process. If `None`, processes all samples.
 
