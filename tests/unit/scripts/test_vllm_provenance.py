@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from pathlib import Path
+from typing import TYPE_CHECKING
 from unittest.mock import patch
 
 from launch_vllm import (  # type: ignore[import-not-found]
@@ -10,6 +10,9 @@ from launch_vllm import (  # type: ignore[import-not-found]
     _save_vllm_patch,
     _save_vllm_provenance,
 )
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 
 class TestFindVllmRepo:

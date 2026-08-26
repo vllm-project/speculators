@@ -24,22 +24,20 @@ def provenance_dir(tmp_path: Path) -> Path:
 
 
 class TestVenvIsolation:
-    """Verify launch_vllm.py works without speculators installed (vLLM venv scenario)."""
+    """launch_vllm.py must import without speculators installed (vLLM venv)."""
 
     def test_imports_without_speculators_on_path(self):
-        """Script must not ImportError when speculators is absent — the root cause of #1008."""
+        """No ImportError when speculators is absent — the root cause of #1008."""
+        # Strip path entries that would let `speculators` be found, then import.
+        snippet = (
+            "import sys; "
+            "sys.path = [p for p in sys.path "
+            "if 'speculators' not in p and 'site-packages' not in p]; "
+            f"sys.path.insert(0, {str(SCRIPTS_DIR)!r}); "
+            "import launch_vllm"
+        )
         result = subprocess.run(  # noqa: S603
-            [
-                sys.executable,
-                "-c",
-                (
-                    "import sys; "
-                    # Strip any path entries that would let `speculators` be found
-                    "sys.path = [p for p in sys.path if 'speculators' not in p and 'site-packages' not in p]; "
-                    f"sys.path.insert(0, {str(SCRIPTS_DIR)!r}); "
-                    "import launch_vllm"  # must not raise ImportError
-                ),
-            ],
+            [sys.executable, "-c", snippet],
             capture_output=True,
             text=True,
             timeout=30,
