@@ -66,9 +66,9 @@ steps:
         matrix:
           setup:
             python: ["3.10", "3.13"]
-            transformers: ["<5.0.0", "latest"]
+            transformers: ["lower", "latest"]
           adjustments:
-            - with: { python: "3.13", transformers: "<5.0.0" }
+            - with: { python: "3.13", transformers: "lower" }
               skip: true
 
   - group: ":test_tube: Integration Tests (H100)"
@@ -138,7 +138,7 @@ steps:
         matrix:
           setup:
             python: ["3.10", "3.13"]
-            transformers: ["<5.0.0", "latest"]
+            transformers: ["lower", "latest"]
           adjustments:
-            - with: { python: "3.13", transformers: "<5.0.0" }
+            - with: { python: "3.13", transformers: "lower" }
               skip: true
