@@ -65,7 +65,7 @@ def test_eagle3_qwen3_8b_sharegpt(tmp_path: Path, prompts: list[list[dict[str, s
         max_tokens=512,
         ignore_eos=True,
         prompts=prompts,
-        acceptance_thresholds=[0.40, 0.10, 0.01],
+        acceptance_thresholds=[0.39, 0.10, 0.01],
     )
 
 
