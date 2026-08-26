@@ -52,9 +52,8 @@ def test_fp8_hidden_states_roundtrip(tmp_path: Path):
     with launch_vllm_server_context(
         MODEL,
         VLLM_PORT,
-        hidden_states_path=str(tmp_path / "unused_file_backend_path"),
+        hidden_states_path=str(hs_path),
         hidden_states_backend="fp8",
-        fp8_hidden_states_path=str(hs_path),
         enforce_eager=True,
     ):
         resp = _send_completion(f"http://127.0.0.1:{VLLM_PORT}", MODEL, prompt)
