@@ -48,7 +48,7 @@ def test_fp8_backend_defaults_backfilled():
         argv=["train.py"],
     )
     flat = cfg.flatten()
-    assert flat["fp8_hidden_states_path"] is None  # FP8Backend default
+    assert flat["hidden_states_path"] is None  # FP8Backend default (shared with file)
 
 
 def test_resolve_fp8_backend_hidden_states_path():
@@ -58,12 +58,12 @@ def test_resolve_fp8_backend_hidden_states_path():
             "m",
             "--hidden-states-backend",
             "fp8",
-            "--fp8-hidden-states-path",
+            "--hidden-states-path",
             "/data/hs-fp8",
         ]
     )
     flat = cfg.flatten()
-    assert flat["fp8_hidden_states_path"] == "/data/hs-fp8"
+    assert flat["hidden_states_path"] == "/data/hs-fp8"
 
 
 def test_unselected_backend_args_not_backfilled():

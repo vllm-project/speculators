@@ -162,7 +162,8 @@ class FileBackend(HiddenStatesBackend):
 
     @staticmethod
     def add_train_args(parser: argparse.ArgumentParser) -> None:
-        parser.add_argument(
+        _add_argument_if_absent(
+            parser,
             "--hidden-states-path",
             type=str,
             default=None,
@@ -174,7 +175,8 @@ class FileBackend(HiddenStatesBackend):
 
     @staticmethod
     def add_launch_args(parser: argparse.ArgumentParser) -> None:
-        parser.add_argument(
+        _add_argument_if_absent(
+            parser,
             "--hidden-states-path",
             type=str,
             default="/tmp/hidden_states",  # noqa: S108
@@ -246,38 +248,44 @@ class FP8Transfer(FileTransfer):
         return self._dequantize(super().get_generated(handle))
 
 
+def _add_argument_if_absent(
+    parser: argparse.ArgumentParser, *args: Any, **kwargs: Any
+) -> None:
+    """Add an argument only if its dest is not already registered."""
+    dest = kwargs.get("dest") or args[0].lstrip("-").replace("-", "_")
+    if not any(a.dest == dest for a in parser._actions):  # noqa: SLF001
+        parser.add_argument(*args, **kwargs)
+
+
 @HiddenStatesBackend.register("fp8")
 class FP8Backend(HiddenStatesBackend):
     """Shared-filesystem backend that quantizes hidden states to FP8.
 
-    Uses distinct ``--fp8-*`` flags (rather than reusing ``FileBackend``'s
-    ``--hidden-states-path``) since ``add_train_args``/``add_launch_args``
-    from every registered backend are merged into one shared parser, and
-    dest/flag collisions across backends are treated as errors.
+    Reuses the same ``--hidden-states-path`` flag as ``FileBackend`` since
+    the semantics are identical (a directory for safetensors files).
     """
 
     @staticmethod
     def add_train_args(parser: argparse.ArgumentParser) -> None:
-        parser.add_argument(
-            "--fp8-hidden-states-path",
+        _add_argument_if_absent(
+            parser,
+            "--hidden-states-path",
             type=str,
             default=None,
             help=(
-                "The path where cached FP8-quantized hidden states files are "
-                "stored. (Default: args.data_path / 'hidden_states')"
+                "The path where cached hidden states files are stored. (Default: "
+                "args.data_path / 'hidden_states')"
             ),
         )
 
     @staticmethod
     def add_launch_args(parser: argparse.ArgumentParser) -> None:
-        parser.add_argument(
-            "--fp8-hidden-states-path",
+        _add_argument_if_absent(
+            parser,
+            "--hidden-states-path",
             type=str,
             default="/tmp/hidden_states",  # noqa: S108
-            help=(
-                "The directory to save FP8 hidden states to. Default "
-                "'/tmp/hidden_states'"
-            ),
+            help="The directory to save hidden states to. Default '/tmp/hidden_states'",
         )
 
     @staticmethod
@@ -286,8 +294,8 @@ class FP8Backend(HiddenStatesBackend):
         data_path: str,
     ) -> FP8Transfer:
         hs_path = (
-            Path(args.fp8_hidden_states_path)
-            if args.fp8_hidden_states_path
+            Path(args.hidden_states_path)
+            if args.hidden_states_path
             else Path(data_path) / "hidden_states"
         )
         return FP8Transfer(hs_path)
@@ -299,7 +307,7 @@ class FP8Backend(HiddenStatesBackend):
             "kv_role": "kv_producer",
             "kv_connector_module_path": "hs_connectors.fp8_hidden_states_connector",
             "kv_connector_extra_config": {
-                "shared_storage_path": args.fp8_hidden_states_path,
+                "shared_storage_path": args.hidden_states_path,
             },
         }
 
@@ -335,13 +343,15 @@ class MooncakeBackend(HiddenStatesBackend):
 
     @staticmethod
     def _add_mooncake_args(parser: argparse.ArgumentParser) -> None:
-        parser.add_argument(
+        _add_argument_if_absent(
+            parser,
             "--mooncake-master",
             type=str,
             default="127.0.0.1:50051",
             help="Mooncake master server address. Used with backend=mooncake.",
         )
-        parser.add_argument(
+        _add_argument_if_absent(
+            parser,
             "--mooncake-metadata-server",
             type=str,
             default="P2PHANDSHAKE",
@@ -350,13 +360,15 @@ class MooncakeBackend(HiddenStatesBackend):
                 "Used with backend=mooncake."
             ),
         )
-        parser.add_argument(
+        _add_argument_if_absent(
+            parser,
             "--mooncake-protocol",
             choices=["tcp", "rdma"],
             default="tcp",
             help="Mooncake transport protocol. Used with backend=mooncake.",
         )
-        parser.add_argument(
+        _add_argument_if_absent(
+            parser,
             "--mooncake-global-segment-gib",
             type=float,
             default=4.0,
@@ -365,7 +377,8 @@ class MooncakeBackend(HiddenStatesBackend):
                 "objects, in GiB. Increase for many concurrent long sequences."
             ),
         )
-        parser.add_argument(
+        _add_argument_if_absent(
+            parser,
             "--mooncake-local-buffer-gib",
             type=float,
             default=2.0,
@@ -379,7 +392,8 @@ class MooncakeBackend(HiddenStatesBackend):
     @staticmethod
     def add_launch_args(parser: argparse.ArgumentParser) -> None:
         MooncakeBackend._add_mooncake_args(parser)
-        parser.add_argument(
+        _add_argument_if_absent(
+            parser,
             "--mooncake-writer-threads",
             type=int,
             default=4,

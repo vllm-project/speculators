@@ -115,7 +115,6 @@ def launch_vllm_server(
     mooncake_master: str | None = None,
     mooncake_metadata_server: str | None = None,
     mooncake_protocol: str | None = None,
-    fp8_hidden_states_path: str | None = None,
 ) -> subprocess.Popen:
     """Launch a vLLM server configured for hidden-state extraction.
 
@@ -137,8 +136,6 @@ def launch_vllm_server(
         cmd += ["--mooncake-metadata-server", mooncake_metadata_server]
     if mooncake_protocol is not None:
         cmd += ["--mooncake-protocol", mooncake_protocol]
-    if fp8_hidden_states_path is not None:
-        cmd += ["--fp8-hidden-states-path", fp8_hidden_states_path]
     if target_layer_ids is not None:
         cmd += ["--target-layer-ids"] + [str(lid) for lid in target_layer_ids]
     if enforce_eager:
