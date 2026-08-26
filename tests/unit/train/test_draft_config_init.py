@@ -22,15 +22,15 @@ import pytest
 from transformers.models.llama.configuration_llama import LlamaConfig
 from transformers.models.qwen3.configuration_qwen3 import Qwen3Config
 
-from scripts.train import (
+from speculators import SpeculatorsConfig, VerifierConfig
+from speculators.models.eagle3 import Eagle3DraftModel, Eagle3SpeculatorConfig
+from speculators.proposals.greedy import GreedyTokenProposalConfig
+from speculators.train.cli import (
     _build_from_config_only,
     build_draft_model,
     create_transformer_layer_config,
     load_draft_transformer_layer_config,
 )
-from speculators import SpeculatorsConfig, VerifierConfig
-from speculators.models.eagle3 import Eagle3DraftModel, Eagle3SpeculatorConfig
-from speculators.proposals.greedy import GreedyTokenProposalConfig
 from speculators.train.config import TrainConfig
 from speculators.train.config.resolution import DECODER_SHAPING_FLAGS
 from speculators.utils.loading import is_config_only_dir
@@ -204,7 +204,9 @@ def test_create_layer_config_layer_types(
     """full_attention_indices selects per-layer attention; sliding window stays
     enabled unless every layer opts into full attention."""
     verifier = _make_verifier_namespace()
-    with patch("scripts.train.AutoConfig.from_pretrained", return_value=verifier):
+    with patch(
+        "speculators.train.cli.AutoConfig.from_pretrained", return_value=verifier
+    ):
         config = create_transformer_layer_config(
             "target",
             num_layers=num_layers,
@@ -222,7 +224,9 @@ def test_create_layer_config_rejects_out_of_range_indices(bad_indices):
     """full_attention_indices outside [0, num_layers) is a hard error."""
     verifier = _make_verifier_namespace()
     with (
-        patch("scripts.train.AutoConfig.from_pretrained", return_value=verifier),
+        patch(
+            "speculators.train.cli.AutoConfig.from_pretrained", return_value=verifier
+        ),
         pytest.raises(ValueError, match="valid draft layer ids"),
     ):
         create_transformer_layer_config(
@@ -314,7 +318,7 @@ def test_mtp_with_from_pretrained_parses(monkeypatch):
 
 def _patch_verifier(monkeypatch, hidden_size: int, vocab_size: int):
     monkeypatch.setattr(
-        "scripts.train.get_verifier_config",
+        "speculators.train.cli.get_verifier_config",
         lambda _path, **_kwargs: SimpleNamespace(
             hidden_size=hidden_size, vocab_size=vocab_size
         ),
@@ -474,14 +478,17 @@ def test_build_draft_model_mtp_from_scratch_uses_verifier_decoder(monkeypatch):
     must not synthesize a decoder or resolve a draft mask token."""
     verifier_cfg = object()
     monkeypatch.setattr(
-        "scripts.train.get_verifier_config", lambda _p, **_kwargs: verifier_cfg
+        "speculators.train.cli.get_verifier_config",
+        lambda _p, **_kwargs: verifier_cfg,
     )
 
     def _must_not_call(*_a, **_k):
         raise AssertionError("not expected for MTP-from-scratch")
 
-    monkeypatch.setattr("scripts.train.create_transformer_layer_config", _must_not_call)
-    monkeypatch.setattr("scripts.train.resolve_mask_token_id", _must_not_call)
+    monkeypatch.setattr(
+        "speculators.train.cli.create_transformer_layer_config", _must_not_call
+    )
+    monkeypatch.setattr("speculators.train.cli.resolve_mask_token_id", _must_not_call)
 
     captured = {}
 
@@ -528,8 +535,12 @@ def _capture_full_attention_indices(
         captured["full_attention_indices"] = full_attention_indices
         return SimpleNamespace(vocab_size=128)
 
-    monkeypatch.setattr("scripts.train.create_transformer_layer_config", _fake_create)
-    monkeypatch.setattr("scripts.train.resolve_mask_token_id", lambda *_a, **_k: 0)
+    monkeypatch.setattr(
+        "speculators.train.cli.create_transformer_layer_config", _fake_create
+    )
+    monkeypatch.setattr(
+        "speculators.train.cli.resolve_mask_token_id", lambda *_a, **_k: 0
+    )
 
     class _FakeModel:
         @classmethod
@@ -582,7 +593,9 @@ def test_build_draft_model_routing(
 
 
 def _create_layer_config_for(verifier: SimpleNamespace):
-    with patch("scripts.train.AutoConfig.from_pretrained", return_value=verifier):
+    with patch(
+        "speculators.train.cli.AutoConfig.from_pretrained", return_value=verifier
+    ):
         return create_transformer_layer_config(
             "target",
             num_layers=2,
