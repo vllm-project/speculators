@@ -10,8 +10,8 @@ import types
 
 import pytest
 
-import scripts.train as train_module
-from scripts.train import create_transformer_layer_config
+import speculators.train.cli as train_module
+from speculators.train.cli import create_transformer_layer_config
 
 
 def _make_verifier_config(**overrides) -> types.SimpleNamespace:
