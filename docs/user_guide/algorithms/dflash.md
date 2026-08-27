@@ -41,11 +41,11 @@ Pretrained DFlash speculator models are available on HuggingFace from the [RedHa
 
 ## Multimodal (VL) Verifiers
 
-DFlash drafts train against VL verifiers (e.g. Qwen3-VL) through the same
-pipeline as text verifiers: the data-generation path sends image rows through
-the Chat Completions API, vLLM runs the full VLM forward, and the captured
-verifier hidden states already encode the image content. The draft itself
-never sees pixels.
+DFlash drafts train against VL verifiers (e.g. Qwen3.5, Qwen3-VL) through the
+same pipeline as text verifiers: the data-generation path sends image rows
+through the Chat Completions API, vLLM runs the full VLM forward, and the
+captured verifier hidden states already encode the image content. The draft
+itself never sees pixels.
 
 The draft config is built **plain-rope**: `mrope_section` (and the coupled
 `partial_rotary_factor`) inherited from the verifier's `text_config` is
@@ -66,10 +66,11 @@ Multimodal data requirements:
   regeneration does not support images yet - use a
   multimodal-capable workflow to produce the target responses first.
 
-For a runnable offline example, see
-`examples/train/dflash_qwen3_vl_2b_offline_smoke.sh`; the multimodal path is
-covered end-to-end by the offline smoke tests in
-`tests/e2e/smoke/test_offline_training.py`.
+For a runnable online example on Qwen3.5-4B, see
+`examples/train/dflash_qwen3_5_4b_sharegpt4v_online_5k.sh`; the multimodal path
+is covered end-to-end by the smoke tests in
+`tests/e2e/smoke/test_offline_training.py` and
+`tests/e2e/smoke/test_online_training.py`.
 
 ## Research & Citation
 
