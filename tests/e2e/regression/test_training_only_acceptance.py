@@ -153,7 +153,7 @@ def test_dflash2_qwen3_8b_sharegpt(tmp_path: Path, prompts: list[list[dict[str, 
     )
 
 
-@requires_cadence("weekly")
+@requires_cadence("nightly")
 @pytest.mark.regression
 def test_dspark_qwen3_8b_sharegpt(tmp_path: Path, prompts: list[list[dict[str, str]]]):
     save_path = tmp_path / "checkpoints"

@@ -53,7 +53,7 @@ To train your own, see `examples/train/dflash2_qwen3_8b_sharegpt_online_5k.sh`.
 
 ## Serving
 
-Checkpoint tensors emitted here follow the public Z Lab weight contract. Serving support is being developed in [vLLM PR #52816](https://github.com/vllm-project/vllm/pull/52816) and [SGLang PR #35371](https://github.com/sgl-project/sglang/pull/35371), but those implementations do not consume the raw Speculators config directly. An adapter or conversion must map the flat Speculators fields into the nested `dflash_config` they expect. Only the local vLLM adapter has been validated with checkpoints produced here; SGLang remains unvalidated. The adapted serving configuration must request `block_size - 1` speculative tokens when `sample_from_anchor` is false.
+Checkpoints emitted here follow the public Z Lab weight contract but use a speculators config. They can be served in vLLM using `vllm serve ./checkpoint`.
 
 ## Research and Implementation Reference
 
