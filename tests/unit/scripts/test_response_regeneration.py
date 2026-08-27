@@ -478,7 +478,7 @@ def _run_worker(responses, tmp_path, stem):
             "start_time": time.perf_counter(),
         }
         await _worker(
-            _FakeSession(responses),
+            _FakeSession(responses),  # type: ignore[arg-type]  # fake stands in for ClientSession
             queue,
             model=_Args.model,
             max_tokens=_Args.max_tokens,
@@ -857,7 +857,9 @@ def test_prepare_row_normalizes_like_off_policy():
         "input": [{"role": "user", "content": "Hi"}],
         "output": "<original answer to drop>",
     }
-    _, turns, _ = prepare_row(row, DATASET_CONFIGS["nemotron"])
+    result = prepare_row(row, DATASET_CONFIGS["nemotron"])
+    assert result is not None
+    _, turns, _ = result
     assert turns == [{"role": "user", "content": "Hi"}]
 
 
@@ -870,7 +872,9 @@ def test_prepare_row_applies_filter_fn():
     )
     row = {"keep": False, "conversations": [{"role": "user", "content": "Hi"}]}
     assert prepare_row(row, config) is None
-    _, turns, _ = prepare_row(row | {"keep": True}, config)
+    result = prepare_row(row | {"keep": True}, config)
+    assert result is not None
+    _, turns, _ = result
     assert turns == [{"role": "user", "content": "Hi"}]
 
 
@@ -883,7 +887,9 @@ def test_prepare_row_merges_normalize_output_over_raw_row():
         normalize_fn=lambda row: {"conversations": []},
         prompt_field="prompt",
     )
-    _, turns, _ = prepare_row({"prompt": "Hi"}, config)
+    result = prepare_row({"prompt": "Hi"}, config)
+    assert result is not None
+    _, turns, _ = result
     assert turns == [{"role": "user", "content": "Hi"}]
 
 
@@ -910,7 +916,9 @@ def test_tools_and_results_are_read_from_the_normalized_row():
         "tools": [{"type": "function", "function": {"name": "get_weather"}}],
     }
 
-    normalized, _, tool_results = prepare_row(row, config)
+    result = prepare_row(row, config)
+    assert result is not None
+    normalized, _, tool_results = result
 
     assert extract_tools(normalized) == [
         {"type": "function", "function": {"name": "get_weather"}}
