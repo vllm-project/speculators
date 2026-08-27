@@ -6,15 +6,39 @@ rows (gradient formula, log-space underflow), bf16 (the training dtype), and
 the 151936-wide vocab (multi-block streaming, non-power-of-2 tail). The
 upstream gradient contains exact zeros, so masked rows take the backward
 kernel's early-out and must return exact zeros from an uninitialized buffer.
+
+The accelerator is auto-detected: CUDA when present, otherwise Ascend NPU
+(via triton-ascend). The 151936-wide leg also exercises the smaller NPU
+BLOCK_SIZE cap (MAX_FUSED_SIZE_NPU = 4096), which forces the tighter
+multi-block streaming loop.
 """
+
+from types import SimpleNamespace
 
 import pytest
 import torch
 
 from speculators.losses import eager, resolve_loss_config
+from speculators.utils.util import is_npu_available
 
+
+def _accelerator_device() -> str | None:
+    """Pick the accelerator the fused kernels can run on, or None to skip."""
+    if torch.cuda.is_available():
+        return "cuda"
+    if is_npu_available():
+        return "npu"
+    return None
+
+
+DEVICE = _accelerator_device()
+requires_accelerator = pytest.mark.skipif(
+    DEVICE is None,
+    reason="fused Triton losses require a CUDA or Ascend NPU accelerator",
+)
 requires_cuda = pytest.mark.skipif(
-    not torch.cuda.is_available(), reason="fused Triton losses require CUDA"
+    not torch.cuda.is_available(),
+    reason="memory accounting test uses torch.cuda APIs",
 )
 
 # (name, eager fn, fused fn name); fused resolved lazily so this file
@@ -59,7 +83,7 @@ def _assert_fused_matches_eager(
     torch.testing.assert_close(lf.grad.float(), le.grad.float(), **grad_tol)
 
 
-@requires_cuda
+@requires_accelerator
 @pytest.mark.parametrize(
     ("name", "eager_fn", "fused_name"), CASES, ids=[c[0] for c in CASES]
 )
@@ -70,8 +94,8 @@ def test_fused_matches_eager(name, eager_fn, fused_name):
 
     # fp32, with saturated +-30 point-mass rows (one agreeing, one disagreeing)
     torch.manual_seed(0)
-    logits = torch.randn(1, 32, 512, device="cuda") * 3
-    targets = torch.randn(1, 32, 512, device="cuda") * 3
+    logits = torch.randn(1, 32, 512, device=DEVICE) * 3
+    targets = torch.randn(1, 32, 512, device=DEVICE) * 3
     logits[0, -2:] = -30.0
     targets[0, -2:] = -30.0
     logits[0, -2:, 0] = 30.0
@@ -84,8 +108,8 @@ def test_fused_matches_eager(name, eager_fn, fused_name):
 
     # bf16, the training dtype
     torch.manual_seed(1)
-    logits = (torch.randn(1, 64, 512, device="cuda") * 3).bfloat16()
-    targets = (torch.randn(1, 64, 512, device="cuda") * 3).bfloat16()
+    logits = (torch.randn(1, 64, 512, device=DEVICE) * 3).bfloat16()
+    targets = (torch.randn(1, 64, 512, device=DEVICE) * 3).bfloat16()
     _assert_fused_matches_eager(
         eager_fn,
         fused_fn,
@@ -95,15 +119,16 @@ def test_fused_matches_eager(name, eager_fn, fused_name):
         CE_BF16_GRAD_TOL if name == "ce" else GRAD_TOL,
     )
 
-    # Qwen3's 151936 vocab exceeds MAX_FUSED_SIZE: multi-block streaming plus
-    # a non-power-of-2 masked tail
+    # Qwen3's 151936 vocab exceeds MAX_FUSED_SIZE (and MAX_FUSED_SIZE_NPU):
+    # multi-block streaming plus a non-power-of-2 masked tail. On NPU the
+    # per-block cap is 4096, so this leg also covers the tighter block loop.
     torch.manual_seed(2)
-    logits = torch.randn(1, 3, 151936, device="cuda") * 3
-    targets = torch.randn(1, 3, 151936, device="cuda") * 3
+    logits = torch.randn(1, 3, 151936, device=DEVICE) * 3
+    targets = torch.randn(1, 3, 151936, device=DEVICE) * 3
     _assert_fused_matches_eager(eager_fn, fused_fn, logits, targets, LOSS_TOL, GRAD_TOL)
 
 
-@requires_cuda
+@requires_accelerator
 @pytest.mark.parametrize(
     ("name", "eager_fn", "fused_name"), CASES, ids=[c[0] for c in CASES]
 )
@@ -117,8 +142,8 @@ def test_compiles_fullgraph(name, eager_fn, fused_name):
     """
     fused_losses = pytest.importorskip("speculators.losses.fused")
     fused_fn = getattr(fused_losses, fused_name)
-    logits = torch.randn(1, 8, 512, device="cuda", requires_grad=True)
-    targets = torch.randn(1, 8, 512, device="cuda")
+    logits = torch.randn(1, 8, 512, device=DEVICE, requires_grad=True)
+    targets = torch.randn(1, 8, 512, device=DEVICE)
 
     compiled = torch.compile(lambda a, b: fused_fn(a, b).sum(), fullgraph=True)
     compiled(logits, targets).backward()
@@ -160,3 +185,41 @@ def test_eager_implementation_supports_differentiable_targets():
         loss_fn(logits, targets).sum().backward()
         assert logits.grad is not None, name
         assert targets.grad is not None, name
+
+
+def test_calculate_settings_respects_device_cap():
+    """`_calculate_settings` picks the right BLOCK_SIZE for each device without
+    needing NPU or CUDA hardware -- the helper only reads ``device.type``.
+
+    Exercises the NPU cap (MAX_FUSED_SIZE_NPU = 4096) and the CUDA cap
+    (MAX_FUSED_SIZE = 131072) at vocab sizes that span the boundaries, so
+    upstream CI (which typically has no NPU) still covers the NPU branch.
+    """
+    fused_losses = pytest.importorskip("speculators.losses.fused")
+
+    npu_cases = (
+        (512, 512),
+        (4096, 4096),
+        (8192, 4096),
+        (32768, 4096),
+        (131072, 4096),
+        (151936, 4096),
+    )
+    for vocab, expected in npu_cases:
+        block, _ = fused_losses._calculate_settings(vocab, SimpleNamespace(type="npu"))
+        assert block == expected, (
+            f"NPU cap: vocab={vocab} -> BLOCK_SIZE={block}, expected {expected}"
+        )
+
+    cuda_cases = (
+        (512, 512),
+        (4096, 4096),
+        (8192, 8192),
+        (131072, 131072),
+        (151936, 131072),
+    )
+    for vocab, expected in cuda_cases:
+        block, _ = fused_losses._calculate_settings(vocab, SimpleNamespace(type="cuda"))
+        assert block == expected, (
+            f"CUDA cap: vocab={vocab} -> BLOCK_SIZE={block}, expected {expected}"
+        )
