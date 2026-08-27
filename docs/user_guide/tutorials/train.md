@@ -305,7 +305,7 @@ CUDA_VISIBLE_DEVICES=2,3 torchrun --standalone --nproc_per_node 2 \
   --data-path ./output \
   --save-path ./output/checkpoints \
   --draft-vocab-size 32000 \
-  --epochs 10 \
+  --epochs 5 \
   --total-seq-len 8192 \
   --vllm-endpoint http://localhost:8000/v1 \
   --on-missing generate \
@@ -324,7 +324,7 @@ CUDA_VISIBLE_DEVICES=2,3 torchrun --standalone --nproc_per_node 2 \
   --data-path ./output \
   --save-path ./output/checkpoints \
   --draft-vocab-size 32000 \
-  --epochs 10 \
+  --epochs 5 \
   --total-seq-len 8192 \
   --speculator-type peagle \
   --num-layers 4 \
@@ -349,7 +349,7 @@ CUDA_VISIBLE_DEVICES=2,3 torchrun --standalone --nproc_per_node 2 \
   --data-path ./output \
   --save-path ./output/checkpoints \
   --draft-vocab-size 32000 \
-  --epochs 10 \
+  --epochs 5 \
   --total-seq-len 8192 \
   --speculator-type dflash \
   --num-layers 5 \
@@ -392,7 +392,7 @@ CUDA_VISIBLE_DEVICES=2,3 torchrun --standalone --nproc_per_node 2 \
   --data-path ./output \
   --save-path ./output/checkpoints \
   --draft-vocab-size 32000 \
-  --epochs 10 \
+  --epochs 5 \
   --total-seq-len 8192 \
   --speculator-type dspark \
   --num-layers 5 \
@@ -458,7 +458,7 @@ CUDA_VISIBLE_DEVICES=0,1,2,3 torchrun --standalone --nproc_per_node 4 \
   --data-path ./output \
   --save-path ./output/checkpoints \
   --draft-vocab-size 32000 \
-  --epochs 10 \
+  --epochs 5 \
   --total-seq-len 8192 \
   --hidden-states-path ./output/hidden_states \
   --on-missing raise
@@ -476,7 +476,7 @@ CUDA_VISIBLE_DEVICES=0,1,2,3 torchrun --standalone --nproc_per_node 4 \
   --data-path ./output \
   --save-path ./output/checkpoints \
   --draft-vocab-size 32000 \
-  --epochs 10 \
+  --epochs 5 \
   --total-seq-len 8192 \
   --speculator-type peagle \
   --num-layers 4 \
@@ -500,7 +500,7 @@ CUDA_VISIBLE_DEVICES=0,1,2,3 torchrun --standalone --nproc_per_node 4 \
   --data-path ./output \
   --save-path ./output/checkpoints \
   --draft-vocab-size 32000 \
-  --epochs 10 \
+  --epochs 5 \
   --total-seq-len 8192 \
   --speculator-type dflash \
   --num-layers 5 \
@@ -541,7 +541,7 @@ CUDA_VISIBLE_DEVICES=0,1,2,3 torchrun --standalone --nproc_per_node 4 \
   --data-path ./output \
   --save-path ./output/checkpoints \
   --draft-vocab-size 32000 \
-  --epochs 10 \
+  --epochs 5 \
   --total-seq-len 8192 \
   --speculator-type dspark \
   --num-layers 5 \
@@ -664,19 +664,19 @@ Check vLLM logs for speculative decoding metrics.
 
 ## Expected Results
 
-These are sanity-check runs, not production numbers: with only 5K samples the point is to confirm the pipeline works and the model is learning. For production quality, train on significantly more data.
+These runs exist to confirm the pipeline works and the model is learning, not to produce a good speculator. 5K samples is far too small to train a drafter you would deploy -- the models below start overfitting within a few epochs -- so treat these as a smoke test and train on substantially more data for anything real.
 
-Measured on four H100s with the offline commands above -- `Qwen/Qwen3-8B`, the `tutorial_regen` split, 10 epochs, `checkpoint_best` -- and evaluated with `evaluate.py throughput` across all nine subsets of `RedHatAI/speculator_benchmarks`:
+Measured on four H100s with the offline commands above -- `Qwen/Qwen3-8B`, the `tutorial_regen` split, 5 epochs, `checkpoint_best` -- and evaluated with `evaluate.py throughput` across all nine subsets of `RedHatAI/speculator_benchmarks`:
 
 | Algorithm | Draft tokens per step | Acceptance length | Position-0 acceptance | Training time |
 | --------- | --------------------- | ----------------- | --------------------- | ------------- |
-| Eagle-3   | 3                     | 1.88              | 51.9%                 | 28 min        |
-| DFlash    | 15                    | 2.03              | 58.3%                 | 36 min        |
-| DSpark    | 8                     | 2.07              | 55.5%                 | 32 min        |
+| Eagle-3   | 3                     | 1.89              | 52.4%                 | 15 min        |
+| DFlash    | 15                    | 1.99              | 57.9%                 | 19 min        |
+| DSpark    | 8                     | 2.02              | 54.2%                 | 17 min        |
 
 Acceptance length is the number of tokens accepted per verifier step, so it is the figure that tracks end-to-end speedup. Compare algorithms on it rather than on the raw accepted/drafted ratio, which falls as a drafter proposes more tokens per step.
 
-End to end on a four-GPU node: about 17 seconds to prepare the data, 56 minutes to generate hidden states, and 28-36 minutes to train each speculator. Because all three read the same hidden-state cache, the three checkpoints together take roughly two and a half hours.
+End to end on a four-GPU node: about 17 seconds to prepare the data, 56 minutes to generate hidden states, and 15-19 minutes to train each speculator. Because all three read the same hidden-state cache, the three checkpoints together take under two hours.
 
 ## Estimating Disk Space Requirements
 
