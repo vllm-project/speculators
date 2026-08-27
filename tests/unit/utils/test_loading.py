@@ -118,6 +118,39 @@ def test_resolve_key_prefers_exact_over_alias():
     assert _resolve_key("embed_tokens.weight", wm) == "embed_tokens.weight"
 
 
+@pytest.mark.smoke
+def test_resolve_key_prefers_shortest_suffix():
+    """When several keys share the searched suffix, the shortest (most specific)
+    one wins via ``min(matches, key=len)``.
+
+    None of the keys match an alias here, so resolution falls through to the
+    generic ``norm.weight`` suffix scan and the tie-break is exercised directly
+    rather than short-circuited by an alias hit (see ``test_resolve_key_llm_aliases``
+    for the alias path).
+    """
+    wm = {
+        "model.audio.final_norm.weight": "shard-a.safetensors",
+        "model.text.norm.weight": "shard-b.safetensors",
+    }
+    # Both keys end in "norm.weight" (reached via the model.norm.weight ->
+    # norm.weight alias); the shorter, more-specific key must win over the audio
+    # tower's norm.
+    assert _resolve_key("model.norm.weight", wm) == "model.text.norm.weight"
+
+
+@pytest.mark.smoke
+def test_resolve_key_llm_aliases():
+    """Inkling-style keys with llm. prefix resolve correctly."""
+    wm = {
+        "model.llm.embed.weight": "shard-0.safetensors",
+        "model.llm.unembed.weight": "shard-1.safetensors",
+        "model.llm.norm.weight": "shard-2.safetensors",
+    }
+    assert _resolve_key("embed_tokens.weight", wm) == "model.llm.embed.weight"
+    assert _resolve_key("lm_head.weight", wm) == "model.llm.unembed.weight"
+    assert _resolve_key("model.norm.weight", wm) == "model.llm.norm.weight"
+
+
 # _resolve_file Tests
 
 

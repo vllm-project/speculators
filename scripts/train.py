@@ -729,8 +729,9 @@ def main(cfg: TrainConfig):  # noqa: C901
     # Cleanup
     del trainer, draft_model
     gc.collect()
-    if torch.cuda.is_available():
-        torch.cuda.empty_cache()
+    acc = torch.accelerator.current_accelerator(check_available=True)
+    if acc is not None:
+        torch.get_device_module(acc.type).empty_cache()
     maybe_destroy_distributed()
 
 
