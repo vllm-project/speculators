@@ -1,6 +1,6 @@
+import logging
 import warnings
 from collections.abc import Callable, Sequence
-from dataclasses import dataclass
 from os import PathLike
 from pathlib import Path
 from typing import Any, Literal, cast
@@ -19,23 +19,15 @@ from speculators.data_generation.vllm_client import (
     generate_hidden_states,
 )
 from speculators.train.noise_transforms import TransformTensors
-from speculators.train.utils import (
-    GENERATION_CIRCUIT_BREAKER_KEY,
-    GENERATION_ERROR_KEY,
-    GENERATION_FAILURE_COUNT_KEY,
-    LOCALLY_EMPTY_BATCH_KEY,
+from speculators.train.recovery import (
+    RECOVERY_METADATA_KEY,
+    GenerationRecoveryGuard,
+    RecoveryMetadata,
+    SampleUnavailable,
 )
 
 BatchType = dict[str, Any]
-
-
-@dataclass(frozen=True)
-class GenerationFailure:
-    """Picklable sentinel passed from a DataLoader worker to the collator."""
-
-    error: str
-    consecutive_failures: int
-    fatal: bool = False
+logger = logging.getLogger("speculators")
 
 
 def create_empty_sample(
@@ -122,10 +114,10 @@ class BaseDataset(Dataset):
     def _get_raw_data(self, index):
         raise NotImplementedError
 
-    def __getitem__(self, index) -> BatchType | GenerationFailure | None:
+    def __getitem__(self, index) -> BatchType | SampleUnavailable:
         data = self._get_raw_data(index)
 
-        if data is None or isinstance(data, GenerationFailure):
+        if isinstance(data, SampleUnavailable):
             return data
 
         # data structure: {
@@ -177,7 +169,6 @@ class ArrowDataset(BaseDataset):
         max_retries: int = DEFAULT_MAX_RETRIES,
         generation_validation_retries: int = 2,
         max_consecutive_generation_failures: int = 20,
-        raise_on_generate_error: bool = False,
     ):
         self.data = load_from_disk(datapath)
         if not 0.0 < train_ratio <= 1.0:
@@ -207,17 +198,10 @@ class ArrowDataset(BaseDataset):
         self.model = model
         self.request_timeout = request_timeout
         self.max_retries = max_retries
-        if generation_validation_retries < 0:
-            raise ValueError("generation_validation_retries must be >= 0")
-        if max_consecutive_generation_failures <= 0:
-            raise ValueError("max_consecutive_generation_failures must be > 0")
-        self.generation_validation_retries = generation_validation_retries
-        self.max_consecutive_generation_failures = max_consecutive_generation_failures
-        # Each spawned DataLoader worker owns its own dataset copy. This tracks
-        # consecutive failed full round trips within that worker and resets after
-        # any valid sample.
-        self._consecutive_generation_failures = 0
-        self.raise_on_generate_error = raise_on_generate_error
+        self.generation_recovery = GenerationRecoveryGuard(
+            retries=generation_validation_retries,
+            max_consecutive_failures=max_consecutive_generation_failures,
+        )
 
         # Delay super init so that `_compute_approx_lengths` has required data
         super().__init__(max_len, transform, hidden_states_dtype)
@@ -256,119 +240,73 @@ class ArrowDataset(BaseDataset):
         try:
             self.transfer.delete(handle)
         except Exception as cleanup_error:  # noqa: BLE001 - recovery must be best effort
-            warnings.warn(
-                f"Failed to clean generated hidden-state handle {handle}: "
-                f"{cleanup_error}",
-                stacklevel=1,
+            logger.warning(
+                "Failed to clean generated hidden-state handle %s: %s",
+                handle,
+                cleanup_error,
             )
 
-    def _record_generation_failure(
+    def _generate_hs_round_trip(
         self,
-        *,
         index: int,
-        attempt: int,
-        total_attempts: int,
-        error: Exception,
-    ) -> GenerationFailure:
-        self._consecutive_generation_failures += 1
-        fatal = (
-            self._consecutive_generation_failures
-            >= self.max_consecutive_generation_failures
-        )
-        file_idx = self._map_to_file_idx(index)
-        message = (
-            f"Hidden-state round trip failed for dataset index {index} "
-            f"(file index {file_idx}, attempt {attempt}/{total_attempts}, "
-            f"consecutive failures={self._consecutive_generation_failures}/"
-            f"{self.max_consecutive_generation_failures}): "
-            f"{type(error).__name__}: {error}"
-        )
-        warnings.warn(message, stacklevel=1)
-        return GenerationFailure(
-            error=message,
-            consecutive_failures=self._consecutive_generation_failures,
-            fatal=fatal,
-        )
-
-    def _record_generation_success(self) -> None:
-        if self._consecutive_generation_failures:
-            warnings.warn(
-                "Hidden-state generation recovered after "
-                f"{self._consecutive_generation_failures} consecutive failure(s).",
-                stacklevel=1,
+        dataset_item: dict,
+        client_item: ClientItem,
+    ) -> dict[str, torch.Tensor]:
+        handle: str | None = None
+        try:
+            if not self.client:
+                self._setup_client()
+            handle = generate_hidden_states(
+                self.client,  # type:ignore[arg-type]
+                self.model,  # type:ignore[arg-type]
+                client_item,
+                timeout=self.request_timeout,
+                max_retries=self.max_retries,
             )
-        self._consecutive_generation_failures = 0
+
+            loaded_hs = self.transfer.get_generated(handle)
+            if loaded_hs is None:
+                raise ValueError(f"Failed to load hidden states for handle {handle}")
+
+            # Covers token/shape mismatches and non-finite values. The Mooncake
+            # transfer performs manifest/checksum validation first.
+            check_hidden_states(loaded_hs, dataset_item["input_ids"].tolist())
+
+            file_idx = self._map_to_file_idx(index)
+            if self.on_generate == "cache":
+                self.transfer.cache(handle, file_idx)
+            else:
+                try:
+                    self.transfer.delete(handle)
+                except Exception as cleanup_error:  # noqa: BLE001
+                    logger.warning(
+                        "Loaded a valid hidden-state sample but failed to delete "
+                        "handle %s: %s",
+                        handle,
+                        cleanup_error,
+                    )
+            return loaded_hs
+        except Exception:
+            self._cleanup_failed_handle(handle)
+            raise
 
     def _maybe_generate_hs(
         self, index: int
-    ) -> dict[str, torch.Tensor] | GenerationFailure:
+    ) -> dict[str, torch.Tensor] | SampleUnavailable:
         dataset_item = self.data[index]
         client_item = build_client_item(dataset_item)
-        total_attempts = self.generation_validation_retries + 1
-        last_failure: GenerationFailure | None = None
-
-        for attempt in range(1, total_attempts + 1):
-            handle: str | None = None
-            try:
-                if not self.client:
-                    self._setup_client()
-                handle = generate_hidden_states(
-                    self.client,  # type:ignore[arg-type]
-                    self.model,  # type:ignore[arg-type]
-                    client_item,
-                    timeout=self.request_timeout,
-                    max_retries=self.max_retries,
-                )
-
-                loaded_hs = self.transfer.get_generated(handle)
-                if loaded_hs is None:
-                    raise ValueError(
-                        f"Failed to load hidden states for handle {handle}"
-                    )
-
-                # Covers token mismatch, shape mismatch, NaN, and infinity. The
-                # Mooncake transfer performs manifest/checksum validation first.
-                check_hidden_states(loaded_hs, dataset_item["input_ids"].tolist())
-
-                file_idx = self._map_to_file_idx(index)
-                if self.on_generate == "cache":
-                    self.transfer.cache(handle, file_idx)
-                else:
-                    try:
-                        self.transfer.delete(handle)
-                    except Exception as cleanup_error:  # noqa: BLE001
-                        warnings.warn(
-                            f"Loaded a valid hidden-state sample but failed to delete "
-                            f"handle {handle}: {cleanup_error}",
-                            stacklevel=1,
-                        )
-
-                self._record_generation_success()
-                return loaded_hs
-            except Exception as error:
-                self._cleanup_failed_handle(handle)
-                last_failure = self._record_generation_failure(
-                    index=index,
-                    attempt=attempt,
-                    total_attempts=total_attempts,
-                    error=error,
-                )
-                if last_failure.fatal:
-                    return last_failure
-                if attempt < total_attempts:
-                    continue
-                if self.raise_on_generate_error:
-                    raise RuntimeError(
-                        f"Failed to generate hidden states for dataset index {index} "
-                        f"after {total_attempts} full round-trip attempt(s)"
-                    ) from error
-
-        assert last_failure is not None  # noqa: S101
-        return last_failure
+        file_idx = self._map_to_file_idx(index)
+        return self.generation_recovery.run(
+            lambda: self._generate_hs_round_trip(index, dataset_item, client_item),
+            description=(
+                f"Hidden-state round trip failed for dataset index {index}, "
+                f"file index {file_idx}"
+            ),
+        )
 
     def _get_raw_data(self, index):
         file_idx = self._map_to_file_idx(index)
-        loaded_hs: dict[str, torch.Tensor] | GenerationFailure | None
+        loaded_hs: dict[str, torch.Tensor] | SampleUnavailable | None
         loaded_hs = self.transfer.get_cached(file_idx)
 
         if loaded_hs is None:
@@ -376,20 +314,26 @@ class ArrowDataset(BaseDataset):
                 case "generate":
                     loaded_hs = self._maybe_generate_hs(index)
                 case "skip":
-                    return None
+                    return SampleUnavailable()
                 case "warn":
                     warnings.warn(
                         f"Failed to load hidden states for sample {index}. Skipping...",
                         stacklevel=1,
                     )
-                    return None
+                    return SampleUnavailable(
+                        reason=f"Hidden states unavailable for sample {index}"
+                    )
                 case "raise":
                     raise RuntimeError(
                         f"Failed to load hidden states for sample {index}."
                     )
 
-        if loaded_hs is None or isinstance(loaded_hs, GenerationFailure):
+        if isinstance(loaded_hs, SampleUnavailable):
             return loaded_hs
+        if loaded_hs is None:
+            return SampleUnavailable(
+                reason=f"Hidden states unavailable for sample {index}"
+            )
 
         # loaded_hs structure: {
         #   "hidden_states": [seq_len, num_layers, hidden_size]
@@ -402,7 +346,9 @@ class ArrowDataset(BaseDataset):
                 f"match input ids {self.data[index]['input_ids']}",
                 stacklevel=1,
             )
-            return None
+            return SampleUnavailable(
+                reason=f"Cached token ids do not match sample {index}"
+            )
 
         return {
             "hidden_states": loaded_hs["hidden_states"][:, :-1].flatten(
@@ -434,52 +380,33 @@ class CollateFn:
         self.preprocess = preprocess
 
     def _clean_batch(
-        self, batch: Sequence[BatchType | GenerationFailure | None]
-    ) -> tuple[list[BatchType], list[GenerationFailure], int]:
-        """Preprocess valid samples and collect dropped samples and failures."""
+        self, batch: Sequence[BatchType | SampleUnavailable | None]
+    ) -> tuple[list[BatchType], list[SampleUnavailable], int]:
+        """Preprocess valid samples and collect unavailable and dropped samples."""
         preprocess = self.preprocess
-        failures = []
+        unavailable = []
         num_dropped = 0
         new_batch = []
         for item in batch:
             if item is None:
                 num_dropped += 1
                 continue
-            if isinstance(item, GenerationFailure):
-                failures.append(item)
+            if isinstance(item, SampleUnavailable):
+                unavailable.append(item)
                 num_dropped += 1
                 continue
 
             new_batch.append(preprocess(item) if preprocess else item)
 
-        return new_batch, failures, num_dropped
-
-    @staticmethod
-    def _attach_recovery_metadata(
-        collated_data: BatchType,
-        failures: Sequence[GenerationFailure],
-        locally_empty: bool,
-    ) -> None:
-        if locally_empty:
-            # The trainer deliberately still runs this batch through the normal
-            # forward/backward path. Its loss mask is empty, so this rank contributes
-            # zero gradients while participating in the same DDP collectives.
-            collated_data[LOCALLY_EMPTY_BATCH_KEY] = True
-        if not failures:
-            return
-        collated_data[GENERATION_FAILURE_COUNT_KEY] = len(failures)
-        fatal = next((failure for failure in failures if failure.fatal), None)
-        if fatal is not None:
-            collated_data[GENERATION_CIRCUIT_BREAKER_KEY] = True
-            collated_data[GENERATION_ERROR_KEY] = fatal.error
+        return new_batch, unavailable, num_dropped
 
     def __call__(
-        self, batch: Sequence[BatchType | GenerationFailure | None]
+        self, batch: Sequence[BatchType | SampleUnavailable | None]
     ) -> BatchType:
         max_len = self.max_len
         dtype = self.dtype
 
-        batch, failures, num_dropped = self._clean_batch(batch)
+        batch, unavailable, num_dropped = self._clean_batch(batch)
 
         if not batch:
             # Create empty sample which then gets padded to full
@@ -547,6 +474,11 @@ class CollateFn:
         collated_data["document_ids"] = document_ids
 
         collated_data["error_records"] = num_dropped
-        self._attach_recovery_metadata(collated_data, failures, locally_empty)
+        metadata = RecoveryMetadata.from_unavailable(
+            unavailable,
+            locally_empty=locally_empty,
+        )
+        if metadata.failure_count or metadata.locally_empty:
+            collated_data[RECOVERY_METADATA_KEY] = metadata
 
         return collated_data

@@ -7,8 +7,14 @@ import torch.distributed as dist
 import torch.multiprocessing as mp
 from torch.nn.parallel import DistributedDataParallel
 
-import speculators.train.utils as utils_module
-from speculators.train.utils import consume_recovery_metadata
+import speculators.train.recovery as recovery_module
+from speculators.train.recovery import (
+    RECOVERY_METADATA_KEY,
+    BatchRecoveryCoordinator,
+    GenerationRecoveryGuard,
+    RecoveryMetadata,
+    SampleUnavailable,
+)
 
 
 def _ddp_local_empty_worker(rank, world_size, init_file, output_dir):
@@ -30,15 +36,52 @@ def _ddp_local_empty_worker(rank, world_size, init_file, output_dir):
         dist.destroy_process_group()
 
 
+def test_generation_guard_counts_exhausted_samples_not_attempts():
+    guard = GenerationRecoveryGuard(retries=2, max_consecutive_failures=2)
+    attempts = 0
+
+    def fail():
+        nonlocal attempts
+        attempts += 1
+        raise ValueError("bad payload")
+
+    first = guard.run(fail, description="round trip failed")
+    second = guard.run(fail, description="round trip failed")
+
+    assert isinstance(first, SampleUnavailable)
+    assert first.consecutive_failures == 1
+    assert not first.fatal
+    assert isinstance(second, SampleUnavailable)
+    assert second.consecutive_failures == 2
+    assert second.fatal
+    assert attempts == 6
+
+
+def test_generation_guard_resets_after_a_valid_sample():
+    guard = GenerationRecoveryGuard(retries=0, max_consecutive_failures=2)
+
+    def fail():
+        raise ValueError("bad payload")
+
+    unavailable = guard.run(fail, description="round trip failed")
+    result = guard.run(lambda: "valid", description="round trip failed")
+
+    assert isinstance(unavailable, SampleUnavailable)
+    assert result == "valid"
+    assert guard.consecutive_failures == 0
+
+
 def test_locally_empty_batch_does_not_mask_other_ranks_or_skip_step():
     batch: dict[str, Any] = {
         "loss_mask": torch.zeros(1, 8),
         "input_ids": torch.zeros(1, 8, dtype=torch.long),
-        "__locally_empty_batch__": True,
-        "__generation_failure_count__": 1,
+        RECOVERY_METADATA_KEY: RecoveryMetadata(
+            failure_count=1,
+            locally_empty=True,
+        ),
     }
 
-    consume_recovery_metadata(batch, phase="training")
+    BatchRecoveryCoordinator("training").consume(batch)
 
     assert batch["loss_mask"].shape == (1, 8)
     assert not batch["loss_mask"].bool().any()
@@ -49,28 +92,70 @@ def test_locally_empty_batch_does_not_mask_other_ranks_or_skip_step():
 def test_remote_circuit_breaker_stops_this_rank_at_status_collective(monkeypatch):
     batch = {
         "loss_mask": torch.ones(1, 8),
-        "__generation_failure_count__": 0,
+        RECOVERY_METADATA_KEY: RecoveryMetadata(),
     }
 
     def emulate_remote_fatal(status, op):
-        assert op == utils_module.dist.ReduceOp.SUM
+        assert op == recovery_module.dist.ReduceOp.SUM
         status[0] += 1
 
-    monkeypatch.setattr(utils_module, "is_distributed", lambda: True)
-    monkeypatch.setattr(utils_module.dist, "all_reduce", emulate_remote_fatal)
+    monkeypatch.setattr(recovery_module, "is_distributed", lambda: True)
+    monkeypatch.setattr(recovery_module.dist, "all_reduce", emulate_remote_fatal)
 
     with pytest.raises(RuntimeError, match="circuit breaker tripped on 1 rank"):
-        # Explicit CPU device: the real default is this rank's accelerator.
-        consume_recovery_metadata(batch, phase="training", device=torch.device("cpu"))
+        BatchRecoveryCoordinator("training", device=torch.device("cpu")).consume(
+            batch,
+            synchronize=True,
+        )
+
+
+def test_recovery_status_defaults_to_cpu_without_accelerator(monkeypatch):
+    batch = {RECOVERY_METADATA_KEY: RecoveryMetadata(failure_count=1)}
+
+    def check_cpu_status(status, op):
+        assert status.device.type == "cpu"
+        assert op == recovery_module.dist.ReduceOp.SUM
+
+    monkeypatch.setattr(recovery_module, "is_distributed", lambda: True)
+    monkeypatch.setattr(
+        recovery_module.torch.accelerator,
+        "is_available",
+        lambda: False,
+    )
+    monkeypatch.setattr(recovery_module.dist, "all_reduce", check_cpu_status)
+
+    BatchRecoveryCoordinator("training").consume(batch, synchronize=True)
+
+
+def test_recovery_metadata_accumulates_until_synchronization(monkeypatch):
+    statuses = []
+
+    def record_status(status, op):
+        assert op == recovery_module.dist.ReduceOp.SUM
+        statuses.append(status.tolist())
+
+    monkeypatch.setattr(recovery_module, "is_distributed", lambda: True)
+    monkeypatch.setattr(recovery_module.dist, "all_reduce", record_status)
+    coordinator = BatchRecoveryCoordinator("training", device=torch.device("cpu"))
+
+    coordinator.consume({RECOVERY_METADATA_KEY: RecoveryMetadata(failure_count=1)})
+    assert not statuses
+
+    coordinator.consume(
+        {RECOVERY_METADATA_KEY: RecoveryMetadata(failure_count=2)},
+        synchronize=True,
+    )
+    assert statuses == [[0, 3]]
 
 
 def test_unknown_metadata_key_fails_before_reaching_the_model():
     batch = {"loss_mask": torch.ones(1, 8), "__generation_future_key__": True}
 
     with pytest.raises(RuntimeError, match="__generation_future_key__"):
-        consume_recovery_metadata(batch, phase="training")
+        BatchRecoveryCoordinator("training").consume(batch)
 
 
+@pytest.mark.slow
 def test_ddp_local_zero_loss_still_joins_backward_collectives(tmp_path):
     init_file = tmp_path / "gloo-init"
     mp.spawn(

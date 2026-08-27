@@ -298,8 +298,8 @@ class GenerationArgs(_Group):
         default=20,
         gt=0,
         description="Trip the data-generation circuit breaker after this many "
-        "consecutive failed complete round trips in one persistent DataLoader "
-        "worker. Successful validation resets the counter.",
+        "consecutive samples exhaust all complete generate/load/validate attempts "
+        "in one persistent DataLoader worker. A valid sample resets the counter.",
     )
 
 
