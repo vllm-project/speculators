@@ -132,10 +132,16 @@ def main():
             num_hidden_layers - 3,
             num_hidden_layers,
         ]
-    if min(target_layer_ids) < 0 or len(set(target_layer_ids)) != len(target_layer_ids):
+    # Layer id ``num_hidden_layers`` (the final hidden state) is valid: the
+    # default above and --include-last-layer both emit it.
+    if (
+        min(target_layer_ids) < 0
+        or max(target_layer_ids) > num_hidden_layers
+        or len(set(target_layer_ids)) != len(target_layer_ids)
+    ):
         raise ValueError(
-            f"Invalid target layer ids {target_layer_ids}; "
-            "ids must be non-negative and distinct."
+            f"Invalid target layer ids {target_layer_ids}; ids must be "
+            f"distinct and within [0, {num_hidden_layers}]."
         )
 
     speculative_config = {

@@ -32,10 +32,25 @@ def test_default_ids_fail_when_negative_or_repeated(num_layers, monkeypatch):
         resolve_target_layer_ids(None, "verifier")
 
 
-def test_explicit_ids_pass_through():
+def test_explicit_ids_pass_through(monkeypatch):
+    _verifier_with(28, monkeypatch)
     assert resolve_target_layer_ids([1, 9, 17], "verifier") == [1, 9, 17]
 
 
-def test_explicit_duplicate_ids_are_rejected():
+def test_explicit_last_layer_id_is_valid(monkeypatch):
+    """Id ``num_hidden_layers`` is the final hidden state (--include-last-layer)."""
+    _verifier_with(28, monkeypatch)
+    assert resolve_target_layer_ids([2, 14, 28], "verifier") == [2, 14, 28]
+
+
+def test_explicit_duplicate_ids_are_rejected(monkeypatch):
+    _verifier_with(28, monkeypatch)
     with pytest.raises(ValueError, match="distinct"):
         resolve_target_layer_ids([2, 2, 1], "verifier")
+
+
+@pytest.mark.parametrize("ids", [[-1, 2, 3], [2, 14, 29], []])
+def test_explicit_out_of_bounds_ids_are_rejected(ids, monkeypatch):
+    _verifier_with(28, monkeypatch)
+    with pytest.raises(ValueError, match="distinct and within"):
+        resolve_target_layer_ids(ids, "verifier")

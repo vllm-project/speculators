@@ -18,8 +18,10 @@ import launch_vllm  # type: ignore[import-not-found]
         (28, [], True),  # default [2, 14, 25, 28]
         (4, [], False),  # default [2, 2, 1, 4] repeats an id
         (28, ["--target-layer-ids", "1", "9", "17"], True),
+        (28, ["--target-layer-ids", "2", "14", "28"], True),  # last layer is valid
         (28, ["--target-layer-ids", "2", "2", "1"], False),
         (28, ["--target-layer-ids", "-1", "2", "3"], False),
+        (28, ["--target-layer-ids", "2", "14", "29"], False),  # beyond last layer
     ],
 )
 def test_launch_rejects_invalid_target_layer_ids(
@@ -36,5 +38,5 @@ def test_launch_rejects_invalid_target_layer_ids(
     if ok:
         launch_vllm.main()
     else:
-        with pytest.raises(ValueError, match="non-negative and distinct"):
+        with pytest.raises(ValueError, match="distinct and within"):
             launch_vllm.main()
