@@ -163,6 +163,11 @@ steps:
                     env:
                       - name: PYTHON_VERSION
                         value: "{{matrix.python}}"
+                      - name: HF_TOKEN
+                        valueFrom:
+                          secretKeyRef:
+                            name: hf-token-secret
+                            key: token
 
                 volumes:
                   - name: model-cache
