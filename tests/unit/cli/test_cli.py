@@ -28,6 +28,7 @@ class TestRootApp:
         assert result.exit_code == 0
         assert "prepare-data" in result.output
         assert "stitch-mtp" in result.output
+        assert "regenerate-responses" in result.output
         assert "train" in result.output
 
     def test_tools_commands_in_help(self):
@@ -92,6 +93,32 @@ class TestStitchCommand:
 
     def test_missing_required_args(self):
         result = runner.invoke(app, ["stitch-mtp"])
+        assert result.exit_code != 0
+
+
+class TestRegenerateResponsesCommand:
+    def test_help(self):
+        result = runner.invoke(app, ["regenerate-responses", "--help"])
+        assert result.exit_code == 0
+        assert "--endpoint" in result.output
+        assert "--dataset" in result.output
+        assert "--concurrency" in result.output
+        assert "--max-tokens" in result.output
+
+    def test_invalid_max_retries(self):
+        result = runner.invoke(app, ["regenerate-responses", "--max-retries", "-1"])
+        assert result.exit_code != 0
+
+    def test_invalid_sampling_params(self):
+        result = runner.invoke(
+            app, ["regenerate-responses", "--sampling-params", "not-json"]
+        )
+        assert result.exit_code != 0
+
+    def test_sampling_params_must_be_object(self):
+        result = runner.invoke(
+            app, ["regenerate-responses", "--sampling-params", "[1,2,3]"]
+        )
         assert result.exit_code != 0
 
 

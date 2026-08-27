@@ -55,6 +55,7 @@ keywords = [
 
 [tool.speculators.dependencies]
 base = [
+    "aiohttp",
     "click",
     "datasets>=4.0.0,<=5.0.1",
     "httpx",
