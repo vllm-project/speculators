@@ -163,6 +163,7 @@ def _resolve_verifier_path(verifier_path: Path) -> Path:
             allow_patterns=[
                 "*.json",
                 "*.safetensors",
+                "*.bin",
                 "*.index.json",
             ],
         )
