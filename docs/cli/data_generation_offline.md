@@ -1,4 +1,4 @@
-# generate-data
+# generate-offline-data
 
 Generates training data for speculator models by extracting hidden states from a running vLLM server. Connects to a vLLM endpoint via the OpenAI-compatible API and saves output as individual `.safetensors` files for offline training.
 
@@ -13,7 +13,7 @@ Generates training data for speculator models by extracting hidden states from a
 ## Basic Usage
 
 ```bash
-speculators generate-data \
+speculators generate-offline-data \
   --preprocessed-data ./preprocessed_dataset \
   --output ./training_data \
   --max-samples 5000
@@ -60,7 +60,7 @@ speculators generate-data \
 ## Full Example
 
 ```bash
-speculators generate-data \
+speculators generate-offline-data \
   --endpoint http://localhost:8000/v1 \
   --preprocessed-data ./preprocessed_dataset \
   --output ./hidden_states \

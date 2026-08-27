@@ -28,7 +28,7 @@ class TestRootApp:
         assert result.exit_code == 0
         assert "prepare-data" in result.output
         assert "stitch-mtp" in result.output
-        assert "generate-data" in result.output
+        assert "generate-offline-data" in result.output
         assert "train" in result.output
 
     def test_tools_commands_in_help(self):
@@ -96,9 +96,9 @@ class TestStitchCommand:
         assert result.exit_code != 0
 
 
-class TestGenerateDataCommand:
+class TestGenerateOfflineDataCommand:
     def test_help(self):
-        result = runner.invoke(app, ["generate-data", "--help"])
+        result = runner.invoke(app, ["generate-offline-data", "--help"])
         assert result.exit_code == 0
         assert "--endpoint" in result.output
         assert "--preprocessed-data" in result.output
@@ -107,7 +107,7 @@ class TestGenerateDataCommand:
         assert "--rank" in result.output
 
     def test_fail_on_error_in_help(self):
-        result = runner.invoke(app, ["generate-data", "--help"])
+        result = runner.invoke(app, ["generate-offline-data", "--help"])
         assert result.exit_code == 0
         assert "--fail-on-error" in result.output
         assert "--max-retries" in result.output
@@ -115,12 +115,12 @@ class TestGenerateDataCommand:
 
     def test_invalid_rank(self):
         result = runner.invoke(
-            app, ["generate-data", "--rank", "5", "--world-size", "2"]
+            app, ["generate-offline-data", "--rank", "5", "--world-size", "2"]
         )
         assert result.exit_code != 0
 
     def test_invalid_concurrency(self):
-        result = runner.invoke(app, ["generate-data", "--concurrency", "0"])
+        result = runner.invoke(app, ["generate-offline-data", "--concurrency", "0"])
         assert result.exit_code != 0
 
 

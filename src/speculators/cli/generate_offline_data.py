@@ -5,7 +5,7 @@ This module generates hidden states and saves them to disk for offline training.
 
 Usage::
 
-    speculators generate-data \
+    speculators generate-offline-data \
         --model meta-llama/Llama-3.1-8B-Instruct \
         --preprocessed-data sharegpt \
         --output ./training_data \
@@ -326,7 +326,7 @@ async def _generate_and_save_hidden_states(
         )
 
 
-def generate_data(
+def generate_offline_data(
     model: Annotated[
         str | None,
         typer.Option(
