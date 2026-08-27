@@ -55,10 +55,7 @@ steps:
         matrix:
           setup:
             python: ["3.10", "3.13"]
-            transformers: ["<5.0.0", "latest"]
-          adjustments:
-            - with: { python: "3.13", transformers: "<5.0.0" }
-              skip: true
+            transformers: ["latest"]
 
   - group: ":test_tube: Integration Tests (L4)"
     steps:
@@ -116,7 +113,4 @@ steps:
         matrix:
           setup:
             python: ["3.10", "3.13"]
-            transformers: ["<5.0.0", "latest"]
-          adjustments:
-            - with: { python: "3.13", transformers: "<5.0.0" }
-              skip: true
+            transformers: ["latest"]
