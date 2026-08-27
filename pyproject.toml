@@ -72,7 +72,7 @@ base = [
     "torchaudio",
     "torchvision",
     "tqdm>=4.66.3,<=4.70.0",
-    "transformers>=4.56.1,<5.16.0",
+    "transformers>=5.0.0,<5.16.0",
     "typer>=0.12.0",
 ]
 
