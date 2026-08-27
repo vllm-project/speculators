@@ -6,15 +6,15 @@ This page provides a comprehensive reference for all command-line interface (CLI
 
 Speculators provides the following CLI commands for different stages of the speculative decoding workflow:
 
-| Command                            | Purpose                                                      | Reference                               |
-| ---------------------------------- | ------------------------------------------------------------ | --------------------------------------- |
-| `speculators prepare-data`         | Preprocess and tokenize datasets for training                | [→ Details](prepare_data.md)            |
-| `speculators generate-data`        | Generate hidden states offline using vLLM                    | [→ Details](data_generation_offline.md) |
-| `launch_vllm.py`                   | Launch vLLM server configured for hidden states extraction   | [→ Details](launch_vllm.md)             |
-| `speculators train`                | Train speculator models with online or offline hidden states | [→ Details](train.md)                   |
-| `speculators regenerate-responses` | Regenerate dataset responses using a vLLM-served model       | [→ Details](response_regeneration.md)   |
-| `speculators stitch-mtp`           | Stitch finetuned MTP weights back into verifier checkpoint   | `speculators stitch-mtp --help`         |
-| `speculators convert`              | Convert speculator checkpoints between formats               | `speculators convert --help`            |
+| Command                             | Purpose                                                      | Reference                               |
+| ----------------------------------- | ------------------------------------------------------------ | --------------------------------------- |
+| `speculators prepare-data`          | Preprocess and tokenize datasets for training                | [→ Details](prepare_data.md)            |
+| `speculators generate-offline-data` | Generate hidden states offline using vLLM                    | [→ Details](data_generation_offline.md) |
+| `launch_vllm.py`                    | Launch vLLM server configured for hidden states extraction   | [→ Details](launch_vllm.md)             |
+| `speculators train`                 | Train speculator models with online or offline hidden states | [→ Details](train.md)                   |
+| `speculators regenerate-responses`  | Regenerate dataset responses using a vLLM-served model       | [→ Details](response_regeneration.md)   |
+| `speculators stitch-mtp`            | Stitch finetuned MTP weights back into verifier checkpoint   | `speculators stitch-mtp --help`         |
+| `speculators convert`               | Convert speculator checkpoints between formats               | `speculators convert --help`            |
 
 ## Common Workflows
 
@@ -29,7 +29,7 @@ flowchart TD
     subgraph offline ["Offline Pipeline"]
         B["speculators prepare-data\nTokenize & format dataset"]
         C["launch_vllm.py\nStart vLLM server"]
-        D["speculators generate-data\nExtract hidden states from verifier and cache to disk"]
+        D["speculators generate-offline-data\nExtract hidden states from verifier and cache to disk"]
         E["speculators train\nTrain draft model on saved hidden states"]
     end
 

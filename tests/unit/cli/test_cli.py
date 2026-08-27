@@ -28,6 +28,7 @@ class TestRootApp:
         assert result.exit_code == 0
         assert "prepare-data" in result.output
         assert "stitch-mtp" in result.output
+        assert "generate-offline-data" in result.output
         assert "regenerate-responses" in result.output
         assert "train" in result.output
 
@@ -93,6 +94,34 @@ class TestStitchCommand:
 
     def test_missing_required_args(self):
         result = runner.invoke(app, ["stitch-mtp"])
+        assert result.exit_code != 0
+
+
+class TestGenerateOfflineDataCommand:
+    def test_help(self):
+        result = runner.invoke(app, ["generate-offline-data", "--help"])
+        assert result.exit_code == 0
+        assert "--endpoint" in result.output
+        assert "--preprocessed-data" in result.output
+        assert "--concurrency" in result.output
+        assert "--world-size" in result.output
+        assert "--rank" in result.output
+
+    def test_fail_on_error_in_help(self):
+        result = runner.invoke(app, ["generate-offline-data", "--help"])
+        assert result.exit_code == 0
+        assert "--fail-on-error" in result.output
+        assert "--max-retries" in result.output
+        assert "--validate-outputs" in result.output
+
+    def test_invalid_rank(self):
+        result = runner.invoke(
+            app, ["generate-offline-data", "--rank", "5", "--world-size", "2"]
+        )
+        assert result.exit_code != 0
+
+    def test_invalid_concurrency(self):
+        result = runner.invoke(app, ["generate-offline-data", "--concurrency", "0"])
         assert result.exit_code != 0
 
 
