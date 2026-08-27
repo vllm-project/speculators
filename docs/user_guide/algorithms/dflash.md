@@ -37,7 +37,39 @@ Pretrained DFlash speculator models are available on HuggingFace from the [RedHa
 | ----------------------- | --------------------------------------------------------------------------------------------------------------- |
 | `google/gemma-4-31B-it` | [`RedHatAI/gemma-4-31B-it-speculator.dflash`](https://huggingface.co/RedHatAI/gemma-4-31B-it-speculator.dflash) |
 
-> **Note:** DFlash is under active development. Not all hardware configurations have been validated yet — refer to individual model cards for details.
+> **Note:** DFlash is under active development. Not all hardware configurations have been validated yet - refer to individual model cards for details.
+
+## Multimodal (VL) Verifiers
+
+DFlash drafts train against VL verifiers (e.g. Qwen3-VL) through the same
+pipeline as text verifiers: the data-generation path sends image rows through
+the Chat Completions API, vLLM runs the full VLM forward, and the captured
+verifier hidden states already encode the image content. The draft itself
+never sees pixels.
+
+The draft config is built **plain-rope**: `mrope_section` (and the coupled
+`partial_rotary_factor`) inherited from the verifier's `text_config` is
+stripped for DFlash drafts. The draft's rope is only an internal
+distance metric for its own attention, decoupled from the verifier's position
+scheme, and vLLM's DFlash serving path rejects MRoPE draft configs outright -
+so plain rope keeps train/serve consistent for free. This mirrors the design
+validated end-to-end in [SpecForge PR #730](https://github.com/sgl-project/SpecForge/pull/730)
+(46.2% server accept rate on CC-OCR vs 35.0% for the untrained draft).
+
+Multimodal data requirements:
+
+- Images are referenced by local path or URL in the dataset `messages`
+  (`{"type": "image", "path": ...}` parts; the `sharegpt4v_coco` preset
+  produces this shape). The vLLM server must be started with
+  `--allowed-local-media-path` pointing at the image root.
+- Base64/in-memory images are rejected during preprocessing, and response
+  regeneration does not support images yet - use a
+  multimodal-capable workflow to produce the target responses first.
+
+For a runnable offline example, see
+`examples/train/dflash_qwen3_vl_2b_offline_smoke.sh`; the multimodal path is
+covered end-to-end by the offline smoke tests in
+`tests/e2e/smoke/test_offline_training.py`.
 
 ## Research & Citation
 
