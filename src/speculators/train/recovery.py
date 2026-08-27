@@ -152,7 +152,7 @@ class BatchRecoveryCoordinator:
         device: torch.device | int | None = None,
     ) -> None:
         self.phase = phase
-        self.device = device
+        self.device = device if device is not None else self._default_device()
         self._pending = RecoveryMetadata()
 
     def consume(self, batch: dict[str, Any], *, synchronize: bool = False) -> None:
@@ -192,11 +192,10 @@ class BatchRecoveryCoordinator:
         self._pending = RecoveryMetadata()
 
         if is_distributed():
-            device = self.device if self.device is not None else self._default_device()
             status = torch.tensor(
                 [int(pending.fatal), pending.failure_count],
                 dtype=torch.int64,
-                device=device,
+                device=self.device,
             )
             dist.all_reduce(status, op=dist.ReduceOp.SUM)
             fatal_ranks, total_failures = (int(value) for value in status.tolist())

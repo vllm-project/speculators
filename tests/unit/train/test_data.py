@@ -237,7 +237,7 @@ def test_arrow_dataset_default_train_ratio_does_not_crash(tmp_path: Path):
 
 def test_arrow_dataset_on_generate_cache_creates_hidden_states_dir(tmp_path: Path):
     """on_generate="cache" must create the cache dir when cache() is called —
-    otherwise shutil.move into it raises FileNotFoundError, which _maybe_generate_hs
+    otherwise shutil.move into it raises FileNotFoundError, which generation recovery
     downgrades to a warning, so caching silently fails for every sample."""
     ds = Dataset.from_dict(
         {

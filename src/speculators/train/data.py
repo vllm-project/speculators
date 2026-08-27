@@ -111,7 +111,7 @@ class BaseDataset(Dataset):
     def _compute_approx_lengths(self):
         raise NotImplementedError
 
-    def _get_raw_data(self, index):
+    def _get_raw_data(self, index: int) -> BatchType | SampleUnavailable:
         raise NotImplementedError
 
     def __getitem__(self, index) -> BatchType | SampleUnavailable:
@@ -234,19 +234,7 @@ class ArrowDataset(BaseDataset):
         """Get lengths of the dataset samples."""
         return list(self.data.with_format(None)["seq_len"])
 
-    def _cleanup_failed_handle(self, handle: str | None) -> None:
-        if handle is None:
-            return
-        try:
-            self.transfer.delete(handle)
-        except Exception as cleanup_error:  # noqa: BLE001 - recovery must be best effort
-            logger.warning(
-                "Failed to clean generated hidden-state handle %s: %s",
-                handle,
-                cleanup_error,
-            )
-
-    def _generate_hs_round_trip(
+    def _generate_hidden_states_once(
         self,
         index: int,
         dataset_item: dict,
@@ -287,53 +275,52 @@ class ArrowDataset(BaseDataset):
                     )
             return loaded_hs
         except Exception:
-            self._cleanup_failed_handle(handle)
+            if handle is not None:
+                try:
+                    self.transfer.delete(handle)
+                except Exception as cleanup_error:  # noqa: BLE001
+                    logger.warning(
+                        "Failed to clean generated hidden-state handle %s: %s",
+                        handle,
+                        cleanup_error,
+                    )
             raise
 
-    def _maybe_generate_hs(
-        self, index: int
-    ) -> dict[str, torch.Tensor] | SampleUnavailable:
-        dataset_item = self.data[index]
-        client_item = build_client_item(dataset_item)
+    def _get_raw_data(self, index: int) -> BatchType | SampleUnavailable:
         file_idx = self._map_to_file_idx(index)
-        return self.generation_recovery.run(
-            lambda: self._generate_hs_round_trip(index, dataset_item, client_item),
-            description=(
-                f"Hidden-state round trip failed for dataset index {index}, "
-                f"file index {file_idx}"
-            ),
-        )
-
-    def _get_raw_data(self, index):
-        file_idx = self._map_to_file_idx(index)
-        loaded_hs: dict[str, torch.Tensor] | SampleUnavailable | None
-        loaded_hs = self.transfer.get_cached(file_idx)
-
-        if loaded_hs is None:
-            match self.on_missing:
-                case "generate":
-                    loaded_hs = self._maybe_generate_hs(index)
-                case "skip":
-                    return SampleUnavailable()
-                case "warn":
-                    warnings.warn(
-                        f"Failed to load hidden states for sample {index}. Skipping...",
-                        stacklevel=1,
-                    )
-                    return SampleUnavailable(
-                        reason=f"Hidden states unavailable for sample {index}"
-                    )
-                case "raise":
-                    raise RuntimeError(
-                        f"Failed to load hidden states for sample {index}."
-                    )
+        cached_hs = self.transfer.get_cached(file_idx)
+        if cached_hs is None:
+            if self.on_missing == "generate":
+                dataset_item = self.data[index]
+                client_item = build_client_item(dataset_item)
+                loaded_hs = self.generation_recovery.run(
+                    lambda: self._generate_hidden_states_once(
+                        index,
+                        dataset_item,
+                        client_item,
+                    ),
+                    description=(
+                        f"Hidden-state round trip failed for dataset index {index}, "
+                        f"file index {file_idx}"
+                    ),
+                )
+            elif self.on_missing == "skip":
+                return SampleUnavailable()
+            elif self.on_missing == "warn":
+                warnings.warn(
+                    f"Failed to load hidden states for sample {index}. Skipping...",
+                    stacklevel=1,
+                )
+                return SampleUnavailable(
+                    reason=f"Hidden states unavailable for sample {index}"
+                )
+            else:
+                raise RuntimeError(f"Failed to load hidden states for sample {index}.")
+        else:
+            loaded_hs = cached_hs
 
         if isinstance(loaded_hs, SampleUnavailable):
             return loaded_hs
-        if loaded_hs is None:
-            return SampleUnavailable(
-                reason=f"Hidden states unavailable for sample {index}"
-            )
 
         # loaded_hs structure: {
         #   "hidden_states": [seq_len, num_layers, hidden_size]

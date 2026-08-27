@@ -94,13 +94,10 @@ class _StepTimer:
 warnings.filterwarnings("ignore", category=TqdmExperimentalWarning)
 MIN_STEP_PCT = 0.25
 
-# Coordinate recovery every N batches. In validation this also bounds cross-rank skew,
-# which would otherwise blow the NCCL watchdog at the end-of-epoch metrics all-reduce.
-# 0 disables intermediate synchronization; epoch and early-stop boundaries still sync.
+# Bound circuit-breaker detection latency without synchronizing every batch.
 _RECOVERY_SYNC_INTERVAL = 50
 
-# Validation already used a barrier to bound rank skew before recovery was introduced.
-# Keep that synchronization contract independent of recovery status coordination.
+# Bound rank skew before the validation metrics reduction.
 _VAL_SYNC_INTERVAL = 50
 
 
