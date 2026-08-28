@@ -469,6 +469,8 @@ class Trainer:
             loss.backward()
             torch.nn.utils.clip_grad_norm_(self.model.parameters(), 1.0)
 
+            metrics["error_records"] = torch.tensor(batch["error_records"], dtype=torch.int32, device=loss.device)
+
             timer.mark("bwd")
             self._optimizers_step()
 
