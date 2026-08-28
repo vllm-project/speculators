@@ -320,8 +320,10 @@ class CollateFn:
         self.dtype = dtype
         self.preprocess = preprocess
 
-    def _clean_batch(self, batch: Sequence[BatchType | None]) -> tuple[list[BatchType], int]:
-        """ Apply per-sample preprocessing and filter failed samples """
+    def _clean_batch(
+        self, batch: Sequence[BatchType | None]
+    ) -> tuple[list[BatchType], int]:
+        """Apply per-sample preprocessing and filter failed samples"""
         preprocess = self.preprocess
 
         none_records = 0
@@ -330,9 +332,8 @@ class CollateFn:
             if item is None:
                 none_records += 1
                 continue
-            if preprocess:
-                item = preprocess(item)
-            new_batch.append(item)
+
+            new_batch.append(preprocess(item) if preprocess else item)
 
         return new_batch, none_records
 
@@ -355,7 +356,7 @@ class CollateFn:
                 empty = self.preprocess(empty)
             batch = [empty]
 
-        collated_data = {}
+        collated_data: BatchType = {}
         for key in batch[0]:  # type: ignore[union-attr]
             if key == "lengths":
                 collated_data[key] = torch.cat([b[key] for b in batch], dim=0)  # type: ignore[index]

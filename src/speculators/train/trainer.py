@@ -469,8 +469,12 @@ class Trainer:
             loss.backward()
             torch.nn.utils.clip_grad_norm_(self.model.parameters(), 1.0)
 
-            metrics["error_records_sum"] = torch.tensor(batch["error_records"], dtype=torch.int32, device=loss.device)
-            metrics["error_records_total"] = torch.tensor(1.0 if (self.is_distributed and self.rank == 0) else 0, device=loss.device)
+            metrics["error_records_sum"] = torch.tensor(
+                batch["error_records"], dtype=torch.int32, device=loss.device
+            )
+            metrics["error_records_total"] = torch.tensor(
+                1.0 if self.rank == 0 else 0, device=loss.device
+            )
 
             timer.mark("bwd")
             self._optimizers_step()
