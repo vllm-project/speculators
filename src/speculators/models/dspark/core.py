@@ -61,6 +61,25 @@ class DSparkDraftModel(DFlashDraftModel):
             )
             self.confidence_head = ConfidenceHead(input_dim)
 
+    def save_pretrained(self, save_directory, **kwargs):  # noqa: ANN001
+        """Persist GLM-5 MLA drafts under the vLLM-Ascend architecture name.
+
+        HuggingFace ``PreTrainedModel.save_pretrained`` overwrites
+        ``config.architectures`` with this Python class name. Restore the
+        K3-style export contract afterwards so serve can dispatch
+        ``Glm5DSparkForCausalLM``.
+        """
+        super().save_pretrained(save_directory, **kwargs)
+        from speculators.models.dflash.glm5 import (  # noqa: PLC0415
+            GLM5_DSPARK_ARCHITECTURE,
+            is_glm5_mla_config,
+        )
+
+        if not is_glm5_mla_config(self.config.transformer_layer_config):
+            return
+        self.config.architectures = [GLM5_DSPARK_ARCHITECTURE]
+        self.config.save_pretrained(save_directory)
+
     @classmethod
     def from_training_args(
         cls,

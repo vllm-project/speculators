@@ -7,6 +7,7 @@ real parser is proven separately by the example-recipe tests, not a golden
 """
 
 import pytest
+from pydantic import ValidationError
 
 from speculators.train.config import TrainConfig
 from speculators.train.config.schema import (
@@ -111,3 +112,38 @@ def test_from_flat_accepts_partial_working_dict():
     assert recovered.draft.num_layers == 6
     # Untouched fields fall back to their schema defaults.
     assert recovered.trainer.epochs == 20
+
+
+def test_glm5_draft_arch_accepted_for_dflash_and_dspark():
+    dflash = TrainConfig(
+        speculator_type="dflash",
+        draft=DraftArgs(draft_arch="glm5"),
+    )
+    dspark = TrainConfig(
+        speculator_type="dspark",
+        draft=DraftArgs(draft_arch="glm5"),
+    )
+    assert dflash.draft.draft_arch == "glm5"
+    assert dspark.draft.draft_arch == "glm5"
+
+
+def test_glm5_draft_arch_rejected_for_eagle3():
+    with pytest.raises(ValidationError, match="only supported"):
+        TrainConfig(draft=DraftArgs(draft_arch="glm5"))
+
+
+def test_q_lora_rank_requires_glm5_draft_arch():
+    with pytest.raises(ValidationError, match="require --draft-arch glm5"):
+        TrainConfig(
+            speculator_type="dflash",
+            draft=DraftArgs(q_lora_rank=32),
+        )
+
+
+def test_q_lora_rank_accepted_with_glm5_draft_arch():
+    cfg = TrainConfig(
+        speculator_type="dspark",
+        draft=DraftArgs(draft_arch="glm5", q_lora_rank=32, kv_lora_rank=16),
+    )
+    assert cfg.draft.q_lora_rank == 32
+    assert cfg.draft.kv_lora_rank == 16

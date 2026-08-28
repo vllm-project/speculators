@@ -95,10 +95,11 @@ class DraftArgs(_Group):
         description="Number of draft decoder layers to synthesize. "
         "(default: 5 for dflash/dspark/dflash2, 1 otherwise).",
     )
-    draft_arch: Literal["llama", "qwen3"] | None = Field(
+    draft_arch: Literal["llama", "qwen3", "glm5"] | None = Field(
         default=None,
         description="Architecture for draft decoder layers "
-        "(default: 'llama' for eagle3, 'qwen3' otherwise).",
+        "(default: 'llama' for eagle3, 'qwen3' otherwise). "
+        "'glm5' selects Dense MLA layers for DFlash/DSpark (GLM-5.x).",
     )
     draft_hidden_act: str = Field(
         default="silu",
@@ -191,6 +192,16 @@ class DraftArgs(_Group):
         default="simple_flex_attention",
         description="Attention implementation for draft layers. Use 'sdpa' or 'eager' "
         "for hardware that doesn't support flex attention. Not supported for MTP.",
+    )
+    q_lora_rank: int | None = Field(
+        default=None,
+        description="Override glm5 draft Q LoRA rank (default: copy verifier "
+        "q_lora_rank). Set 0 to use a full q_proj instead of q_a/q_b.",
+    )
+    kv_lora_rank: int | None = Field(
+        default=None,
+        description="Override glm5 draft KV LoRA rank (default: copy verifier "
+        "kv_lora_rank).",
     )
 
 
@@ -686,6 +697,27 @@ class TrainConfig(BaseSettings):
             self.loss.loss_fn = "ce" if is_dflash else "kl_div"
         if self.dflash.block_size is None:
             self.dflash.block_size = 16 if is_dflash else 8
+        return self
+
+    @model_validator(mode="after")
+    def _validate_glm5_draft(self) -> "TrainConfig":
+        """``glm5`` is DFlash/DSpark-only; LoRA rank overrides require glm5."""
+        if self.draft.draft_arch == "glm5" and self.speculator_type not in (
+            "dflash",
+            "dspark",
+        ):
+            raise ValueError(
+                "--draft-arch glm5 is only supported for --speculator-type dflash "
+                "or dspark."
+            )
+        lora_set = (
+            self.draft.q_lora_rank is not None or self.draft.kv_lora_rank is not None
+        )
+        if lora_set and self.draft.draft_arch != "glm5" and not self.draft.draft_config:
+            raise ValueError(
+                "--q-lora-rank / --kv-lora-rank require --draft-arch glm5 "
+                "(or a glm5 --draft-config)."
+            )
         return self
 
     @model_validator(mode="after")
