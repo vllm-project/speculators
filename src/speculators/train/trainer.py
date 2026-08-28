@@ -191,6 +191,9 @@ class Trainer:
     _pending_rng_state: dict | None = None
     # Delay an end-of-epoch snapshot until validation has finished.
     _epoch_checkpoint_written: bool = False
+    # Set when the sampler lacks the fast-skip API: _epoch_iterator must fetch
+    # and discard the skipped batches instead of relying on a sampler slice.
+    _replay_skip_steps: bool = False
 
     def __init__(
         self,
@@ -281,6 +284,16 @@ class Trainer:
             self._maybe_restore_rng_state()
         loader_iter = iter(self.train_loader)
         if skip_steps > 0:
+            if self._replay_skip_steps:
+                # No fast-skip API: fetch and discard the already-trained
+                # batches so the loop never retrains them and local_step
+                # numbering stays aligned with the full epoch. With
+                # num_workers=0 their __getitem__ calls consume random draws
+                # exactly as the original epoch did, so the snapshot must be
+                # applied only after the drain.
+                self._replay_skip_steps = False
+                for _ in range(skip_steps):
+                    next(loader_iter, None)
             self._maybe_restore_rng_state()
         return loader_iter
 
@@ -497,8 +510,9 @@ class Trainer:
                 f"epoch={epoch}, global_step={self.global_step}."
             )
         elif skip_steps > 0:
+            self._replay_skip_steps = True
             root_logger.warning(
-                "Sampler lacks fast-skip API; resume will replay "
+                "Sampler lacks fast-skip API; resume will fetch and discard "
                 f"{skip_steps} batches from the start of the epoch."
             )
         return skip_steps

@@ -96,10 +96,7 @@ class _MockTrainer(Trainer):
             )
             batch_sampler.set_epoch(epoch)
 
-        skip_steps = 0
-        if epoch == getattr(self, "current_epoch", epoch):
-            skip_steps = getattr(self, "_resume_local_step", 0)
-            self._resume_local_step = 0
+        skip_steps = self._prepare_resume_skip(epoch)
 
         num_steps = len(self.train_loader)
         step_interval = (
@@ -108,9 +105,10 @@ class _MockTrainer(Trainer):
             else None
         )
 
-        for local_step, _batch in enumerate(self._epoch_iterator(skip_steps), 1):
-            if local_step <= skip_steps:
-                continue
+        for local_step_rel, _batch in enumerate(self._epoch_iterator(skip_steps), 1):
+            # Mirrors the real trainer: skipped batches never leave the
+            # iterator, so local_step is offset into the full epoch.
+            local_step = local_step_rel + skip_steps
             self._trained_steps.append((epoch, local_step, self.global_step))
             self.global_step += 1
             if (
@@ -463,6 +461,44 @@ def test_mid_epoch_resume_continues_the_interrupted_iterator_exactly() -> None:
         assert torch.equal(_draw(), expected)
 
 
+def test_fallback_replay_discards_skipped_batches_and_restores_rng_after() -> None:
+    """Without the fast-skip API, resume drains the already-trained batches and
+    only then applies the RNG snapshot: the drained __getitem__ calls consume
+    random draws exactly as the original epoch did, so restoring first would
+    shift the stream for every remaining batch. The drained batches must also
+    never reach the training loop (no retraining, no local_step skew)."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+
+        def _plain_loader() -> DataLoader:
+            return DataLoader(_NoisyDataset(10), batch_size=1)  # no fast-skip API
+
+        # Uninterrupted run: one step, checkpoint, keep drawing.
+        t1 = _make_trainer_with_loader(tmpdir, _plain_loader())
+        torch.manual_seed(1234)
+        it1 = t1._epoch_iterator(t1._prepare_resume_skip(0))
+        next(it1)
+        t1.global_step = 1
+        t1.maybe_save_checkpoint(0, local_step=1)
+        expected_batch = next(it1)  # the live iterator fetches step 2
+        expected = _draw()
+
+        # Perturb the generator, then resume in a fresh trainer/loader.
+        torch.manual_seed(0)
+        t2 = _make_trainer_with_loader(tmpdir, _plain_loader(), resume=True)
+        assert t2._pending_rng_state is not None
+        skip = t2._prepare_resume_skip(0)
+        assert skip == 1
+        assert t2._replay_skip_steps
+        it2 = t2._epoch_iterator(skip)
+        assert t2._pending_rng_state is None
+        assert not t2._replay_skip_steps
+        got_batch = next(it2)  # batch 1 was drained; first yield is step 2
+
+        assert torch.equal(got_batch["input_ids"], expected_batch["input_ids"])
+        assert torch.equal(got_batch["noise"], expected_batch["noise"])
+        assert torch.equal(_draw(), expected)
+
+
 def test_end_of_epoch_resume_continues_the_next_epoch_exactly() -> None:
     """Resuming at an epoch boundary reproduces the next epoch's first fetch/draws."""
     with tempfile.TemporaryDirectory() as tmpdir:
@@ -555,20 +591,7 @@ class _FastSkipMockTrainer(_MockTrainer):
             )
             batch_sampler.set_epoch(epoch)
 
-        skip_steps = 0
-        if epoch == getattr(self, "current_epoch", epoch):
-            skip_steps = getattr(self, "_resume_local_step", 0)
-            self._resume_local_step = 0
-
-        sampler = self.train_loader.batch_sampler
-        has_fast_skip_api = hasattr(sampler, "_generate_batches") and hasattr(
-            sampler, "_cached_generated_batches"
-        )
-        if skip_steps > 0 and has_fast_skip_api:
-            fast_skip_sampler = cast("_FastSkipBatchSamplerProtocol", sampler)
-            all_batches = fast_skip_sampler._generate_batches(epoch)
-            remaining = all_batches[skip_steps:]
-            fast_skip_sampler._cached_generated_batches = (epoch, remaining)
+        skip_steps = self._prepare_resume_skip(epoch)
 
         for local_step_rel, _batch in enumerate(self._epoch_iterator(skip_steps), 1):
             local_step = local_step_rel + skip_steps
