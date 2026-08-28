@@ -12,6 +12,7 @@ import asyncio
 import copy
 import importlib.util
 import json
+import sys
 import time
 from pathlib import Path
 from typing import Any
@@ -901,10 +902,44 @@ def test_prepare_row_merges_normalize_output_over_raw_row():
     assert turns == [{"role": "user", "content": "Hi"}]
 
 
-def test_dataset_choice_rejects_multimodal_with_a_reason():
+def test_dataset_source_rejects_multimodal_with_a_reason():
     with pytest.raises(argparse.ArgumentTypeError, match="does not support images"):
-        regen._dataset_choice("sharegpt4v_coco")
-    assert regen._dataset_choice("ultrachat") == "ultrachat"
+        regen._dataset_source("sharegpt4v_coco")
+    assert regen._dataset_source("ultrachat") == "ultrachat"
+
+
+def test_dataset_source_validates_local_files(tmp_path):
+    path = tmp_path / "prompts.jsonl"
+    path.write_text('{"prompt": "hello"}\n')
+
+    assert regen._dataset_source(str(path)) == str(path)
+    with pytest.raises(argparse.ArgumentTypeError, match="does not exist"):
+        regen._dataset_source(str(tmp_path / "missing.json"))
+    with pytest.raises(argparse.ArgumentTypeError, match="not a supported dataset"):
+        regen._dataset_source(str(tmp_path / "prompts.csv"))
+
+
+def test_parse_args_accepts_local_dataset(monkeypatch, tmp_path):
+    path = tmp_path / "prompts.jsonl"
+    path.write_text('{"prompt": "hello"}\n')
+    monkeypatch.setattr(sys, "argv", ["script.py", "--dataset", str(path)])
+
+    assert regen.parse_args().dataset == str(path)
+
+
+@pytest.mark.parametrize("option", ["--split", "--subset"])
+def test_parse_args_rejects_preset_options_for_local_dataset(
+    monkeypatch, capsys, tmp_path, option
+):
+    path = tmp_path / "prompts.jsonl"
+    path.write_text('{"prompt": "hello"}\n')
+    monkeypatch.setattr(
+        sys, "argv", ["script.py", "--dataset", str(path), option, "custom"]
+    )
+
+    with pytest.raises(SystemExit):
+        regen.parse_args()
+    assert "only apply to dataset presets" in capsys.readouterr().err
 
 
 @pytest.mark.parametrize(
@@ -931,8 +966,7 @@ def test_load_input_dataset_from_local_file(tmp_path, filename, data):
     path = tmp_path / filename
     path.write_text(json.dumps(data))
     args = argparse.Namespace(
-        dataset=None,
-        dataset_file=str(path),
+        dataset=str(path),
         split=None,
         subset=None,
     )

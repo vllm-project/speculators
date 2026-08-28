@@ -76,7 +76,7 @@ python scripts/response_regeneration/script.py --dataset magpie
 
 ### Local Files
 
-Use `--dataset-file` to regenerate responses from a local `.json` or `.jsonl` file. **JSONL is recommended for large datasets** because it can be read one row at a time; a regular JSON file may need to be loaded completely before iteration. Each JSONL line, or each object in a top-level JSON array, must use one of these schemas:
+Pass a local `.json` or `.jsonl` file to `--dataset` to regenerate its responses. **JSONL is recommended for large datasets** because it can be read one row at a time; a regular JSON file may need to be loaded completely before iteration. Each JSONL line, or each object in a top-level JSON array, must use one of these schemas:
 
 - `prompt`: a non-empty string or a non-empty list of message objects.
 - `messages`: a non-empty list of message objects.
@@ -96,7 +96,7 @@ Run regeneration with:
 
 ```bash
 python scripts/response_regeneration/script.py \
-  --dataset-file ./my_prompts.jsonl
+  --dataset ./my_prompts.jsonl
 ```
 
 Column names such as `instruction`, `question`, and `text` are not inferred. Convert those rows to one of the schemas above or use a registered dataset preset with a normalization function.
@@ -105,9 +105,7 @@ Column names such as `instruction`, `question`, and `text` are not inferred. Con
 
 #### Data Arguments
 
-- **`--dataset`** (str, default: `ultrachat`) Dataset preset to process (see [Supported Datasets](#supported-datasets)).
-
-- **`--dataset-file`** (str) Local JSON/JSONL file to process instead of a preset (see [Local Files](#local-files)). Mutually exclusive with `--dataset`; `--split` and `--subset` do not apply.
+- **`--dataset`** (str, default: `ultrachat`) Registered dataset preset (see [Supported Datasets](#supported-datasets)) or local JSON/JSONL file (see [Local Files](#local-files)). `--split` and `--subset` do not apply to local files.
 
 - **`--split`** (str, default: preset-specific) Dataset split. Defaults to the preset's split.
 

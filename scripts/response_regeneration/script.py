@@ -34,26 +34,24 @@ MULTIMODAL_DATASETS = {"sharegpt4v_coco"}
 REGEN_DATASETS = [name for name in DATASET_CONFIGS if name not in MULTIMODAL_DATASETS]
 
 
-def _dataset_choice(name: str) -> str:
-    """Reject multimodal presets with a reason, not a bare invalid choice."""
+def _dataset_source(name: str) -> str:
+    """Validate a registered preset or local JSON/JSONL file."""
     if name in MULTIMODAL_DATASETS:
         raise argparse.ArgumentTypeError(
             f"{name!r} is multimodal; response regeneration does not support "
             "images yet. Generate target-model responses with a multimodal-capable "
             "workflow, then convert them with `prepare_data.py`."
         )
-    return name
+    if name in REGEN_DATASETS:
+        return name
 
-
-def _dataset_file(path: str) -> str:
-    """Validate a local JSON/JSONL dataset path for argparse."""
-    dataset_path = Path(path)
+    dataset_path = Path(name)
     if dataset_path.suffix.lower() not in {".json", ".jsonl"}:
         raise argparse.ArgumentTypeError(
-            "--dataset-file must be a .json or .jsonl file"
+            f"{name!r} is not a supported dataset preset or local .json/.jsonl file"
         )
     if not dataset_path.is_file():
-        raise argparse.ArgumentTypeError(f"dataset file does not exist: {path}")
+        raise argparse.ArgumentTypeError(f"dataset file does not exist: {name}")
     return str(dataset_path)
 
 
@@ -87,18 +85,12 @@ def parse_args():
         default=None,
         help="Model name exposed by vLLM (auto-detected if not specified)",
     )
-    dataset_group = parser.add_mutually_exclusive_group()
-    dataset_group.add_argument(
+    parser.add_argument(
         "--dataset",
-        default=None,
-        type=_dataset_choice,
-        choices=REGEN_DATASETS,
-        help="Dataset to process",
-    )
-    dataset_group.add_argument(
-        "--dataset-file",
-        type=_dataset_file,
-        help="Local JSON/JSONL file with messages, conversations, or prompt rows",
+        default="ultrachat",
+        type=_dataset_source,
+        metavar="PRESET_OR_PATH",
+        help="Registered dataset preset or local .json/.jsonl file",
     )
     parser.add_argument(
         "--split",
@@ -159,12 +151,10 @@ def parse_args():
         ),
     )
     args = parser.parse_args()
-    if args.dataset is None and args.dataset_file is None:
-        args.dataset = "ultrachat"
-    if args.dataset_file is not None and (
+    if args.dataset not in REGEN_DATASETS and (
         args.split is not None or args.subset is not None
     ):
-        parser.error("--split and --subset only apply to --dataset presets")
+        parser.error("--split and --subset only apply to dataset presets")
 
     if args.max_retries < 0:
         parser.error("--max-retries must be >= 0")
@@ -779,10 +769,10 @@ async def worker(
 
 def load_input_dataset(args: argparse.Namespace) -> tuple[DatasetConfig, Any, str]:
     """Load either a registered Hugging Face preset or a local JSON/JSONL file."""
-    if args.dataset_file is not None:
+    if args.dataset not in REGEN_DATASETS:
         config = DatasetConfig(
-            name=Path(args.dataset_file).stem,
-            hf_path=args.dataset_file,
+            name=Path(args.dataset).stem,
+            hf_path=args.dataset,
             split="train",
             prompt_field="prompt",
         )
@@ -791,8 +781,6 @@ def load_input_dataset(args: argparse.Namespace) -> tuple[DatasetConfig, Any, st
         )
         return config, dataset, config.split
 
-    if args.dataset is None:
-        raise ValueError("dataset is required when dataset_file is not set")
     config = DATASET_CONFIGS[args.dataset]
     split = args.split if args.split is not None else config.split
     subset = args.subset if args.subset is not None else config.subset
