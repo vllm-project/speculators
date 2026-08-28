@@ -118,17 +118,22 @@ def test_collate_fn_basic():
         "position_ids": torch.tensor(
             [[0, 1, 0, 1, 2, 3, 4, 5, -1, -1]], dtype=torch.long
         ),
+        "error_records": 0,
     }
 
     collated = collate_fn(batch)
 
     for key, value in collated.items():
-        assert value.shape == expected_output[key].shape
+        if isinstance(value, torch.Tensor):
+            assert value.shape == expected_output[key].shape
 
-        is_masking = expected_output[key] == -1
-        assert torch.all(
-            torch.isclose(value[~is_masking], expected_output[key][~is_masking])
-        )
+            is_masking = expected_output[key] == -1
+            assert torch.all(
+                torch.isclose(value[~is_masking], expected_output[key][~is_masking])
+            )
+
+        else:
+            assert value == expected_output[key]
 
 
 def test_collate_fn_casts_hidden_states_dtype():
