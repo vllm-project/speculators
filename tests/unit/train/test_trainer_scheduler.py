@@ -1,12 +1,16 @@
 from pathlib import Path
+from unittest.mock import MagicMock
 
 import pytest
 import torch
 from transformers import get_linear_schedule_with_warmup
 
+from speculators.train import checkpointer as checkpointer_module
 from speculators.train.checkpointer import SingleGPUCheckpointer
 from speculators.train.config import TrainConfig
+from speculators.train.optimizers import build_optimizers
 from speculators.train.trainer import (
+    Trainer,
     TrainerConfig,
     _resolve_scheduler_steps,
 )
@@ -109,3 +113,40 @@ def test_scheduler_resume_restores_optimizer_learning_rate(tmp_path: Path):
 
     assert resumed_scheduler.get_last_lr()[0] == pytest.approx(expected_lr)
     assert resumed_optimizer.param_groups[0]["lr"] == pytest.approx(expected_lr)
+
+
+def test_resume_without_scheduler_state_keeps_configured_base_lr(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """A checkpoint may carry a decayed optimizer LR but no scheduler file
+    (legacy checkpoints, or an interruption between the optimizer and scheduler
+    writes). The rebuilt scheduler must adopt the configured LR as its base,
+    not the decayed value the optimizer load put back into the param groups."""
+    monkeypatch.setattr(checkpointer_module, "get_current_device", lambda: "cpu")
+
+    config = TrainerConfig(
+        lr=1e-4,
+        num_epochs=5,
+        save_path=str(tmp_path),
+        resume_from_checkpoint=True,
+    )
+    model = torch.nn.Linear(2, 2)
+    model.dtype = torch.float32  # load_optimizer_state_dict reads it off the model
+
+    # Checkpoint an optimizer whose scheduled LR has decayed to ~zero.
+    (tmp_path / "0").mkdir()
+    saved = build_optimizers(model, config)
+    for group in saved[0].param_groups:
+        group["lr"] = 1e-9
+    torch.save([saved[0].state_dict()], tmp_path / "0" / "optimizer_state_dict.pt")
+
+    trainer = Trainer.__new__(Trainer)
+    trainer.model = model
+    trainer.config = config
+    trainer.resume_from_checkpoint = True
+    trainer.checkpointer = SingleGPUCheckpointer(tmp_path)
+    trainer.train_loader = MagicMock(__len__=MagicMock(return_value=20))
+    trainer.setup_optimizer()
+
+    assert trainer.schedulers[0].base_lrs == [pytest.approx(config.lr)]
+    assert trainer.optimizers[0].param_groups[0]["lr"] != pytest.approx(1e-9)
