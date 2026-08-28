@@ -125,11 +125,12 @@ def test_collate_fn_basic():
 
     for key, value in collated.items():
         if isinstance(value, torch.Tensor):
-            assert value.shape == expected_output[key].shape
+            assert isinstance(expected_output[key], torch.Tensor)
+            assert value.shape == expected_output[key].shape  # type: ignore[attr-defined]
 
             is_masking = expected_output[key] == -1
             assert torch.all(
-                torch.isclose(value[~is_masking], expected_output[key][~is_masking])
+                torch.isclose(value[~is_masking], expected_output[key][~is_masking])  # type: ignore[index]
             )
 
         else:

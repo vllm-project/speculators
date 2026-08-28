@@ -337,7 +337,7 @@ def make_batch(
         preprocess=preprocess,
     )
     batch = collate_fn(samples)
-    # We drop all non-tensors items, to mimic logic from Trainer class, see gpu_batch formation
+    # We drop all non-tensors items, to mimic logic from Trainer class
     return {k: v.to(device) for k, v in batch.items() if isinstance(v, torch.Tensor)}
 
 
