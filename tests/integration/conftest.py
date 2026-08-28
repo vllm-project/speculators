@@ -337,8 +337,9 @@ def make_batch(
         preprocess=preprocess,
     )
     batch = collate_fn(samples)
-    # We drop all non-tensors items, to mimic logic from Trainer class
-    return {k: v.to(device) for k, v in batch.items() if isinstance(v, torch.Tensor)}
+    return {
+        k: v.to(device) if isinstance(v, torch.Tensor) else v for k, v in batch.items()
+    }
 
 
 # ---------------------------------------------------------------------------
