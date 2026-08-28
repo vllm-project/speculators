@@ -383,6 +383,28 @@ def test_end_of_epoch_rng_state_is_written_after_validation(
         assert not (Path(tmpdir) / "1" / "rng_state_rank0.pt").exists()
 
 
+def test_deferred_epoch_snapshot_invalidates_stale_mid_epoch_rng(
+    trained_steps: list[tuple[int, int, int]],
+) -> None:
+    """With checkpoint_freq < 1 a mid-epoch RNG file lives in the same epoch
+    directory. The end-of-epoch save defers its own snapshot until after
+    validation, so it must remove the mid-epoch file: a resume in that window
+    should fall back to the no-RNG warning, not silently replay mid-epoch
+    draws against end-of-epoch weights."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        t = _make_trainer(tmpdir, trained_steps=trained_steps)
+        rng_file = Path(tmpdir) / "0" / "rng_state_rank0.pt"
+
+        t.maybe_save_checkpoint(0, local_step=3)  # mid-epoch snapshot
+        assert rng_file.exists()
+
+        t.maybe_save_checkpoint(0, local_step=0)  # end-of-epoch, snapshot deferred
+        assert not rng_file.exists(), "stale mid-epoch RNG survived the deferral"
+
+        t._save_end_of_epoch_rng_state(0)  # after validation
+        assert rng_file.exists()
+
+
 def test_save_best_checkpoint_gets_rng_state(
     trained_steps: list[tuple[int, int, int]],
 ) -> None:

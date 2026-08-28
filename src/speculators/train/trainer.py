@@ -258,6 +258,17 @@ class Trainer:
         if self.is_distributed:
             dist.barrier()
 
+    def _invalidate_rng_state(self, epoch: int) -> None:
+        """Drop this rank's RNG file when deferring the end-of-epoch snapshot.
+
+        A mid-epoch checkpoint may have written RNG state into the same epoch
+        directory. Between the end-of-epoch weight save and the post-validation
+        snapshot that file is stale: a resume in that window would silently
+        replay mid-epoch random draws against end-of-epoch weights. Removing it
+        makes such a resume fall back to the documented no-RNG warning instead.
+        """
+        self._rng_state_path(epoch).unlink(missing_ok=True)
+
     def _save_end_of_epoch_rng_state(self, epoch: int) -> None:
         """Snapshot after validation for either end-of-epoch save path."""
         if self._epoch_checkpoint_written:
@@ -673,6 +684,7 @@ class Trainer:
             if local_step > 0:
                 self._save_rng_state(epoch)  # mid-epoch: resume continues from here
             else:
+                self._invalidate_rng_state(epoch)
                 self._epoch_checkpoint_written = True  # snapshot after validation
             # Create a human-readable symlink for checkpoint readability.
             # e.g. epoch0_step16626 -> 0/ (mid) or epoch0_end -> 0/ (end)
@@ -698,6 +710,7 @@ class Trainer:
             self.checkpointer.save_checkpoint(self.model, self.optimizers, epoch)
             if self.schedulers:
                 self.checkpointer.save_scheduler_state_dict(self.schedulers, epoch)
+            self._invalidate_rng_state(epoch)
             self._epoch_checkpoint_written = True
         elif self.config.checkpoint_freq >= 1 and not (
             epoch == 0 or (epoch + 1) % int(self.config.checkpoint_freq) == 0
