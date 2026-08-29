@@ -121,7 +121,7 @@ class TestReverseKLDivLoss:
 
     def test_resolve_rkl(self):
         """resolve_loss_config wires 'rkl' to reverse_kl_div_loss."""
-        assert resolve_loss_config("rkl")["rkl"][0] is reverse_kl_div_loss
+        assert resolve_loss_config("rkl")["rkl"][0].__wrapped__ is reverse_kl_div_loss
 
 
 class TestJSDivLoss:
@@ -172,7 +172,7 @@ class TestJSDivLoss:
 
     def test_resolve_jsd(self):
         """resolve_loss_config wires 'jsd' to js_div_loss."""
-        assert resolve_loss_config("jsd")["jsd"][0] is js_div_loss
+        assert resolve_loss_config("jsd")["jsd"][0].__wrapped__ is js_div_loss
 
 
 class TestTVLoss:
@@ -200,7 +200,7 @@ class TestTVLoss:
 
     def test_resolve_tv(self):
         """resolve_loss_config wires 'tv' to the fused-or-eager dispatcher."""
-        assert resolve_loss_config("tv")["tv"][0] is tv_loss_fused_or_eager
+        assert resolve_loss_config("tv")["tv"][0].__wrapped__ is tv_loss_fused_or_eager
 
     @pytest.mark.skipif(
         not torch.cuda.is_available(), reason="fused Triton loss requires CUDA"
@@ -272,7 +272,7 @@ class TestNegLogAcceptanceLoss:
 
     def test_resolve_nla(self):
         """resolve_loss_config wires 'nla' to the fused-or-eager dispatcher."""
-        assert resolve_loss_config("nla")["nla"][0] is nla_loss_fused_or_eager
+        assert resolve_loss_config("nla")["nla"][0].__wrapped__ is nla_loss_fused_or_eager
 
 
 class TestLKHybridLoss:
@@ -331,7 +331,7 @@ class TestLKHybridLoss:
 
     def test_resolve_lk_hybrid(self):
         """resolve_loss_config wires 'lk_hybrid' to lk_hybrid_loss."""
-        assert resolve_loss_config("lk_hybrid")["lk_hybrid"][0] is lk_hybrid_loss
+        assert resolve_loss_config("lk_hybrid")["lk_hybrid"][0].__wrapped__ is lk_hybrid_loss
 
 
 class TestComputeAccuracySingleStep:
@@ -447,3 +447,71 @@ class TestBf16GradientPrecision:
 
         rel_err = ((actual - exact).norm() / exact.norm()).item()
         assert rel_err < 0.02, f"{loss_fn.__name__} bf16 gradient error {rel_err:.1%}"
+
+
+class TestChunkedLoss:
+    """Chunked (checkpointed) losses must be numerically identical to eager."""
+
+    SEQ = 2048  # > _LOSS_CHUNK (512) so the chunk loop actually runs
+    VOCAB = 64
+
+    def _logits_targets(self, seed: int = 0):
+        g = torch.Generator().manual_seed(seed)
+        logits = torch.randn(1, self.SEQ, self.VOCAB, generator=g, requires_grad=True)
+        targets = torch.randn(1, self.SEQ, self.VOCAB, generator=g)
+        return logits, targets
+
+    @pytest.mark.parametrize("loss_name", ["kl_div", "rkl", "jsd", "ce", "tv", "nla"])
+    def test_forced_chunking_matches_eager_values_and_grads(self, loss_name, monkeypatch):
+        from speculators.models import metrics as M
+
+        # Eager reference: force the gate off and call the wrapped fn's
+        # original (fn.__wrapped__, preserved by functools.wraps).
+        monkeypatch.setattr(M, "CHUNKED_LOSS", False)
+        fn_chunked = M.resolve_loss_config(loss_name)[loss_name][0]
+        eager_fn = fn_chunked.__wrapped__
+
+        logits, targets = self._logits_targets()
+        ref = eager_fn(logits, targets).sum()
+        ref_logits = logits.detach().clone().requires_grad_(True)
+        eager_fn(ref_logits, targets).sum().backward()
+
+        # Forced-on chunking: same wrapper, gate now True.
+        monkeypatch.setattr(M, "CHUNKED_LOSS", True)
+        out = fn_chunked(logits, targets).sum()
+        chunked_logits = logits.detach().clone().requires_grad_(True)
+        fn_chunked(chunked_logits, targets).sum().backward()
+
+        torch.testing.assert_close(out, ref, rtol=1e-5, atol=1e-6)
+        torch.testing.assert_close(
+            chunked_logits.grad, ref_logits.grad, rtol=1e-5, atol=1e-6
+        )
+
+    def test_auto_gate_by_intermediate_size(self, monkeypatch):
+        from speculators.models import metrics as M
+
+        monkeypatch.setattr(M, "CHUNKED_LOSS", None)
+
+        # Small logits: far below the byte threshold -> eager path.
+        small = torch.zeros(1, 4096, 8)  # 4096*8*4 = 128 KiB
+        assert M._should_chunk(small) is False
+
+        # Large logits on a non-CUDA tensor: single fp32 intermediate > 3 GiB.
+        big = torch.empty(1, 1024, 1 << 21, dtype=torch.float32)  # 8 GiB logical
+        assert M._should_chunk(big) is True
+
+        # A CPU tensor still passes the device check through the byte gate,
+        # so the byte threshold is what protects small-vocab models:
+        # Qwen3-30B-sized [3584, 151936] = 2.0 GiB < 3 GiB -> eager.
+        qwen3_30b = torch.empty(1, 3584, 151936)  # numel*4 ≈ 2.0 GiB (lazy)
+        assert M._should_chunk(qwen3_30b) is False
+
+    def test_force_overrides_auto(self, monkeypatch):
+        from speculators.models import metrics as M
+
+        tiny = torch.zeros(1, 16, 8)
+        monkeypatch.setattr(M, "CHUNKED_LOSS", True)
+        assert M._should_chunk(tiny) is True
+        monkeypatch.setattr(M, "CHUNKED_LOSS", False)
+        big = torch.empty(1, 1024, 1 << 21)
+        assert M._should_chunk(big) is False

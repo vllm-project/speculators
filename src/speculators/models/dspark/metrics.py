@@ -27,6 +27,10 @@ __all__ = [
 
 _EPS = 1e-8
 
+# Seq-len chunk for the no_grad acceptance-rate computation below; one chunk
+# holds ~1 GiB of transient fp32 [chunk, V] at V=248320.
+_ACCEPT_RATE_CHUNK = 1024
+
 
 def _masked_decayed_mean(
     elementwise: torch.Tensor,  # [1, T]
@@ -81,10 +85,21 @@ def compute_metrics(
     )
 
     # Analytical per-position acceptance rate = distributional overlap.
+    # Computed in seq-len chunks: logits.float()/softmax materialize fp32
+    # [1, T, V] tensors (~3.2 GiB each at V=248320, T=3584) which OOM 60 GiB
+    # NPUs when four of them are live at once. Under no_grad nothing is saved
+    # for backward, so chunking is purely transient-buffer management; the ops
+    # are row-independent so the values are identical to the unchunked form.
     with torch.no_grad():
-        draft_p = softmax(logits.float(), dim=-1)
-        target_p = softmax(targets.float(), dim=-1)
-        accept_rate = torch.minimum(draft_p, target_p).sum(dim=-1)  # [1, T]
+        chunk = _ACCEPT_RATE_CHUNK
+        rates = []
+        for start in range(0, seq_len, chunk):
+            l = logits[:, start : start + chunk].float()
+            t = targets[:, start : start + chunk].float()
+            rates.append(
+                torch.minimum(softmax(l, dim=-1), softmax(t, dim=-1)).sum(dim=-1)
+            )
+        accept_rate = torch.cat(rates, dim=1)  # [1, T]
         # Per-block cumulative acceptance product over the draft slots (slot 0
         # is the anchor), shared by the accept-length and calibration metrics.
         num_blocks = seq_len // block_size

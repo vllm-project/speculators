@@ -1102,6 +1102,18 @@ def parse_args():
         default=4.0,
         help="Decay gamma for DFlash/DSpark loss weighting (default: 4.0)",
     )
+    parser.add_argument(
+        "--chunked-loss",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help=(
+            "Compute losses in seq-len chunks with gradient checkpointing "
+            "(bounds fp32 [1, seq_len, vocab] intermediates on devices "
+            "without fused kernels). Default: auto -- enable only when a "
+            "single intermediate exceeds 3 GiB. Pass --chunked-loss/--no-chunked-loss "
+            "to force on/off."
+        ),
+    )
     # D-Pace specific arguments (loss weight option + smoothing)
     parser.add_argument(
         "--per-position-loss-weight",
@@ -1310,6 +1322,9 @@ def parse_args():
 
     provided = explicitly_provided_dests(parser, DECODER_SHAPING_FLAGS)
     validate_draft_init_args(parser, args, provided)
+    import speculators.models.metrics as _metrics
+
+    _metrics.CHUNKED_LOSS = args.chunked_loss
     resolve_loss_config(args.loss_fn)
 
     if args.per_position_loss_weight == "dpace":

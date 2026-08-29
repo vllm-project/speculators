@@ -1,11 +1,29 @@
 import json
 import math
 from collections.abc import Callable
-from functools import cache
+from functools import cache, wraps
 
 import torch
 
 _EPS = 1e-5
+
+# Token-chunk size for the chunked loss/metrics path (see ``chunked_over_seq``).
+# One chunk of fp32 [CHUNK, V] intermediates costs 0.5 GiB at V=248320, a few of
+# which are live at once -- small enough to keep the peak well under the
+# headroom left by the resident [T, V] bf16 logits/targets.
+_LOSS_CHUNK = 512
+
+# Auto-enable chunking when a single eager fp32 [1, seq_len, V] intermediate
+# (softmax / log-softmax, saved for backward) exceeds this size. Calibrated
+# between the largest configuration verified to run unchunked (2.0 GiB per
+# intermediate: Qwen3-30B-A3B, V=151936, 512 anchors x block 7 = T 3584,
+# single 60 GiB NPU) and the smallest known to OOM (3.3 GiB: Qwen3.8-27B
+# full vocab, V=248320, same anchor budget, same hardware).
+_CHUNK_INTERMEDIATE_BYTES = 3 << 30  # 3 GiB
+
+# Force-switch for the chunked loss path (set from --chunked-loss / --no-chunked-loss).
+# None = auto (byte heuristic above), True/False = forced on/off.
+CHUNKED_LOSS: bool | None = None
 
 LossConfig = dict[
     str, tuple[Callable[[torch.Tensor, torch.Tensor], torch.Tensor], float]
@@ -416,14 +434,133 @@ def nla_loss_fused_or_eager(logits: torch.Tensor, targets: torch.Tensor):
     return neg_log_acceptance_loss(logits, targets)
 
 
+def _should_chunk(logits: torch.Tensor) -> bool:
+    """Decide whether the eager loss for ``logits`` should run chunked.
+
+    Auto mode (``CHUNKED_LOSS is None``) chunks only when the device has no
+    fused kernels (CUDA/ROCm keep the Triton path) and a single fp32
+    ``[1, seq_len, V]`` intermediate would exceed ``_CHUNK_INTERMEDIATE_BYTES``
+    -- see its calibration note. Everything smaller (e.g. Qwen3-30B at
+    V=151936, T=3584 -> 2.0 GiB per intermediate) keeps the plain eager path
+    and pays no checkpoint-recompute cost.
+    """
+    if CHUNKED_LOSS is not None:
+        return CHUNKED_LOSS
+    if logits.is_cuda:
+        # CUDA/ROCm: fused Triton kernels already bound the intermediates.
+        return False
+    return logits.numel() * 4 > _CHUNK_INTERMEDIATE_BYTES
+
+
+class _ChunkedLossApply(torch.autograd.Function):
+    """Autograd bridge for chunked per-position losses.
+
+    forward(): the per-position loss values, concatenated over chunks.
+    backward(): given the upstream per-position gradient ``g`` (loss mask /
+    decay weights applied by ``loss_function``), recompute each chunk's
+    forward and backprop ``g_chunk`` through it, discarding the chunk's
+    intermediates immediately. Peak memory stays at one chunk's worth
+    (``[_LOSS_CHUNK, V]``); the cost is one extra per-chunk forward during
+    backward -- measured ~3% of the loss-section time on 910B at full vocab.
+    """
+
+    @staticmethod
+    def forward(ctx, values, logits, fn, targets):
+        ctx.save_for_backward(logits, targets)
+        ctx.fn, ctx.chunk = fn, _LOSS_CHUNK
+        return values
+
+    @staticmethod
+    def backward(ctx, grad_out):
+        logits, targets = ctx.saved_tensors
+        grad_logits = torch.zeros_like(logits)
+        with torch.enable_grad():
+            for start in range(0, logits.shape[1], ctx.chunk):
+                logit_c = logits[:, start : start + ctx.chunk].detach().requires_grad_(True)
+                per_pos = ctx.fn(logit_c, targets[:, start : start + ctx.chunk])
+                (g,) = torch.autograd.grad(
+                    per_pos, logit_c, grad_outputs=grad_out[:, start : start + ctx.chunk]
+                )
+                grad_logits[:, start : start + ctx.chunk] = g
+                del per_pos, g
+        return None, grad_logits, None, None
+
+
+def chunked_over_seq(fn: Callable[[torch.Tensor, torch.Tensor], torch.Tensor]):
+    """Wrap a per-position loss so it runs in seq-len chunks.
+
+    The eager losses materialize fp32 ``[1, T, V]`` intermediates (softmax,
+    log-softmax) that are also saved for backward. At full vocab (Qwen3.8:
+    V=248320) a T=3584 batch (512 anchors x block 7) holds two of those per
+    loss term -- ~6.4 GiB on top of the resident bf16 logits/targets, which
+    OOMs 60 GiB NPUs where the fused Triton kernels are unavailable.
+
+    Instead of building one autograd graph over the whole sequence, the
+    per-position values are computed chunk-by-chunk under ``no_grad``, and a
+    custom autograd node (``_ChunkedLossApply``) carries the backward: each
+    chunk is re-forwarded and the upstream per-position gradient is pushed
+    through it, with the chunk's intermediates discarded immediately. A
+    chunk's intermediates therefore never outlive their own forward /
+    backward pair, bounding live memory to ``[_LOSS_CHUNK, V]``. Values and
+    gradients are mathematically identical to the unchunked loss -- every op
+    is row-independent, so no cross-row reduction order changes either.
+
+    Measured on a 910B NPU at T=3584, V=248320 (tv loss): 24.0 GiB peak /
+    105 ms eager vs 11.6 GiB / 108 ms chunked -- the loss-section memory
+    drops to the resident-activations floor at ~3% time cost.
+
+    Gated by ``_should_chunk``: on CUDA/ROCm (``logits.is_cuda``) the wrapper
+    passes straight through so the fused Triton kernels in
+    ``tv_loss_fused_or_eager`` / ``nla_loss_fused_or_eager`` keep running
+    unchunked, and on other devices it engages only when the intermediates
+    reach GB scale (or when forced via ``CHUNKED_LOSS``).
+
+    NB: the chunked path accumulates into ``logits.grad`` itself (it does
+    not flow through autograd's deferred backward). ``targets`` is expected
+    to be gradient-free (verifier logits computed under ``no_grad``); if a
+    loss ever needs gradients w.r.t. ``targets`` too, the wrapper must be
+    extended to accumulate both.
+
+    Args:
+        fn: A per-position loss ``(logits, targets) -> [1, seq_len]``.
+
+    Returns:
+        A function with the same signature, computed chunk-wise.
+    """
+
+    @wraps(fn)
+    def wrapped(logits: torch.Tensor, targets: torch.Tensor):
+        if not _should_chunk(logits):
+            return fn(logits, targets)
+        values = []
+        with torch.no_grad():  # values only; gradients flow through Apply
+            for start in range(0, logits.shape[1], _LOSS_CHUNK):
+                values.append(
+                    fn(
+                        logits[:, start : start + _LOSS_CHUNK],
+                        targets[:, start : start + _LOSS_CHUNK],
+                    )
+                )
+        out = torch.cat(values, dim=1)  # [1, seq_len]
+        if torch.is_grad_enabled() and logits.requires_grad:
+            return _ChunkedLossApply.apply(out, logits, fn, targets)
+        return out
+
+    return wrapped
+
+
+# Every entry is chunk-wrapped: on CUDA the wrapper passes through to the
+# fused kernels; elsewhere it engages only when a single fp32 intermediate
+# exceeds ``_CHUNK_INTERMEDIATE_BYTES`` (see ``_should_chunk``), bounding the
+# live intermediates to ``[_LOSS_CHUNK, V]``.
 _LOSS_FN_MAP: dict[str, Callable[[torch.Tensor, torch.Tensor], torch.Tensor]] = {
-    "kl_div": kl_div_loss,
-    "rkl": reverse_kl_div_loss,
-    "jsd": js_div_loss,
-    "ce": ce_loss,
-    "tv": tv_loss_fused_or_eager,
-    "nla": nla_loss_fused_or_eager,
-    "lk_hybrid": lk_hybrid_loss,
+    "kl_div": chunked_over_seq(kl_div_loss),
+    "rkl": chunked_over_seq(reverse_kl_div_loss),
+    "jsd": chunked_over_seq(js_div_loss),
+    "ce": chunked_over_seq(ce_loss),
+    "tv": chunked_over_seq(tv_loss_fused_or_eager),
+    "nla": chunked_over_seq(nla_loss_fused_or_eager),
+    "lk_hybrid": chunked_over_seq(lk_hybrid_loss),
 }
 
 
