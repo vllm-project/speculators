@@ -16,7 +16,7 @@ from speculators.models.mtp.model_definitions import (
     mtp_model_classes,
     resolve_model_type,
 )
-from speculators.models.utils import conditional_torch_compile
+from speculators.models.utils import conditional_torch_compile, flatten_rope_parameters
 from speculators.proposals.greedy import GreedyTokenProposalConfig
 
 logger = logging.getLogger(__name__)
@@ -84,7 +84,9 @@ class MTPDraftModel(DraftVocabMixin, SpeculatorModel):
         self.mtp_layers = nn.ModuleList(
             [self._model_definitions.first_layer_class(tc, layer_idx=0)]
         )
-        self.rotary_emb = self._model_definitions.rotary_emb_class(tc)
+        self.rotary_emb = self._model_definitions.rotary_emb_class(
+            flatten_rope_parameters(tc)
+        )
 
         self.post_init()
 

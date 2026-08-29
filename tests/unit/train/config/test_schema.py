@@ -11,7 +11,10 @@ import pytest
 from speculators.train.config import TrainConfig
 from speculators.train.config.schema import (
     CONFIG_DESTS,
+    DFlash2Args,
+    DFlashArgs,
     DraftArgs,
+    LossArgs,
     OptimizerArgs,
 )
 
@@ -44,6 +47,83 @@ def test_flatten_resolves_non_eagle3_derived_defaults():
     assert flat["draft_arch"] == "qwen3"
     assert flat["norm_before_fc"] is False
     assert flat["norm_output"] is False
+
+
+def test_flatten_resolves_dflash_derived_defaults():
+    # Best-practices recipe from https://github.com/vllm-project/speculators/issues/979:
+    # dflash gets 5 draft layers, D-PACE weighting, CE loss, and block_size=16
+    # out of the box.
+    flat = TrainConfig(speculator_type="dflash").flatten()
+    assert flat["num_layers"] == 5
+    assert flat["per_position_loss_weight"] == "dpace"
+    assert flat["loss_fn"] == "ce"
+    assert flat["block_size"] == 16
+    assert flat["sliding_window_non_causal"] is False
+
+
+def test_flatten_resolves_dflash2_derived_defaults():
+    flat = TrainConfig(speculator_type="dflash2").flatten()
+    assert flat["num_layers"] == 5
+    assert flat["per_position_loss_weight"] == "fixed-exp-decay"
+    assert flat["loss_fn"] == "kl_div"
+    assert flat["block_size"] == 8
+    assert flat["conv_kernel_size"] == 2
+    assert flat["conv_group_size"] == 16
+    assert flat["selector_rank"] == 256
+    assert flat["selector_top_k"] == 16
+    assert flat["selector_loss_alpha"] == pytest.approx(1.0)
+    assert flat["sliding_window_non_causal"] is True
+
+
+def test_flatten_leaves_non_dflash_derived_defaults_unchanged():
+    # DSpark shares only the DFlash layer default; the remaining derived defaults
+    # keep their pre-existing behavior.
+    for speculator_type in ("eagle3", "dspark", "peagle", "mtp"):
+        flat = TrainConfig(speculator_type=speculator_type).flatten()
+        assert flat["num_layers"] == (5 if speculator_type == "dspark" else 1)
+        assert flat["per_position_loss_weight"] == "fixed-exp-decay"
+        assert flat["loss_fn"] == "kl_div"
+        assert flat["block_size"] == 8
+        assert flat["sliding_window_non_causal"] is False
+
+
+def test_dflash_derived_defaults_do_not_override_explicit_values():
+    cfg = TrainConfig(
+        speculator_type="dflash",
+        draft=DraftArgs(num_layers=3),
+        loss=LossArgs(loss_fn="kl_div"),
+        dflash=DFlashArgs(per_position_loss_weight="fixed-exp-decay", block_size=8),
+    )
+    assert cfg.draft.num_layers == 3
+    assert cfg.loss.loss_fn == "kl_div"
+    assert cfg.dflash.per_position_loss_weight == "fixed-exp-decay"
+    assert cfg.dflash.block_size == 8
+
+
+def test_dflash2_explicit_values_override_defaults():
+    cfg = TrainConfig(
+        speculator_type="dflash2",
+        draft=DraftArgs(num_layers=3, sliding_window_non_causal=False),
+        loss=LossArgs(loss_fn="ce"),
+        dflash=DFlashArgs(block_size=4),
+        dflash2=DFlash2Args(
+            conv_kernel_size=3,
+            conv_group_size=8,
+            selector_rank=128,
+            selector_top_k=32,
+            selector_loss_alpha=0.25,
+        ),
+    )
+    flat = cfg.flatten()
+    assert flat["num_layers"] == 3
+    assert flat["loss_fn"] == "ce"
+    assert flat["block_size"] == 4
+    assert flat["sliding_window_non_causal"] is False
+    assert flat["conv_kernel_size"] == 3
+    assert flat["conv_group_size"] == 8
+    assert flat["selector_rank"] == 128
+    assert flat["selector_top_k"] == 32
+    assert flat["selector_loss_alpha"] == pytest.approx(0.25)
 
 
 def test_from_flat_inverts_flatten():

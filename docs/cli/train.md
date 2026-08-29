@@ -46,17 +46,17 @@ torchrun --standalone --nproc_per_node=4 scripts/train.py \
 
 - **`--trust-remote-code`** (flag) Allow executing code from HF Hub when loading the verifier's tokenizer.
 
-- **`--speculator-type`** (str, default: `"eagle3"`) Type of speculator model to train. Options: `eagle3`, `dflash`, `dspark`, `peagle`, `mtp`
+- **`--speculator-type`** (str, default: `"eagle3"`) Type of speculator model to train. Options: `eagle3`, `dflash`, `dflash2`, `dspark`, `peagle`, `mtp`
 
 - **`--from-pretrained`** (str, default: `""`) Path or HF id of an existing draft checkpoint to load weights from and train — either a previously trained draft or the initialized-but-untrained checkpoint produced by `--dry-run`. May also point to a local directory containing only a `config.json`, in which case a fresh draft is initialized from that full speculator config. Takes precedence over all other model-definition options: it is mutually exclusive with `--draft-config` and the decoder-shaping flags (`--num-layers`, `--draft-arch`, `--draft-hidden-act`, `--sliding-window`, `--full-attention-indices`).
 
-- **`--draft-config`** (str, default: `""`) HF id, directory, or JSON path of a decoder config (`LlamaConfig` for eagle3/peagle, `Qwen3Config` for dflash) used as the draft `transformer_layer_config`; the rest of the speculator is built from the other CLI args. The draft `hidden_size` must match the verifier (mismatch is not yet supported). If a full speculator config is passed, its nested `transformer_layer_config` is extracted. Mutually exclusive with `--from-pretrained` and with the decoder-shaping flags (`--num-layers`, `--draft-arch`, `--draft-hidden-act`, `--sliding-window`, `--full-attention-indices`).
+- **`--draft-config`** (str, default: `""`) HF id, directory, or JSON path of a decoder config (`LlamaConfig` for eagle3/peagle, `Qwen3Config` for DFlash-family models) used as the draft `transformer_layer_config`; the rest of the speculator is built from the other CLI args. The draft `hidden_size` must match the verifier (mismatch is not yet supported). If a full speculator config is passed, its nested `transformer_layer_config` is extracted. Mutually exclusive with `--from-pretrained` and with the decoder-shaping flags (`--num-layers`, `--draft-arch`, `--draft-hidden-act`, `--sliding-window`, `--full-attention-indices`).
 
 - **`--dry-run`** (flag) Build the speculator, initialize weights, save a checkpoint to `--save-path`, then exit before training. Useful to validate the config/weights in vLLM before launching a full run; the saved checkpoint can be fed straight back via `--from-pretrained`.
 
-- **`--num-layers`** (int, default: `1`) Number of transformer layers in the draft model.
+- **`--num-layers`** (int, default: `5` for dflash/dspark/dflash2, `1` otherwise) Number of transformer layers in the draft model.
 
-- **`--draft-arch`** (str, default: `"llama"`) Architecture for the synthesized draft decoder layers. Options: `llama`, `qwen3`. Used by Eagle3 and P-EAGLE, which select the decoder layer class from this value; DFlash always uses a Qwen3-style decoder regardless. Both are supported in vLLM for inference, and the target and draft architectures do not have to match.
+- **`--draft-arch`** (str, default: `"llama"`) Architecture for the synthesized draft decoder layers. Options: `llama`, `qwen3`. Used by Eagle3 and P-EAGLE, which select the decoder layer class from this value; DFlash-family models always use a Qwen3-style decoder regardless. Both are supported in vLLM for inference, and the target and draft architectures do not have to match.
 
 - **`--draft-hidden-act`** (str, default: `"silu"`) Activation function for draft decoder layers. Setting as `None` will inherit activation function from the verifier model.
 
@@ -83,8 +83,6 @@ torchrun --standalone --nproc_per_node=4 scripts/train.py \
 - **`--request-timeout`** (float, default: `180.0`) Timeout in seconds for each individual vLLM request.
 
 - **`--max-retries`** (int, default: `3`) Maximum number of retry attempts per vLLM request on failure.
-
-- **`--legacy-data`** (flag) **DEPRECATED.** Use the old data format which stores hidden states alongside token_ids.
 
 - **`--total-seq-len`** (int, default: `8192`) Maximum total sequence length for training batches. Note: samples will be packed into batches with total combined sequence length `{total-seq-len}`.
 
@@ -130,6 +128,8 @@ torchrun --standalone --nproc_per_node=4 scripts/train.py \
 
 - **`--deterministic-cuda`** (flag) Enable deterministic CUDA operations. May impact performance.
 
+- **`--loss-fn`** (str, default: `"ce"` for dflash, `"kl_div"` otherwise) Loss function specification. Pass a name for a single loss (`kl_div`, `rkl`, `jsd`, `ce`, `tv`, `nla`, `lk_hybrid`) or a JSON dict for a weighted combination, e.g. `'{"ce": 0.1, "tv": 0.9}'`. Required to be `ce` when `--per-position-loss-weight dpace` is used.
+
 ### Optimizer Arguments
 
 - **`--optimizer`** (str, default: `"muon"`) Optimizer to use. Options: `adamw`, `muon`. The `muon` option applies the Muon optimizer to 2D weight matrices and AdamW to the remaining parameters (norms, biases, embeddings, lm_head).
@@ -172,21 +172,35 @@ torchrun --standalone --nproc_per_node=4 scripts/train.py \
 
 ### Attention Backend Arguments
 
-- **`--draft-attn-impl`** (str, default: `"simple_flex_attention"`) Attention implementation for draft layers. Options: `simple_flex_attention`, `sdpa`, `eager`. Use `sdpa` or `eager` on hardware where flex attention is unavailable (e.g. Ascend NPU). Applies to Eagle3, P-EAGLE, and DFlash. Not supported for MTP.
+- **`--draft-attn-impl`** (str, default: `"simple_flex_attention"`) Attention implementation for draft layers. Options: `simple_flex_attention`, `sdpa`, `eager`. Use `sdpa` or `eager` on hardware where flex attention is unavailable (e.g. Ascend NPU). Applies to Eagle3, P-EAGLE, and DFlash-family models. Not supported for MTP.
 
 ### DFlash-Specific Arguments
 
-- **`--block-size`** (int, default: `8`) Block size for DFlash model.
+- **`--block-size`** (int, default: `16` for dflash, `8` otherwise) Block size for DFlash-family models.
 
-- **`--sample-from-anchor`** / **`--no-sample-from-anchor`** (bool, default: algorithm-specific) Whether to sample from the anchor position. `True`: sample from anchor and all mask positions (default for dspark, produces block_size tokens). `False`: anchor is bonus token (default for dflash, produces block_size-1 tokens).
+- **`--sample-from-anchor`** / **`--no-sample-from-anchor`** (bool, default: algorithm-specific) Whether to sample from the anchor position. `True`: sample from anchor and all mask positions (default for dspark, produces block_size tokens). `False`: anchor is bonus token (default for dflash/dflash2, produces block_size-1 tokens).
 
-- **`--max-anchors`** (int, default: `3072`) Maximum anchor positions for DFlash, DSpark, and P-EAGLE training.
+- **`--max-anchors`** (int, default: `512`) Maximum anchor positions for DFlash-family and P-EAGLE training.
 
-- **`--dflash-decay-gamma`** (float, default: `4.0`) Decay gamma for DFlash loss weighting.
+- **`--dflash-decay-gamma`** (float, default: `4.0`) Decay gamma for DFlash-family loss weighting.
 
-- **`--per-position-loss-weight`** (str, default: `"fixed-exp-decay"`) Per-position loss weighting scheme. Options: `fixed-exp-decay`, `dpace`. Applies to DFlash and DSpark.
+- **`--per-position-loss-weight`** (str, default: `"dpace"` for dflash, `"fixed-exp-decay"` otherwise) Per-position loss weighting scheme. Options: `fixed-exp-decay`, `dpace`. Applies to DFlash-family models. `dpace` requires `--loss-fn ce`.
 
 - **`--dpace-alpha`** (float, default: `0.5`) Confidence smoothing constant for the D-PACE loss. Only used with `--per-position-loss-weight dpace`.
+
+### DFlash2-Specific Arguments
+
+DFlash2 builds on DFlash, so all DFlash-specific arguments apply as well. It defaults to five draft layers, block size 8, and KL loss.
+
+- **`--conv-kernel-size`** (int, default: `2`) Local convolution kernel size.
+
+- **`--conv-group-size`** (int, default: `16`) Channel group size for local convolution.
+
+- **`--selector-rank`** (int, default: `256`) Low-rank dimension of the candidate selector.
+
+- **`--selector-top-k`** (int, default: `16`) Number of candidates retained per position.
+
+- **`--selector-loss-alpha`** (float, default: `1.0`) Weight of the candidate-selector K-way cross-entropy term.
 
 ### DSpark-Specific Arguments
 

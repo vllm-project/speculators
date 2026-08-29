@@ -90,6 +90,14 @@ def parse_args():
         action="store_true",
         help="Print the command that would be executed without running it",
     )
+    parser.add_argument(
+        "--trust-remote-code",
+        action="store_true",
+        help=(
+            "Allow custom model configuration code while resolving hidden-state "
+            "layer ids. Pass the same flag after '--' for vLLM itself."
+        ),
+    )
     return parser.parse_known_args()
 
 
@@ -100,7 +108,10 @@ def main():
 
     from transformers import AutoConfig  # noqa: PLC0415
 
-    config = AutoConfig.from_pretrained(args.model)
+    config = AutoConfig.from_pretrained(
+        args.model,
+        trust_remote_code=args.trust_remote_code,
+    )
     if hasattr(config, "text_config"):
         config = config.text_config
     num_hidden_layers = config.num_hidden_layers
@@ -121,6 +132,17 @@ def main():
             num_hidden_layers - 3,
             num_hidden_layers,
         ]
+    # Layer id ``num_hidden_layers`` (the final hidden state) is valid: the
+    # default above and --include-last-layer both emit it.
+    if (
+        min(target_layer_ids) < 0
+        or max(target_layer_ids) > num_hidden_layers
+        or len(set(target_layer_ids)) != len(target_layer_ids)
+    ):
+        raise ValueError(
+            f"Invalid target layer ids {target_layer_ids}; ids must be "
+            f"distinct and within [0, {num_hidden_layers}]."
+        )
 
     speculative_config = {
         "method": "extract_hidden_states",
@@ -144,10 +166,6 @@ def main():
         json.dumps(kv_transfer_config),
         *vllm_args,
     ]
-
-    disable_cp_arg = "--no-enable-chunked-prefill"
-    if disable_cp_arg not in cmd:
-        cmd.append(disable_cp_arg)
 
     print("Running command:")
     print(" ".join(cmd))
