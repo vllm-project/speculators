@@ -338,3 +338,62 @@ class TestComputeMetrics:
         for i in range(1, 4):
             assert torch.isclose(metrics[f"position_{i}_acc_sum"], expected_correct[i])
             assert torch.isclose(metrics[f"position_{i}_acc_total"], expected_total[i])
+
+
+class TestExpectedAcceptedLength:
+    """EAL is the mean per-block accepted run, plus the verifier's bonus token."""
+
+    # Four blocks of block_size=4; with sample_from_anchor=False the anchor is
+    # the bonus token, leaving three draft slots whose accepted runs are 3/2/1/0.
+    _TARGET_IDS = torch.zeros(1, 16, dtype=torch.long)
+    _PRED_IDS = torch.tensor([[0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 1, 1, 0, 1, 1, 1]])
+
+    def _metrics(self, block_slice: slice):
+        ids = self._PRED_IDS[:, block_slice]
+        return compute_metrics(
+            _ids_to_logits(ids, 2),
+            _ids_to_logits(self._TARGET_IDS[:, block_slice], 2),
+            torch.ones(1, ids.shape[1]),
+            block_size=4,
+        )[1]
+
+    def test_eal_is_mean_accepted_run_plus_bonus_token(self):
+        metrics = self._metrics(slice(None))
+        # runs 3, 2, 1, 0 -> mean 1.5, plus one bonus token per block
+        assert metrics["eal_sum"].item() == pytest.approx(10.0)
+        assert metrics["eal_total"].item() == pytest.approx(4.0)
+
+    def test_eal_ignores_how_blocks_are_split_into_batches(self):
+        """Regression: the run must be formed per block, never per batch.
+
+        Averaging per-batch products overstates and multiplying pooled
+        per-position marginals understates; only per-block counting is
+        invariant to the batch split.
+        """
+        whole = self._metrics(slice(None))
+        halves = [self._metrics(slice(0, 8)), self._metrics(slice(8, 16))]
+        accumulated = {
+            key: sum(m[key] for m in halves) for key in ("eal_sum", "eal_total")
+        }
+        assert accumulated["eal_sum"].item() == pytest.approx(whole["eal_sum"].item())
+        assert accumulated["eal_total"].item() == pytest.approx(
+            whole["eal_total"].item()
+        )
+
+        eal = accumulated["eal_sum"] / accumulated["eal_total"]
+        assert eal.item() == pytest.approx(2.5)
+        # The per-position marginals are .75/.50/.25, whose running product sums
+        # to 1.21875 (2.21875 with the bonus token) -- a different number.
+        assert eal.item() != pytest.approx(2.21875)
+
+    def test_eal_skips_fully_masked_blocks(self):
+        ids = torch.zeros(1, 8, dtype=torch.long)
+        loss_mask = torch.tensor([[0.0, 1.0, 1.0, 1.0, 0.0, 0.0, 0.0, 0.0]])
+        _, metrics = compute_metrics(
+            _ids_to_logits(ids, 2),
+            _ids_to_logits(ids, 2),
+            loss_mask,
+            block_size=4,
+        )
+        assert metrics["eal_total"].item() == pytest.approx(1.0)
+        assert metrics["eal_sum"].item() == pytest.approx(4.0)
