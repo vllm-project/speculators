@@ -357,12 +357,6 @@ class TestExpectedAcceptedLength:
             block_size=4,
         )[1]
 
-    def test_eal_is_mean_accepted_run_plus_bonus_token(self):
-        metrics = self._metrics(slice(None))
-        # runs 3, 2, 1, 0 -> mean 1.5, plus one bonus token per block
-        assert metrics["eal_sum"].item() == pytest.approx(10.0)
-        assert metrics["eal_total"].item() == pytest.approx(4.0)
-
     def test_eal_ignores_how_blocks_are_split_into_batches(self):
         """Regression: the run must be formed per block, never per batch.
 
@@ -371,6 +365,10 @@ class TestExpectedAcceptedLength:
         invariant to the batch split.
         """
         whole = self._metrics(slice(None))
+        # runs 3, 2, 1, 0 -> mean 1.5, plus one bonus token per block
+        assert whole["eal_sum"].item() == pytest.approx(10.0)
+        assert whole["eal_total"].item() == pytest.approx(4.0)
+
         halves = [self._metrics(slice(0, 8)), self._metrics(slice(8, 16))]
         accumulated = {
             key: sum(m[key] for m in halves) for key in ("eal_sum", "eal_total")

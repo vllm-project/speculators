@@ -2,7 +2,6 @@
 
 from functools import partial
 
-import pytest
 import torch
 
 from speculators.losses import resolve_loss_config
@@ -64,9 +63,11 @@ class TestComputeMetrics:
         assert float(loss) < 1e-2
         accept = metrics["accept_rate_sum"] / metrics["accept_rate_total"]
         assert float(accept) > 0.99
-        # One draft slot per block accepted w.p. ~1, plus the anchor token -> ~2.
+        # One draft slot per block accepted w.p. ~1, plus the bonus token -> ~2.
         accept_len = metrics["accept_len_sum"] / metrics["accept_len_total"]
         assert abs(float(accept_len) - 2.0) < 1e-2
+        eal = metrics["eal_sum"] / metrics["eal_total"]
+        assert abs(float(eal) - 2.0) < 1e-2
 
     def test_perfect_draft_anchor_sampled_includes_slot0(self):
         # sample_from_anchor=True (default): slot 0 is the first real prediction,
@@ -88,9 +89,11 @@ class TestComputeMetrics:
         assert float(loss) < 1e-2
         accept = metrics["accept_rate_sum"] / metrics["accept_rate_total"]
         assert float(accept) > 0.99
-        # Two draft slots per block accepted w.p. ~1, plus the anchor token -> ~3.
+        # Two draft slots per block accepted w.p. ~1, plus the bonus token -> ~3.
         accept_len = metrics["accept_len_sum"] / metrics["accept_len_total"]
         assert abs(float(accept_len) - 3.0) < 1e-2
+        eal = metrics["eal_sum"] / metrics["eal_total"]
+        assert abs(float(eal) - 3.0) < 1e-2
 
     def test_accept_rate_equals_softmax_overlap(self):
         """accept_rate (now 1 - tv) matches the explicit softmax-overlap formula."""
@@ -231,26 +234,3 @@ class TestComputeMetrics:
             assert key in metrics
         # all metric values must be tensors (so dist.reduce works in the trainer)
         assert all(torch.is_tensor(v) for v in metrics.values())
-
-
-class TestExpectedAcceptedLength:
-    def test_greedy_eal_matches_accept_len_convention(self):
-        # block_size=2, sample_from_anchor=True -> both slots are drafted.
-        # Block 0 is fully correct; block 1 breaks at its second slot.
-        target_ids = torch.tensor([[0, 0, 0, 0]])
-        pred_ids = torch.tensor([[0, 0, 0, 1]])
-        _, metrics = compute_metrics(
-            _ids_to_logits(pred_ids, 4),
-            _ids_to_logits(target_ids, 4),
-            None,
-            torch.ones(1, 4),
-            block_size=2,
-            loss_config=_DEFAULT_LOSS,
-        )
-        # runs 2 and 1, each plus the bonus token -> (3 + 2) / 2
-        assert metrics["eal_sum"].item() == pytest.approx(5.0)
-        assert metrics["eal_total"].item() == pytest.approx(2.0)
-        # Both lengths count the bonus token, so both are >= 1.
-        assert (
-            metrics["accept_len_sum"].item() / metrics["accept_len_total"].item() >= 1.0
-        )

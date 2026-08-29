@@ -149,7 +149,7 @@ def compute_metrics(
         metrics["accept_rate_total"] = mask_f.sum().clamp_min(1.0)
 
     # Expected accepted draft length per block (DSpark's tau): the cumulative
-    # acceptance product summed over draft slots, plus the always-emitted anchor.
+    # acceptance product summed over draft slots, plus the always-emitted bonus.
     with torch.no_grad():
         per_block_len = accept_prefix.sum(dim=-1) + 1.0
         block_valid = (draft_mask.sum(dim=-1) > 0).to(accept_rate.dtype)
