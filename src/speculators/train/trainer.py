@@ -7,6 +7,7 @@ from typing import Literal, NamedTuple
 
 import torch
 import torch.distributed as dist
+from rich.errors import LiveError
 from torch.distributed.checkpoint.state_dict import (
     StateDictOptions,
     set_model_state_dict,
@@ -111,6 +112,11 @@ class TrainerConfig(NamedTuple):
     # copying the result back. Costs roughly +6 bytes per parameter (fp32 weights
     # plus fp32 Adam moments) over stepping bf16 directly, so it is opt-in.
     fp32_master_weights: bool = False
+    # Run the accept-length eval every N optimizer steps instead of only at epoch
+    # end. None = epoch end only.
+    eval_interval: int | None = None
+    # Per-rank batch cap for those evals; None sweeps the whole validation set.
+    eval_max_batches: int | None = None
     muon_lr: float = 0.02
     muon_momentum: float = 0.95
     muon_weight_decay: float = 0.1
@@ -178,6 +184,11 @@ class Trainer:
         self.model = model
         self.config = config
         self._fp32_masters: list[tuple[torch.Tensor, torch.Tensor]] = []
+        self._anchor_start: float | None = None
+        self._anchor_total: int = 1
+        self._anchor_now: float = 0.0
+        self._anchor_buf: torch.Tensor | None = None
+        self._metric_keys: list[str] | None = None
         self.local_rank = get_local_rank()
         self.rank = get_rank()
         self.train_loader = train_loader
@@ -418,6 +429,58 @@ class Trainer:
         for scheduler in self.schedulers:
             scheduler.step()
 
+    def _anneal_base_anchor(self) -> None:
+        """Decay ``base_anchor_weight`` toward ``base_anchor_floor`` over the run.
+
+        A no-op unless the algorithm passes a floor. ``train_call_kwargs`` is the
+        live dict handed to ``forward``, so mutating it takes effect on the next
+        call.
+        """
+        call_kwargs = self.config.train_call_kwargs or {}
+        floor = call_kwargs.get("base_anchor_floor")
+        if floor is None:
+            return
+        if self._anchor_start is None:
+            self._anchor_start = float(call_kwargs.get("base_anchor_weight", 0.6))
+            self._anchor_total = max(1, self.config.num_epochs * len(self.train_loader))
+            # Hand the model a 0-dim TENSOR, never a Python float. Dynamo guards a
+            # float by its exact value, so an annealed scalar invalidates the guard
+            # every step: the frame recompiles until it hits recompile_limit and then
+            # falls back to eager for the REST of the run -- torch.compile silently
+            # stops applying, after one warning in the first minutes. A tensor carries
+            # the same number with no value guard, and reusing one buffer keeps the
+            # object identity (and its shape/dtype/device guards) stable.
+            self._anchor_buf = torch.zeros(
+                (), device=self.local_rank, dtype=torch.float32
+            )
+        progress = min(1.0, self.global_step / self._anchor_total)
+        self._anchor_now = self._anchor_start * (1 - progress) + float(floor) * progress
+        self._anchor_buf.fill_(self._anchor_now)  # type: ignore[union-attr]
+        call_kwargs["base_anchor_weight"] = self._anchor_buf
+
+    def _reduce_metrics(self, metrics: dict[str, torch.Tensor]) -> None:
+        """Sum each metric across ranks, in a canonical key order.
+
+        Iterating dict values relies on every rank having built this dict
+        identically; if one rank takes a different branch the reduces pair up
+        mismatched tensors and the logged metrics are silently wrong. Sorting
+        removes the ordering half of that risk; a differing key SET would still
+        misalign, so warn when the key list shifts rather than failing quietly.
+        """
+        keys = sorted(metrics)
+        if self._metric_keys is None:
+            self._metric_keys = keys
+        elif keys != self._metric_keys:
+            root_logger.warning(
+                "metric keys changed between logged steps (%d -> %d); "
+                "cross-rank reduction may be misaligned",
+                len(self._metric_keys),
+                len(keys),
+            )
+            self._metric_keys = keys
+        for key in keys:
+            dist.reduce(metrics[key], dst=0, op=dist.ReduceOp.SUM)
+
     def _prepare_resume_skip(self, epoch: int) -> int:
         """Prepare fast-skip state for mid-epoch resume and return skipped steps."""
         skip_steps = 0
@@ -487,6 +550,8 @@ class Trainer:
                 for k, v in batch.items()
             }
 
+            self._anneal_base_anchor()
+
             with torch.autocast(
                 self.device_type, dtype=self.config.hidden_states_dtype
             ):
@@ -515,9 +580,13 @@ class Trainer:
             if timer.enabled:
                 num_tokens = int((gpu_batch["document_ids"] != -1).sum().item())
                 profile = timer.profile(num_tokens)
+                if self._anchor_buf is not None:
+                    metrics["base_anchor_weight_sum"] = self._anchor_buf.clone()
+                    metrics["base_anchor_weight_total"] = torch.ones_like(
+                        self._anchor_buf
+                    )
                 if self.is_distributed:
-                    for v in metrics.values():
-                        dist.reduce(v, dst=0, op=dist.ReduceOp.SUM)
+                    self._reduce_metrics(metrics)
 
                 metrics = {k: v.item() for k, v in metrics.items()}
                 world_size = dist.get_world_size() if self.is_distributed else 1
@@ -538,6 +607,17 @@ class Trainer:
                     extra={"step": self.global_step},
                 )
             self.global_step += 1
+
+            # Mid-epoch accept-length eval. Runs right after an optimizer step, so
+            # the gradients are already applied and zeroed. global_step is identical
+            # on every rank, so all ranks enter val_epoch's collectives together.
+            if (
+                self.config.eval_interval
+                and self.val_loader is not None
+                and self.global_step % self.config.eval_interval == 0
+            ):
+                self.val_epoch(epoch, max_batches=self.config.eval_max_batches)
+                self.model.train()  # val_epoch left it in eval mode
 
             if (
                 self.config.max_steps is not None
@@ -561,7 +641,9 @@ class Trainer:
             dist.barrier()
 
     @torch.no_grad()
-    def val_epoch(self, epoch: int) -> dict[str, float] | None:
+    def val_epoch(  # noqa: C901
+        self, epoch: int, max_batches: int | None = None
+    ) -> dict[str, float] | None:
         if self.val_loader is None:
             return None
         self.model.eval()
@@ -569,11 +651,27 @@ class Trainer:
             self.val_loader.batch_sampler.set_epoch(epoch)  # type: ignore[union-attr]
         val_loader = self.val_loader
         if self.rank == 0:
-            val_loader = tqdm(val_loader, desc=f"Epoch {epoch}")  # type: ignore[assignment]
+            try:
+                val_loader = tqdm(val_loader, desc=f"Epoch {epoch} [val]")  # type: ignore[assignment]
+            except LiveError:
+                # A mid-epoch eval runs inside train_epoch, whose progress bar is
+                # still live. Older rich allows only one live display and raises
+                # here; newer rich nests them. Detecting which by attribute is
+                # version-fragile, so fall back to no bar rather than ending a
+                # multi-day run over a cosmetic.
+                val_loader = self.val_loader
 
         accumulated: dict[str, torch.Tensor] = {}
         num_batches = len(val_loader)
+        if max_batches is not None:
+            # Every rank must stop after the SAME number of batches or the metric
+            # all-reduce below deadlocks. max_batches is a constant, so they do.
+            num_batches = min(num_batches, max_batches)
+        seen = 0
         for i, batch in enumerate(val_loader):
+            if max_batches is not None and i >= max_batches:
+                break
+            seen = i + 1
             self._maybe_val_sync(i)
             gpu_batch = {
                 k: v.to(self.local_rank, non_blocking=True)
@@ -601,7 +699,8 @@ class Trainer:
             val_metrics = dict(zip(accumulated, stacked.tolist(), strict=True))
 
         world_size = dist.get_world_size() if self.is_distributed else 1
-        val_metrics = {k: v / num_batches for k, v in val_metrics.items()}
+        divisor = max(1, seen or num_batches)
+        val_metrics = {k: v / divisor for k, v in val_metrics.items()}
         val_metrics = normalize_counted_metrics(val_metrics, world_size)
         val_metrics = {f"{k}_epoch": v for k, v in val_metrics.items()}
 

@@ -213,7 +213,19 @@ class DataArgs(_Group):
     train_data_ratio: float = Field(
         default=0.9,
         description="Fraction of the dataset used for training; the remainder is held "
-        "out for validation.",
+        "out for validation. Ignored when --val-data-path is set.",
+    )
+    val_data_path: str | None = Field(
+        default=None,
+        description="A SEPARATE preprocessed dataset directory to validate on. When "
+        "set, all of --data-path is used for training and --train-data-ratio is "
+        "ignored. Default None = hold out --train-data-ratio of --data-path instead.",
+    )
+    no_packing: bool = Field(
+        default=False,
+        description="One conversation per rank per step: feed the packer a constant "
+        "length equal to the token budget, so the global batch is a count of "
+        "conversations rather than a token budget. Default off = stock multipack.",
     )
     noise_std: float = Field(
         default=0.05, description="Standard deviation for noise augmentation."
@@ -393,6 +405,16 @@ class TrainerArgs(_Group):
     save_best: bool = Field(
         default=False,
         description="Also point a checkpoint at the lowest validation loss.",
+    )
+    eval_interval: int | None = Field(
+        default=None,
+        description="Run the validation pass every N optimizer steps, not only at "
+        "epoch end. None = epoch end only.",
+    )
+    eval_max_batches: int | None = Field(
+        default=None,
+        description="Per-rank batch cap for those evals. None = sweep the whole "
+        "validation set.",
     )
     no_resume_from_checkpoint: bool = Field(
         default=False, description="Do not resume training from an existing checkpoint."

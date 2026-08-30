@@ -26,6 +26,10 @@ Training runs the refiner for several free-running rounds, each conditioned on t
 
 All DFlash parameters (`--block-size`, `--max-anchors`, `--num-layers`, ...) apply unchanged.
 
+## Pretrained Models
+
+To train your own, see `examples/train/xpress_qwen3_8b_regen_online.sh`.
+
 ## Research & Citation
 
 XPress is based on research from UIUC: [arXiv Paper](https://arxiv.org/abs/2608.02438)
