@@ -47,25 +47,26 @@ def test_frozen_parameters_get_no_master():
     assert "1.weight" in masters
 
 
-def test_a_small_update_survives_in_fp32_but_is_lost_in_bf16():
+def test_small_updates_accumulate_in_fp32_but_are_lost_in_bf16():
     """The reason the option exists: bf16 has ~8 bits of mantissa.
 
-    An update far below the representable step at the weight's magnitude -- which
-    is where a decayed LR schedule ends up -- is silently rounded away when the
-    bf16 parameter is stepped directly.
+    Near 1.0 the smallest representable bf16 step is 2**-8 ~ 0.0039. An update
+    below that -- where a decayed LR schedule ends up -- is rounded away every
+    single time it is applied to the bf16 weight, so it never accumulates. An
+    fp32 master accumulates the same updates and crosses the threshold.
     """
-    weight = torch.full((4,), 1.0, dtype=torch.bfloat16)
+    start = torch.full((4,), 1.0, dtype=torch.bfloat16)
     tiny = 1e-4
+    steps = 100
 
-    direct = weight.clone()
-    direct += torch.full_like(direct, tiny)
+    direct = start.clone()
+    master = start.float()
+    for _ in range(steps):
+        direct += torch.full_like(direct, tiny)
+        master += tiny
 
-    master = weight.float()
-    master += tiny
-    through_master = master.to(torch.bfloat16)
-
-    assert torch.equal(direct, weight), "expected bf16 to swallow the update"
-    assert not torch.equal(through_master, weight)
+    assert torch.equal(direct, start), "expected bf16 to swallow every update"
+    assert not torch.equal(master.to(torch.bfloat16), start)
 
 
 def test_build_optimizers_steps_the_masters_and_leaves_params_untouched():
