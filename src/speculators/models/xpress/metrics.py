@@ -123,8 +123,9 @@ def compute_metrics(  # noqa: C901
             dflash_loss_decay, gamma=gamma, sample_from_anchor=sample_from_anchor
         )
 
-    use_data_ce = ce_data_labels is not None and "ce" in loss_config
-    if use_data_ce:
+    ce_labels = ce_data_labels if "ce" in loss_config else None
+    use_data_ce = ce_labels is not None
+    if ce_labels is not None:
         _cfg_soft = {k: v for k, v in loss_config.items() if k != "ce"}
         _ce_weight = loss_config["ce"][1]
 
@@ -155,7 +156,7 @@ def compute_metrics(  # noqa: C901
             else (lgts.new_zeros((), dtype=torch.float32), {})
         )
         ce = _hard_label_ce(
-            lgts, ce_data_labels, loss_mask, pos_idx, term_decay_fn, decayed_loss_norm
+            lgts, ce_labels, loss_mask, pos_idx, term_decay_fn, decayed_loss_norm
         )
         terms = dict(terms)
         if _cfg_soft and not terms:

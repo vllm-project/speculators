@@ -1,5 +1,19 @@
+from speculators.model import SpeculatorModel
+from speculators.models.xpress.core import XPressDraftModel
 from speculators.train.config.resolution import _ALGORITHM_GROUP_USERS
 from speculators.train.config.schema import TrainConfig
+
+
+def test_speculator_type_xpress_resolves_to_the_model():
+    """``--speculator-type xpress`` is resolved through the global registry.
+
+    Without the ``@register`` decorator the flag parses fine and then fails at
+    model construction, so pin the lookup rather than the decorator.
+    """
+    registry = SpeculatorModel.registry
+
+    assert registry is not None
+    assert registry["xpress"] is XPressDraftModel
 
 
 def test_xpress_group_is_exposed_with_the_released_defaults():

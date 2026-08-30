@@ -10,6 +10,10 @@ __all__ = [
 class XPressRefinerHead(nn.Module):
     """Lightweight causal refiner producing a per-position logit bias."""
 
+    # register_buffer widens the attribute to Tensor | Module; the annotation
+    # tells the type checker which one it is.
+    causal_tril: torch.Tensor
+
     def __init__(
         self,
         *,

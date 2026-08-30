@@ -22,6 +22,17 @@ __all__ = [
 ]
 
 
+def _buffer(module: nn.Module, name: str) -> torch.Tensor | None:
+    """Fetch a named buffer, or None when the module has no such tensor.
+
+    ``getattr`` on an ``nn.Module`` can return a submodule as easily as a buffer,
+    so the isinstance check is what makes the duck-typed rotary lookup below
+    safe as well as checkable.
+    """
+    value = getattr(module, name, None)
+    return value if isinstance(value, torch.Tensor) else None
+
+
 @SpeculatorModel.register("xpress")
 class XPressDraftModel(DFlashDraftModel):
     """DFlash backbone plus the XPress causal-refiner head.
@@ -70,19 +81,21 @@ class XPressDraftModel(DFlashDraftModel):
         ``inv_freq``).
         """
         for module in self.modules():
-            if hasattr(module, "inv_freq") and hasattr(module, "config"):
+            inv_freq = _buffer(module, "inv_freq")
+            if inv_freq is not None and hasattr(module, "config"):
                 fresh = type(module)(module.config, device="cpu")
-                module.inv_freq.data.copy_(
-                    fresh.inv_freq.to(module.inv_freq.device, module.inv_freq.dtype)
-                )
+                fresh_inv_freq = _buffer(fresh, "inv_freq")
+                if fresh_inv_freq is not None:
+                    inv_freq.data.copy_(
+                        fresh_inv_freq.to(inv_freq.device, inv_freq.dtype)
+                    )
                 if hasattr(fresh, "attention_scaling"):
                     module.attention_scaling = fresh.attention_scaling
-                if hasattr(module, "original_inv_freq"):
-                    module.original_inv_freq.data.copy_(
-                        fresh.original_inv_freq.to(
-                            module.original_inv_freq.device,
-                            module.original_inv_freq.dtype,
-                        )
+                original = _buffer(module, "original_inv_freq")
+                fresh_original = _buffer(fresh, "original_inv_freq")
+                if original is not None and fresh_original is not None:
+                    original.data.copy_(
+                        fresh_original.to(original.device, original.dtype)
                     )
             elif isinstance(module, XPressRefinerHead):
                 module.causal_tril.data.copy_(
