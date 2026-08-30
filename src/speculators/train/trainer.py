@@ -107,6 +107,10 @@ class TrainerConfig(NamedTuple):
     val_call_kwargs: dict | None = None
     optimizer: Literal["adamw", "muon"] = "adamw"
     weight_decay: float = 0.01
+    # Keep an fp32 master copy of every low-precision parameter and step THAT,
+    # copying the result back. Costs roughly +6 bytes per parameter (fp32 weights
+    # plus fp32 Adam moments) over stepping bf16 directly, so it is opt-in.
+    fp32_master_weights: bool = False
     muon_lr: float = 0.02
     muon_momentum: float = 0.95
     muon_weight_decay: float = 0.1
@@ -173,6 +177,7 @@ class Trainer:
     ):
         self.model = model
         self.config = config
+        self._fp32_masters: list[tuple[torch.Tensor, torch.Tensor]] = []
         self.local_rank = get_local_rank()
         self.rank = get_rank()
         self.train_loader = train_loader
@@ -338,7 +343,7 @@ class Trainer:
     def setup_optimizer(self):
         # Setup optimizer(s). The "muon" option returns two optimizers (Muon for the
         # 2D weight matrices, AdamW for everything else); "adamw" returns a single one.
-        self.optimizers = build_optimizers(self.model, self.config)
+        self.optimizers, self._fp32_masters = build_optimizers(self.model, self.config)
         last_epoch = -1
         if self.resume_from_checkpoint and self.checkpointer.previous_epoch != -1:
             self.checkpointer.load_optimizer_state_dict(self.model, self.optimizers)
@@ -378,10 +383,36 @@ class Trainer:
     def _optimizers_zero_grad(self):
         for opt in self.optimizers:
             opt.zero_grad()
+        # The optimizer owns the masters, so the call above cleared THEIR grads;
+        # the parameters autograd actually writes into are a separate set.
+        for param, _ in self._fp32_masters:
+            param.grad = None
 
     def _optimizers_step(self):
         for opt in self.optimizers:
             opt.step()
+
+    def _clip_grads(self):
+        """Clip gradients, in fp32 when master weights are in use."""
+        if not self._fp32_masters:
+            torch.nn.utils.clip_grad_norm_(self.model.parameters(), 1.0)
+            return
+        # DDP has already all-reduced into param.grad. Move each gradient into its
+        # fp32 master so the clip and the step both happen in fp32, where a small
+        # update is not rounded away at bf16's ~8-bit mantissa.
+        for param, master in self._fp32_masters:
+            master.grad = None if param.grad is None else param.grad.float()
+        torch.nn.utils.clip_grad_norm_(
+            [master for _, master in self._fp32_masters], 1.0
+        )
+
+    def _sync_from_masters(self):
+        """Copy the stepped fp32 masters back into the model's parameters."""
+        if not self._fp32_masters:
+            return
+        with torch.no_grad():
+            for param, master in self._fp32_masters:
+                param.data.copy_(master.data)
 
     def _schedulers_step(self):
         for scheduler in self.schedulers:
@@ -467,10 +498,11 @@ class Trainer:
             timer.mark("fwd")
             self._optimizers_zero_grad()
             loss.backward()
-            torch.nn.utils.clip_grad_norm_(self.model.parameters(), 1.0)
+            self._clip_grads()
 
             timer.mark("bwd")
             self._optimizers_step()
+            self._sync_from_masters()
 
             current_lrs = {
                 type(opt).__name__: opt.param_groups[0]["lr"] for opt in self.optimizers

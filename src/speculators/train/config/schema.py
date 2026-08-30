@@ -334,6 +334,15 @@ class OptimizerArgs(_Group):
         description="Weight decay for the AdamW optimizer (and the AdamW group in muon "
         "mode).",
     )
+    fp32_master_weights: bool = Field(
+        default=False,
+        description="Keep an fp32 master copy of every low-precision parameter and "
+        "step THAT, copying the result back. Under bf16 autocast the parameters are "
+        "bf16, so once the LR schedule decays an Adam update can fall below the "
+        "representable step at the weight's magnitude and is silently rounded away -- "
+        "training flattens while the gradients stay healthy. Costs roughly +6 bytes "
+        "per parameter (fp32 weights plus fp32 Adam moments), so it is opt-in.",
+    )
     muon_lr: float | None = Field(
         default=None,
         description="LR for the Muon (2D weights) group. Only used with --optimizer "
