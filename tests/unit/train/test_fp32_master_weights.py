@@ -8,10 +8,13 @@ from torch import nn
 from speculators.train.optimizers import build_optimizers, make_fp32_masters
 
 
-def _model() -> nn.Module:
+def _model() -> tuple[nn.Module, nn.Linear]:
+    """Returns the model and its first layer, so a test can freeze that layer."""
     torch.manual_seed(0)
-    model = nn.Sequential(nn.Linear(8, 8, bias=False), nn.Linear(8, 8, bias=False))
-    return model.to(torch.bfloat16)
+    first = nn.Linear(8, 8, bias=False)
+    model = nn.Sequential(first, nn.Linear(8, 8, bias=False))
+    model.to(torch.bfloat16)
+    return model, first
 
 
 def _config(fp32: bool) -> SimpleNamespace:
@@ -21,7 +24,7 @@ def _config(fp32: bool) -> SimpleNamespace:
 
 
 def test_masters_are_fp32_copies_of_the_bf16_parameters():
-    model = _model()
+    model, _ = _model()
 
     masters = make_fp32_masters(model)
 
@@ -38,8 +41,8 @@ def test_frozen_parameters_get_no_master():
     torch's grouped Adam step requires one dtype per group, so a frozen weight
     left in place raises rather than being harmlessly ignored.
     """
-    model = _model()
-    model[0].weight.requires_grad_(False)
+    model, first = _model()
+    first.weight.requires_grad_(False)
 
     masters = make_fp32_masters(model)
 
@@ -70,7 +73,7 @@ def test_small_updates_accumulate_in_fp32_but_are_lost_in_bf16():
 
 
 def test_build_optimizers_steps_the_masters_and_leaves_params_untouched():
-    model = _model()
+    model, _ = _model()
 
     optimizers, pairs = build_optimizers(model, _config(fp32=True))
 
@@ -82,7 +85,7 @@ def test_build_optimizers_steps_the_masters_and_leaves_params_untouched():
 
 
 def test_build_optimizers_without_the_flag_is_unchanged():
-    model = _model()
+    model, _ = _model()
 
     optimizers, pairs = build_optimizers(model, _config(fp32=False))
 

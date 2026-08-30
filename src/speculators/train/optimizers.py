@@ -120,7 +120,7 @@ def build_optimizers(
     if masters:
         logger.info("fp32 master weights: %d parameters.", len(masters))
 
-    pairs = [
+    pairs: list[tuple[Tensor, Tensor]] = [
         (param, masters[name])
         for name, param in model.named_parameters()
         if name in masters
