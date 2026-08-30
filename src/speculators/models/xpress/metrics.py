@@ -124,7 +124,6 @@ def compute_metrics(  # noqa: C901
         )
 
     ce_labels = ce_data_labels if "ce" in loss_config else None
-    use_data_ce = ce_labels is not None
     if ce_labels is not None:
         _cfg_soft = {k: v for k, v in loss_config.items() if k != "ce"}
         _ce_weight = loss_config["ce"][1]
@@ -132,7 +131,7 @@ def compute_metrics(  # noqa: C901
     def _term_loss(lgts, term_decay_fn):
         """compound loss with the CE component optionally re-pointed at the
         DATA tokens instead of the teacher argmax."""
-        if not use_data_ce:
+        if ce_labels is None:
             return compound_loss(
                 lgts,
                 targets,

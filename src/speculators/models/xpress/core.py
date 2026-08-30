@@ -1,4 +1,4 @@
-from typing import ClassVar
+from typing import ClassVar, cast
 
 import torch
 from torch import nn
@@ -104,7 +104,7 @@ class XPressDraftModel(DFlashDraftModel):
 
     @classmethod
     def from_pretrained(cls, *args, **kwargs):  # type: ignore[override]
-        model = super().from_pretrained(*args, **kwargs)
+        model = cast("XPressDraftModel", super().from_pretrained(*args, **kwargs))
         model._reinit_nonpersistent_buffers()  # noqa: SLF001
         return model
 
