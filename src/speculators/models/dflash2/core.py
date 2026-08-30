@@ -146,7 +146,7 @@ class DFlash2DraftModel(DFlashDraftModel):
         dpace_alpha: float = 0.5,
         **kwargs,
     ) -> tuple[None, torch.Tensor, dict[str, Any]]:
-        hidden, unary_logits, targets, aligned_loss_mask, block_indices = (
+        hidden, unary_logits, targets, aligned_loss_mask, block_indices, _ = (
             self._backbone_forward(
                 hidden_states,
                 input_ids,

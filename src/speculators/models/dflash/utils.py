@@ -22,6 +22,7 @@ def select_anchors(
     loss_mask: torch.Tensor,  # shape: [1, total_seq_len]
     num_anchors: int,
     block_size: int,
+    cap_to_max_valid: bool = False,
 ) -> tuple[torch.Tensor, torch.Tensor]:
     """Randomly select anchor positions from valid tokens in sequence.
 
@@ -53,6 +54,11 @@ def select_anchors(
     anchor_valid = torch.zeros(num_anchors, dtype=torch.bool, device=device)
 
     k = min(num_anchors, valid_indices.numel())
+    if cap_to_max_valid:
+        # Cap at min(num_anchors, valid_candidates - 1): drop one anchor whenever
+        # the sequence has fewer candidates than num_anchors. Worth ~0.3% of
+        # supervised blocks; opt-in so DFlash / DSpark keep their own behaviour.
+        k = min(k, max(valid_indices.numel() - 1, 0))
 
     # Constrain value of k for torch dynamo
     torch._check(k <= valid_indices.numel())  # noqa: SLF001

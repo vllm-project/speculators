@@ -511,6 +511,75 @@ class DSparkArgs(_Group):
     )
 
 
+class XPressArgs(_Group):
+    """XPress-exclusive knobs (causal-refiner head + Jacobi consistency)."""
+
+    xpress_rank: int = Field(
+        default=256,
+        description="XPress: low-rank dim r of the causal-refiner head.",
+    )
+    xpress_mlp_ratio: int = Field(
+        default=2,
+        description="XPress: refiner MLP expansion ratio (hidden = r * ratio). "
+        "The released checkpoints use 2 (r=256 -> hidden 512).",
+    )
+    num_jacobi_passes: int = Field(
+        default=6,
+        description="XPress: inference-time parallel refine passes K (stored in "
+        "the exported config; not used during training).",
+    )
+    consistency_weight: float = Field(
+        default=0.3,
+        description="XPress: weight of the free-running Jacobi consistency term "
+        "(0 disables it).",
+    )
+    consistency_passes: int = Field(
+        default=3,
+        description="XPress: number of free-running rounds the consistency term "
+        "unrolls (round j conditions on round j-1's argmax, stop-grad between "
+        "rounds; losses averaged).",
+    )
+    base_anchor_weight: float = Field(
+        default=0.6,
+        description="XPress: weight of the drafter-anchor loss on the backbone's "
+        "own logits (keeps the co-trained Jacobi seed from decaying).",
+    )
+    base_anchor_floor: float | None = Field(
+        default=None,
+        description=(
+            "Linearly decay base_anchor_weight to this floor over training "
+            "(the validated b16 recipe runs 0.6 -> 0.2). None = constant."
+        ),
+    )
+    decayed_loss_norm: bool = Field(
+        default=False,
+        description=(
+            "Normalize position-decayed losses by the DECAYED weight sum (a true "
+            "weighted mean) instead of the undecayed mask count. "
+            "Uniform rescale of all terms (~4x at b16/gamma4); mainly changes "
+            "grad-clip engagement."
+        ),
+    )
+    ce_from_data: bool = Field(
+        default=False,
+        description="XPress: point the CE loss component at the DATA "
+        "tokens (the target's own continuation from regeneration) instead of the "
+        "teacher-argmax labels. Applies to the teacher-forced, consistency, and "
+        "anchor terms alike. Requires full verifier vocab.",
+    )
+    base_anchor_full_weight: bool = Field(
+        default=False,
+        description="XPress: apply the drafter-anchor with UNDECAYED per-position "
+        "weights (mask only), anchoring deep slots at full strength; the head's "
+        "learning loss keeps its decay. Default False preserves the historical "
+        "recipe, which is validated for z-lab b16 warm starts. Enable for "
+        "deepseek-native (shift) warm starts: with the decayed anchor their "
+        "standalone-drafter accept@6 eroded 0.52 -> 0.20 within 40k steps "
+        "(slot-6 anchor weight is only exp(-6/4)=0.22) while teacher-forced "
+        "greedy metrics kept rising.",
+    )
+
+
 class PEagleArgs(_Group):
     num_depths: int = Field(
         default=8,
@@ -550,6 +619,7 @@ _GROUPS: dict[str, type[_Group]] = {
     "dflash": DFlashArgs,
     "dflash2": DFlash2Args,
     "dspark": DSparkArgs,
+    "xpress": XPressArgs,
     "peagle": PEagleArgs,
     "mtp": MTPArgs,
 }

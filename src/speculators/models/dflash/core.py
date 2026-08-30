@@ -343,7 +343,12 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
         total_seq_len = loss_mask.shape[1]
 
         anchor_positions, anchor_valid = select_anchors(
-            loss_mask, max_anchors, self.block_size
+            loss_mask,
+            max_anchors,
+            self.block_size,
+            cap_to_max_valid=bool(
+                getattr(self.config, "anchor_cap_to_max_valid", False)
+            ),
         )
 
         full_attn_mask = None
@@ -382,8 +387,13 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
         """Run the anchored-block draft transformer up to the draft logits.
 
         Returns ``(hidden, logits, targets, aligned_loss_mask,
-        anchored_block_indices)``. DSpark reuses this and adds its Markov and
-        confidence heads before computing its own loss.
+        anchored_block_indices, anchor_valid)``. DSpark reuses this and adds its
+        Markov and confidence heads before computing its own loss.
+
+        ``anchor_valid`` [num_anchors] marks the anchors that are REAL (the
+        sequence had that many candidates) rather than zero-padding. Accept-length
+        metrics need it as their per-block denominator: they average over every kept
+        block, not only the blocks that happen to hold a supervised slot.
         """
         device = hidden_states.device
         total_seq_len = hidden_states.shape[1]
@@ -478,7 +488,31 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
         if not self.config.sample_from_anchor:
             aligned_loss_mask[:, :: self.block_size] = 0
 
-        return hidden, logits, targets, aligned_loss_mask, anchored_block_indices
+        if getattr(self.config, "prefix_valid_mask", False):
+            # PREFIX (cumprod) validity mask -- once a slot in a block is invalid,
+            # every LATER slot is masked too, because a left-to-right accept can
+            # never reach it. Without this, a block whose
+            # mask dips (an assistant turn ending and a new one starting inside the
+            # same block, or a packed document boundary) is supervised on tokens the
+            # drafter could not have been asked to produce.
+            _blocks = aligned_loss_mask.view(-1, self.block_size)
+            if self.config.sample_from_anchor:
+                _blocks = _blocks.cumprod(dim=1)
+            else:
+                # slot 0 is the anchor (already 0); run the prefix over predictions
+                _blocks = torch.cat(
+                    [_blocks[:, :1], _blocks[:, 1:].cumprod(dim=1)], dim=1
+                )
+            aligned_loss_mask = _blocks.reshape(1, -1)
+
+        return (
+            hidden,
+            logits,
+            targets,
+            aligned_loss_mask,
+            anchored_block_indices,
+            anchor_valid,
+        )
 
     @conditional_torch_compile
     def forward(
@@ -496,7 +530,7 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
         dpace_alpha: float = 0.5,
         **kwargs,
     ):
-        _, logits, targets, aligned_loss_mask, _ = self._backbone_forward(
+        _, logits, targets, aligned_loss_mask, _, _ = self._backbone_forward(
             hidden_states,
             input_ids,
             loss_mask,

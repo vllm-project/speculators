@@ -44,7 +44,7 @@ def test_targets_match_full_sequence_roll(sample_from_anchor, max_anchors):
     document_ids = torch.zeros(1, seq_len, dtype=torch.long)
 
     with torch.no_grad():
-        _, _, targets, _, anchored_block_indices = model._backbone_forward(
+        _, _, targets, _, anchored_block_indices, _ = model._backbone_forward(
             hidden_states,
             input_ids,
             loss_mask,
