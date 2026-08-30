@@ -149,7 +149,7 @@ def create_train_val_loaders(
         max_retries=max_retries,
     )
     val_dataset: BaseDataset = ArrowDataset(
-        datapath=val_data_path if use_val_path else data_path,
+        datapath=data_path if val_data_path is None else val_data_path,
         max_len=total_seq_len,
         # A separate corpus needs its own cache root, or its file indices would
         # collide with the training set's under on_generate="cache".

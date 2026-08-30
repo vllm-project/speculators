@@ -61,7 +61,7 @@ def test_train_data_ratio_is_still_validated_without_a_val_path(ratio):
             hidden_size=8,
             num_target_layers=1,
             num_workers=0,
-            prefetch_factor=None,
+            prefetch_factor=4,
             preprocess=None,
             train_data_ratio=ratio,
         )
