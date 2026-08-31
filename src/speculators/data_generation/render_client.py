@@ -6,11 +6,14 @@ between two renders, not the server's ``assistant_tokens_mask`` (which needs
 already runs, so one tokenizer feeds the mask, hidden states, and serving.
 """
 
+import logging
 from http import HTTPStatus
 
 import httpx
 
 from speculators.data_generation.vllm_client import InvalidResponseError, with_retries
+
+logging.getLogger("httpx").setLevel(logging.WARNING)
 
 DEFAULT_RENDER_TIMEOUT = 30
 
