@@ -48,8 +48,13 @@ repos:
         args:
           - -c
           - |
-            if ! grep -q "^Signed-off-by: $(git config user.name) <$(git config user.email)>" "$(git rev-parse --git-path COMMIT_EDITMSG)"; then
-              printf "\nSigned-off-by: %s <%s>\n" "$(git config user.name)" "$(git config user.email)" >> "$(git rev-parse --git-path COMMIT_EDITMSG)"
+            trailer="Signed-off-by: $(git config user.name) <$(git config user.email)>"
+            msg_file="$(git rev-parse --git-path COMMIT_EDITMSG)"
+            # -F/-x match the trailer as a literal, complete line so names/emails
+            # containing regex metacharacters (or a line with an extra suffix)
+            # can't be mistaken for an existing sign-off.
+            if ! grep -Fqx -- "$trailer" "$msg_file"; then
+              printf "\n%s\n" "$trailer" >> "$msg_file"
             fi
         language: system
         stages: [commit-msg]
