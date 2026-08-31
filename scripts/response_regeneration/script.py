@@ -594,7 +594,7 @@ def _sample_from_response(
     return sample, assistant_msg, tool_calls
 
 
-async def regenerate_conversation(  # noqa: C901
+async def regenerate_conversation(
     post_fn,
     item: dict[str, Any],
     *,
@@ -638,30 +638,27 @@ async def regenerate_conversation(  # noqa: C901
         # Tool-call loop: a tool call splices a cached result and continues;
         # a final answer ends the turn.
         while True:
+            overrides = {
+                k: v
+                for k, v in (
+                    ("reasoning_effort", reasoning_effort),
+                    ("temperature", temperature),
+                )
+                if v is not None
+            }
+            recorded_params = {**sampling_params, **overrides}
             payload: dict[str, Any] = {
                 # Spread first: the keys below are ours to own and must not be
                 # overridden by user-supplied sampling params.
-                **sampling_params,
+                **recorded_params,
                 "model": model,
                 "messages": prefix,
                 "max_tokens": max_tokens,
                 "return_token_ids": True,  # prompt_token_ids + completion token_ids
             }
-            if reasoning_effort is not None:
-                payload["reasoning_effort"] = reasoning_effort
-            if temperature is not None:
-                payload["temperature"] = temperature
             if tools:
                 payload["tools"] = tools
                 payload["tool_choice"] = "auto"
-
-            recorded_params = sampling_params
-            if reasoning_effort is not None or temperature is not None:
-                recorded_params = {**sampling_params}
-                if reasoning_effort is not None:
-                    recorded_params["reasoning_effort"] = reasoning_effort
-                if temperature is not None:
-                    recorded_params["temperature"] = temperature
 
             data = await post_fn(payload)
             sample, assistant_msg, tool_calls = _sample_from_response(
