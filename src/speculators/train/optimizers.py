@@ -59,25 +59,86 @@ def split_named_params_for_muon(
     return muon_params, adamw_params
 
 
-def build_optimizers(model: Module, config) -> list[torch.optim.Optimizer]:
+def make_fp32_masters(model: Module) -> dict[str, Tensor]:
+    """Give every low-precision trainable parameter an fp32 master copy.
+
+    Returns ``{parameter name: master}``. Frozen parameters are skipped: they
+    never receive an update, and leaving them in an optimizer group alongside
+    fp32 masters would put two dtypes in one group, which torch's fused Adam
+    path rejects.
+
+    Under bf16 autocast the parameters themselves are bf16, so stepping them
+    directly rounds every update to bf16's ~8-bit mantissa. Early in training an
+    update is large enough to survive that; once the LR schedule decays it falls
+    below the representable step at the weight's magnitude and is silently
+    rounded away -- training flattens while the gradients stay healthy.
+    """
+    masters: dict[str, Tensor] = {}
+    for name, param in model.named_parameters():
+        if not param.requires_grad or param.dtype == torch.float32:
+            continue
+        masters[name] = param.detach().clone().float().requires_grad_(True)
+    return masters
+
+
+def _swap_in_masters(
+    named: list[tuple[str, Tensor]], masters: dict[str, Tensor]
+) -> list[tuple[str, Tensor]]:
+    """Replace each parameter by its fp32 master, dropping the frozen ones.
+
+    Frozen parameters never receive an update, and a group holding both them and
+    the fp32 masters would mix dtypes, which torch's grouped Adam step rejects.
+    """
+    if not masters:
+        return named
+    swapped: list[tuple[str, Tensor]] = []
+    for name, param in named:
+        if name in masters:
+            swapped.append((name, masters[name]))
+        elif param.requires_grad and param.dtype == torch.float32:
+            swapped.append((name, param))
+    return swapped
+
+
+def build_optimizers(
+    model: Module, config
+) -> tuple[list[torch.optim.Optimizer], list[tuple[Tensor, Tensor]]]:
     """Build the optimizer(s) for a training run based on ``config.optimizer``.
 
     :param model: The model to optimize.
     :param config: A ``TrainerConfig`` holding the optimizer hyperparameters.
-    :return: A list of optimizers for the trainer to step in tandem. The default
-        "adamw" returns a single optimizer; "muon" returns ``[Muon, AdamW]``.
+    :return: The optimizers for the trainer to step in tandem, and the
+        ``(parameter, fp32 master)`` pairs it must move gradients through --
+        empty unless ``config.fp32_master_weights`` is set. The default "adamw"
+        returns a single optimizer; "muon" returns ``[Muon, AdamW]``.
     """
+    masters = (
+        make_fp32_masters(model)
+        if getattr(config, "fp32_master_weights", False)
+        else {}
+    )
+    if masters:
+        logger.info("fp32 master weights: %d parameters.", len(masters))
+
+    pairs: list[tuple[Tensor, Tensor]] = [
+        (param, masters[name])
+        for name, param in model.named_parameters()
+        if name in masters
+    ]
+
     if config.optimizer == "adamw":
         return [
             torch.optim.AdamW(
-                model.named_parameters(),
+                _swap_in_masters(list(model.named_parameters()), masters),
                 lr=config.lr,
                 weight_decay=config.weight_decay,
             )
-        ]
+        ], pairs
 
     if config.optimizer == "muon":
         muon_params, adamw_params = split_named_params_for_muon(model)
+        muon_params = _swap_in_masters(muon_params, masters)
+        adamw_params = _swap_in_masters(adamw_params, masters)
         logger.info(
             "Muon optimizer: %d 2D params via Muon, %d params via AdamW.",
             len(muon_params),
@@ -106,6 +167,6 @@ def build_optimizers(model: Module, config) -> list[torch.optim.Optimizer]:
             )
         if not optimizers:
             raise ValueError("No trainable parameters found to optimize.")
-        return optimizers
+        return optimizers, pairs
 
     raise ValueError(f"Unsupported optimizer: {config.optimizer!r}")

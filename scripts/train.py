@@ -654,6 +654,13 @@ def main(cfg: TrainConfig):  # noqa: C901
     # than the plugin depending on pydantic. test_backend_reconciliation.py keeps
     # the mirror complete so nothing read here was dropped during resolution.
     transfer = backend_cls.from_train_args(args, args.data_path)
+    # A separate validation corpus needs its own transfer, or its file indices
+    # would collide with the training set's under a shared cache root.
+    val_transfer = (
+        backend_cls.from_train_args(args, args.val_data_path)
+        if args.val_data_path
+        else None
+    )
 
     train_loader, val_loader = create_train_val_loaders(
         data_path=args.data_path,
@@ -673,6 +680,9 @@ def main(cfg: TrainConfig):  # noqa: C901
         prefetch_factor=args.prefetch_factor,
         preprocess=preprocess,
         train_data_ratio=args.train_data_ratio,
+        no_packing=args.no_packing,
+        val_data_path=args.val_data_path,
+        val_transfer=val_transfer,
     )
 
     # Get trainer kwargs from model class
@@ -687,6 +697,9 @@ def main(cfg: TrainConfig):  # noqa: C901
         val_call_kwargs=val_call_kwargs,
         optimizer=args.optimizer,
         weight_decay=args.weight_decay,
+        fp32_master_weights=args.fp32_master_weights,
+        eval_interval=args.eval_interval,
+        eval_max_batches=args.eval_max_batches,
         muon_lr=args.muon_lr,
         muon_momentum=args.muon_momentum,
         muon_weight_decay=args.muon_weight_decay,

@@ -135,7 +135,7 @@ class DSparkDraftModel(DFlashDraftModel):
         dpace_alpha: float = 0.5,
         **kwargs,
     ):
-        hidden, logits, targets, aligned_loss_mask, anchored_block_indices = (
+        hidden, logits, targets, aligned_loss_mask, anchored_block_indices, _ = (
             self._backbone_forward(
                 hidden_states,
                 input_ids,
