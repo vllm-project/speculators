@@ -305,14 +305,15 @@ def run_benchmark(args: argparse.Namespace) -> None:
 
     if args.mode == "mrcr":
         from mrcr_bench import run_mrcr
+        model_info = _fetch_model_info(args.target)
         run_mrcr(
             target=args.target,
+            model_info=model_info,
             metrics_url=metrics_url,
             output_dir=output_dir,
             max_concurrency=args.max_concurrency,
             max_context=args.mrcr_max_context,
             max_samples_per_bucket=args.mrcr_max_samples_per_bucket,
-            fetch_model_info=_fetch_model_info,
             require_metrics=_require_metrics,
         )
         logger.info("Benchmarking complete! Results: %s", output_dir)

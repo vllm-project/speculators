@@ -174,12 +174,12 @@ def warn_if_oversized(
 
 def run_mrcr(
     target: str,
+    model_info: dict | None,
     metrics_url: str,
     output_dir: Path,
     max_concurrency: int,
     max_context: int,
     max_samples_per_bucket: int,
-    fetch_model_info,
     require_metrics,
 ) -> None:
     """Run MRCR long-context evaluation.
@@ -187,7 +187,6 @@ def run_mrcr(
     Drives MRCR prompts through the target server bucket-by-bucket, diffing
     spec-decode Prometheus counters around each bucket's run.
     """
-    model_info = fetch_model_info(target)
     if model_info is None:
         logger.error("Could not determine served model info from %s/models", target)
         sys.exit(1)
