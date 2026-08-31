@@ -505,6 +505,8 @@ def _sample_from_response(
     message = choice["message"]
     content = message.get("content")
     tool_calls = message.get("tool_calls")
+    # Older vLLM builds returned this as `reasoning_content`.
+    reasoning = message.get("reasoning") or message.get("reasoning_content")
 
     # A tool call legitimately has empty content; only a wholly empty generation
     # corrupts the next prefix and must fail the conversation.
@@ -520,8 +522,7 @@ def _sample_from_response(
 
     input_ids, loss_mask = build_boundary_sample(prompt_token_ids, completion_token_ids)
     if tool_calls:
-        # History keeps the parsed call; any generated <think> is supervised in
-        # this row's completion tokens, not re-rendered.
+        # History keeps the parsed call, not the raw text it was parsed from.
         assistant_msg = {
             "role": "assistant",
             "content": content or "",
@@ -529,6 +530,10 @@ def _sample_from_response(
         }
     else:
         assistant_msg = {"role": "assistant", "content": content}
+    if reasoning:
+        # Templates re-render a turn's reasoning from this field. Kimi K2.5 has no
+        # <think>-in-content fallback, so dropping it changes the next prompt.
+        assistant_msg["reasoning_content"] = reasoning
 
     sample = {
         "id": f"{conv_id}_gen{sample_index}",
