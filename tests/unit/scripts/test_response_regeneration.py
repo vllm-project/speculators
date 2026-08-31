@@ -606,7 +606,15 @@ def _fake_post(responses):
 
 
 def _regen(
-    item, responses, *, model="m", max_tokens=64, endpoint="ep", sampling_params=None
+    item,
+    responses,
+    *,
+    model="m",
+    max_tokens=64,
+    endpoint="ep",
+    sampling_params=None,
+    reasoning_effort=None,
+    temperature=None,
 ):
     post, sent = _fake_post(responses)
     samples: list = []
@@ -620,6 +628,8 @@ def _regen(
             sampling_params=sampling_params or {},
             samples=samples,
             detokenize=_detok,
+            reasoning_effort=reasoning_effort,
+            temperature=temperature,
         )
     )
     return samples, truncated, sent
@@ -751,6 +761,65 @@ def test_sampling_params_reach_the_request_and_metadata():
     assert sent[0]["max_tokens"] == 64
     # Recorded for reproducibility of the generated row.
     assert samples[0]["metadata"]["sampling_params"] == params
+
+
+def test_reasoning_effort_reaches_request_and_metadata():
+    item = {"idx": 0, "primary_id": "u", "turns": [{"role": "user", "content": "hi"}]}
+    responses = [_response(prompt_token_ids=[1, 2], token_ids=[3], content="hello")]
+    params = {"temperature": 0.6}
+    samples, _, sent = _regen(
+        item, responses, sampling_params=params, reasoning_effort="high"
+    )
+
+    assert sent[0]["reasoning_effort"] == "high"
+    assert samples[0]["metadata"]["sampling_params"] == {
+        "temperature": 0.6,
+        "reasoning_effort": "high",
+    }
+
+
+def test_reasoning_effort_absent_by_default():
+    item = {"idx": 0, "primary_id": "u", "turns": [{"role": "user", "content": "hi"}]}
+    responses = [_response(prompt_token_ids=[1, 2], token_ids=[3], content="hello")]
+    samples, _, sent = _regen(item, responses)
+
+    assert "reasoning_effort" not in sent[0]
+    assert "reasoning_effort" not in samples[0]["metadata"]["sampling_params"]
+
+
+def test_temperature_reaches_request_and_metadata():
+    item = {"idx": 0, "primary_id": "u", "turns": [{"role": "user", "content": "hi"}]}
+    responses = [_response(prompt_token_ids=[1, 2], token_ids=[3], content="hello")]
+    params = {"top_p": 0.95}
+    samples, _, sent = _regen(item, responses, sampling_params=params, temperature=0.6)
+
+    assert sent[0]["temperature"] == 0.6
+    assert samples[0]["metadata"]["sampling_params"] == {
+        "top_p": 0.95,
+        "temperature": 0.6,
+    }
+
+
+def test_temperature_absent_by_default():
+    item = {"idx": 0, "primary_id": "u", "turns": [{"role": "user", "content": "hi"}]}
+    responses = [_response(prompt_token_ids=[1, 2], token_ids=[3], content="hello")]
+    samples, _, sent = _regen(item, responses)
+
+    assert "temperature" not in sent[0]
+    assert "temperature" not in samples[0]["metadata"]["sampling_params"]
+
+
+def test_temperature_and_reasoning_effort_both_recorded():
+    item = {"idx": 0, "primary_id": "u", "turns": [{"role": "user", "content": "hi"}]}
+    responses = [_response(prompt_token_ids=[1, 2], token_ids=[3], content="hello")]
+    samples, _, sent = _regen(item, responses, reasoning_effort="high", temperature=0.8)
+
+    assert sent[0]["reasoning_effort"] == "high"
+    assert sent[0]["temperature"] == 0.8
+    assert samples[0]["metadata"]["sampling_params"] == {
+        "reasoning_effort": "high",
+        "temperature": 0.8,
+    }
 
 
 def test_regenerate_plain_conversation_is_unchanged_and_sends_no_tools():
