@@ -320,13 +320,28 @@ class CollateFn:
         self.dtype = dtype
         self.preprocess = preprocess
 
+    def _clean_batch(
+        self, batch: Sequence[BatchType | None]
+    ) -> tuple[list[BatchType], int]:
+        """Apply per-sample preprocessing and filter failed samples"""
+        preprocess = self.preprocess
+
+        none_records = 0
+        new_batch = []
+        for item in batch:
+            if item is None:
+                none_records += 1
+                continue
+
+            new_batch.append(preprocess(item) if preprocess else item)
+
+        return new_batch, none_records
+
     def __call__(self, batch: Sequence[BatchType | None]) -> BatchType:
         max_len = self.max_len
         dtype = self.dtype
-        preprocess = self.preprocess
 
-        # Apply per-sample preprocessing and filter failed samples
-        batch = [preprocess(b) if preprocess else b for b in batch if b is not None]
+        batch, num_dropped = self._clean_batch(batch)
 
         if not batch:
             # Create empty sample which then gets padded to full
@@ -337,11 +352,11 @@ class CollateFn:
             empty = create_empty_sample(
                 self.hidden_size, self.num_target_layers, dtype=dtype
             )
-            if preprocess:
-                empty = preprocess(empty)
+            if self.preprocess:
+                empty = self.preprocess(empty)
             batch = [empty]
 
-        collated_data = {}
+        collated_data: BatchType = {}
         for key in batch[0]:  # type: ignore[union-attr]
             if key == "lengths":
                 collated_data[key] = torch.cat([b[key] for b in batch], dim=0)  # type: ignore[index]
@@ -389,5 +404,7 @@ class CollateFn:
         ).unsqueeze(0)
         # shape: [1, max_len]
         collated_data["document_ids"] = document_ids
+
+        collated_data["error_records"] = num_dropped
 
         return collated_data
