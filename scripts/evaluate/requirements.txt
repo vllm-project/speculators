@@ -7,3 +7,11 @@ matplotlib
 numpy
 scikit-learn
 scipy
+
+# MRCR mode: Inspect AI harness + dataset loading
+inspect-ai
+openai>=3.1.0  # inspect-ai's vllm provider requires this; older pins from guidellm are too low
+pandas
+pyarrow
+tiktoken
+huggingface_hub

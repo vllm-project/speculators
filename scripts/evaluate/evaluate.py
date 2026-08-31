@@ -4,6 +4,8 @@
 Modes:
     throughput   Max throughput run for acceptance rates
     sweep        Full pipeline (gen-len, sweep, CSV)
+    mrcr         Long-context acceptance rates via OpenAI's MRCR dataset,
+                 bucketed by context length (uses Inspect AI as the harness)
 
 Examples:
     python evaluate.py --target http://localhost:8000/v1 throughput
@@ -18,6 +20,10 @@ Examples:
     python evaluate.py --target http://localhost:8000/v1 throughput \\
         --dataset speedbench/qualitative/coding \\
         --speedbench-data-dir ./speedbench_data
+
+    # MRCR (long-context acceptance rate by bucket, capped at 128k tokens):
+    python evaluate.py --target http://localhost:8000/v1 mrcr \\
+        --mrcr-max-context 131072 --mrcr-max-samples-per-bucket 20
 """
 
 from __future__ import annotations
@@ -78,7 +84,8 @@ _SPEEDBENCH_COLUMN_MAPPER = (
 )
 
 
-def _fetch_model_name(target: str) -> str | None:
+def _fetch_model_info(target: str) -> dict | None:
+    """Return the first entry of ``/v1/models`` (includes ``id`` and ``max_model_len``)."""
     base = target.rstrip("/")
     if not base.endswith("/v1"):
         base += "/v1"
@@ -88,10 +95,15 @@ def _fetch_model_name(target: str) -> str | None:
             data = json.loads(resp.read())
         models = data.get("data", [])
         if models:
-            return models[0].get("id")
+            return models[0]
     except (URLError, json.JSONDecodeError, OSError) as e:
-        logger.warning("Could not fetch model name from %s: %s", url, e)
+        logger.warning("Could not fetch model info from %s: %s", url, e)
     return None
+
+
+def _fetch_model_name(target: str) -> str | None:
+    info = _fetch_model_info(target)
+    return info.get("id") if info else None
 
 
 def _sanitize_dir_name(name: str) -> str:
@@ -281,16 +293,102 @@ def _run_subset(
     return acceptance_csv, perf_csv, max_tokens if is_sweep else None
 
 
-def run_benchmark(args: argparse.Namespace) -> None:
-    check_dependencies()
-    is_sweep = args.mode == "sweep"
+def _run_mrcr(args: argparse.Namespace, metrics_url: str, output_dir: Path) -> None:
+    """Drive MRCR long-context prompts through the target server, bucket by
+    bucket, diffing spec-decode Prometheus counters around each bucket's run.
 
+    Uses Inspect AI as the eval harness (dataset loading + concurrent
+    generation against the target's OpenAI-compatible endpoint via the
+    ``vllm`` model provider). Correctness is not graded here — only
+    acceptance metrics are collected.
+    """
+    from inspect_ai import eval as inspect_eval
+
+    from mrcr_bench import build_task, load_mrcr_buckets, warn_if_oversized
+
+    model_info = _fetch_model_info(args.target)
+    if model_info is None:
+        logger.error("Could not determine served model info from %s/models", args.target)
+        sys.exit(1)
+    model_name = model_info["id"]
+    max_model_len = model_info.get("max_model_len")
+    logger.info(
+        "Server reports model=%s max_model_len=%s", model_name, max_model_len
+    )
+    logger.info(
+        "Loading MRCR 2-needle dataset (max_context=%d, max_samples_per_bucket=%s)...",
+        args.mrcr_max_context,
+        args.mrcr_max_samples_per_bucket,
+    )
+    buckets = load_mrcr_buckets(
+        max_context=args.mrcr_max_context,
+        max_samples_per_bucket=args.mrcr_max_samples_per_bucket,
+    )
+    if not buckets:
+        logger.error(
+            "No MRCR buckets available at or below --mrcr-max-context=%d",
+            args.mrcr_max_context,
+        )
+        sys.exit(1)
+
+    root_url = args.target.rstrip("/").removesuffix("/v1")
+    log_dir = output_dir / "artifacts" / "mrcr_logs"
+    acceptance_csv: CsvWriter | None = None
+
+    for label, samples in buckets.items():
+        subset = f"mrcr/2needle/{label}"
+        logger.info("[%s] Starting (%d samples)", subset, len(samples))
+
+        if max_model_len is not None:
+            warn_if_oversized(root_url, model_name, subset, samples, max_model_len)
+
+        baseline = _require_metrics(metrics_url)
+        inspect_eval(
+            build_task(samples),
+            model=f"vllm/{model_name}",
+            model_base_url=args.target,
+            max_connections=args.max_concurrency,
+            log_dir=str(log_dir / label.replace("-", "_")),
+            display="none",
+            fail_on_error=False,
+        )
+        current = _require_metrics(metrics_url)
+
+        spec = extract_spec_decode_metrics(current, baseline_metrics=baseline)
+        if not spec or spec.get("num_drafts", 0) <= 0:
+            logger.warning("[%s] No speculative decoding metrics found", subset)
+            continue
+
+        spec["subset"] = subset
+        print_acceptance_report(spec)
+        if acceptance_csv is None:
+            acceptance_csv = CsvWriter(
+                output_dir / "acceptance.csv",
+                ["subset"] + acceptance_csv_columns(spec),
+            )
+        acceptance_csv.append(spec)
+        logger.info("[%s] Complete", subset)
+
+    if acceptance_csv is None:
+        logger.error("No acceptance metrics collected from any MRCR bucket")
+        sys.exit(1)
+
+
+def run_benchmark(args: argparse.Namespace) -> None:
     metrics_url = args.target.rstrip("/").removesuffix("/v1") + "/metrics"
     output_dir = Path(args.output_dir)
     artifacts_dir = output_dir / "artifacts"
     artifacts_dir.mkdir(parents=True, exist_ok=True)
 
     save_eval_provenance(output_dir)
+
+    if args.mode == "mrcr":
+        _run_mrcr(args, metrics_url, output_dir)
+        logger.info("Benchmarking complete! Results: %s", output_dir)
+        return
+
+    check_dependencies()
+    is_sweep = args.mode == "sweep"
 
     acceptance_csv = None
     perf_csv = None
@@ -382,10 +480,11 @@ def main() -> None:
     )
     parser.add_argument(
         "mode",
-        choices=["throughput", "sweep"],
+        choices=["throughput", "sweep", "mrcr"],
         help=(
             "throughput: max-rate run for acceptance rates; "
-            "sweep: full benchmarking pipeline"
+            "sweep: full benchmarking pipeline; "
+            "mrcr: long-context acceptance rates via OpenAI's MRCR dataset"
         ),
     )
     parser.add_argument(
@@ -442,6 +541,23 @@ def main() -> None:
         default=DEFAULT_DATA_COLUMN_MAPPER,
         help="Column mapping for guidellm in typed key=value format"
         f" (default: {DEFAULT_DATA_COLUMN_MAPPER})",
+    )
+    parser.add_argument(
+        "--mrcr-max-context",
+        type=int,
+        default=131072,
+        dest="mrcr_max_context",
+        help=(
+            "Skip MRCR buckets whose lower token-count edge exceeds this; "
+            "keep at or below the target server's max_model_len (default: 131072)"
+        ),
+    )
+    parser.add_argument(
+        "--mrcr-max-samples-per-bucket",
+        type=int,
+        default=20,
+        dest="mrcr_max_samples_per_bucket",
+        help="Cap samples per context-length bucket to bound eval cost (default: 20)",
     )
     parser.add_argument(
         "--speedbench-data-dir",
