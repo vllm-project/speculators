@@ -4,7 +4,7 @@
 Modes:
     throughput   Max throughput run for acceptance rates
     sweep        Full pipeline (gen-len, sweep, CSV)
-    mrcr         Long-context acceptance rates via OpenAI's MRCR dataset,
+    long-context Long-context acceptance rates via OpenAI's MRCR dataset,
                  bucketed by context length (uses Inspect AI as the harness)
 
 Examples:
@@ -21,8 +21,8 @@ Examples:
         --dataset speedbench/qualitative/coding \\
         --speedbench-data-dir ./speedbench_data
 
-    # MRCR (long-context acceptance rate by bucket, capped at 128k tokens):
-    python evaluate.py --target http://localhost:8000/v1 mrcr \\
+    # Long-context (acceptance rate by context-length bucket, capped at 128k tokens):
+    python evaluate.py --target http://localhost:8000/v1 long-context \\
         --mrcr-max-context 131072 --mrcr-max-samples-per-bucket 20
 """
 
@@ -303,7 +303,7 @@ def run_benchmark(args: argparse.Namespace) -> None:
 
     save_eval_provenance(output_dir)
 
-    if args.mode == "mrcr":
+    if args.mode == "long-context":
         from mrcr_bench import run_mrcr
         model_info = _fetch_model_info(args.target)
         run_mrcr(
@@ -412,11 +412,11 @@ def main() -> None:
     )
     parser.add_argument(
         "mode",
-        choices=["throughput", "sweep", "mrcr"],
+        choices=["throughput", "sweep", "long-context"],
         help=(
             "throughput: max-rate run for acceptance rates; "
             "sweep: full benchmarking pipeline; "
-            "mrcr: long-context acceptance rates via OpenAI's MRCR dataset"
+            "long-context: acceptance rates across context-length buckets"
         ),
     )
     parser.add_argument(

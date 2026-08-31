@@ -1,10 +1,10 @@
-"""MRCR long-context prompt source for speculative-decoding acceptance benchmarking.
+"""Long-context acceptance benchmarking via OpenAI's MRCR dataset.
 
-Loads OpenAI's ``openai/mrcr`` 2-needle dataset and buckets samples by
+Loads the ``openai/mrcr`` 2-needle dataset and buckets samples by
 prompt+answer token count, using the same bin edges and ``o200k_base``
 tiktoken encoding OpenAI uses for its own leaderboard. Each bucket becomes an
 Inspect AI ``Task`` that is run against the target server to drive realistic
-long-context requests.
+long-context requests and measure acceptance rates across context lengths.
 
 Correctness is intentionally not graded: MRCR is used here purely as a source
 of long, multi-turn prompts to see how spec-decode acceptance holds up as
