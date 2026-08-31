@@ -389,6 +389,8 @@ def run_benchmark(bench_args, train_args) -> dict:
         muon_weight_decay=train_args.muon_weight_decay,
         muon_ns_steps=train_args.muon_ns_steps,
         muon_adjust_lr_fn=train_args.muon_adjust_lr_fn,
+        dion_fraction=train_args.dion_fraction,
+        dion_selection_scope=train_args.dion_selection_scope,
         scheduler_type="none",
         hidden_states_dtype=hidden_states_dtype,
         log_freq=1,

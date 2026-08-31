@@ -121,13 +121,15 @@ class TrainerConfig(NamedTuple):
     resume_from_checkpoint: bool = False
     train_call_kwargs: dict | None = None
     val_call_kwargs: dict | None = None
-    optimizer: Literal["adamw", "muon"] = "adamw"
+    optimizer: Literal["adamw", "muon", "dion3"] = "adamw"
     weight_decay: float = 0.01
     muon_lr: float = 0.02
     muon_momentum: float = 0.95
     muon_weight_decay: float = 0.1
     muon_ns_steps: int = 5
     muon_adjust_lr_fn: str = "match_rms_adamw"
+    dion_fraction: float = 0.25
+    dion_selection_scope: str = "global"
     scheduler_type: Literal["linear", "cosine", "none"] = "linear"
     scheduler_warmup_steps: int | None = None
     scheduler_warmup_ratio: float | None = None

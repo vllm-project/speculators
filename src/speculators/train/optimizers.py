@@ -10,13 +10,23 @@ embedding / LM-head matrices, following standard Muon practice).
 Muon works transparently for both single-GPU and multi-GPU (FSDP2) training: when the
 model is sharded with ``fully_shard`` the parameters become ``DTensor``s and Muon's
 Newton-Schulz orthogonalization dispatches across ranks automatically.
+
+The "dion3" option substitutes Dion3 (``microsoft/dion``) for Muon over the identical
+parameter split. Dion3 orthogonalizes only a ``dion_fraction`` of the momentum matrix's
+rows per step and megabatches the sharded transfer, which is why its advantage grows
+with world size: Muon has to reassemble whole matrices from their shards to run
+Newton-Schulz, so sharding buys it nothing. ``dion`` is not published on PyPI and is
+therefore imported lazily rather than declared as a dependency; install it with
+``pip install git+https://github.com/microsoft/dion.git``.
 """
 
+import functools
 import logging
 
 import torch
 from torch import Tensor
 from torch.nn import Module
+from torch.torch_version import TorchVersion
 
 logger = logging.getLogger("speculators")
 
@@ -108,4 +118,124 @@ def build_optimizers(model: Module, config) -> list[torch.optim.Optimizer]:
             raise ValueError("No trainable parameters found to optimize.")
         return optimizers
 
+    if config.optimizer == "dion3":
+        return _build_dion3(model, config)
+
     raise ValueError(f"Unsupported optimizer: {config.optimizer!r}")
+
+
+def _device_mesh_of(params: list[Tensor]) -> object | None:
+    """Return the device mesh the parameters are sharded over, if any.
+
+    Taken from the parameters themselves rather than rebuilt with
+    ``init_device_mesh``, so it is by construction the same mesh ``fully_shard``
+    used. Without it Dion3 silently runs its single-device orthonormalization
+    path, which is where its multi-GPU advantage comes from.
+    """
+    for param in params:
+        mesh = getattr(param, "device_mesh", None)
+        if mesh is not None:
+            return mesh
+    return None
+
+
+def _static_shape_step(optimizer: torch.optim.Optimizer) -> torch.optim.Optimizer:
+    """Run ``optimizer.step`` with dynamic shapes disabled.
+
+    torch 2.13 regressed inductor's handling of Dion3's
+    ``@torch.compile(fullgraph=True)`` per-neuron normalization: once dynamo
+    promotes its shapes to dynamic -- which happens on the second distinct matrix
+    shape in a step -- the generated Triton kernel reuses a value emitted inside
+    the reduction loop from the epilogue after that loop closes. A ``tl.range``
+    body is a separate scope, so it fails to compile with
+    ``NameError: tmp<N> is not defined``. torch 2.12.1 and 2.12.0 emit a
+    self-contained epilogue and are unaffected, so this is gated to >= 2.13.
+
+    An optimizer's shapes are fixed by the parameter list, so there is nothing to
+    gain from dynamic shapes here. Scoping the setting to ``step`` rather than
+    setting it process-wide leaves the model's own ``torch.compile`` alone --
+    setting it globally measurably inflates the forward pass. Pinning shapes
+    static does cost extra recompiles, hence the raised ``cache_size_limit``
+    (cf. microsoft/dion#23).
+    """
+    if TorchVersion(torch.__version__) < (2, 13):
+        return optimizer
+
+    inner = optimizer.step
+
+    @functools.wraps(inner)
+    def step(*args, **kwargs):
+        with torch._dynamo.config.patch(  # noqa: SLF001
+            automatic_dynamic_shapes=False, cache_size_limit=64
+        ):
+            return inner(*args, **kwargs)
+
+    optimizer.step = step  # type: ignore[method-assign]
+    return optimizer
+
+
+def _build_dion3(model: Module, config) -> list[torch.optim.Optimizer]:
+    """Build a single Dion3 optimizer covering both parameter groups."""
+    try:
+        # Imported lazily on purpose: dion is not on PyPI, so it cannot be a
+        # declared dependency and may legitimately be absent.
+        from dion import Dion3  # noqa: PLC0415
+    except ImportError as exc:  # pragma: no cover - depends on optional install
+        raise ImportError(
+            "--optimizer dion3 requires the 'dion' package, which is not published "
+            "on PyPI. Install it with:\n"
+            "    pip install git+https://github.com/microsoft/dion.git"
+        ) from exc
+
+    matrix_named, scalar_named = split_named_params_for_muon(model)
+    if not matrix_named:
+        raise ValueError("No trainable 2D parameters found to optimize.")
+    matrix = [p for _, p in matrix_named]
+    scalar = [p for _, p in scalar_named]
+
+    logger.info(
+        "Dion3 optimizer: %d 2D params via Dion3 (fraction=%s, selection_scope=%s), "
+        "%d params via AdamW.",
+        len(matrix),
+        config.dion_fraction,
+        config.dion_selection_scope,
+        len(scalar),
+    )
+
+    # Dion3 consumes both groups itself, so this returns one optimizer where the
+    # muon path returns two. The trainer and checkpointer both take a list.
+    param_groups: list[dict] = [
+        {
+            "params": matrix,
+            "algorithm": "nordion2",
+            "lr": config.muon_lr,
+            "weight_decay": config.muon_weight_decay,
+        }
+    ]
+    if scalar:
+        param_groups.append(
+            {
+                "params": scalar,
+                "algorithm": "adamw",
+                "lr": config.lr,
+                "weight_decay": config.weight_decay,
+            }
+        )
+
+    optimizer = Dion3(
+        param_groups,
+        lr=config.muon_lr,
+        mu=config.muon_momentum,
+        # Preserve the torch.optim.AdamW defaults used by Muon's scalar group.
+        # Dion3 otherwise defaults beta2 to 0.95 instead of torch's 0.999.
+        betas=(0.9, 0.999),
+        weight_decay=config.muon_weight_decay,
+        fraction=config.dion_fraction,
+        # dion's "rms_norm" is 0.2*sqrt(max(fan_out, fan_in)), the same expression
+        # as torch Muon's "match_rms_adamw", so a given --muon-lr means the same
+        # effective step size on both. dion's own default is a different scale.
+        adjust_lr="rms_norm",
+        selection_scope=config.dion_selection_scope,
+        distributed_mesh=_device_mesh_of(matrix),
+    )
+    return [_static_shape_step(optimizer)]
