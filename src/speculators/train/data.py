@@ -1,3 +1,4 @@
+import logging
 import warnings
 from collections.abc import Callable, Sequence
 from os import PathLike
@@ -18,8 +19,15 @@ from speculators.data_generation.vllm_client import (
     generate_hidden_states,
 )
 from speculators.train.noise_transforms import TransformTensors
+from speculators.train.recovery import (
+    RECOVERY_METADATA_KEY,
+    GenerationRecoveryGuard,
+    RecoveryMetadata,
+    SampleUnavailable,
+)
 
 BatchType = dict[str, Any]
+logger = logging.getLogger("speculators")
 
 
 def create_empty_sample(
@@ -103,13 +111,13 @@ class BaseDataset(Dataset):
     def _compute_approx_lengths(self):
         raise NotImplementedError
 
-    def _get_raw_data(self, index):
+    def _get_raw_data(self, index: int) -> BatchType | SampleUnavailable:
         raise NotImplementedError
 
-    def __getitem__(self, index) -> BatchType | None:
+    def __getitem__(self, index) -> BatchType | SampleUnavailable:
         data = self._get_raw_data(index)
 
-        if data is None:
+        if isinstance(data, SampleUnavailable):
             return data
 
         # data structure: {
@@ -159,6 +167,8 @@ class ArrowDataset(BaseDataset):
         model: str | None = None,
         request_timeout: float | None = DEFAULT_REQUEST_TIMEOUT,
         max_retries: int = DEFAULT_MAX_RETRIES,
+        generation_validation_retries: int = 2,
+        max_consecutive_generation_failures: int = 20,
     ):
         self.data = load_from_disk(datapath)
         if not 0.0 < train_ratio <= 1.0:
@@ -188,6 +198,10 @@ class ArrowDataset(BaseDataset):
         self.model = model
         self.request_timeout = request_timeout
         self.max_retries = max_retries
+        self.generation_recovery = GenerationRecoveryGuard(
+            retries=generation_validation_retries,
+            max_consecutive_failures=max_consecutive_generation_failures,
+        )
 
         # Delay super init so that `_compute_approx_lengths` has required data
         super().__init__(max_len, transform, hidden_states_dtype)
@@ -196,10 +210,10 @@ class ArrowDataset(BaseDataset):
         return index + self.start_file_idx
 
     def _setup_client(self):
-        self.client = openai.OpenAI(
+        client = openai.OpenAI(
             base_url=self.vllm_endpoint, api_key="EMPTY", max_retries=0
         )
-        list_models = self.client.models.list()
+        list_models = client.models.list()
         model_id = list_models.data[0].id
         if self.model and self.model != model_id:
             raise ValueError(
@@ -209,6 +223,9 @@ class ArrowDataset(BaseDataset):
             )
         self.model = model_id
         self.transfer.setup()
+        # Do not retain a half-initialized client if model discovery or Mooncake
+        # setup failed; the outer full-round-trip retry should redo initialization.
+        self.client = client
 
     def __len__(self):
         return len(self.data)
@@ -217,14 +234,16 @@ class ArrowDataset(BaseDataset):
         """Get lengths of the dataset samples."""
         return list(self.data.with_format(None)["seq_len"])
 
-    def _maybe_generate_hs(self, index: int) -> dict[str, torch.Tensor] | None:
-        if not self.client:
-            self._setup_client()
-
-        dataset_item = self.data[index]
-        client_item = build_client_item(dataset_item)
-
+    def _generate_hidden_states_once(
+        self,
+        index: int,
+        dataset_item: dict,
+        client_item: ClientItem,
+    ) -> dict[str, torch.Tensor]:
+        handle: str | None = None
         try:
+            if not self.client:
+                self._setup_client()
             handle = generate_hidden_states(
                 self.client,  # type:ignore[arg-type]
                 self.model,  # type:ignore[arg-type]
@@ -237,45 +256,70 @@ class ArrowDataset(BaseDataset):
             if loaded_hs is None:
                 raise ValueError(f"Failed to load hidden states for handle {handle}")
 
+            # Covers token/shape mismatches and non-finite values. The Mooncake
+            # transfer performs manifest/checksum validation first.
             check_hidden_states(loaded_hs, dataset_item["input_ids"].tolist())
 
             file_idx = self._map_to_file_idx(index)
-            match self.on_generate:
-                case "cache":
-                    self.transfer.cache(handle, file_idx)
-                case "delete":
+            if self.on_generate == "cache":
+                self.transfer.cache(handle, file_idx)
+            else:
+                try:
                     self.transfer.delete(handle)
-        except Exception as e:  # noqa: BLE001
-            warnings.warn(
-                f"Failed to load/cache hidden states for sample {index}: {e}",
-                stacklevel=1,
-            )
-            return None
+                except Exception as cleanup_error:  # noqa: BLE001
+                    logger.warning(
+                        "Loaded a valid hidden-state sample but failed to delete "
+                        "handle %s: %s",
+                        handle,
+                        cleanup_error,
+                    )
+            return loaded_hs
+        except Exception:
+            if handle is not None:
+                try:
+                    self.transfer.delete(handle)
+                except Exception as cleanup_error:  # noqa: BLE001
+                    logger.warning(
+                        "Failed to clean generated hidden-state handle %s: %s",
+                        handle,
+                        cleanup_error,
+                    )
+            raise
 
-        return loaded_hs
-
-    def _get_raw_data(self, index):
+    def _get_raw_data(self, index: int) -> BatchType | SampleUnavailable:
         file_idx = self._map_to_file_idx(index)
-        loaded_hs = self.transfer.get_cached(file_idx)
+        cached_hs = self.transfer.get_cached(file_idx)
+        if cached_hs is None:
+            if self.on_missing == "generate":
+                dataset_item = self.data[index]
+                client_item = build_client_item(dataset_item)
+                loaded_hs = self.generation_recovery.run(
+                    lambda: self._generate_hidden_states_once(
+                        index,
+                        dataset_item,
+                        client_item,
+                    ),
+                    description=(
+                        f"Hidden-state round trip failed for dataset index {index}, "
+                        f"file index {file_idx}"
+                    ),
+                )
+            elif self.on_missing == "skip":
+                return SampleUnavailable()
+            elif self.on_missing == "warn":
+                warnings.warn(
+                    f"Failed to load hidden states for sample {index}. Skipping...",
+                    stacklevel=1,
+                )
+                return SampleUnavailable(
+                    reason=f"Hidden states unavailable for sample {index}"
+                )
+            else:
+                raise RuntimeError(f"Failed to load hidden states for sample {index}.")
+        else:
+            loaded_hs = cached_hs
 
-        if loaded_hs is None:
-            match self.on_missing:
-                case "generate":
-                    loaded_hs = self._maybe_generate_hs(index)
-                case "skip":
-                    return None
-                case "warn":
-                    warnings.warn(
-                        f"Failed to load hidden states for sample {index}. Skipping...",
-                        stacklevel=1,
-                    )
-                    return None
-                case "raise":
-                    raise RuntimeError(
-                        f"Failed to load hidden states for sample {index}."
-                    )
-
-        if loaded_hs is None:
+        if isinstance(loaded_hs, SampleUnavailable):
             return loaded_hs
 
         # loaded_hs structure: {
@@ -289,7 +333,9 @@ class ArrowDataset(BaseDataset):
                 f"match input ids {self.data[index]['input_ids']}",
                 stacklevel=1,
             )
-            return None
+            return SampleUnavailable(
+                reason=f"Cached token ids do not match sample {index}"
+            )
 
         return {
             "hidden_states": loaded_hs["hidden_states"][:, :-1].flatten(
@@ -321,27 +367,33 @@ class CollateFn:
         self.preprocess = preprocess
 
     def _clean_batch(
-        self, batch: Sequence[BatchType | None]
-    ) -> tuple[list[BatchType], int]:
-        """Apply per-sample preprocessing and filter failed samples"""
+        self, batch: Sequence[BatchType | SampleUnavailable | None]
+    ) -> tuple[list[BatchType], list[SampleUnavailable], int]:
+        """Preprocess valid samples and collect unavailable and dropped samples."""
         preprocess = self.preprocess
-
-        none_records = 0
+        unavailable = []
+        num_dropped = 0
         new_batch = []
         for item in batch:
             if item is None:
-                none_records += 1
+                num_dropped += 1
+                continue
+            if isinstance(item, SampleUnavailable):
+                unavailable.append(item)
+                num_dropped += 1
                 continue
 
             new_batch.append(preprocess(item) if preprocess else item)
 
-        return new_batch, none_records
+        return new_batch, unavailable, num_dropped
 
-    def __call__(self, batch: Sequence[BatchType | None]) -> BatchType:
+    def __call__(
+        self, batch: Sequence[BatchType | SampleUnavailable | None]
+    ) -> BatchType:
         max_len = self.max_len
         dtype = self.dtype
 
-        batch, num_dropped = self._clean_batch(batch)
+        batch, unavailable, num_dropped = self._clean_batch(batch)
 
         if not batch:
             # Create empty sample which then gets padded to full
@@ -355,6 +407,9 @@ class CollateFn:
             if self.preprocess:
                 empty = self.preprocess(empty)
             batch = [empty]
+            locally_empty = True
+        else:
+            locally_empty = False
 
         collated_data: BatchType = {}
         for key in batch[0]:  # type: ignore[union-attr]
@@ -406,5 +461,11 @@ class CollateFn:
         collated_data["document_ids"] = document_ids
 
         collated_data["error_records"] = num_dropped
+        metadata = RecoveryMetadata.from_unavailable(
+            unavailable,
+            locally_empty=locally_empty,
+        )
+        if metadata.failure_count or metadata.locally_empty:
+            collated_data[RECOVERY_METADATA_KEY] = metadata
 
         return collated_data

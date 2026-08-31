@@ -276,6 +276,10 @@ def _build_train_loader(
         verifier_name_or_path=train_args.verifier_name_or_path,
         request_timeout=train_args.request_timeout,
         max_retries=train_args.max_retries,
+        generation_validation_retries=train_args.generation_validation_retries,
+        max_consecutive_generation_failures=(
+            train_args.max_consecutive_generation_failures
+        ),
         hidden_size=hidden_size,
         num_target_layers=num_target_layers,
         num_workers=train_args.num_workers,
