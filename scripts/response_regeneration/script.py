@@ -5,6 +5,7 @@ import hashlib
 import json
 import logging
 import os
+import random
 import re
 import sys
 import time
@@ -164,6 +165,15 @@ def parse_args():
         help=(
             "Comma-separated temperature values to cycle through "
             "per conversation, e.g. '0.6,0.8,1.0'"
+        ),
+    )
+    parser.add_argument(
+        "--seed",
+        type=int,
+        default=None,
+        help=(
+            "Seed for random selection of reasoning effort / temperature "
+            "per conversation, for reproducible runs"
         ),
     )
     args = parser.parse_args()
@@ -855,11 +865,17 @@ async def main():  # noqa: C901
 
     print(f"Using model: {args.model}")
     if args.reasoning_effort_cycle:
-        print(f"Reasoning effort cycle: {' -> '.join(args.reasoning_effort_cycle)}")
+        print(
+            "Reasoning effort (random per conversation): "
+            f"{', '.join(args.reasoning_effort_cycle)}"
+        )
     if args.temperature_cycle:
         print(
-            f"Temperature cycle: {' -> '.join(str(t) for t in args.temperature_cycle)}"
+            "Temperature (random per conversation): "
+            f"{', '.join(str(t) for t in args.temperature_cycle)}"
         )
+    if args.reasoning_effort_cycle or args.temperature_cycle:
+        print(f"Sampling seed: {args.seed}")
 
     # Decoder for the review-only `text` twin; see build_detokenizer.
     detokenize = build_detokenizer(args.model)
@@ -938,6 +954,7 @@ async def main():  # noqa: C901
                 for _ in range(args.concurrency)
             ]
 
+            rng = random.Random(args.seed)
             processed_count = 0
             for index, row in enumerate(dataset):
                 if args.limit is not None and processed_count >= args.limit:
@@ -988,14 +1005,17 @@ async def main():  # noqa: C901
                     "tools": tools,
                     "tool_results": tool_results,
                 }
+                # Independently pick a reasoning effort and temperature at
+                # random so that, across conversations, we sample a mix of
+                # (effort, temperature) combinations rather than always pairing
+                # effort[i] with temperature[i]. Seeded via --seed for
+                # reproducibility.
                 if args.reasoning_effort_cycle is not None:
-                    queue_item["reasoning_effort"] = args.reasoning_effort_cycle[
-                        processed_count % len(args.reasoning_effort_cycle)
-                    ]
+                    queue_item["reasoning_effort"] = rng.choice(
+                        args.reasoning_effort_cycle
+                    )
                 if args.temperature_cycle is not None:
-                    queue_item["temperature"] = args.temperature_cycle[
-                        processed_count % len(args.temperature_cycle)
-                    ]
+                    queue_item["temperature"] = rng.choice(args.temperature_cycle)
                 await queue.put(queue_item)
                 processed_count += 1
 
