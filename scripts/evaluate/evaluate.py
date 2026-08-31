@@ -293,85 +293,6 @@ def _run_subset(
     return acceptance_csv, perf_csv, max_tokens if is_sweep else None
 
 
-def _run_mrcr(args: argparse.Namespace, metrics_url: str, output_dir: Path) -> None:
-    """Drive MRCR long-context prompts through the target server, bucket by
-    bucket, diffing spec-decode Prometheus counters around each bucket's run.
-
-    Uses Inspect AI as the eval harness (dataset loading + concurrent
-    generation against the target's OpenAI-compatible endpoint via the
-    ``vllm`` model provider). Correctness is not graded here — only
-    acceptance metrics are collected.
-    """
-    from inspect_ai import eval as inspect_eval
-
-    from mrcr_bench import build_task, load_mrcr_buckets, warn_if_oversized
-
-    model_info = _fetch_model_info(args.target)
-    if model_info is None:
-        logger.error("Could not determine served model info from %s/models", args.target)
-        sys.exit(1)
-    model_name = model_info["id"]
-    max_model_len = model_info.get("max_model_len")
-    logger.info(
-        "Server reports model=%s max_model_len=%s", model_name, max_model_len
-    )
-    logger.info(
-        "Loading MRCR 2-needle dataset (max_context=%d, max_samples_per_bucket=%s)...",
-        args.mrcr_max_context,
-        args.mrcr_max_samples_per_bucket,
-    )
-    buckets = load_mrcr_buckets(
-        max_context=args.mrcr_max_context,
-        max_samples_per_bucket=args.mrcr_max_samples_per_bucket,
-    )
-    if not buckets:
-        logger.error(
-            "No MRCR buckets available at or below --mrcr-max-context=%d",
-            args.mrcr_max_context,
-        )
-        sys.exit(1)
-
-    root_url = args.target.rstrip("/").removesuffix("/v1")
-    log_dir = output_dir / "artifacts" / "mrcr_logs"
-    acceptance_csv: CsvWriter | None = None
-
-    for label, samples in buckets.items():
-        subset = f"mrcr/2needle/{label}"
-        logger.info("[%s] Starting (%d samples)", subset, len(samples))
-
-        if max_model_len is not None:
-            warn_if_oversized(root_url, model_name, subset, samples, max_model_len)
-
-        baseline = _require_metrics(metrics_url)
-        inspect_eval(
-            build_task(samples),
-            model=f"vllm/{model_name}",
-            model_base_url=args.target,
-            max_connections=args.max_concurrency,
-            log_dir=str(log_dir / label.replace("-", "_")),
-            display="none",
-            fail_on_error=False,
-        )
-        current = _require_metrics(metrics_url)
-
-        spec = extract_spec_decode_metrics(current, baseline_metrics=baseline)
-        if not spec or spec.get("num_drafts", 0) <= 0:
-            logger.warning("[%s] No speculative decoding metrics found", subset)
-            continue
-
-        spec["subset"] = subset
-        print_acceptance_report(spec)
-        if acceptance_csv is None:
-            acceptance_csv = CsvWriter(
-                output_dir / "acceptance.csv",
-                ["subset"] + acceptance_csv_columns(spec),
-            )
-        acceptance_csv.append(spec)
-        logger.info("[%s] Complete", subset)
-
-    if acceptance_csv is None:
-        logger.error("No acceptance metrics collected from any MRCR bucket")
-        sys.exit(1)
 
 
 def run_benchmark(args: argparse.Namespace) -> None:
@@ -383,7 +304,17 @@ def run_benchmark(args: argparse.Namespace) -> None:
     save_eval_provenance(output_dir)
 
     if args.mode == "mrcr":
-        _run_mrcr(args, metrics_url, output_dir)
+        from mrcr_bench import run_mrcr
+        run_mrcr(
+            target=args.target,
+            metrics_url=metrics_url,
+            output_dir=output_dir,
+            max_concurrency=args.max_concurrency,
+            max_context=args.mrcr_max_context,
+            max_samples_per_bucket=args.mrcr_max_samples_per_bucket,
+            fetch_model_info=_fetch_model_info,
+            require_metrics=_require_metrics,
+        )
         logger.info("Benchmarking complete! Results: %s", output_dir)
         return
 
