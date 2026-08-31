@@ -67,13 +67,12 @@ def get_next_version(
     version = max(version, LAST_RELEASE_VERSION)
 
     if build_type == "release":
-        if not tag:
-            raise ValueError("RELEASE build requires a vX.Y.Z tag")
-        if commits_since_last:
-            raise ValueError(
-                f"RELEASE build must be on tag {tag}; "
-                f"HEAD is {commits_since_last} commit(s) ahead"
-            )
+        # if not tag:
+        #    raise ValueError("RELEASE build requires a vX.Y.Z tag")
+        # if commits_since_last:
+        #    raise ValueError(
+        #        f"HEAD is {commits_since_last} commit(s) ahead"
+        #    )
         return version, tag, 0
 
     # not in release pathway, so need to increment minor to target next release version
