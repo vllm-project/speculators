@@ -1,5 +1,10 @@
-import pytest
+from pathlib import Path
 
+import pytest
+import torch
+from transformers import get_linear_schedule_with_warmup
+
+from speculators.train.checkpointer import SingleGPUCheckpointer
 from speculators.train.config import TrainConfig
 from speculators.train.trainer import (
     TrainerConfig,
@@ -68,3 +73,39 @@ def test_scheduler_type_rejects_unsupported_values():
         TrainConfig.resolve(
             ["--verifier-name-or-path", "x", "--scheduler-type", "constant"]
         )
+
+
+def test_scheduler_resume_restores_optimizer_learning_rate(tmp_path: Path):
+    checkpoint_dir = tmp_path / "0"
+    checkpoint_dir.mkdir()
+    checkpointer = SingleGPUCheckpointer(tmp_path)
+
+    parameter = torch.nn.Parameter(torch.zeros(()))
+    optimizer = torch.optim.AdamW([parameter], lr=1e-3)
+    scheduler = get_linear_schedule_with_warmup(
+        optimizer,
+        num_warmup_steps=10,
+        num_training_steps=100,
+    )
+    for _ in range(25):
+        optimizer.step()
+        scheduler.step()
+
+    expected_lr = scheduler.get_last_lr()[0]
+    checkpointer.save_scheduler_state_dict(scheduler, epoch=0)
+
+    resumed_parameter = torch.nn.Parameter(torch.zeros(()))
+    resumed_optimizer = torch.optim.AdamW([resumed_parameter], lr=1e-3)
+    resumed_optimizer.load_state_dict(optimizer.state_dict())
+    resumed_scheduler = get_linear_schedule_with_warmup(
+        resumed_optimizer,
+        num_warmup_steps=10,
+        num_training_steps=100,
+        last_epoch=0,
+    )
+    assert resumed_optimizer.param_groups[0]["lr"] != pytest.approx(expected_lr)
+
+    checkpointer.load_scheduler_state_dict(resumed_scheduler)
+
+    assert resumed_scheduler.get_last_lr()[0] == pytest.approx(expected_lr)
+    assert resumed_optimizer.param_groups[0]["lr"] == pytest.approx(expected_lr)

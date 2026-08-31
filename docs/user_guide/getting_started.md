@@ -27,7 +27,11 @@ For a list of models that have been trained and validated end-to-end by our team
 Speculators supports multiple speculative decoding algorithms:
 
 - **[Eagle-3](algorithms/eagle3.md)**
+- **[P-EAGLE](algorithms/peagle.md)**
 - **[DFlash](algorithms/dflash.md)**
+- **[DFlash2](algorithms/dflash2.md)**
+- **[DSpark](algorithms/dspark.md)**
+- **[MTP](algorithms/mtp.md)**
 
 For help choosing between them, see the [Algorithm Decision Guide](algorithms/decision_guide.md).
 

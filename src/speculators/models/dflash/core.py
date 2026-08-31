@@ -57,6 +57,16 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
     t2d: torch.Tensor | None
     d2t: torch.Tensor | None
 
+    def _make_decoder_layer(
+        self, config: DFlashSpeculatorConfig, layer_idx: int
+    ) -> nn.Module:
+        """Build one draft decoder layer.
+
+        DFlash-family variants override this factory when they wrap the shared
+        attention and MLP with additional modules.
+        """
+        return Qwen3DFlashDecoderLayer(config.transformer_layer_config, layer_idx)  # type: ignore[arg-type]
+
     def __init__(
         self,
         config: DFlashSpeculatorConfig,
@@ -83,7 +93,7 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
         num_draft_layers = tl_config.num_hidden_layers
         self.layers = nn.ModuleList(
             [
-                Qwen3DFlashDecoderLayer(config.transformer_layer_config, layer_idx)  # type: ignore[arg-type]
+                self._make_decoder_layer(config, layer_idx)
                 for layer_idx in range(num_draft_layers)
             ]
         )
@@ -232,6 +242,11 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
             if sample_from_anchor_arg is None
             else sample_from_anchor_arg
         )
+        default_non_causal = algorithm == "dflash2"
+        non_causal_arg = kwargs.get("sliding_window_non_causal")
+        sliding_window_non_causal = (
+            default_non_causal if non_causal_arg is None else non_causal_arg
+        )
 
         # Calculate speculative tokens based on sample_from_anchor
         # False: anchor is bonus token (block_size - 1 tokens)
@@ -244,7 +259,7 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
             "block_size": block_size,
             "aux_hidden_state_layer_ids": target_layer_ids,
             "mask_token_id": kwargs.get("mask_token_id"),
-            "sliding_window_non_causal": kwargs.get("sliding_window_non_causal", False),
+            "sliding_window_non_causal": sliding_window_non_causal,
             "sample_from_anchor": sample_from_anchor,
             "speculators_config": SpeculatorsConfig(
                 algorithm=algorithm,
