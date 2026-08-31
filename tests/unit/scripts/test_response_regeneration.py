@@ -147,6 +147,12 @@ _EXTRACT_CASES = [
         id="empty_messages_falls_back_to_prompt",
     ),
     pytest.param(
+        {"prompt": [{"role": "assistant", "content": "old answer"}]},
+        "prompt",
+        [],
+        id="message_list_prompt_without_user_skipped",
+    ),
+    pytest.param(
         {"messages": ["not-a-dict", {"role": "user", "content": "ok"}]},
         "prompt",
         [{"role": "user", "content": "ok"}],
@@ -895,10 +901,60 @@ def test_prepare_row_merges_normalize_output_over_raw_row():
     assert turns == [{"role": "user", "content": "Hi"}]
 
 
-def test_dataset_choice_rejects_multimodal_with_a_reason():
+def test_dataset_source_rejects_multimodal_with_a_reason():
     with pytest.raises(argparse.ArgumentTypeError, match="does not support images"):
-        regen._dataset_choice("sharegpt4v_coco")
-    assert regen._dataset_choice("ultrachat") == "ultrachat"
+        regen._dataset_source("sharegpt4v_coco")
+    assert regen._dataset_source("ultrachat") == "ultrachat"
+
+
+def test_parse_args_handles_local_dataset(monkeypatch, capsys, tmp_path):
+    path = tmp_path / "prompts.jsonl"
+    path.touch()
+    argv = ["script.py", "--dataset", str(path)]
+    monkeypatch.setattr("sys.argv", argv)
+
+    assert regen.parse_args().dataset == str(path)
+
+    monkeypatch.setattr("sys.argv", [*argv, "--split", "custom"])
+    with pytest.raises(SystemExit):
+        regen.parse_args()
+    assert "only apply to dataset presets" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize(
+    ("filename", "data"),
+    [
+        pytest.param(
+            "prompts.jsonl",
+            {"prompt": [{"role": "user", "content": "local prompt"}]},
+            id="jsonl-message-list-prompt",
+        ),
+        pytest.param(
+            "prompts.jsonl",
+            {"prompt": "local prompt"},
+            id="jsonl-string-prompt",
+        ),
+        pytest.param(
+            "prompts.json",
+            [{"prompt": "local prompt"}],
+            id="json-string-prompt",
+        ),
+    ],
+)
+def test_load_input_dataset_from_local_file(tmp_path, filename, data):
+    path = tmp_path / filename
+    path.write_text(json.dumps(data) + "\n", encoding="utf-8")
+    args = argparse.Namespace(
+        dataset=str(path),
+        split=None,
+        subset=None,
+    )
+
+    config, dataset, split = regen.load_input_dataset(args)
+    assert (config.name, config.prompt_field, split) == ("prompts", "prompt", "train")
+    assert regen.prepare_row(next(iter(dataset)), config)[1] == [
+        {"role": "user", "content": "local prompt"}
+    ]
 
 
 def test_tools_and_results_are_read_from_the_normalized_row():
