@@ -51,6 +51,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from train import (
     build_draft_model,
+    configure_gradient_checkpointing,
     parse_vocab_mappings,
     set_seed,
 )
@@ -308,6 +309,7 @@ def run_benchmark(bench_args, train_args) -> dict:
 
     model_class = SpeculatorModel.registry[train_args.speculator_type]
     draft_model = build_draft_model(train_args, model_class, t2d, d2t, draft_vocab_size)
+    configure_gradient_checkpointing(draft_model, train_args.gradient_checkpointing)
 
     num_target_layers = len(draft_model.target_layer_ids)
     hidden_size = draft_model.config.transformer_layer_config.hidden_size
@@ -408,6 +410,7 @@ def run_benchmark(bench_args, train_args) -> dict:
             "optimizer": train_args.optimizer,
             "lr": train_args.lr,
             "hidden_states_dtype": train_args.hidden_states_dtype,
+            "gradient_checkpointing": train_args.gradient_checkpointing,
             "synthetic_data": is_synthetic,
             "fsdp_shard": train_args.fsdp_shard,
             "num_gpus_used": num_gpus_used,
