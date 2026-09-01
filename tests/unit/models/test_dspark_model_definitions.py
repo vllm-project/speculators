@@ -1,10 +1,15 @@
 """Unit tests for DSpark Markov and confidence heads."""
 
+from types import SimpleNamespace
+
 import pytest
 import torch
 
 from speculators.models.dspark.model_definitions import ConfidenceHead, MarkovHead
-from speculators.train.optimizers import split_named_params_for_muon
+from speculators.train.optimizers import (
+    build_optimizers,
+    split_named_params_for_muon,
+)
 
 
 class TestMarkovHead:
@@ -55,16 +60,41 @@ class TestMarkovHead:
     def test_vocab_factors_use_adamw_under_muon_optimizer(self):
         head = self._head("gated")
 
-        muon, adamw = split_named_params_for_muon(head)
-        muon_names = {name for name, _ in muon}
-        adamw_names = {name for name, _ in adamw}
+        muon, adamw, excluded = split_named_params_for_muon(head)
 
-        assert muon_names == {"gate_proj.weight"}
-        assert adamw_names == {
+        assert {name for name, _ in muon} == {"gate_proj.weight"}
+        assert {name for name, _ in adamw} == {"gate_proj.bias"}
+        assert {name for name, _ in excluded} == {
             "markov_w1.weight",
             "markov_w2.weight",
-            "gate_proj.bias",
         }
+
+    def test_vocab_factors_keep_muon_lr_not_the_base_lr(self):
+        """The Markov factors are skipped by Muon because a vocabulary index is not a
+        feature axis -- not because they want a 10x smaller step than their neighbours.
+        """
+        head = self._head("vanilla")
+        config = SimpleNamespace(
+            optimizer="muon",
+            lr=3e-4,
+            weight_decay=0.01,
+            muon_lr=3e-3,
+            muon_momentum=0.95,
+            muon_weight_decay=0.1,
+            muon_ns_steps=5,
+            muon_adjust_lr_fn="match_rms_adamw",
+        )
+
+        groups = {
+            name: group
+            for opt in build_optimizers(head, config)
+            for group in opt.param_groups
+            for name in group.get("param_names") or []
+        }
+
+        for name in ("markov_w1.weight", "markov_w2.weight"):
+            assert groups[name]["lr"] == config.muon_lr
+            assert groups[name]["weight_decay"] == config.muon_weight_decay
 
     def test_invalid_rank_raises(self):
         with pytest.raises(ValueError):

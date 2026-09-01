@@ -225,12 +225,11 @@ def test_candidate_codebooks_use_adamw_under_muon_optimizer():
         top_k=3,
     )
 
-    muon, adamw = split_named_params_for_muon(selector)
-    muon_names = {name for name, _ in muon}
-    adamw_names = {name for name, _ in adamw}
+    muon, adamw, excluded = split_named_params_for_muon(selector)
 
-    assert muon_names == {"hidden_projection.weight"}
-    assert adamw_names == {
+    assert {name for name, _ in muon} == {"hidden_projection.weight"}
+    assert not adamw
+    assert {name for name, _ in excluded} == {
         "predecessor_codebook",
         "successor_codebook",
     }
