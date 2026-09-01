@@ -147,6 +147,12 @@ _EXTRACT_CASES = [
         id="empty_messages_falls_back_to_prompt",
     ),
     pytest.param(
+        {"prompt": [{"role": "assistant", "content": "old answer"}]},
+        "prompt",
+        [],
+        id="message_list_prompt_without_user_skipped",
+    ),
+    pytest.param(
         {"messages": ["not-a-dict", {"role": "user", "content": "ok"}]},
         "prompt",
         [{"role": "user", "content": "ok"}],
@@ -600,7 +606,15 @@ def _fake_post(responses):
 
 
 def _regen(
-    item, responses, *, model="m", max_tokens=64, endpoint="ep", sampling_params=None
+    item,
+    responses,
+    *,
+    model="m",
+    max_tokens=64,
+    endpoint="ep",
+    sampling_params=None,
+    reasoning_effort=None,
+    temperature=None,
 ):
     post, sent = _fake_post(responses)
     samples: list = []
@@ -614,6 +628,8 @@ def _regen(
             sampling_params=sampling_params or {},
             samples=samples,
             detokenize=_detok,
+            reasoning_effort=reasoning_effort,
+            temperature=temperature,
         )
     )
     return samples, truncated, sent
@@ -745,6 +761,65 @@ def test_sampling_params_reach_the_request_and_metadata():
     assert sent[0]["max_tokens"] == 64
     # Recorded for reproducibility of the generated row.
     assert samples[0]["metadata"]["sampling_params"] == params
+
+
+def test_reasoning_effort_reaches_request_and_metadata():
+    item = {"idx": 0, "primary_id": "u", "turns": [{"role": "user", "content": "hi"}]}
+    responses = [_response(prompt_token_ids=[1, 2], token_ids=[3], content="hello")]
+    params = {"temperature": 0.6}
+    samples, _, sent = _regen(
+        item, responses, sampling_params=params, reasoning_effort="high"
+    )
+
+    assert sent[0]["reasoning_effort"] == "high"
+    assert samples[0]["metadata"]["sampling_params"] == {
+        "temperature": 0.6,
+        "reasoning_effort": "high",
+    }
+
+
+def test_reasoning_effort_absent_by_default():
+    item = {"idx": 0, "primary_id": "u", "turns": [{"role": "user", "content": "hi"}]}
+    responses = [_response(prompt_token_ids=[1, 2], token_ids=[3], content="hello")]
+    samples, _, sent = _regen(item, responses)
+
+    assert "reasoning_effort" not in sent[0]
+    assert "reasoning_effort" not in samples[0]["metadata"]["sampling_params"]
+
+
+def test_temperature_reaches_request_and_metadata():
+    item = {"idx": 0, "primary_id": "u", "turns": [{"role": "user", "content": "hi"}]}
+    responses = [_response(prompt_token_ids=[1, 2], token_ids=[3], content="hello")]
+    params = {"top_p": 0.95}
+    samples, _, sent = _regen(item, responses, sampling_params=params, temperature=0.6)
+
+    assert sent[0]["temperature"] == 0.6
+    assert samples[0]["metadata"]["sampling_params"] == {
+        "top_p": 0.95,
+        "temperature": 0.6,
+    }
+
+
+def test_temperature_absent_by_default():
+    item = {"idx": 0, "primary_id": "u", "turns": [{"role": "user", "content": "hi"}]}
+    responses = [_response(prompt_token_ids=[1, 2], token_ids=[3], content="hello")]
+    samples, _, sent = _regen(item, responses)
+
+    assert "temperature" not in sent[0]
+    assert "temperature" not in samples[0]["metadata"]["sampling_params"]
+
+
+def test_temperature_and_reasoning_effort_both_recorded():
+    item = {"idx": 0, "primary_id": "u", "turns": [{"role": "user", "content": "hi"}]}
+    responses = [_response(prompt_token_ids=[1, 2], token_ids=[3], content="hello")]
+    samples, _, sent = _regen(item, responses, reasoning_effort="high", temperature=0.8)
+
+    assert sent[0]["reasoning_effort"] == "high"
+    assert sent[0]["temperature"] == 0.8
+    assert samples[0]["metadata"]["sampling_params"] == {
+        "reasoning_effort": "high",
+        "temperature": 0.8,
+    }
 
 
 def test_regenerate_plain_conversation_is_unchanged_and_sends_no_tools():
@@ -895,10 +970,60 @@ def test_prepare_row_merges_normalize_output_over_raw_row():
     assert turns == [{"role": "user", "content": "Hi"}]
 
 
-def test_dataset_choice_rejects_multimodal_with_a_reason():
+def test_dataset_source_rejects_multimodal_with_a_reason():
     with pytest.raises(argparse.ArgumentTypeError, match="does not support images"):
-        regen._dataset_choice("sharegpt4v_coco")
-    assert regen._dataset_choice("ultrachat") == "ultrachat"
+        regen._dataset_source("sharegpt4v_coco")
+    assert regen._dataset_source("ultrachat") == "ultrachat"
+
+
+def test_parse_args_handles_local_dataset(monkeypatch, capsys, tmp_path):
+    path = tmp_path / "prompts.jsonl"
+    path.touch()
+    argv = ["script.py", "--dataset", str(path)]
+    monkeypatch.setattr("sys.argv", argv)
+
+    assert regen.parse_args().dataset == str(path)
+
+    monkeypatch.setattr("sys.argv", [*argv, "--split", "custom"])
+    with pytest.raises(SystemExit):
+        regen.parse_args()
+    assert "only apply to dataset presets" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize(
+    ("filename", "data"),
+    [
+        pytest.param(
+            "prompts.jsonl",
+            {"prompt": [{"role": "user", "content": "local prompt"}]},
+            id="jsonl-message-list-prompt",
+        ),
+        pytest.param(
+            "prompts.jsonl",
+            {"prompt": "local prompt"},
+            id="jsonl-string-prompt",
+        ),
+        pytest.param(
+            "prompts.json",
+            [{"prompt": "local prompt"}],
+            id="json-string-prompt",
+        ),
+    ],
+)
+def test_load_input_dataset_from_local_file(tmp_path, filename, data):
+    path = tmp_path / filename
+    path.write_text(json.dumps(data) + "\n", encoding="utf-8")
+    args = argparse.Namespace(
+        dataset=str(path),
+        split=None,
+        subset=None,
+    )
+
+    config, dataset, split = regen.load_input_dataset(args)
+    assert (config.name, config.prompt_field, split) == ("prompts", "prompt", "train")
+    assert regen.prepare_row(next(iter(dataset)), config)[1] == [
+        {"role": "user", "content": "local prompt"}
+    ]
 
 
 def test_tools_and_results_are_read_from_the_normalized_row():

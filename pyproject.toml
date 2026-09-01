@@ -118,6 +118,7 @@ dev = [
     # code quality
     "mypy~=2.1.0",
     "ruff~=0.15.20",
+    "pre-commit~=4.0",
 
     # docs quality
     "mdformat~=1.0.0",

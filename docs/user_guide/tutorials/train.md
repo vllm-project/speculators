@@ -184,6 +184,12 @@ CUDA_VISIBLE_DEVICES=0 python scripts/launch_vllm.py Qwen/Qwen3.5-9B \
   -- --port 8000
 ```
 
+/// admonition | Multi-node? type: tip
+
+If the target model doesn't fit on a single node, or you want extraction and training on separate machines, see [Multi-Node Training](multi_node_training.md) for how to use the Mooncake backend to stream hidden states across nodes.
+
+///
+
 **The `--` separator:** Anything after `--` is passed directly to vLLM. Common options:
 
 - `--data-parallel-size 4` - Use 4 data parallel instances
