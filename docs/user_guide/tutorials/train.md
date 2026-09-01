@@ -678,11 +678,14 @@ Measured on four H100s with the offline commands above -- `Qwen/Qwen3-8B`, the `
 | --------- | --------------------- | ----------------- | --------------------- | ------------- |
 | Eagle-3   | 3                     | 1.89              | 52.4%                 | 15 min        |
 | DFlash    | 15                    | 1.99              | 57.9%                 | 19 min        |
+| DFlash2   | 7                     | 1.90              | 52.1%                 | 20 min        |
 | DSpark    | 8                     | 2.02              | 54.2%                 | 17 min        |
+
+DFlash2 differs from the other three rows in two ways, both forced rather than chosen. It requires the full verifier vocabulary, so it trains a 151936-token output layer where the others use the pruned 32000-token one -- which also means it needs a `--data-path` without the `t2d.npy` / `d2t.npy` written by Step 1, since those files set the draft vocabulary and override the CLI. And it was served on vLLM 0.28.1, the first version with DFlash2 support; the other three rows were served on 0.27.1.
 
 Acceptance length is the number of tokens accepted per verifier step, so it is the figure that tracks end-to-end speedup. Compare algorithms on it rather than on the raw accepted/drafted ratio, which falls as a drafter proposes more tokens per step.
 
-End to end on a four-GPU node: about 17 seconds to prepare the data, 56 minutes to generate hidden states, and 15-19 minutes to train each speculator. Because all three read the same hidden-state cache, the three checkpoints together take under two hours.
+End to end on a four-GPU node: about 17 seconds to prepare the data, 56 minutes to generate hidden states, and 15-20 minutes to train each speculator. Because all four read the same hidden-state cache, the four checkpoints together take under two hours.
 
 ## Estimating Disk Space Requirements
 
