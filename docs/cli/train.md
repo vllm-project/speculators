@@ -1,4 +1,4 @@
-# train.py
+# train
 
 Trains speculator models using either online or offline hidden states. Supports single-GPU and multi-GPU distributed training.
 
@@ -7,7 +7,7 @@ Trains speculator models using either online or offline hidden states. Supports 
 **Single-GPU:**
 
 ```bash
-python scripts/train.py \
+speculators train \
   --verifier-name-or-path meta-llama/Llama-3.1-8B-Instruct \
   --data-path ./training_data \
   --save-path ./checkpoints \
@@ -18,7 +18,7 @@ python scripts/train.py \
 **Multi-GPU (DDP):**
 
 ```bash
-torchrun --standalone --nproc_per_node=4 scripts/train.py \
+torchrun --standalone --nproc_per_node=4 -m speculators.train \
   --verifier-name-or-path meta-llama/Llama-3.1-8B-Instruct \
   --data-path ./training_data \
   --save-path ./checkpoints \
@@ -29,7 +29,7 @@ torchrun --standalone --nproc_per_node=4 scripts/train.py \
 **Multi-GPU (FSDP sharded):**
 
 ```bash
-torchrun --standalone --nproc_per_node=4 scripts/train.py \
+torchrun --standalone --nproc_per_node=4 -m speculators.train \
   --verifier-name-or-path meta-llama/Llama-3.1-8B-Instruct \
   --data-path ./training_data \
   --save-path ./checkpoints \
@@ -263,7 +263,7 @@ python scripts/launch_vllm.py \
   -- --port 8000
 
 # Then train with on-demand hidden states generation
-python scripts/train.py \
+speculators train \
   --verifier-name-or-path meta-llama/Llama-3.1-8B-Instruct \
   --data-path ./training_data \
   --vllm-endpoint http://localhost:8000/v1 \
@@ -279,7 +279,7 @@ python scripts/train.py \
 
 ```bash
 # Train using pre-generated hidden states
-python scripts/train.py \
+speculators train \
   --verifier-name-or-path meta-llama/Llama-3.1-8B-Instruct \
   --data-path ./training_data \
   --hidden-states-path ./hidden_states \
@@ -293,7 +293,7 @@ python scripts/train.py \
 ### Hybrid Training (Cache on First Epoch)
 
 ```bash
-python scripts/train.py \
+speculators train \
   --verifier-name-or-path meta-llama/Llama-3.1-8B-Instruct \
   --data-path ./training_data \
   --hidden-states-path ./hidden_states \
@@ -312,7 +312,7 @@ python scripts/train.py \
 CUDA_VISIBLE_DEVICES=0,1,2,3 torchrun \
   --standalone \
   --nproc_per_node 4 \
-  scripts/train.py \
+  -m speculators.train \
   --verifier-name-or-path meta-llama/Llama-3.1-70B-Instruct \
   --data-path ./training_data \
   --hidden-states-path ./hidden_states \
@@ -332,7 +332,7 @@ CUDA_VISIBLE_DEVICES=0,1,2,3 torchrun \
 ### Fine-tuning a Pretrained Model
 
 ```bash
-python scripts/train.py \
+speculators train \
   --verifier-name-or-path meta-llama/Llama-3.1-8B-Instruct \
   --from-pretrained ./pretrained_speculator \
   --data-path ./new_training_data \
@@ -347,7 +347,7 @@ python scripts/train.py \
 ```bash
 # Build the speculator from a plain decoder config, initialize weights, save a
 # checkpoint, and exit before training so it can be validated in vLLM first.
-python scripts/train.py \
+speculators train \
   --verifier-name-or-path Qwen/Qwen3-8B \
   --speculator-type dflash \
   --draft-config ./qwen3_draft_decoder_config.json \
@@ -356,7 +356,7 @@ python scripts/train.py \
   --dry-run
 
 # After validating ./draft_init in vLLM, train starting from it:
-python scripts/train.py \
+speculators train \
   --verifier-name-or-path Qwen/Qwen3-8B \
   --speculator-type dflash \
   --from-pretrained ./draft_init \

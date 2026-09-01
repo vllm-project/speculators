@@ -138,10 +138,10 @@ head -1 magpie_Llama-3.3-70B-Instruct.jsonl | python -m json.tool
 
 ## Step 3: Use the Data for Training
 
-The output JSONL can be passed directly to `prepare_data.py` for speculator training:
+The output JSONL can be passed directly to `speculators prepare-data` for speculator training:
 
 ```bash
-python scripts/prepare_data.py \
+speculators prepare-data \
   --model meta-llama/Llama-3.3-70B-Instruct \
   --data ./magpie_Llama-3.3-70B-Instruct.jsonl \
   --output ./output \
@@ -159,7 +159,7 @@ vllm serve "meta-llama/Llama-3.3-70B-Instruct" \
   --port 8000
 
 # 2. Run regeneration (model auto-detected from server)
-python scripts/response_regeneration/script.py \
+speculators regenerate-responses \
   --dataset magpie \
   --limit 1000
 
@@ -171,7 +171,7 @@ python scripts/response_regeneration/script.py \
 If processing is interrupted, use the `--resume` flag to skip already-processed rows:
 
 ```bash
-python scripts/response_regeneration/script.py \
+speculators regenerate-responses \
   --dataset magpie \
   --outfile magpie_Llama-3.3-70B-Instruct.jsonl \
   --resume
@@ -188,7 +188,7 @@ Use `--keep-server` with `run_all.sh` to leave the vLLM server running after pro
   --dataset magpie --keep-server
 
 # Second run - use the already-running server directly
-python scripts/response_regeneration/script.py --dataset ultrachat
+speculators regenerate-responses --dataset ultrachat
 ```
 
 ## Next Steps

@@ -33,8 +33,8 @@ nav:
           - reference/speculators
     - CLI Reference:
           - cli/index.md
-          - prepare_data.py: cli/prepare_data.md
-          - data_generation_offline.py: cli/data_generation_offline.md
+          - prepare-data: cli/prepare_data.md
+          - generate-offline-data: cli/data_generation_offline.md
           - launch_vllm.py: cli/launch_vllm.md
           - train.py: cli/train.md
           - response_regeneration: cli/response_regeneration.md

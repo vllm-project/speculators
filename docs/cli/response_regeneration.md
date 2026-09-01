@@ -1,13 +1,13 @@
-# response_regeneration
+# regenerate-responses
 
 Regenerates assistant responses in existing datasets using a vLLM-served model. Given a dataset containing conversations (e.g., Magpie, UltraChat, GSM8K), this pipeline extracts conversation turns, regenerates each assistant response turn-by-turn against the model's own prior outputs, and produces speculator-format training samples. For multi-turn conversations, each turn conditions on the regenerated history, producing on-policy training data.
 
-The pipeline consists of two scripts:
+The pipeline consists of two entry points:
 
-| Script       | Purpose                                                        |
-| ------------ | -------------------------------------------------------------- |
-| `run_all.sh` | End-to-end pipeline: starts vLLM, regenerates responses, stops |
-| `script.py`  | Standalone response regeneration against a running vLLM server |
+| Entry point                        | Purpose                                                        |
+| ---------------------------------- | -------------------------------------------------------------- |
+| `run_all.sh`                       | End-to-end pipeline: starts vLLM, regenerates responses, stops |
+| `speculators regenerate-responses` | Standalone response regeneration against a running vLLM server |
 
 ## run_all.sh
 
@@ -41,7 +41,7 @@ Orchestrates the entire pipeline: starts a vLLM server (with optional data/tenso
 
 - **`--tool-call-parser`** (str) vLLM tool-call parser (e.g. `hermes`, `llama3_json`). Adds `--enable-auto-tool-choice --tool-call-parser` to the server; required for tool-call regeneration, otherwise tool calls arrive as raw text and are not regenerated as tools.
 
-All other arguments are passed through to `script.py`.
+All other arguments are passed through to the regeneration command (see `speculators regenerate-responses`).
 
 ### Full Example
 
@@ -55,7 +55,7 @@ All other arguments are passed through to `script.py`.
   --max-tokens 4096
 ```
 
-## script.py
+## speculators regenerate-responses
 
 Extracts conversation turns from a dataset, regenerates each assistant response turn-by-turn via a vLLM chat completion endpoint, and writes out speculator-format training samples with generation boundaries marked in the loss mask.
 
@@ -71,7 +71,7 @@ Extracts conversation turns from a dataset, regenerates each assistant response 
 ### Basic Usage
 
 ```bash
-python scripts/response_regeneration/script.py --dataset magpie
+speculators regenerate-responses --dataset magpie
 ```
 
 ### Local Files
@@ -95,7 +95,7 @@ For example, `my_prompts.jsonl` may contain:
 Run regeneration with:
 
 ```bash
-python scripts/response_regeneration/script.py \
+speculators regenerate-responses \
   --dataset ./my_prompts.jsonl
 ```
 
@@ -140,7 +140,7 @@ Column names such as `instruction`, `question`, and `text` are not inferred. Con
 ### Full Example
 
 ```bash
-python scripts/response_regeneration/script.py \
+speculators regenerate-responses \
   --dataset magpie \
   --endpoint http://127.0.0.1:8000/v1/chat/completions \
   --limit 1000 \
@@ -164,7 +164,7 @@ The text presets from the shared dataset registry (`DATASET_CONFIGS` in `specula
 | `open-perfectblend` | `mlabonne/open-perfectblend`                      | `train`       |
 | `hermes-fc`         | `NousResearch/hermes-function-calling-v1`         | `train`       |
 
-The registry's multimodal preset, `sharegpt4v_coco`, is rejected because this regeneration pipeline cannot send its image content or retain it in a speculator-format row. Generate target responses with a multimodal-capable workflow, save the resulting natural-language conversations, and convert them with `prepare_data.py`.
+The registry's multimodal preset, `sharegpt4v_coco`, is rejected because this regeneration pipeline cannot send its image content or retain it in a speculator-format row. Generate target responses with a multimodal-capable workflow, save the resulting natural-language conversations, and convert them with `speculators prepare-data`.
 
 ## Output Format
 
