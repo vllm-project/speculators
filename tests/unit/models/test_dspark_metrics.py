@@ -1,11 +1,15 @@
 """Unit tests for the DSpark loss and metrics."""
 
+from functools import partial
+
 import torch
 
-from speculators.models.dspark.metrics import compute_metrics
-from speculators.models.metrics import resolve_loss_config
+from speculators.losses import resolve_loss_config
+from speculators.losses.eager import tv_loss
+from speculators.models.dspark.metrics import compute_metrics as _compute_metrics
 
-_DEFAULT_LOSS = resolve_loss_config('{"ce": 0.1, "tv": 0.9}')
+compute_metrics = partial(_compute_metrics, tv_loss_fn=tv_loss)
+_DEFAULT_LOSS = resolve_loss_config('{"ce": 0.1, "tv": 0.9}', "eager")
 
 
 def _ids_to_logits(ids: torch.Tensor, vocab_size: int) -> torch.Tensor:
@@ -15,6 +19,28 @@ def _ids_to_logits(ids: torch.Tensor, vocab_size: int) -> torch.Tensor:
 
 
 class TestComputeMetrics:
+    def test_empty_loss_mask_keeps_backward_graph_with_zero_gradients(self):
+        logits = torch.randn(1, 8, 16, requires_grad=True)
+        targets = torch.randn(1, 8, 16)
+        confidence_logits = torch.randn(1, 8, requires_grad=True)
+        loss_mask = torch.zeros(1, 8)
+
+        loss, _ = compute_metrics(
+            logits,
+            targets,
+            confidence_logits,
+            loss_mask,
+            block_size=2,
+            loss_config=_DEFAULT_LOSS,
+        )
+        loss.backward()
+
+        assert loss.item() == 0
+        assert logits.grad is not None
+        assert confidence_logits.grad is not None
+        assert torch.count_nonzero(logits.grad) == 0
+        assert torch.count_nonzero(confidence_logits.grad) == 0
+
     def test_perfect_draft_low_loss_high_accept(self):
         # block_size=2; with sample_from_anchor=False, position 0 is the anchor
         # (masked) and position 1 supervised.
@@ -64,6 +90,20 @@ class TestComputeMetrics:
         # Two draft slots per block accepted w.p. ~1, plus the anchor token -> ~3.
         accept_len = metrics["accept_len_sum"] / metrics["accept_len_total"]
         assert abs(float(accept_len) - 3.0) < 1e-2
+
+    def test_accept_rate_equals_softmax_overlap(self):
+        """accept_rate (now 1 - tv) matches the explicit softmax-overlap formula."""
+        torch.manual_seed(0)
+        logits = torch.randn(1, 4, 32) * 3
+        targets = torch.randn(1, 4, 32) * 3
+        loss_mask = torch.ones(1, 4, dtype=torch.float32)
+        _, metrics = compute_metrics(
+            logits, targets, None, loss_mask, 2, loss_config=_DEFAULT_LOSS
+        )
+        draft_p = torch.softmax(logits.float(), dim=-1)
+        target_p = torch.softmax(targets.float(), dim=-1)
+        overlap = torch.minimum(draft_p, target_p).sum(dim=-1)
+        assert torch.isclose(metrics["accept_rate_sum"], overlap.sum(), atol=1e-5)
 
     def test_confidence_target_is_overlap(self):
         # When draft == target, accept rate == 1, so a confidence logit that is
@@ -150,7 +190,7 @@ class TestComputeMetrics:
             None,
             loss_mask,
             block_size=2,
-            loss_config=resolve_loss_config('{"tv": 0.1}'),
+            loss_config=resolve_loss_config('{"tv": 0.1}', "eager"),
         )
         loss_large, _ = compute_metrics(
             logits,
@@ -158,7 +198,7 @@ class TestComputeMetrics:
             None,
             loss_mask,
             block_size=2,
-            loss_config=resolve_loss_config('{"tv": 1.0}'),
+            loss_config=resolve_loss_config('{"tv": 1.0}', "eager"),
         )
         assert float(loss_large) > float(loss_small)
 

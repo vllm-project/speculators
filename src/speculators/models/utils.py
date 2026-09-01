@@ -1,8 +1,12 @@
+import logging
 import warnings
+from copy import deepcopy
 from functools import partial
 
 import torch
 from transformers import AutoConfig, PretrainedConfig
+
+logger = logging.getLogger(__name__)
 
 
 def conditional_torch_compile(func=None, *args, **kwargs):
@@ -13,8 +17,14 @@ def conditional_torch_compile(func=None, *args, **kwargs):
     return func
 
 
-def get_verifier_config(verifier_name_or_path: str) -> PretrainedConfig:
-    verifier_config = AutoConfig.from_pretrained(verifier_name_or_path)
+def get_verifier_config(
+    verifier_name_or_path: str,
+    trust_remote_code: bool = False,
+) -> PretrainedConfig:
+    verifier_config = AutoConfig.from_pretrained(
+        verifier_name_or_path,
+        trust_remote_code=trust_remote_code,
+    )
     if hasattr(verifier_config, "text_config"):
         verifier_config = verifier_config.text_config
     return verifier_config
@@ -30,17 +40,62 @@ DEFAULT_TARGET_LAYER_IDS_WARNING = (
 def resolve_target_layer_ids(
     target_layer_ids: list[int] | None,
     verifier_name_or_path: str,
+    trust_remote_code: bool = False,
 ) -> list[int]:
-    if target_layer_ids is not None:
-        return target_layer_ids
+    num_layers = get_verifier_config(
+        verifier_name_or_path,
+        trust_remote_code=trust_remote_code,
+    ).num_hidden_layers
 
-    num_layers = get_verifier_config(verifier_name_or_path).num_hidden_layers
-    target_layer_ids = [2, num_layers // 2, num_layers - 3]
-    warnings.warn(
-        DEFAULT_TARGET_LAYER_IDS_WARNING.format(target_layer_ids=target_layer_ids),
-        stacklevel=3,
+    if target_layer_ids is None:
+        explicit = False
+        target_layer_ids = [2, num_layers // 2, num_layers - 3]
+    else:
+        explicit = True
+
+    # Layer id ``num_layers`` (the final hidden state) is valid, matching the
+    # ids scripts/launch_vllm.py emits with --include-last-layer.
+    invalid = (
+        not target_layer_ids
+        or min(target_layer_ids) < 0
+        or max(target_layer_ids) > num_layers
+        or len(set(target_layer_ids)) != len(target_layer_ids)
     )
+    if invalid:
+        if explicit:
+            raise ValueError(
+                f"target_layer_ids must be distinct and within [0, {num_layers}] "
+                f"for a verifier with {num_layers} hidden layers, "
+                f"got {target_layer_ids}"
+            )
+        raise ValueError(
+            f"Default target layer ids {target_layer_ids} are invalid for a verifier "
+            f"with {num_layers} hidden layers; pass --target-layer-ids explicitly."
+        )
+
+    if not explicit:
+        warnings.warn(
+            DEFAULT_TARGET_LAYER_IDS_WARNING.format(target_layer_ids=target_layer_ids),
+            stacklevel=3,
+        )
     return target_layer_ids
+
+
+def flatten_rope_parameters(config: PretrainedConfig) -> PretrainedConfig:
+    """Flatten nested per-layer-type ``rope_parameters`` for rotary embedding init.
+
+    Models like Laguna store separate rope configs per layer type
+    (``sliding_attention``, ``full_attention``). Rotary embedding classes expect
+    a flat dict with ``rope_type``/``rope_theta`` at the top level. This helper
+    selects the ``sliding_attention`` variant when nested parameters are detected
+    and returns a deep-copied config; otherwise returns the original unchanged.
+    """
+    rope_params = getattr(config, "rope_parameters", None)
+    if not rope_params or "sliding_attention" not in rope_params:
+        return config
+    config = deepcopy(config)
+    config.rope_parameters = rope_params["sliding_attention"]
+    return config
 
 
 def resolve_draft_intermediate_size(verifier_config: PretrainedConfig) -> int:

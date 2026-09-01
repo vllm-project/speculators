@@ -1,5 +1,9 @@
 [build-system]
-requires = ["setuptools >= 82.0.1", "setuptools-git-versioning>=2.0,<3"]
+requires = [
+    "setuptools >= 82.0.1",
+    "setuptools-git-versioning>=2.0,<3",
+    "tomli>=2.0; python_version < '3.11'",
+]
 build-backend = "setuptools.build_meta"
 
 [tool.uv.workspace]
@@ -17,7 +21,7 @@ include = ["*"]
 # ************************************************
 
 [project]
-dynamic = ["version"]
+dynamic = ["version", "dependencies"]
 name = "speculators"
 description = "A unified library for creating, representing, and storing speculative decoding algorithms for LLM serving such as in vLLM."
 readme = { file = "README.md", content-type = "text/markdown" }
@@ -41,10 +45,20 @@ keywords = [
     "decoding algorithms",
     "inference server"
 ]
-dependencies = [
+
+# Base (non-hs-connectors) dependencies live in [tool.speculators.dependencies]
+# below rather than here, since `hs-connectors` itself must be resolved at build
+# time (see get_hs_connectors_requirement() in setup.py) based on build type
+# (dev/nightly/release), which requires the whole `dependencies` field to be
+# dynamic per PEP 621. setup.py reads the base list back out of this file and
+# appends the computed hs-connectors requirement before calling setup().
+
+[tool.speculators.dependencies]
+base = [
+    "aiohttp",
     "click",
-    "datasets>=4.0.0,<=5.0.0",
-    "hs-connectors",
+    "datasets>=4.0.0,<=5.0.1",
+    "httpx",
     "huggingface-hub",
     "loguru>=0.7.2,<=0.7.3",
     "numpy>=2.0.0,<=2.4.6",
@@ -55,15 +69,21 @@ dependencies = [
     "pydantic-settings>=2.0.0",
     "rich",
     "safetensors",
-    "torch>=2.9.0,<=2.12.1",
+    "torch>=2.9.0,<=2.13.0",
     "torchaudio",
     "torchvision",
-    "tqdm>=4.66.3,<=4.69.0",
-    "transformers>=4.56.1,<5.15.0",
+    "tqdm>=4.66.3,<=4.70.0",
+    "transformers>=5.0.0,<5.16.0",
     "typer>=0.12.0",
 ]
 
 [project.optional-dependencies]
+mooncake-cuda = [
+    "mooncake-transfer-engine",
+]
+mooncake-cuda13 = [
+    "mooncake-transfer-engine-cuda13",
+]
 dev = [
     # build
     "build>=1.5.0",
@@ -83,6 +103,7 @@ dev = [
     "mkdocstrings-python~=2.0.5",
     "mkdocs-gen-files~=0.6.1",
     "mkdocs-nav-weight~=0.3.0",
+    "mkdocs-redirects~=1.2.3",
     "pygments<2.20.0",
 
     # general and configurations
@@ -98,6 +119,7 @@ dev = [
     # code quality
     "mypy~=2.1.0",
     "ruff~=0.15.20",
+    "pre-commit~=4.0",
 
     # docs quality
     "mdformat~=1.0.0",
@@ -144,7 +166,7 @@ exclude = ["venv", "build", "dist"]
 follow_imports = 'silent'
 
 [[tool.mypy.overrides]]
-module = ["datasets.*", "transformers.*", "setuptools.*", "setuptools_git_versioning.*", "vllm.*", "triton.*"]
+module = ["datasets.*", "transformers.*", "setuptools.*", "setuptools_git_versioning.*", "vllm.*", "triton.*", "hs_connectors.*", "mooncake.*"]
 ignore_missing_imports=true
 
 [tool.ruff]
@@ -268,6 +290,7 @@ select = [
 "hs_connectors/**/*.py" = [
     "INP001", # separate package
     "PTH", # os.path acceptable
+    "S101", # assert for internal invariants is acceptable
 ]
 
 [tool.ruff.lint.isort]

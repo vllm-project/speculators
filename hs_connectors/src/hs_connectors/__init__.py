@@ -3,6 +3,8 @@ from hs_connectors.transfer import (
     FileTransfer,
     HiddenStatesBackend,
     HiddenStatesTransfer,
+    MooncakeBackend,
+    MooncakeTransfer,
 )
 
 __all__ = [
@@ -10,4 +12,11 @@ __all__ = [
     "FileTransfer",
     "HiddenStatesBackend",
     "HiddenStatesTransfer",
+    "MooncakeBackend",
+    "MooncakeTransfer",
 ]
+
+try:
+    from hs_connectors.version import version as __version__
+except ImportError:
+    __version__ = "unknown"

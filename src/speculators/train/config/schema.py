@@ -28,7 +28,7 @@ from speculators.data_generation.vllm_client import (
     DEFAULT_MAX_RETRIES,
     DEFAULT_REQUEST_TIMEOUT,
 )
-from speculators.models.metrics import resolve_loss_config
+from speculators.losses import resolve_loss_config
 
 # A bool that must render as an argparse ``--x/--no-x`` (``BooleanOptionalAction``)
 # even though it defaults to False. Bools defaulting to True or None get that form
@@ -64,7 +64,7 @@ class VerifierArgs(_Group):
     trust_remote_code: bool = Field(
         default=False,
         description="Allow executing code from HF Hub when loading the verifier's "
-        "tokenizer.",
+        "configuration or tokenizer.",
     )
 
 
@@ -84,14 +84,16 @@ class DraftArgs(_Group):
     draft_config: str = Field(
         default="",
         description="HF id, directory, or JSON path of a decoder config (LlamaConfig "
-        "for eagle3/peagle, Qwen3Config for dflash) to use as the draft "
+        "for eagle3/peagle, Qwen3Config for DFlash-family models) to use as the draft "
         "transformer_layer_config; the rest of the speculator is built from the other "
         "CLI args. Mutually exclusive with --from-pretrained and the decoder-shaping "
         "flags (--num-layers, --draft-arch, --draft-hidden-act, --sliding-window, "
         "--full-attention-indices).",
     )
-    num_layers: int = Field(
-        default=1, description="Number of draft decoder layers to synthesize."
+    num_layers: int | None = Field(
+        default=None,
+        description="Number of draft decoder layers to synthesize. "
+        "(default: 5 for dflash/dspark/dflash2, 1 otherwise).",
     )
     draft_arch: Literal["llama", "qwen3"] | None = Field(
         default=None,
@@ -101,8 +103,8 @@ class DraftArgs(_Group):
     draft_hidden_act: str = Field(
         default="silu",
         description="Activation function for draft decoder layers. Defaults to 'silu'. "
-        "Qwen3 layers of dflash expect 'silu' for vLLM deployment. Leave as None to "
-        "fall back to the verifier's activation function.",
+        "Qwen3 layers of DFlash-family models expect 'silu' for vLLM deployment. "
+        "Leave as None to fall back to the verifier's activation function.",
     )
     draft_mrope_full_head_hack: bool = Field(
         default=True,
@@ -179,11 +181,11 @@ class DraftArgs(_Group):
         "by default (except mtp). (e.g. '--full-attention-indices 0 2' makes layers 0 "
         "and 2 use full attention; the rest use sliding window).",
     )
-    sliding_window_non_causal: bool = Field(
-        default=False,
+    sliding_window_non_causal: bool | None = Field(
+        default=None,
         description="Use non-causal (bidirectional) masking within draft blocks for "
         "sliding window attention layers. Full attention layers are always "
-        "bidirectional. Note: vLLM currently doesn't support these models.",
+        "bidirectional. Defaults to True for DFlash2 and False otherwise.",
     )
     draft_attn_impl: Literal["simple_flex_attention", "sdpa", "eager"] = Field(
         default="simple_flex_attention",
@@ -205,11 +207,6 @@ class DataArgs(_Group):
         "arguments. Default: 'file'.",
         json_schema_extra=_CLI_CHOICES,
     )
-    hidden_states_path: str | None = Field(
-        default=None,
-        description="Path where cached hidden states are stored "
-        "(default: <data-path>/hidden_states). Contributed by the 'file' backend.",
-    )
     total_seq_len: int = Field(
         default=8192, description="Maximum training sequence length, in tokens."
     )
@@ -221,12 +218,6 @@ class DataArgs(_Group):
     noise_std: float = Field(
         default=0.05, description="Standard deviation for noise augmentation."
     )
-    legacy_data: bool = Field(
-        default=False,
-        description="DEPRECATED. Use the old data format which stores hidden states "
-        "alongside token_ids and assistant_masks in data_i.pt files. Will be removed "
-        "soon.",
-    )
     hidden_states_dtype: str = Field(
         default="bfloat16",
         description="Data type for dataloader hidden states and autocast compute. "
@@ -236,9 +227,9 @@ class DataArgs(_Group):
     num_workers: int = Field(default=12, description="Number of dataloader workers.")
     prefetch_factor: int = Field(default=4, description="Dataloader prefetch factor.")
     max_anchors: int = Field(
-        default=3072,
-        description="Maximum anchor positions for DFlash, DSpark, and P-EAGLE training "
-        "(default: 3072).",
+        default=512,
+        description="Maximum anchor positions for DFlash-family and P-EAGLE training "
+        "(default: 512).",
     )
 
     @field_validator("hidden_states_dtype")
@@ -295,14 +286,34 @@ class GenerationArgs(_Group):
         description="Maximum retry attempts per vLLM request on failure. Only applies "
         "if --on-missing=generate.",
     )
+    generation_validation_retries: int = Field(
+        default=2,
+        ge=0,
+        description="Number of additional complete generate/load/validate attempts "
+        "after a corrupt, missing, non-finite, or otherwise invalid hidden-state "
+        "payload. HTTP retries within each generation remain controlled by "
+        "--max-retries.",
+    )
+    max_consecutive_generation_failures: int = Field(
+        default=20,
+        gt=0,
+        description="Trip the data-generation circuit breaker after this many "
+        "consecutive samples exhaust all complete generate/load/validate attempts "
+        "in one persistent DataLoader worker. A valid sample resets the counter.",
+    )
 
 
 class LossArgs(_Group):
-    loss_fn: str = Field(
-        default="kl_div",
+    loss_implementation: Literal["fused", "eager"] = Field(
+        default="fused",
+        description="Loss implementation to use; eager is for compatibility and "
+        "numerical validation and may OOM with DFlash-family models.",
+    )
+    loss_fn: str | None = Field(
+        default=None,
         description="Loss function specification. A name (kl_div, rkl, jsd, ce, tv, "
         'nla, lk_hybrid) or a JSON dict for a weighted combination, e.g. \'{"ce": 0.1, '
-        '"tv": 0.9}\'.',
+        '"tv": 0.9}\'. (default: "ce" for dflash, "kl_div" otherwise).',
     )
     ttt_steps: int = Field(
         default=3,
@@ -317,7 +328,11 @@ class LossArgs(_Group):
 
     @field_validator("loss_fn")
     @classmethod
-    def _loss_parseable(cls, v: str) -> str:
+    def _loss_parseable(cls, v: str | None) -> str | None:
+        if v is None:
+            # Unset -> resolved later in TrainConfig._resolve_derived_defaults,
+            # once speculator_type is known.
+            return v
         resolve_loss_config(v)
         return v
 
@@ -436,28 +451,53 @@ class LoggingArgs(_Group):
 
 
 class DFlashArgs(_Group):
-    """DFlash-family backbone knobs (also used by DSpark, which is-a DFlash)."""
+    """Shared DFlash-family backbone knobs."""
 
-    block_size: int = Field(
-        default=8, description="Block size for DFlash model (default: 8)."
+    block_size: int | None = Field(
+        default=None,
+        description="Block size for DFlash model (default: 16 for dflash, 8 "
+        "otherwise).",
     )
     sample_from_anchor: bool | None = Field(
         default=None,
         description="Sample from the anchor position (all positions predict). "
-        "Default: False for dflash, True for dspark.",
+        "Default: False for dflash/dflash2, True for dspark.",
     )
     dflash_decay_gamma: float = Field(
-        default=4.0, description="Decay gamma for DFlash/DSpark loss weighting."
+        default=4.0, description="Decay gamma for DFlash-family loss weighting."
     )
-    per_position_loss_weight: Literal["fixed-exp-decay", "dpace"] = Field(
-        default="fixed-exp-decay",
+    per_position_loss_weight: Literal["fixed-exp-decay", "dpace"] | None = Field(
+        default=None,
         description="Per-position loss weight option for D-PACE support "
-        "(default: fixed-exp-decay).",
+        "(default: dpace for dflash, fixed-exp-decay otherwise).",
     )
     dpace_alpha: float = Field(
         default=0.5,
         description="Smoothing constant for the D-PACE loss (default: 0.5). Must be in "
         "(0, 1] when --per-position-loss-weight=dpace.",
+    )
+
+
+class DFlash2Args(_Group):
+    """DFlash2-exclusive local-convolution and candidate-selector knobs."""
+
+    conv_kernel_size: int = Field(
+        default=2, description="DFlash2: local convolution kernel size."
+    )
+    conv_group_size: int = Field(
+        default=16, description="DFlash2: channel group size for local convolution."
+    )
+    selector_rank: int = Field(
+        default=256,
+        description="DFlash2: low-rank dimension of the candidate selector.",
+    )
+    selector_top_k: int = Field(
+        default=16, description="DFlash2: number of candidates retained per position."
+    )
+    selector_loss_alpha: float = Field(
+        default=1.0,
+        ge=0.0,
+        description="DFlash2: weight of the candidate-selector K-way CE term.",
     )
 
 
@@ -523,6 +563,7 @@ _GROUPS: dict[str, type[_Group]] = {
     "trainer": TrainerArgs,
     "logging": LoggingArgs,
     "dflash": DFlashArgs,
+    "dflash2": DFlash2Args,
     "dspark": DSparkArgs,
     "peagle": PEagleArgs,
     "mtp": MTPArgs,
@@ -587,6 +628,7 @@ class TrainConfig(BaseSettings):
     # Exposed read-only via the ``provenance`` / ``argv`` properties below.
     _provenance: dict[str, str] = PrivateAttr(default_factory=dict)
     _argv: list[str] = PrivateAttr(default_factory=list)
+    _backend_args: dict[str, Any] = PrivateAttr(default_factory=dict)
 
     @property
     def provenance(self) -> Mapping[str, str]:
@@ -598,10 +640,15 @@ class TrainConfig(BaseSettings):
         """The argv the run was resolved from."""
         return tuple(self._argv)
 
+    @property
+    def backend_args(self) -> Mapping[str, Any]:
+        """Backend-contributed args (not pydantic fields), read-only."""
+        return MappingProxyType(self._backend_args)
+
     speculator_type: str = Field(
         default="eagle3",
         description="Type of speculator model to train "
-        "(eagle3, dflash, dspark, peagle, mtp).",
+        "(eagle3, dflash, dflash2, dspark, peagle, mtp).",
     )
     dry_run: bool = Field(
         default=False,
@@ -626,6 +673,7 @@ class TrainConfig(BaseSettings):
     trainer: TrainerArgs = Field(default_factory=TrainerArgs)
     logging: LoggingArgs = Field(default_factory=LoggingArgs)
     dflash: DFlashArgs = Field(default_factory=DFlashArgs)
+    dflash2: DFlash2Args = Field(default_factory=DFlash2Args)
     dspark: DSparkArgs = Field(default_factory=DSparkArgs)
     peagle: PEagleArgs = Field(default_factory=PEagleArgs)
     mtp: MTPArgs = Field(default_factory=MTPArgs)
@@ -635,20 +683,54 @@ class TrainConfig(BaseSettings):
         """Fill defaults that derive from other fields, mirroring the tail of the
         pre-refactor ``parse_args``: unset ``draft_arch`` -> ``llama`` for eagle3 else
         ``qwen3``; unset ``norm_before_fc`` / ``norm_output`` -> ``True`` for eagle3
-        else ``False``; unset ``muon_lr`` -> ``10 * lr``.
+        else ``False``; unset ``muon_lr`` -> ``10 * lr``; unset ``num_layers`` -> ``5``
+        for dflash/dspark/dflash2 else ``1``; unset ``per_position_loss_weight`` ->
+        ``dpace`` for dflash else ``fixed-exp-decay``; unset ``loss_fn`` -> ``ce`` for
+        dflash else ``kl_div``; unset ``block_size`` -> ``16`` for dflash else
+        ``8``.
+
+        The dflash-conditional defaults reflect the recipe from
+        https://github.com/vllm-project/speculators/issues/979: this combination
+        (5 layers, D-PACE, cross-entropy, block_size=16) consistently
+        outperformed the prior defaults (1 layer, fixed-exp-decay, kl_div,
+        block_size=8) across every DFlash configuration tested, and is now the
+        out-of-the-box behavior for ``--speculator-type dflash`` rather than
+        something users need to separately discover and opt into. DSpark
+        (which shares the ``dflash`` group) keeps ``block_size=8``, since that
+        combination was never tested there. DFlash2 shares the ``dflash`` group
+        and uses five layers, while keeping ``block_size=8``, fixed exponential
+        position weights, and KL loss for direct comparison with DSpark.
+        ``--muon-lr`` / ``--lr`` are
+        deliberately left as-is: the right learning rate depends on effective
+        batch size (anchor count, sequence length, GPU count), which varies by
+        setup, so we did not want to bake in a single "recommended" value.
 
         Idempotent: a concrete value (as produced by :meth:`flatten`) is left
         untouched, so :meth:`from_flat` round-trips.
         """
         is_eagle3 = self.speculator_type == "eagle3"
+        is_dflash = self.speculator_type == "dflash"
+        is_dflash_family = self.speculator_type in {"dflash", "dspark", "dflash2"}
         if self.draft.draft_arch is None:
             self.draft.draft_arch = "llama" if is_eagle3 else "qwen3"
         if self.draft.norm_before_fc is None:
             self.draft.norm_before_fc = is_eagle3
         if self.draft.norm_output is None:
             self.draft.norm_output = is_eagle3
+        if self.draft.sliding_window_non_causal is None:
+            self.draft.sliding_window_non_causal = self.speculator_type == "dflash2"
         if self.optimizer.muon_lr is None:
             self.optimizer.muon_lr = 10 * self.optimizer.lr
+        if self.draft.num_layers is None:
+            self.draft.num_layers = 5 if is_dflash_family else 1
+        if self.dflash.per_position_loss_weight is None:
+            self.dflash.per_position_loss_weight = (
+                "dpace" if is_dflash else "fixed-exp-decay"
+            )
+        if self.loss.loss_fn is None:
+            self.loss.loss_fn = "ce" if is_dflash else "kl_div"
+        if self.dflash.block_size is None:
+            self.dflash.block_size = 16 if is_dflash else 8
         return self
 
     @model_validator(mode="after")
@@ -680,6 +762,7 @@ class TrainConfig(BaseSettings):
             group = getattr(self, gname)
             for fname in type(group).model_fields:
                 values[fname] = getattr(group, fname)
+        values.update(self._backend_args)
         return values
 
     @classmethod
@@ -687,8 +770,17 @@ class TrainConfig(BaseSettings):
         """Inverse of :meth:`flatten`: recover the typed config from a flat
         working-dict. Non-config keys are dropped; the value validators are
         idempotent on already-resolved values."""
+        from speculators.train.config.resolution import (  # noqa: PLC0415
+            _BACKEND_DESTS,  # circular
+        )
+
         known = {dest: value for dest, value in flat.items() if dest in CONFIG_DESTS}
-        return cls(**nest_flat(known))
+        backend = {
+            dest: value for dest, value in flat.items() if dest in _BACKEND_DESTS
+        }
+        cfg = cls(**nest_flat(known))
+        cfg._backend_args = backend
+        return cfg
 
     @classmethod
     def from_sources(
@@ -697,6 +789,7 @@ class TrainConfig(BaseSettings):
         cli: dict[str, Any],
         config_path: str | None = None,
         argv: list[str],
+        backend_cli: dict[str, Any] | None = None,
     ) -> "TrainConfig":
         """The pure, argv-free core: layer the sources into a validated config and
         record each value's origin. Raises on bad input; never exits.
@@ -704,13 +797,14 @@ class TrainConfig(BaseSettings):
         ``cli`` is the flat ``{dest: value}`` map of flags the user passed;
         ``config_path`` names an optional stage-shaped YAML file layered beneath
         the flags; ``argv`` is the command recorded for the reproducibility
-        manifest. This is the primary test seam -- it can be exercised without
-        ``sys.argv``.
+        manifest; ``backend_cli`` carries backend-contributed args that bypass
+        the pydantic schema. This is the primary test seam -- it can be exercised
+        without ``sys.argv``.
         """
         from speculators.train.config import resolution  # noqa: PLC0415
 
         return resolution.build_from_sources(
-            cls, cli=cli, config_path=config_path, argv=argv
+            cls, cli=cli, config_path=config_path, argv=argv, backend_cli=backend_cli
         )
 
     @classmethod

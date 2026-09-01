@@ -3,7 +3,7 @@ from pathlib import Path
 import pytest
 from datasets import Dataset as HFDataset
 
-from scripts.prepare_data import assert_safe_to_overwrite, parse_args
+from speculators.cli.prepare_data import assert_safe_to_overwrite
 from speculators.data_generation import preprocessing as preprocessing_module
 from speculators.data_generation.preprocessing import load_and_preprocess_dataset
 
@@ -38,37 +38,6 @@ def test_assert_safe_to_overwrite_honors_custom_token_freq_path(tmp_path: Path):
     assert_safe_to_overwrite(output, token_freq_path)
 
 
-def test_parse_args_forwards_allow_empty_output(monkeypatch: pytest.MonkeyPatch):
-    monkeypatch.setattr(
-        "sys.argv",
-        [
-            "prepare_data.py",
-            "--model",
-            "target",
-            "--data",
-            "sharegpt",
-            "--output",
-            "out",
-            "--allow-empty-output",
-        ],
-    )
-
-    args = parse_args()
-
-    assert args.allow_empty_output is True
-
-
-def test_parse_args_allow_empty_output_defaults_false(monkeypatch: pytest.MonkeyPatch):
-    monkeypatch.setattr(
-        "sys.argv",
-        ["prepare_data.py", "--model", "target", "--data", "sharegpt", "--output", "o"],
-    )
-
-    args = parse_args()
-
-    assert args.allow_empty_output is False
-
-
 class _FakeProcessor:
     """Minimal processor stub that passes the chat-template precondition."""
 
@@ -76,6 +45,10 @@ class _FakeProcessor:
 
     def apply_chat_template(self, *args, **kwargs):
         return ""
+
+
+class _NoChatTemplateProcessor:
+    chat_template = None
 
 
 def _patch_empty_pipeline(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -90,7 +63,7 @@ def _patch_empty_pipeline(monkeypatch: pytest.MonkeyPatch) -> None:
         lambda _path: (HFDataset.from_dict({"conversations": []}), None),
     )
     monkeypatch.setattr(
-        preprocessing_module, "build_eagle3_dataset", lambda *a, **k: empty
+        preprocessing_module, "build_speculator_training_dataset", lambda *a, **k: empty
     )
     monkeypatch.setattr(
         preprocessing_module, "save_token_frequency_distribution", lambda **k: None
@@ -124,3 +97,82 @@ def test_load_and_preprocess_allows_empty_output_with_flag(
 
     assert len(dataset) == 0
     assert isinstance(processor, _FakeProcessor)
+
+
+def test_pretokenized_data_does_not_require_chat_template(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+):
+    raw = HFDataset.from_dict(
+        {
+            "input_ids": [[1, 2, 3]],
+            "loss_mask": [[0, 1, 1]],
+        }
+    )
+    monkeypatch.setattr(
+        preprocessing_module,
+        "load_processor",
+        lambda *a, **k: _NoChatTemplateProcessor(),
+    )
+    monkeypatch.setattr(
+        preprocessing_module, "load_raw_dataset", lambda _path: (raw, None)
+    )
+    processed = HFDataset.from_dict(
+        {
+            "input_ids": [[1, 2, 3]],
+            "loss_mask": [[0, 1, 1]],
+            "seq_len": [3],
+        }
+    )
+    processed.set_format(type="torch")
+    monkeypatch.setattr(
+        preprocessing_module,
+        "build_speculator_training_dataset",
+        lambda *a, **k: processed,
+    )
+    monkeypatch.setattr(
+        preprocessing_module, "save_token_frequency_distribution", lambda **k: None
+    )
+    monkeypatch.setattr(preprocessing_module, "_visualize_sample", lambda *a, **k: None)
+
+    dataset, _ = load_and_preprocess_dataset(
+        "custom-model",
+        ["pretokenized.jsonl"],
+        seq_length=8,
+        build_dataset_num_proc=1,
+        token_freq_path=tmp_path / "token_freq.pt",
+    )
+
+    assert len(dataset) == 1
+    assert dataset[0]["input_ids"].tolist() == [1, 2, 3]
+
+
+def test_conversation_data_still_requires_chat_template(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+):
+    raw = HFDataset.from_dict(
+        {
+            "conversations": [
+                [
+                    {"role": "user", "content": "hello"},
+                    {"role": "assistant", "content": "hi"},
+                ]
+            ]
+        }
+    )
+    monkeypatch.setattr(
+        preprocessing_module,
+        "load_processor",
+        lambda *a, **k: _NoChatTemplateProcessor(),
+    )
+    monkeypatch.setattr(
+        preprocessing_module, "load_raw_dataset", lambda _path: (raw, None)
+    )
+
+    with pytest.raises(ValueError, match="does not support chat templates"):
+        load_and_preprocess_dataset(
+            "custom-model",
+            ["conversations.jsonl"],
+            seq_length=8,
+            build_dataset_num_proc=1,
+            token_freq_path=tmp_path / "token_freq.pt",
+        )

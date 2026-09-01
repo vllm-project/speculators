@@ -112,7 +112,14 @@ def extract_output(
     if kv_transfer_params is None:
         raise InvalidResponseError("Response missing kv_transfer_params")
 
-    return kv_transfer_params.get("hidden_states_path")
+    handle = kv_transfer_params.get("hidden_states_path") or kv_transfer_params.get(
+        "handle"
+    )
+    if handle is None:
+        raise InvalidResponseError(
+            "Response kv_transfer_params missing both 'hidden_states_path' and 'handle'"
+        )
+    return handle
 
 
 class ClientItem(TypedDict):
@@ -134,7 +141,7 @@ async def _poll_lock_async(fd, poll_interval):
 
 
 async def wait_for_lock_async(lock_path, timeout=10.0, poll_interval=0.1):
-    fd = os.open(lock_path, os.O_RDONLY)
+    fd = os.open(lock_path, os.O_RDWR)
     try:
         await asyncio.wait_for(_poll_lock_async(fd, poll_interval), timeout=timeout)
     except BaseException:
@@ -145,7 +152,7 @@ async def wait_for_lock_async(lock_path, timeout=10.0, poll_interval=0.1):
 
 
 def wait_for_lock(lock_path, timeout=10.0, poll_interval=0.1):
-    fd = os.open(lock_path, os.O_RDONLY)
+    fd = os.open(lock_path, os.O_RDWR)
     try:
         deadline = time.monotonic() + timeout
         while True:

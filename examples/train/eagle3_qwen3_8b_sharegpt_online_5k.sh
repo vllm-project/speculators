@@ -8,7 +8,7 @@
 #   bash examples/train/eagle3_qwen3_8b_sharegpt_online_5k.sh
 #
 # For a detailed walkthrough, see 
-# https://docs.vllm.ai/projects/speculators/en/latest/user_guide/tutorials/train_eagle3_online/
+# https://docs.vllm.ai/projects/speculators/en/latest/user_guide/tutorials/train/
 
 ### Example E2E run for Qwen3-8B on 5k samples from ShareGPT ###
 

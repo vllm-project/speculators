@@ -16,7 +16,7 @@ from speculators.models.mtp.model_definitions import (
     mtp_model_classes,
     resolve_model_type,
 )
-from speculators.models.utils import conditional_torch_compile
+from speculators.models.utils import conditional_torch_compile, flatten_rope_parameters
 from speculators.proposals.greedy import GreedyTokenProposalConfig
 
 logger = logging.getLogger(__name__)
@@ -69,8 +69,9 @@ class MTPDraftModel(DraftVocabMixin, SpeculatorModel):
     d2t: torch.Tensor | None
 
     def __init__(self, config: MTPSpeculatorConfig) -> None:
+        # SDPA, not eager — eager OOMs on long sequences (#886).
         if config.transformer_layer_config._attn_implementation is None:  # noqa: SLF001
-            config.transformer_layer_config._attn_implementation = "eager"  # noqa: SLF001
+            config.transformer_layer_config._attn_implementation = "sdpa"  # noqa: SLF001
         super().__init__(config=config)
         self._init_vocab(config)
         if self.use_draft_vocab:
@@ -83,7 +84,9 @@ class MTPDraftModel(DraftVocabMixin, SpeculatorModel):
         self.mtp_layers = nn.ModuleList(
             [self._model_definitions.first_layer_class(tc, layer_idx=0)]
         )
-        self.rotary_emb = self._model_definitions.rotary_emb_class(tc)
+        self.rotary_emb = self._model_definitions.rotary_emb_class(
+            flatten_rope_parameters(tc)
+        )
 
         self.post_init()
 
@@ -107,7 +110,8 @@ class MTPDraftModel(DraftVocabMixin, SpeculatorModel):
         super().load_verifier_weights()
         del self.verifier_lm_head
 
-    @conditional_torch_compile
+    # requires `dynamic=False`. See #876
+    @conditional_torch_compile(dynamic=False)
     def forward(
         self,
         input_ids: torch.Tensor,
