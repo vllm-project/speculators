@@ -13,7 +13,7 @@ Hidden-state transfer is handled by the `hs_connectors` package, which provides 
 
 ```text
 vLLM (extraction nodes)              Trainer (training nodes)
-  launch_vllm.py                       train.py
+  launch_vllm.py                       speculators train
        |                                  |
        v                                  v
   HiddenStatesBackend              HiddenStatesBackend
@@ -100,7 +100,7 @@ On the training node, point the trainer at the same Mooncake master and the vLLM
 ```bash
 # in speculators venv
 torchrun --standalone --nproc_per_node 4 \
-  scripts/train.py \
+  -m speculators.train \
   --verifier-name-or-path Qwen/Qwen3-8B \
   --data-path ./output \
   --save-path ./output/checkpoints \
@@ -119,7 +119,7 @@ This is the same as single-node online training, but with `--hidden-states-backe
 
 ### Mooncake CLI Arguments
 
-These flags are available on both `launch_vllm.py` and `train.py` when using `--hidden-states-backend mooncake`:
+These flags are available on both `launch_vllm.py` and `speculators train` (`torchrun -m speculators.train`) when using `--hidden-states-backend mooncake`:
 
 | Flag                            | Default           | Description                                                                                       |
 | ------------------------------- | ----------------- | ------------------------------------------------------------------------------------------------- |
@@ -151,4 +151,4 @@ The `hs_connectors` package uses a plugin registry. If you would like to use a d
 2. Implement the four required hooks: `add_train_args`, `add_launch_args`, `from_train_args`, and `build_kv_transfer_config`.
 3. Subclass `HiddenStatesTransfer` to implement the actual data transfer logic (`get_cached`, `get_generated`, `cache`, `delete`).
 
-The new backend is automatically discovered by both `train.py` and `launch_vllm.py` and can be selected with `--hidden-states-backend my_backend`.
+The new backend is automatically discovered by both `speculators train` and `launch_vllm.py` and can be selected with `--hidden-states-backend my_backend`.

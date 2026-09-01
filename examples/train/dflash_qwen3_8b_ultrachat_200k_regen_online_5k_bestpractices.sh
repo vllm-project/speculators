@@ -1,57 +1,58 @@
 #!/bin/bash
-# Online DFlash Training Script
+# Online DFlash Training Script -- Best-Practices Recipe
 #
-# Runs the full online DFlash training pipeline: data preparation, vLLM server launch,
-# and training (with hidden states generated on-the-fly from the live server).
+# Same pipeline as dflash_qwen3_8b_ultrachat_200k_regen_online_5k.sh (data preparation, vLLM
+# server launch, and online training), but using the recipe recommended in
+# https://github.com/vllm-project/speculators/issues/979 ("DFlash Training Best
+# Practices"): D-PACE per-position loss weighting (with cross-entropy), 5 draft
+# layers, and block_size=16. As of this script's introduction these are also
+# train.py's defaults for --speculator-type dflash, so passing them explicitly
+# below is redundant with the CLI -- it's done anyway so this script is a
+# self-contained reference for the full recipe regardless of what the defaults
+# happen to be at the time you read it.
+#
+# The dataset below is UltraChat prompts with every assistant turn regenerated
+# on-policy by Qwen/Qwen3-8B.
 #
 # Usage: Copy this script, modify the configuration variables below, then run:
-#   bash examples/train/dflash_qwen3_8b_sharegpt_online_5k.sh
+#   bash examples/train/dflash_qwen3_8b_ultrachat_200k_regen_online_5k_bestpractices.sh
 #
-# For a detailed walkthrough, see 
+# For a detailed walkthrough, see
 # https://docs.vllm.ai/projects/speculators/en/latest/user_guide/tutorials/train/
+# and the recipe rationale/ablations at
+# https://github.com/vllm-project/speculators/issues/979
 
-### Example E2E run for DFlash Qwen3-8B on 5k samples from ShareGPT ###
+### Example E2E run for DFlash Qwen3-8B on 5k regenerated UltraChat-200k samples ###
 
 # Note: With just 5k samples, the model performance will not be very good, however there
 # are enough samples to verify that the pipeline is working correctly and that the model
 # is learning something. This is a good sanity check when creating a drafter for a new
-# target model.
-
-# Timing (on 4x NVIDIA H100 80GB GPUs, DP=2)
-# Data Preprocessing: 26 seconds
-# vLLM Server Startup: 60 seconds (1 min)
-# Training (5 epochs): 1374 seconds (22 mins 54 secs)
-# Total: 1475 seconds (24 mins 35 secs)
-
-# MT-Bench Results (80 prompts, 2048 max output tokens):
-# acceptance rate: 5.90%
-# acceptance length: 1.47
-# output throughput: 129.41 tok/s
-# per-position acceptance:
-#   position 0: 36.80%
-#   position 1: 8.79%
-#   position 2: 1.39%
-#   position 3: 0.18%
-#   position 4: 0.02%
-#   position 5-7: 0.00%
+# target model. Note also that block_size=16 (double the classic example's block_size=8)
+# means more speculative positions per anchor, so this run trains and generates fewer,
+# larger blocks -- expect different timing and per-position acceptance numbers than the
+# classic example; run your own eval afterward (see examples/evaluate/) rather than
+# relying on any specific numbers here, since the right comparison depends on your data
+# and hardware.
 
 set -euo pipefail
 
 # ============ Configuration ============
 MODEL="Qwen/Qwen3-8B"
-DATASET="sharegpt"                # sharegpt, ultrachat, or path to custom data
-OUTPUT_DIR="./output/dflash_qwen3_8b_sharegpt"
+DATASET="hf:inference-optimization/speculators-ci-datasets:tutorial_regen"  # on-policy regenerated Qwen3-8B data from UltraChat prompts (pretokenized); or a preset/path to custom data
+OUTPUT_DIR="./output/dflash_qwen3_8b_ultrachat_200k_regen_bestpractices"
 VLLM_PORT=8000
 MAX_SAMPLES=5000
 SEQ_LENGTH=8192
 EPOCHS=5
 LR=3e-4
 
-# DFlash-specific parameters
+# DFlash-specific parameters (best-practices recipe from RFC #979)
 SPECULATOR_TYPE="dflash"
-BLOCK_SIZE=8
+BLOCK_SIZE=16
 MAX_ANCHORS=3072
 NUM_LAYERS=5
+PER_POSITION_LOSS_WEIGHT="dpace"  # requires --loss-fn ce
+LOSS_FN="ce"
 DRAFT_VOCAB_SIZE=32000
 TARGET_LAYER_IDS="2 18 33"  # Must match vLLM's eagle_aux_hidden_state_layer_ids
 
@@ -62,8 +63,11 @@ NUM_TRAIN_GPUS=2
 # =======================================
 
 # Step 1: Prepare data
+# The dataset is on-policy regenerated: assistant turns were produced by the
+# target model and ship pretokenized (input_ids + loss_mask). prepare-data just
+# packages them -- no --render-endpoint (or running vLLM server) needed here.
 echo "=== Step 1: Preparing data ==="
-python scripts/prepare_data.py \
+speculators prepare-data \
     --model "$MODEL" \
     --data "$DATASET" \
     --output "$OUTPUT_DIR" \
@@ -95,7 +99,7 @@ echo "vLLM server ready."
 echo "=== Step 3: Training ==="
 CUDA_VISIBLE_DEVICES="$TRAIN_GPUS" torchrun \
     --standalone --nproc_per_node "$NUM_TRAIN_GPUS" \
-    scripts/train.py \
+    -m speculators.train \
     --verifier-name-or-path "$MODEL" \
     --data-path "$OUTPUT_DIR" \
     --vllm-endpoint "http://localhost:${VLLM_PORT}/v1" \
@@ -108,6 +112,8 @@ CUDA_VISIBLE_DEVICES="$TRAIN_GPUS" torchrun \
     --block-size "$BLOCK_SIZE" \
     --max-anchors "$MAX_ANCHORS" \
     --num-layers "$NUM_LAYERS" \
+    --per-position-loss-weight "$PER_POSITION_LOSS_WEIGHT" \
+    --loss-fn "$LOSS_FN" \
     --target-layer-ids $TARGET_LAYER_IDS \
     --on-missing generate \
     --on-generate delete
