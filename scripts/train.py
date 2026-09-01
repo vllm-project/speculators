@@ -53,14 +53,22 @@ DRAFT_ARCH_CONFIGS: dict[str, type] = {
 MROPE_INVERSE_TOLERANCE = 1e-6
 
 
+def _accelerator_module():
+    """Return the current accelerator's device module, or None on CPU-only hosts."""
+    acc = torch.accelerator.current_accelerator(check_available=True)
+    return torch.get_device_module(acc.type) if acc is not None else None
+
+
 def set_seed(seed: int, deterministic: bool = False):
     """Set random seeds for reproducibility."""
     random.seed(seed)
     np.random.seed(seed)  # noqa: NPY002
     torch.manual_seed(seed)
-    torch.cuda.manual_seed_all(seed)
+    acc_module = _accelerator_module()
+    if acc_module is not None and hasattr(acc_module, "manual_seed_all"):
+        acc_module.manual_seed_all(seed)
 
-    if deterministic:
+    if deterministic and torch.cuda.is_available():
         # For deterministic behavior (may impact performance)
         torch.backends.cudnn.deterministic = True
         torch.backends.cudnn.benchmark = False

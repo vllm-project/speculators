@@ -31,7 +31,10 @@ logger = logging.getLogger(__name__)
 
 # Compile so the mask builds block-sparse instead of materializing DFlash's huge
 # dense [Q, KV] grid every step. (No benefit for EAGLE3's small autoregressive mask.)
-_compiled_create_block_mask = torch.compile(create_block_mask)
+# Non-CUDA accelerators (e.g. Ascend NPU) fall back to eager create_block_mask:
+# their compilers (BiSheng) cannot trace it, and flex attention itself is
+# unsupported there anyway (use --draft-attn-impl sdpa|eager instead).
+_compiled_create_block_mask = conditional_torch_compile(create_block_mask)
 
 
 @SpeculatorModel.register("dflash")
