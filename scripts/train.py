@@ -52,6 +52,14 @@ DRAFT_ARCH_CONFIGS: dict[str, type] = {
 }
 MROPE_INVERSE_TOLERANCE = 1e-6
 
+# DFlash drafts always serve with plain 1D rope. vLLM's DFlash serving path
+# rejects MRoPE draft configs outright, and the draft consumes multimodal
+# content exclusively through the captured verifier hidden states (the
+# verifier's own forward already encodes vision into them), so the verifier's
+# (3, N) MRoPE positions carry no signal for the draft. mrope_section is
+# therefore stripped from the draft config so train/serve stay consistent.
+PLAIN_ROPE_DRAFT_SPECULATORS = frozenset({"dflash"})
+
 
 def set_seed(seed: int, deterministic: bool = False):
     """Set random seeds for reproducibility."""
@@ -116,6 +124,7 @@ def create_transformer_layer_config(  # noqa: C901
     full_attention_indices: list[int],
     mrope_full_head_hack: bool = True,
     trust_remote_code: bool = False,
+    speculator_type: str = "",
 ) -> PretrainedConfig:
     if draft_arch not in DRAFT_ARCH_CONFIGS:
         raise ValueError(
@@ -218,6 +227,11 @@ def create_transformer_layer_config(  # noqa: C901
                     rope_params = {"rope_type": "default", "rope_theta": 10000.0}
 
             if isinstance(rope_params, dict):
+                # DFlash drafts are plain-rope by design (see
+                # PLAIN_ROPE_DRAFT_SPECULATORS); dropping mrope_section here
+                # also drops partial_rotary_factor via the guard below.
+                if speculator_type in PLAIN_ROPE_DRAFT_SPECULATORS:
+                    rope_params.pop("mrope_section", None)
                 _maybe_apply_mrope_full_head_hack(
                     rope_params, resolved_head_dim, mrope_full_head_hack
                 )
@@ -236,6 +250,8 @@ def create_transformer_layer_config(  # noqa: C901
         if hasattr(verifier_config, "rope_scaling"):
             rope_scaling = deepcopy(verifier_config.rope_scaling)
             if isinstance(rope_scaling, dict):
+                if speculator_type in PLAIN_ROPE_DRAFT_SPECULATORS:
+                    rope_scaling.pop("mrope_section", None)
                 _maybe_apply_mrope_full_head_hack(
                     rope_scaling, resolved_head_dim, mrope_full_head_hack
                 )
@@ -514,6 +530,7 @@ def build_draft_model(
                 full_attention_indices=full_attention_indices,
                 mrope_full_head_hack=args.draft_mrope_full_head_hack,
                 trust_remote_code=args.trust_remote_code,
+                speculator_type=args.speculator_type,
             )
 
         args.mask_token_id = resolve_mask_token_id(
