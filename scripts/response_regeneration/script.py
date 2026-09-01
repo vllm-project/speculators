@@ -5,6 +5,7 @@ import hashlib
 import json
 import logging
 import os
+import random
 import re
 import sys
 import time
@@ -150,6 +151,31 @@ def parse_args():
             f"(default: {DEFAULT_MAX_RETRIES})"
         ),
     )
+    parser.add_argument(
+        "--reasoning-effort-cycle",
+        default=None,
+        help=(
+            "Comma-separated reasoning effort levels to cycle through "
+            "per conversation, e.g. 'low,high,max'"
+        ),
+    )
+    parser.add_argument(
+        "--temperature-cycle",
+        default=None,
+        help=(
+            "Comma-separated temperature values to cycle through "
+            "per conversation, e.g. '0.6,0.8,1.0'"
+        ),
+    )
+    parser.add_argument(
+        "--seed",
+        type=int,
+        default=None,
+        help=(
+            "Seed for random selection of reasoning effort / temperature "
+            "per conversation, for reproducible runs"
+        ),
+    )
     args = parser.parse_args()
     if args.dataset not in REGEN_DATASETS and (
         args.split is not None or args.subset is not None
@@ -166,6 +192,21 @@ def parse_args():
         parser.error(f"--sampling-params is not valid JSON: {e}")
     if not isinstance(args.sampling_params, dict):
         parser.error("--sampling-params must be a JSON object")
+    if args.reasoning_effort_cycle is not None:
+        args.reasoning_effort_cycle = [
+            level.strip() for level in args.reasoning_effort_cycle.split(",")
+        ]
+        if not args.reasoning_effort_cycle:
+            parser.error("--reasoning-effort-cycle must not be empty")
+    if args.temperature_cycle is not None:
+        try:
+            args.temperature_cycle = [
+                float(t.strip()) for t in args.temperature_cycle.split(",")
+            ]
+        except ValueError:
+            parser.error("--temperature-cycle values must be numbers")
+        if not args.temperature_cycle:
+            parser.error("--temperature-cycle must not be empty")
     return args
 
 
@@ -563,6 +604,8 @@ async def regenerate_conversation(
     sampling_params: dict[str, Any],
     samples: list[dict[str, Any]],
     detokenize: Callable[[list[int]], str],
+    reasoning_effort: str | None = None,
+    temperature: float | None = None,
 ) -> bool:
     """Regenerate one conversation into per-generation boundary samples.
 
@@ -595,10 +638,19 @@ async def regenerate_conversation(
         # Tool-call loop: a tool call splices a cached result and continues;
         # a final answer ends the turn.
         while True:
+            overrides = {
+                k: v
+                for k, v in (
+                    ("reasoning_effort", reasoning_effort),
+                    ("temperature", temperature),
+                )
+                if v is not None
+            }
+            recorded_params = {**sampling_params, **overrides}
             payload: dict[str, Any] = {
                 # Spread first: the keys below are ours to own and must not be
                 # overridden by user-supplied sampling params.
-                **sampling_params,
+                **recorded_params,
                 "model": model,
                 "messages": prefix,
                 "max_tokens": max_tokens,
@@ -616,10 +668,17 @@ async def regenerate_conversation(
                 sample_index=len(samples),
                 idx=item["idx"],
                 endpoint=endpoint,
-                sampling_params=sampling_params,
+                sampling_params=recorded_params,
             )
             samples.append(sample)
             prefix.append(assistant_msg)
+
+            prompt_token_ids = data.get("prompt_token_ids")
+            completion_token_ids = data["choices"][0].get("token_ids")
+            total_tokens = len(prompt_token_ids or []) + len(completion_token_ids or [])
+            if total_tokens > max_tokens:
+                truncated = True
+                break
 
             if not tool_calls:
                 break  # final answer: this user turn is done
@@ -722,6 +781,8 @@ async def worker(
                 sampling_params=args.sampling_params,
                 samples=samples,
                 detokenize=detokenize,
+                reasoning_effort=item.get("reasoning_effort"),
+                temperature=item.get("temperature"),
             )
             # Written only after the conversation finishes -- a clean truncation
             # included, since rerunning it would truncate again. An exception
@@ -788,7 +849,7 @@ def load_input_dataset(args: argparse.Namespace) -> tuple[DatasetConfig, Any, st
     return config, dataset, split
 
 
-async def main():
+async def main():  # noqa: C901
     """Main async function to process dataset through vLLM endpoints."""
     args = parse_args()
 
@@ -800,6 +861,18 @@ async def main():
         args.model = await detect_model(endpoint)
 
     print(f"Using model: {args.model}")
+    if args.reasoning_effort_cycle:
+        print(
+            "Reasoning effort (random per conversation): "
+            f"{', '.join(args.reasoning_effort_cycle)}"
+        )
+    if args.temperature_cycle:
+        print(
+            "Temperature (random per conversation): "
+            f"{', '.join(str(t) for t in args.temperature_cycle)}"
+        )
+    if args.reasoning_effort_cycle or args.temperature_cycle:
+        print(f"Sampling seed: {args.seed}")
 
     # Decoder for the review-only `text` twin; see build_detokenizer.
     detokenize = build_detokenizer(args.model)
@@ -878,6 +951,7 @@ async def main():
                 for _ in range(args.concurrency)
             ]
 
+            rng = random.Random(args.seed)
             processed_count = 0
             for index, row in enumerate(dataset):
                 if args.limit is not None and processed_count >= args.limit:
@@ -921,15 +995,25 @@ async def main():
                     progress.update(1)
                     continue
 
-                await queue.put(
-                    {
-                        "idx": index,
-                        "primary_id": primary_id,
-                        "turns": turns,
-                        "tools": tools,
-                        "tool_results": tool_results,
-                    }
-                )
+                queue_item: dict[str, Any] = {
+                    "idx": index,
+                    "primary_id": primary_id,
+                    "turns": turns,
+                    "tools": tools,
+                    "tool_results": tool_results,
+                }
+                # Independently pick a reasoning effort and temperature at
+                # random so that, across conversations, we sample a mix of
+                # (effort, temperature) combinations rather than always pairing
+                # effort[i] with temperature[i]. Seeded via --seed for
+                # reproducibility.
+                if args.reasoning_effort_cycle is not None:
+                    queue_item["reasoning_effort"] = rng.choice(
+                        args.reasoning_effort_cycle
+                    )
+                if args.temperature_cycle is not None:
+                    queue_item["temperature"] = rng.choice(args.temperature_cycle)
+                await queue.put(queue_item)
                 processed_count += 1
 
             # Signal workers to stop
