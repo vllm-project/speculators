@@ -42,6 +42,85 @@ if "file" not in _backend_registry:
     _backend_registry["file"] = _InlineFileBackend  # type: ignore[assignment]
 
 
+# Keep the preprocessing workers and vLLM front end within one CPU budget.
+# Four preprocessing workers are paired with one API server. The former is
+# estimated at 3 CPUs and the latter at 4 CPUs, so each preprocessing worker
+# represents 4 CPUs of combined capacity. Leave 25% for native runtime
+# threads and other application work.
+CPU_BUDGET_FRACTION = 0.75
+DEFAULT_RENDERER_NUM_WORKERS = 2
+MAX_API_SERVER_COUNT = 32
+WORKERS_PER_API_SERVER = 4
+CPUS_PER_API_SERVER = 4
+MAX_PREPROCESSING_WORKERS = 128
+EFFECTIVE_CPUS_PER_PREPROCESSING_WORKER = 4
+
+# The vLLM API-server processes each create their own native thread pools.
+# Keep those pools bounded by default; explicit environment settings still
+# take precedence for users who have measured a different configuration.
+DEFAULT_RENDER_THREAD_ENV = {
+    "OMP_NUM_THREADS": "1",
+    "OPENBLAS_NUM_THREADS": "1",
+    "MKL_NUM_THREADS": "1",
+    "RAYON_NUM_THREADS": "2",
+}
+
+
+def _usable_cpu_count() -> int:
+    """Return the CPUs available to this process, respecting affinity."""
+    if hasattr(os, "process_cpu_count"):  # Python 3.13+
+        return os.process_cpu_count() or 1
+    if hasattr(os, "sched_getaffinity"):  # Linux
+        return len(os.sched_getaffinity(0))
+    return os.cpu_count() or 1
+
+
+def _preprocessing_workers(cpus: int) -> int:
+    """Mirror prepare_data.py's shared render CPU budget."""
+    return max(
+        1,
+        min(
+            MAX_PREPROCESSING_WORKERS,
+            int(cpus * CPU_BUDGET_FRACTION) // EFFECTIVE_CPUS_PER_PREPROCESSING_WORKER,
+        ),
+    )
+
+
+def render_throughput_defaults(cpus: int | None = None) -> tuple[int, int]:
+    """Return affinity-aware API-server and renderer-worker defaults."""
+    if cpus is None:
+        cpus = _usable_cpu_count()
+    api_servers = max(
+        1,
+        min(
+            MAX_API_SERVER_COUNT,
+            _preprocessing_workers(cpus) // WORKERS_PER_API_SERVER,
+            cpus // CPUS_PER_API_SERVER,
+        ),
+    )
+    return api_servers, DEFAULT_RENDERER_NUM_WORKERS
+
+
+def _with_render_defaults(vllm_args: list[str]) -> list[str]:
+    """Prepend high-throughput render defaults, unless no API server is wanted."""
+    if "--headless" in vllm_args:
+        return vllm_args
+    api_servers, renderer_workers = render_throughput_defaults()
+    return [
+        "--api-server-count",
+        str(api_servers),
+        "--renderer-num-workers",
+        str(renderer_workers),
+        *vllm_args,
+    ]
+
+
+def _set_render_thread_defaults() -> None:
+    """Bound native pools inherited by vLLM's API-server processes."""
+    for name, value in DEFAULT_RENDER_THREAD_ENV.items():
+        os.environ.setdefault(name, value)
+
+
 def parse_args():
     parser = argparse.ArgumentParser(
         description="Launch vLLM for hidden states extraction",
@@ -164,13 +243,15 @@ def main():
         json.dumps(speculative_config),
         "--kv_transfer_config",
         json.dumps(kv_transfer_config),
-        *vllm_args,
+        *_with_render_defaults(vllm_args),
     ]
 
     print("Running command:")
     print(" ".join(cmd))
 
     if not args.dry_run:
+        if "--headless" not in vllm_args:
+            _set_render_thread_defaults()
         os.execvp(cmd[0], cmd)  # noqa: S606
 
 

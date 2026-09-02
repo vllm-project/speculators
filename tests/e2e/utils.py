@@ -8,7 +8,7 @@ import time
 import urllib.error
 import urllib.request
 from collections.abc import Callable, Iterable
-from contextlib import contextmanager
+from contextlib import contextmanager, suppress
 from functools import wraps
 from pathlib import Path
 from textwrap import indent
@@ -67,6 +67,31 @@ def purge_newfiles(fn: Callable[..., Path]):
 
 VLLM_PYTHON = os.environ.get("VLLM_PYTHON", sys.executable)
 SCRIPTS_DIR = Path(__file__).resolve().parent.parent.parent / "scripts"
+PROCESS_GROUP_CLEANUP_TIMEOUT = 5.0
+PROCESS_GROUP_POLL_INTERVAL = 0.1
+
+
+def _signal_process_group(process_group_id: int, sig: int) -> None:
+    """Signal a vLLM process group, ignoring an already-gone group."""
+    if process_group_id == os.getpgrp():
+        raise RuntimeError("Refusing to signal the test runner's process group")
+    with suppress(ProcessLookupError):
+        os.killpg(process_group_id, sig)
+
+
+def _wait_for_process_group_exit(
+    process_group_id: int,
+    timeout: float = PROCESS_GROUP_CLEANUP_TIMEOUT,
+) -> bool:
+    """Wait until no process remains in a vLLM process group."""
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        try:
+            os.killpg(process_group_id, 0)
+        except ProcessLookupError:
+            return True
+        time.sleep(PROCESS_GROUP_POLL_INTERVAL)
+    return False
 
 
 def wait_for_server(
@@ -74,17 +99,21 @@ def wait_for_server(
     timeout: float = 600.0,
     poll_interval: float = 2.0,
     process: subprocess.Popen | None = None,
+    readiness_stability: float = 5.0,
 ):
-    """Poll vLLM server health endpoint until ready or timeout.
+    """Poll vLLM server health endpoint until stably ready or timeout.
 
     If *process* is provided, checks whether it has exited between polls
     so that startup failures are reported immediately instead of waiting
-    for the full timeout.
+    for the full timeout. A continuous healthy window is required because
+    multi-process vLLM can answer one health request before another API
+    server process finishes starting or fails.
     """
 
     logger.info("Waiting for server")
     url = f"http://localhost:{port}/health"
     deadline = time.monotonic() + timeout
+    healthy_since: float | None = None
     while time.monotonic() < deadline:
         if process is not None and process.poll() is not None:
             raise RuntimeError(
@@ -93,10 +122,18 @@ def wait_for_server(
             )
         try:
             with urllib.request.urlopen(url, timeout=5) as resp:  # noqa: S310
-                if resp.status == 200:
-                    return
+                healthy = resp.status == 200
         except (urllib.error.URLError, ConnectionError, OSError):
-            pass
+            healthy = False
+
+        now = time.monotonic()
+        if healthy:
+            if healthy_since is None:
+                healthy_since = now
+            if now - healthy_since >= readiness_stability:
+                return
+        else:
+            healthy_since = None
         time.sleep(poll_interval)
     raise TimeoutError(f"vLLM server on port {port} not ready after {timeout}s")
 
@@ -154,32 +191,49 @@ def launch_vllm_server(
     ]
     logger.info("Starting vLLM server: {}", " ".join(cmd))
 
-    process = subprocess.Popen(cmd)  # noqa: S603
+    # vLLM creates an engine process and multiple API-server descendants.
+    # Isolate the whole tree so teardown cannot leave workers attached to the
+    # pytest process group or interfere with the next test's launch.
+    process = subprocess.Popen(cmd, start_new_session=True)  # noqa: S603
 
     try:
         wait_for_server(port, process=process)
         logger.info("vLLM server ready on port {}", port)
     except Exception:
-        process.terminate()
-        try:
-            process.wait(timeout=30)
-        except subprocess.TimeoutExpired:
-            process.kill()
-            process.wait()
+        stop_vllm_server(process)
         raise
 
     return process
 
 
 def stop_vllm_server(process: subprocess.Popen):
-    """Gracefully stop a vLLM server subprocess."""
+    """Gracefully stop a vLLM server and all of its descendants."""
+    process_group_id = process.pid
     if process.poll() is None:
+        # Give vLLM's process manager the first opportunity to shut down its
+        # children cleanly and reap them.
         process.terminate()
         try:
             process.wait(timeout=30)
         except subprocess.TimeoutExpired:
-            process.kill()
-            process.wait(timeout=10)
+            _signal_process_group(process_group_id, signal.SIGTERM)
+            try:
+                process.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                _signal_process_group(process_group_id, signal.SIGKILL)
+                process.wait(timeout=10)
+
+    # The manager may have exited before all descendants were reaped. The
+    # dedicated session lets us clean up those stragglers without touching
+    # pytest or unrelated processes, then wait for the reset to complete.
+    _signal_process_group(process_group_id, signal.SIGTERM)
+    if not _wait_for_process_group_exit(process_group_id):
+        _signal_process_group(process_group_id, signal.SIGKILL)
+        if not _wait_for_process_group_exit(process_group_id):
+            logger.error(
+                "vLLM process group {} did not exit after forced cleanup",
+                process_group_id,
+            )
     if process.returncode not in (0, -15):  # -15 = SIGTERM (expected)
         logger.error("vLLM server exited with code {}", process.returncode)
     logger.info("vLLM server stopped (exit code {})", process.returncode)

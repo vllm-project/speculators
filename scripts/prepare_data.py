@@ -17,5 +17,6 @@ warnings.warn(
 app = typer.Typer()
 app.command()(prepare_data)
 
+
 if __name__ == "__main__":
     app()

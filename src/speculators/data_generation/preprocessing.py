@@ -1,4 +1,5 @@
 import json
+import os
 from collections.abc import Callable
 from contextlib import nullcontext
 from pathlib import Path
@@ -21,6 +22,7 @@ from speculators.train.vocab_mapping import save_token_frequency_distribution
 
 __all__ = [
     "build_speculator_training_dataset",
+    "default_preprocessing_workers",
     "load_and_preprocess_dataset",
     "load_raw_dataset",
 ]
@@ -28,6 +30,38 @@ __all__ = [
 log = PipelineLogger(__name__)
 
 _warned_roles: set[str] = set()
+
+# Account for both the preprocessing workers and the vLLM front end in one
+# budget. A preprocessing worker is estimated at 3 CPUs, and every four of
+# them share one API server estimated at 4 CPUs: 3 + 4 / 4 = 4 CPUs per
+# preprocessing worker. Leave 25% of the available CPUs for native runtime
+# threads and other application work.
+CPU_BUDGET_FRACTION = 0.75
+MAX_PREPROCESSING_WORKERS = 128
+EFFECTIVE_CPUS_PER_PREPROCESSING_WORKER = 4
+
+
+def usable_cpu_count() -> int:
+    """Return the CPUs available to this process, respecting affinity."""
+    if hasattr(os, "process_cpu_count"):  # Python 3.13+
+        return os.process_cpu_count() or 1
+    if hasattr(os, "sched_getaffinity"):  # Linux
+        return len(os.sched_getaffinity(0))
+    return os.cpu_count() or 1
+
+
+def default_preprocessing_workers(cpus: int | None = None) -> int:
+    """Choose preprocessing workers within the shared render CPU budget."""
+    if cpus is None:
+        cpus = usable_cpu_count()
+    return max(
+        1,
+        min(
+            MAX_PREPROCESSING_WORKERS,
+            int(cpus * CPU_BUDGET_FRACTION) // EFFECTIVE_CPUS_PER_PREPROCESSING_WORKER,
+        ),
+    )
+
 
 ProcessorLike = PreTrainedTokenizerBase | ProcessorMixin
 
