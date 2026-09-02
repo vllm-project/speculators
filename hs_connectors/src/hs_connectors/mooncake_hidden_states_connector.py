@@ -22,6 +22,10 @@ from vllm.distributed.kv_transfer.kv_connector.v1.base import (
     KVConnectorRole,
     SupportsHMA,
 )
+from vllm.distributed.kv_transfer.kv_connector.v1.example_hidden_states_connector import (  # noqa: E501
+    ExampleHiddenStatesConnector,
+    extract_from_kv_cache,
+)
 from vllm.distributed.parallel_state import get_tensor_model_parallel_rank
 from vllm.logger import init_logger
 from vllm.v1.attention.backend import AttentionMetadata
@@ -39,31 +43,6 @@ if TYPE_CHECKING:
     from vllm.v1.request import Request
 
 logger = init_logger(__name__)
-
-
-def extract_from_kv_cache(
-    kv_cache: torch.Tensor,
-    slot_mapping: torch.Tensor,
-    num_tokens: int,
-    *,
-    block_size: int,
-    num_hidden_states: int,
-) -> torch.Tensor:
-    dimensions = kv_cache.shape[1:3]
-    if dimensions == (num_hidden_states, block_size):
-        return kv_cache[slot_mapping // block_size, :, slot_mapping % block_size][
-            :num_tokens
-        ]
-    if dimensions == (block_size, num_hidden_states):
-        return kv_cache[slot_mapping // block_size, slot_mapping % block_size][
-            :num_tokens
-        ]
-    raise ValueError(
-        "Unexpected hidden-state cache dimensions: "
-        f"got {tuple(dimensions)}, expected either "
-        f"({num_hidden_states}, {block_size}) or "
-        f"({block_size}, {num_hidden_states})"
-    )
 
 
 def sanitize_key(key: str) -> str:
@@ -151,9 +130,6 @@ class MooncakeHiddenStatesConnector(KVConnectorBase_V1, SupportsHMA):
         self._block_size = self._get_cache_block_size(
             vllm_config, kv_cache_config, self._hs_group_idx
         )
-        self._num_hidden_states = kv_cache_config.kv_cache_groups[
-            self._hs_group_idx
-        ].kv_cache_spec.num_kv_heads
 
         if (
             self._vllm_config.speculative_config is None
@@ -265,8 +241,6 @@ class MooncakeHiddenStatesConnector(KVConnectorBase_V1, SupportsHMA):
                     self._kv_cache,
                     slot_mapping,
                     num_tokens,
-                    block_size=self._block_size,
-                    num_hidden_states=self._num_hidden_states,
                 )
                 assert_finite("hidden_states", hidden_states)
                 # Async DtoH copy into pinned host memory.
@@ -392,11 +366,6 @@ class MooncakeHiddenStatesConnector(KVConnectorBase_V1, SupportsHMA):
     @classmethod
     def get_required_kvcache_layout(
         cls,
-        vllm_config: VllmConfig,  # noqa: ARG003 (KVConnector interface)
+        vllm_config: VllmConfig,
     ) -> str | None:
-        if cls is KVConnectorBase_V1:
-            raise TypeError(
-                "get_required_kvcache_layout should not be called on the base class"
-            )
-        # NHD keeps each token's hidden states contiguous in memory.
-        return "NHD"
+        return ExampleHiddenStatesConnector.get_required_kvcache_layout(vllm_config)
