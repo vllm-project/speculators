@@ -347,9 +347,6 @@ def main():
     print("Running command:")
     print(" ".join(cmd))
 
-    # Provenance is opt-in: only written when --provenance-dir is passed, so
-    # ad-hoc test/debug launches don't clutter the working directory. Automated
-    # agents should always pass --provenance-dir (see AGENTS.md).
     if args.provenance_dir:
         _save_vllm_provenance(
             cmd,
