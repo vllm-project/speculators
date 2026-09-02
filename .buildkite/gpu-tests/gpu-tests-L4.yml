@@ -1,5 +1,8 @@
 steps:
   - group: ":test_tube: Unit Tests (L4)"
+    notify:
+      - github_commit_status:
+          context: "buildkite/speculators/unit-tests"
     steps:
       - label: ":python: Unit Tests py{{matrix.python}} / transformers {{matrix.transformers}}"
         agents:
@@ -58,6 +61,9 @@ steps:
             transformers: ["latest"]
 
   - group: ":test_tube: Integration Tests (L4)"
+    notify:
+      - github_commit_status:
+          context: "buildkite/speculators/integration-tests"
     steps:
       - label: ":python: Integration Tests py{{matrix.python}} / transformers {{matrix.transformers}}"
         agents:
@@ -122,6 +128,9 @@ steps:
 
   - group: ":test_tube: Smoke Tests (L4)"
     depends_on: "block-smoke-tests-l4"
+    notify:
+      - github_commit_status:
+          context: "buildkite/speculators/smoke-tests"
     steps:
       - label: ":python: Smoke Tests py{{matrix.python}}"
         agents:
