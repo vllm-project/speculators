@@ -184,15 +184,18 @@ def _encode_render(
     render_endpoint: str,
     *,
     add_generation_prompt: bool,
+    max_length: int,
     tools: list[dict] | None = None,
 ) -> list[int]:
-    """Render a conversation prefix via the vLLM ``/render`` endpoint; return ids."""
+    """Render a conversation prefix via vLLM, bounded to the training window."""
     messages = _adapt_conv_for_vllm(conv_prefix)
     return render_conversation(
         render_endpoint,
         messages,
         add_generation_prompt=add_generation_prompt,
         tools=tools,
+        truncate_prompt_tokens=max_length,
+        truncation_side="right",
     )
 
 
@@ -240,6 +243,7 @@ def _render_boundary_rows(
             normalized_conv[:j],
             render_endpoint,
             add_generation_prompt=True,
+            max_length=max_length,
             tools=tools,
         )
         if len(prompt_ids) >= max_length:
@@ -251,6 +255,7 @@ def _render_boundary_rows(
             normalized_conv[: j + 1],
             render_endpoint,
             add_generation_prompt=False,
+            max_length=max_length,
             tools=tools,
         )
         if full_ids[: len(prompt_ids)] == prompt_ids:
@@ -263,6 +268,7 @@ def _render_boundary_rows(
                 normalized_conv[:j],
                 render_endpoint,
                 add_generation_prompt=False,
+                max_length=max_length,
                 tools=tools,
             )
             if full_ids[: len(hist_ids)] != hist_ids or boundary < len(hist_ids):

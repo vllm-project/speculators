@@ -8,6 +8,7 @@ already runs, so one tokenizer feeds the mask, hidden states, and serving.
 
 import logging
 from http import HTTPStatus
+from typing import Literal
 
 import httpx
 
@@ -35,12 +36,15 @@ def render_conversation(
     add_generation_prompt: bool,
     tools: list[dict] | None = None,
     chat_template_kwargs: dict | None = None,
+    truncate_prompt_tokens: int | None = None,
+    truncation_side: Literal["left", "right"] | None = None,
     timeout: float = DEFAULT_RENDER_TIMEOUT,
 ) -> list[int]:
     """POST to ``/v1/chat/completions/render`` and return the token ids.
 
-    No truncation: boundary detection needs full lengths; over-length rows are
-    clipped downstream.
+    ``truncate_prompt_tokens`` and ``truncation_side`` are optional so callers
+    that need the complete render can omit them. Preprocessing uses right-side
+    truncation to keep the rendered prefix and assistant boundary in-window.
     """
     url = f"{endpoint.rstrip('/')}/v1/chat/completions/render"
 
@@ -52,6 +56,10 @@ def render_conversation(
         body["tools"] = tools
     if chat_template_kwargs is not None:
         body["chat_template_kwargs"] = chat_template_kwargs
+    if truncate_prompt_tokens is not None:
+        body["truncate_prompt_tokens"] = truncate_prompt_tokens
+    if truncation_side is not None:
+        body["truncation_side"] = truncation_side
 
     resp = httpx.post(url, json=body, timeout=timeout)
 
