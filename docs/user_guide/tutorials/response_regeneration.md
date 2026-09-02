@@ -138,7 +138,7 @@ head -1 magpie_Llama-3.3-70B-Instruct.jsonl | python -m json.tool
 
 ## Step 3: Use the Data for Training
 
-The output JSONL is already in speculator format (it carries `input_ids` and `loss_mask`), so it can be passed straight to `speculators prepare-data` **without** `--render-endpoint` — the render step is only needed for natural-language conversations that still have to be tokenized. `prepare-data` itself is still required, though: training reads the Arrow dataset it produces, not the raw JSONL.
+The output JSONL is in speculator format (it carries `input_ids` and `loss_mask`), so it can be passed straight to `speculators prepare-data`. It is required, as training reads the Arrow dataset it produces, not the raw JSONL.
 
 ```bash
 speculators prepare-data \
