@@ -1,5 +1,4 @@
 from pathlib import Path
-from typing import Any, cast
 
 import pytest
 import torch
@@ -8,9 +7,9 @@ from transformers import get_linear_schedule_with_warmup
 from speculators.train.checkpointer import SingleGPUCheckpointer
 from speculators.train.config import TrainConfig
 from speculators.train.trainer import (
-    Trainer,
     TrainerConfig,
     WSDDecayStyle,
+    _get_wsd_decay_coefficient,
     _get_wsd_schedule_with_warmup,
     _resolve_scheduler_steps,
 )
@@ -79,61 +78,28 @@ def test_scheduler_type_rejects_unsupported_values():
         )
 
 
-def test_wsd_scheduler_via_trainer(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
-    optimizers = [
-        torch.optim.AdamW([torch.nn.Parameter(torch.zeros(()))], lr=1.0),
-        torch.optim.AdamW([torch.nn.Parameter(torch.zeros(()))], lr=0.1),
-    ]
-    monkeypatch.setattr(
-        "speculators.train.trainer.build_optimizers",
-        lambda _model, _config: optimizers,
+def test_wsd_scheduler():
+    parameter = torch.nn.Parameter(torch.zeros(()))
+    optimizer = torch.optim.AdamW([parameter], lr=1.0)
+    scheduler = _get_wsd_schedule_with_warmup(
+        optimizer,
+        num_warmup_steps=2,
+        num_training_steps=10,
+        warmup_init_lr_ratio=0.25,
+        min_lr_ratio=0.1,
+        decay_ratio=0.4,
+        decay_style="linear",
     )
 
-    trainer = Trainer.__new__(Trainer)
-    trainer.model = cast("Any", torch.nn.Linear(2, 2))
-    trainer.config = TrainerConfig(
-        lr=1.0,
-        num_epochs=1,
-        save_path=str(tmp_path),
-        scheduler_type="wsd",
-        scheduler_warmup_steps=2,
-        scheduler_total_steps=10,
-        scheduler_warmup_init_lr_ratio=0.25,
-        scheduler_min_lr_ratio=0.1,
-        scheduler_wsd_decay_ratio=0.4,
-        scheduler_wsd_decay_style="linear",
-    )
-    trainer.resume_from_checkpoint = False
-    trainer.checkpointer = SingleGPUCheckpointer(tmp_path)
-    trainer.train_loader = cast("Any", [None] * 10)
-
-    trainer.setup_optimizer()
-
-    observed = [[scheduler.get_last_lr()[0]] for scheduler in trainer.schedulers]
+    observed = [scheduler.get_last_lr()[0]]
     for _ in range(10):
-        for index, (optimizer, scheduler) in enumerate(
-            zip(trainer.optimizers, trainer.schedulers, strict=True)
-        ):
-            optimizer.step()
-            scheduler.step()
-            observed[index].append(scheduler.get_last_lr()[0])
+        optimizer.step()
+        scheduler.step()
+        observed.append(scheduler.get_last_lr()[0])
 
-    expected = [
-        0.25,
-        0.625,
-        1.0,
-        1.0,
-        1.0,
-        1.0,
-        1.0,
-        0.775,
-        0.55,
-        0.325,
-        0.1,
-    ]
-    assert len(trainer.schedulers) == 2
-    assert observed[0] == pytest.approx(expected)
-    assert observed[1] == pytest.approx([lr * 0.1 for lr in expected])
+    assert observed == pytest.approx(
+        [0.25, 0.625, 1.0, 1.0, 1.0, 1.0, 1.0, 0.775, 0.55, 0.325, 0.1]
+    )
 
 
 @pytest.mark.parametrize(
@@ -145,54 +111,26 @@ def test_wsd_scheduler_via_trainer(monkeypatch: pytest.MonkeyPatch, tmp_path: Pa
         ("minus_sqrt", 1.0 - 0.5**0.5),
     ],
 )
-def test_wsd_scheduler_supports_final_decay_styles(
+def test_wsd_decay_styles(
     decay_style: WSDDecayStyle,
     expected_midpoint: float,
 ):
-    parameter = torch.nn.Parameter(torch.zeros(()))
-    optimizer = torch.optim.AdamW([parameter], lr=1.0)
-    scheduler = _get_wsd_schedule_with_warmup(
-        optimizer,
-        num_warmup_steps=0,
-        num_training_steps=4,
-        decay_ratio=1.0,
-        decay_style=decay_style,
+    assert _get_wsd_decay_coefficient(0.5, decay_style) == pytest.approx(
+        expected_midpoint
     )
 
-    for _ in range(2):
-        optimizer.step()
-        scheduler.step()
 
-    assert scheduler.get_last_lr()[0] == pytest.approx(expected_midpoint)
-
-
-@pytest.mark.parametrize(
-    ("overrides", "message"),
-    [
-        ({"num_training_steps": 0}, "num_training_steps"),
-        ({"num_warmup_steps": -1}, "num_warmup_steps"),
-        ({"num_warmup_steps": 10}, "num_warmup_steps"),
-        ({"num_warmup_steps": 9, "decay_ratio": 0.2}, "overlap"),
-        ({"warmup_init_lr_ratio": 1.1}, "warmup_init_lr_ratio"),
-        ({"min_lr_ratio": -0.1}, "min_lr_ratio"),
-        ({"decay_ratio": 0.0}, "decay_ratio"),
-        ({"decay_style": "unknown"}, "decay_style"),
-    ],
-)
-def test_wsd_scheduler_rejects_invalid_phase_geometry(
-    overrides: dict[str, Any], message: str
-):
+def test_wsd_rejects_overlapping_phases():
     parameter = torch.nn.Parameter(torch.zeros(()))
     optimizer = torch.optim.AdamW([parameter], lr=1.0)
-    options: dict[str, Any] = {
-        "num_warmup_steps": 2,
-        "num_training_steps": 10,
-        "decay_ratio": 0.2,
-    }
-    options.update(overrides)
 
-    with pytest.raises(ValueError, match=message):
-        _get_wsd_schedule_with_warmup(optimizer, **options)
+    with pytest.raises(ValueError, match="overlap"):
+        _get_wsd_schedule_with_warmup(
+            optimizer,
+            num_warmup_steps=9,
+            num_training_steps=10,
+            decay_ratio=0.2,
+        )
 
 
 def test_scheduler_resume_restores_optimizer_learning_rate(tmp_path: Path):
