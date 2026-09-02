@@ -49,11 +49,41 @@ class TestGetBaseIndicesForAnchoredBlocks:
 
 
 class TestSelectAnchors:
-    def test_sampled_anchors_are_sorted(self):
-        # Anchors are returned sorted by position so the draft blocks form
-        # contiguous flex-attention blocks (fast path) instead of scattered ones.
+    def test_caps_anchors_per_document(self):
         torch.manual_seed(0)
         loss_mask = torch.ones(1, 64)
-        anchors, anchor_valid = select_anchors(loss_mask, num_anchors=8, block_size=4)
-        selected = anchors[anchor_valid]
-        assert torch.equal(selected, torch.sort(selected).values)
+        document_ids = torch.tensor([[0] * 32 + [1] * 32])
+        anchors = select_anchors(loss_mask, document_ids, num_anchors=4, block_size=4)
+
+        assert anchors.shape == (8,)
+        assert (anchors < 32).sum() == 4
+        assert (anchors >= 32).sum() == 4
+        assert torch.equal(anchors, torch.sort(anchors).values)
+        # The last block_size positions are excluded so blocks stay in bounds.
+        assert anchors.max() < 60
+
+    def test_short_document_is_fully_covered(self):
+        torch.manual_seed(0)
+        loss_mask = torch.zeros(1, 64)
+        loss_mask[0, [3, 7, 9]] = 1  # short document 0: only 3 supervised tokens
+        loss_mask[0, 32:60] = 1  # document 1: 28 supervised tokens
+        document_ids = torch.tensor([[0] * 16 + [1] * 48])
+        anchors = select_anchors(loss_mask, document_ids, num_anchors=8, block_size=4)
+
+        assert torch.equal(anchors[:3], torch.tensor([3, 7, 9]))
+        assert anchors.shape == (11,)
+
+    def test_only_supervised_positions_are_anchors(self):
+        loss_mask = torch.zeros(1, 64)
+        loss_mask[0, 8:16] = 1
+        document_ids = torch.tensor([[0] * 32 + [-1] * 32])
+        anchors = select_anchors(loss_mask, document_ids, num_anchors=100, block_size=4)
+
+        assert torch.equal(anchors, torch.arange(8, 16))
+
+    def test_no_supervised_positions_yields_one_anchor(self):
+        loss_mask = torch.zeros(1, 64)
+        document_ids = torch.tensor([[0] * 32 + [-1] * 32])
+        anchors = select_anchors(loss_mask, document_ids, num_anchors=8, block_size=4)
+
+        assert torch.equal(anchors, torch.tensor([0]))

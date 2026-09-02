@@ -54,7 +54,7 @@ exec torchrun --standalone --nproc-per-node 4 \
   --speculator-type dspark \
   --target-layer-ids 24 48 72 88 92 \
   --block-size 8 \
-  --max-anchors 1024 \
+  --max-anchors 512 \
   --dflash-decay-gamma 4.0 \
   --markov-rank 256 \
   --markov-head-type vanilla \

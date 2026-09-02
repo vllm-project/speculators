@@ -20,49 +20,35 @@ def get_base_indices_for_anchored_blocks(
 
 def select_anchors(
     loss_mask: torch.Tensor,  # shape: [1, total_seq_len]
+    document_ids: torch.Tensor,  # shape: [1, total_seq_len]
     num_anchors: int,
     block_size: int,
-) -> tuple[torch.Tensor, torch.Tensor]:
-    """Randomly select anchor positions from valid tokens in sequence.
+) -> torch.Tensor:  # shape: [total_anchors]
+    """Sample up to ``num_anchors`` anchor positions from every packed document.
 
-    Args:
-        loss_mask: Binary mask indicating valid positions [1, total_seq_len]
-        n: Number of anchors to select per batch item
-        block_size: Block size (last block_size positions excluded)
+    Anchors are supervised positions (``loss_mask == 1``) drawn uniformly within
+    each document, so short documents are fully covered and long ones are capped.
+    This matches the reference DFlash trainers, which sample per sample rather
+    than per packed sequence. The last ``block_size`` positions are excluded so
+    every anchor block stays in bounds.
 
-    Returns:
-        tuple: (anchors, anchor_valid)
-            - anchors: Selected anchor indices [num_anchors]
-            - anchor_valid: Boolean mask for valid anchors [num_anchors]
+    Returns the sorted anchor positions. A sequence without supervised positions
+    yields one anchor at position 0; its block is zeroed by the loss mask, which
+    keeps the downstream shapes non-empty.
     """
-    if loss_mask.ndim != 2:  # noqa: PLR2004
-        raise ValueError(f"Expected [B, T], got {loss_mask.shape}")
+    loss_mask = loss_mask.squeeze(0)
+    document_ids = document_ids.squeeze(0)
+    valid = loss_mask.bool().clone()
+    valid[-block_size:] = False
 
-    if block_size <= 0:
-        raise ValueError(f"Expected block size > 0, got {block_size}")
+    anchors = []
+    for doc in document_ids[valid].unique():
+        candidates = torch.nonzero(valid & (document_ids == doc)).squeeze(-1)
+        perm = torch.randperm(candidates.numel(), device=candidates.device)
+        anchors.append(candidates[perm[:num_anchors]])
+    if not anchors:
+        return torch.zeros(1, dtype=torch.long, device=loss_mask.device)
 
-    valid_mask = loss_mask.bool().clone()
-    valid_mask[:, -block_size:] = False
-
-    valid_indices = torch.nonzero(valid_mask.squeeze(0), as_tuple=False).squeeze(
-        -1
-    )  # shape: [num_non_zero]
-
-    device = loss_mask.device
-    anchors = torch.zeros(num_anchors, dtype=torch.long, device=device)
-    anchor_valid = torch.zeros(num_anchors, dtype=torch.bool, device=device)
-
-    k = min(num_anchors, valid_indices.numel())
-
-    # Constrain value of k for torch dynamo
-    torch._check(k <= valid_indices.numel())  # noqa: SLF001
-    torch._check(k >= 0)  # noqa: SLF001
-
-    perm = torch.randperm(valid_indices.numel(), device=loss_mask.device)
-    # Contiguous anchors let flex attention use dense (fast) blocks instead of
+    # Sorted anchors let flex attention use dense (fast) blocks instead of
     # scattered all-partial (slow) ones; the order never affects the loss.
-    anchors[:k] = torch.sort(torch.gather(valid_indices, 0, perm[:k])).values
-    anchor_valid[:k] = True
-
-    return anchors, anchor_valid
-    # shape: [num_anchors], [num_anchors]
+    return torch.sort(torch.cat(anchors)).values

@@ -180,7 +180,7 @@ torchrun --standalone --nproc_per_node=4 -m speculators.train \
 
 - **`--sample-from-anchor`** / **`--no-sample-from-anchor`** (bool, default: algorithm-specific) Whether to sample from the anchor position. `True`: sample from anchor and all mask positions (default for dspark, produces block_size tokens). `False`: anchor is bonus token (default for dflash/dflash2, produces block_size-1 tokens).
 
-- **`--max-anchors`** (int, default: `512`) Maximum anchor positions for DFlash-family and P-EAGLE training.
+- **`--max-anchors`** (int, default: `512`) Maximum anchor positions per packed document for DFlash-family training, and per packed sequence for P-EAGLE.
 
 - **`--dflash-decay-gamma`** (float, default: `4.0`) Decay gamma for DFlash-family loss weighting.
 

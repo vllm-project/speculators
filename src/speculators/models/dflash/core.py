@@ -342,8 +342,8 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
     def _build_attention_mask(self, loss_mask, max_anchors, document_ids, device):
         total_seq_len = loss_mask.shape[1]
 
-        anchor_positions, anchor_valid = select_anchors(
-            loss_mask, max_anchors, self.block_size
+        anchor_positions = select_anchors(
+            loss_mask, document_ids, max_anchors, self.block_size
         )
 
         full_attn_mask = None
@@ -367,7 +367,7 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
                 sliding_window_non_causal=self.sliding_window_non_causal,
             )
 
-        return full_attn_mask, sliding_window_attn_mask, anchor_positions, anchor_valid
+        return full_attn_mask, sliding_window_attn_mask, anchor_positions
 
     def _backbone_forward(
         self,
@@ -387,18 +387,18 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
         """
         device = hidden_states.device
         total_seq_len = hidden_states.shape[1]
-        num_anchors = kwargs.pop("max_anchors", 512)
+        max_anchors = kwargs.pop("max_anchors", 512)
 
         if position_ids is None:
             position_ids = torch.arange(
                 total_seq_len, dtype=torch.long, device=device
             ).unsqueeze(0)
 
-        full_attn_mask, sliding_window_attn_mask, anchor_positions, anchor_valid = (
-            self._build_attention_mask(loss_mask, num_anchors, document_ids, device)
+        full_attn_mask, sliding_window_attn_mask, anchor_positions = (
+            self._build_attention_mask(loss_mask, max_anchors, document_ids, device)
         )
 
-        mask_tokens_size = num_anchors * self.block_size
+        mask_tokens_size = anchor_positions.numel() * self.block_size
 
         mask_token_ids = torch.full(
             (1, mask_tokens_size),
@@ -466,13 +466,6 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
 
         aligned_loss_mask = loss_mask.clone()[:, anchored_block_indices]
         # shape: [1, num_anchors*block_size]
-
-        # zero out any padded anchor blocks
-        aligned_loss_mask = aligned_loss_mask * (
-            anchor_valid.repeat_interleave(self.block_size)
-            .unsqueeze(0)
-            .to(aligned_loss_mask.dtype)
-        )  # shape: [1, num_anchors*block_size]
 
         # For sample_from_anchor=False, mask slot 0 (anchor) since it's not trained
         if not self.config.sample_from_anchor:
