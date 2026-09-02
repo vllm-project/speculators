@@ -57,13 +57,15 @@ def compute_accuracy_multi_step(
         Tuple of (correct_per_pos, total_per_pos) both with shape [num_pos].
         Overall counts can be derived by summing these.
     """
-    correct = pred_ids == target_ids
-    correct = torch.masked_select(correct, loss_mask.to(torch.bool))
-    pos_idx = torch.masked_select(pos_idx, loss_mask.to(torch.bool))
+    # Masked arithmetic instead of masked_select keeps every shape static, so the
+    # compiled callers do not specialize on the supervised-token count.
+    mask = loss_mask.to(torch.bool).flatten()
+    correct = ((pred_ids == target_ids).flatten() & mask).float()
+    pos_idx = pos_idx.flatten()
 
     correct_per_pos = torch.zeros(num_pos, dtype=torch.float, device=correct.device)
     total_per_pos = torch.zeros(num_pos, dtype=torch.float, device=correct.device)
-    correct_per_pos.scatter_add_(0, pos_idx, correct.float())
-    total_per_pos.scatter_add_(0, pos_idx, torch.ones_like(correct, dtype=torch.float))
+    correct_per_pos.scatter_add_(0, pos_idx, correct)
+    total_per_pos.scatter_add_(0, pos_idx, mask.float())
 
     return correct_per_pos, total_per_pos  # shape: [num_pos], [num_pos]

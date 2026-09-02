@@ -133,8 +133,10 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
         # The forward is compiled with static shapes and its query length is
         # num_documents * max_anchors * block_size, so each distinct document
         # count (times train/val) is one compiled variant. select_anchors bounds
-        # that count at ~14 by rounding counts above 8 up to a power of two, so
-        # the limits below cannot be reached by data; hitting one is a bug, and
+        # that count at 18 (1-8 exact, then powers of two up to total_seq_len) by
+        # rounding counts above 8 up to a power of two, and nothing else in the
+        # forward has a data-dependent shape, so the limits below cannot be
+        # reached by data; hitting one is a bug, and
         # dynamo's default reaction, silently running eager, would surface later
         # as an OOM on this memory-heavy path, so fail immediately instead.
         dynamo_config = torch._dynamo.config  # noqa: SLF001
