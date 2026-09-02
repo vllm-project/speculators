@@ -33,8 +33,10 @@ def select_anchors(
     ``anchor_valid == False`` when it has fewer. Short documents are fully
     covered and long ones are capped. The slot count depends only on the number
     of documents, so the compiled forward sees one static shape per document
-    count. The last ``block_size`` positions are excluded so every anchor block
-    stays in bounds.
+    count; counts above 8 are rounded up to a power of two (extra slots fully
+    masked) so that number stays small on data with many short documents. The
+    last ``block_size`` positions are excluded so every anchor block stays in
+    bounds.
 
     Returns ``(anchors, anchor_valid)`` flattened to ``[num_docs * num_anchors]``
     with anchors sorted within each document. A sequence without supervised
@@ -47,6 +49,8 @@ def select_anchors(
 
     docs = document_ids[valid].unique()
     num_docs = max(docs.numel(), 1)
+    if num_docs > 8:  # noqa: PLR2004
+        num_docs = 1 << (num_docs - 1).bit_length()
     device = loss_mask.device
     anchors = torch.zeros(num_docs, num_anchors, dtype=torch.long, device=device)
     anchor_valid = torch.zeros(num_docs, num_anchors, dtype=torch.bool, device=device)

@@ -131,13 +131,18 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
         self.block_size = config.block_size
 
         # The forward is compiled with static shapes and its query length is
-        # num_documents * max_anchors * block_size, so it recompiles once per
-        # distinct document count in a packed sequence (times train/val). The
-        # default limit of 8 variants would silently fall back to eager.
-        torch._dynamo.config.recompile_limit = max(  # noqa: SLF001
-            torch._dynamo.config.recompile_limit,  # noqa: SLF001
-            64,
+        # num_documents * max_anchors * block_size, so each distinct document
+        # count (times train/val) is one compiled variant. select_anchors bounds
+        # that count at ~14 by rounding counts above 8 up to a power of two, so
+        # the limits below cannot be reached by data; hitting one is a bug, and
+        # dynamo's default reaction, silently running eager, would surface later
+        # as an OOM on this memory-heavy path, so fail immediately instead.
+        dynamo_config = torch._dynamo.config  # noqa: SLF001
+        dynamo_config.recompile_limit = max(dynamo_config.recompile_limit, 64)
+        dynamo_config.accumulated_recompile_limit = max(
+            dynamo_config.accumulated_recompile_limit, 1024
         )
+        dynamo_config.fail_on_recompile_limit_hit = True
 
         # Warn if using DFlash with sample_from_anchor=True (may not be supported)
         if type(self).__name__ == "DFlashDraftModel" and config.sample_from_anchor:

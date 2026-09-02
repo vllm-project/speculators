@@ -101,3 +101,16 @@ class TestSelectAnchors:
 
         assert anchors.shape == valid.shape == (8,)
         assert not valid.any()
+
+    def test_document_counts_above_eight_round_up_to_power_of_two(self):
+        loss_mask = torch.ones(1, 64)
+        document_ids = (
+            torch.arange(64).unsqueeze(0) // 4
+        )  # 16 docs; the last one is cut
+        anchors, valid = select_anchors(
+            loss_mask, document_ids, num_anchors=2, block_size=4
+        )
+
+        assert anchors.shape == (32,)  # 15 docs with anchors, rounded up to 16
+        assert valid.sum() == 30
+        assert not valid[30:].any()
