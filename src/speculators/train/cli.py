@@ -696,17 +696,13 @@ def main(cfg: TrainConfig):  # noqa: C901
         muon_weight_decay=args.muon_weight_decay,
         muon_ns_steps=args.muon_ns_steps,
         muon_adjust_lr_fn=args.muon_adjust_lr_fn,
-        scheduler_type=args.scheduler_type,
-        scheduler_warmup_steps=args.scheduler_warmup_steps,
-        scheduler_warmup_ratio=args.scheduler_warmup_ratio,
-        scheduler_total_steps=args.scheduler_total_steps,
-        scheduler_num_cosine_cycles=args.scheduler_num_cosine_cycles,
         checkpoint_freq=args.checkpoint_freq,
         save_best=args.save_best,
         hidden_states_dtype=hidden_states_dtype,
         log_freq=args.log_freq,
         fsdp_shard=args.fsdp_shard,
         max_steps=args.max_steps,
+        **cfg.scheduler.model_dump(),
     )
     trainer = Trainer(draft_model, trainer_config, train_loader, val_loader)
 

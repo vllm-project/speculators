@@ -244,9 +244,12 @@ def _get_wsd_schedule_with_warmup(
     min_lr_ratio: float = 0.0,
     decay_ratio: float = 0.2,
     decay_style: WSDDecayStyle = "cosine",
-    last_epoch: int = -1,
 ) -> LambdaLR:
-    """Create a warmup-stable-decay schedule with a configurable final anneal."""
+    """Create a warmup-stable-decay schedule with a configurable final anneal.
+
+    The decay coefficients follow ``lightseekorg/TorchSpec``'s
+    ``torchspec/training/lr_scheduler.py`` at commit ``4f447655``.
+    """
     decay_start, decay_steps = _validate_wsd_schedule(
         num_warmup_steps=num_warmup_steps,
         num_training_steps=num_training_steps,
@@ -268,7 +271,7 @@ def _get_wsd_schedule_with_warmup(
         coefficient = _get_wsd_decay_coefficient(decay_progress, decay_style)
         return min_lr_ratio + coefficient * (1.0 - min_lr_ratio)
 
-    return LambdaLR(optimizer, lr_lambda, last_epoch=last_epoch)
+    return LambdaLR(optimizer, lr_lambda)
 
 
 class Trainer:
@@ -475,11 +478,10 @@ class Trainer:
                     opt,
                     num_warmup_steps=scheduler_warmup_steps,
                     num_training_steps=scheduler_total_steps,
-                    warmup_init_lr_ratio=(self.config.scheduler_warmup_init_lr_ratio),
+                    warmup_init_lr_ratio=self.config.scheduler_warmup_init_lr_ratio,
                     min_lr_ratio=self.config.scheduler_min_lr_ratio,
                     decay_ratio=self.config.scheduler_wsd_decay_ratio,
                     decay_style=self.config.scheduler_wsd_decay_style,
-                    last_epoch=last_epoch,
                 )
             return get_cosine_schedule_with_warmup(
                 opt,
