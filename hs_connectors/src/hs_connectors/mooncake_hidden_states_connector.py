@@ -23,6 +23,7 @@ from vllm.distributed.kv_transfer.kv_connector.v1.base import (
     SupportsHMA,
 )
 from vllm.distributed.kv_transfer.kv_connector.v1.example_hidden_states_connector import (  # noqa: E501
+    ExampleHiddenStatesConnector,
     extract_from_kv_cache,
 )
 from vllm.distributed.parallel_state import get_tensor_model_parallel_rank
@@ -365,11 +366,6 @@ class MooncakeHiddenStatesConnector(KVConnectorBase_V1, SupportsHMA):
     @classmethod
     def get_required_kvcache_layout(
         cls,
-        vllm_config: VllmConfig,  # noqa: ARG003 (KVConnector interface)
+        vllm_config: VllmConfig,
     ) -> str | None:
-        if cls is KVConnectorBase_V1:
-            raise TypeError(
-                "get_required_kvcache_layout should not be called on the base class"
-            )
-        # NHD keeps each token's hidden states contiguous in memory.
-        return "NHD"
+        return ExampleHiddenStatesConnector.get_required_kvcache_layout(vllm_config)
