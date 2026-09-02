@@ -5,6 +5,7 @@ from pathlib import Path
 
 import torch
 from datasets import Dataset
+from hs_connectors.transfer import FileTransfer
 from safetensors.torch import save_file
 
 import speculators.train.data as data_module
@@ -235,41 +236,20 @@ def test_arrow_dataset_default_train_ratio_does_not_crash(tmp_path: Path):
     assert arrow_ds._map_to_file_idx(5) == 5
 
 
-def test_arrow_dataset_on_generate_cache_creates_hidden_states_dir(tmp_path: Path):
-    """on_generate="cache" must create the cache dir when cache() is called —
-    otherwise shutil.move into it raises FileNotFoundError, which generation recovery
-    downgrades to a warning, so caching silently fails for every sample."""
-    ds = Dataset.from_dict(
-        {
-            "input_ids": [[1, 2, 3]],
-            "loss_mask": [[1, 1, 1]],
-            "seq_len": [3],
-        }
-    )
-    ds.save_to_disk(str(tmp_path / "data"))
+def test_file_transfer_cache_creates_hidden_states_dir(tmp_path: Path):
+    """FileTransfer.cache() must create its target directory lazily — otherwise
+    shutil.move into it raises FileNotFoundError."""
+    transfer = FileTransfer(tmp_path / "hidden_states")
 
-    arrow_ds = ArrowDataset(
-        max_len=128,
-        datapath=str(tmp_path / "data"),
-        on_missing="generate",
-        on_generate="cache",
-    )
-
-    assert hasattr(arrow_ds.transfer, "hidden_states_path")
-    # Directory is created lazily when cache() is called
-    assert not arrow_ds.transfer.hidden_states_path.exists()
-
-    # Simulate caching a generated sample
+    assert not transfer.hidden_states_path.exists()
 
     temp_file = tmp_path / "temp_hs.safetensors"
     save_file({"hidden_states": torch.zeros(1, 1)}, temp_file)
 
-    arrow_ds.transfer.cache(str(temp_file), file_idx=0)
+    transfer.cache(str(temp_file), file_idx=0)
 
-    # Now the directory should exist
-    assert arrow_ds.transfer.hidden_states_path.is_dir()
-    # And the cached file should exist
-    assert (arrow_ds.transfer.hidden_states_path / "hs_0.safetensors").exists()
+    assert transfer.hidden_states_path.is_dir()
+    assert (transfer.hidden_states_path / "hs_0.safetensors").exists()
 
 
 class _SequenceTransfer:
@@ -293,9 +273,6 @@ class _SequenceTransfer:
 
     def delete(self, handle):
         self.deleted.append(handle)
-
-    def cache(self, _handle, _file_idx):
-        return None
 
 
 def _make_generation_dataset(
