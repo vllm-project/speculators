@@ -40,6 +40,17 @@ repos:
         types: [python]
         pass_filenames: false
         require_serial: true
+      # Regenerate scripts/_provenance.py from src/speculators/provenance.py.
+      # It rewrites the generated copy in place; pre-commit then fails the
+      # commit if the copy changed, prompting a re-stage (like ruff --fix).
+      # CI enforces parity read-only via `sync_provenance.py --check` in
+      # `make quality`.
+      - id: sync-provenance
+        name: Sync scripts/_provenance.py from src/speculators/provenance.py
+        entry: python scripts/sync_provenance.py
+        language: system
+        pass_filenames: false
+        files: ^(src/speculators/provenance\.py|scripts/(_provenance|sync_provenance)\.py)$
       # Append a DCO Signed-off-by trailer if the commit message lacks one,
       # matching the `git commit -s` requirement for vllm-project repos.
       - id: signoff-commit
