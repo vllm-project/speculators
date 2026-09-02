@@ -42,10 +42,28 @@ logger = init_logger(__name__)
 
 
 def extract_from_kv_cache(
-    kv_cache: torch.Tensor, slot_mapping: torch.Tensor, num_tokens: int
+    kv_cache: torch.Tensor,
+    slot_mapping: torch.Tensor,
+    num_tokens: int,
+    *,
+    block_size: int,
+    num_hidden_states: int,
 ) -> torch.Tensor:
-    block_size = kv_cache.shape[1]
-    return kv_cache[slot_mapping // block_size, slot_mapping % block_size][:num_tokens]
+    dimensions = kv_cache.shape[1:3]
+    if dimensions == (num_hidden_states, block_size):
+        return kv_cache[slot_mapping // block_size, :, slot_mapping % block_size][
+            :num_tokens
+        ]
+    if dimensions == (block_size, num_hidden_states):
+        return kv_cache[slot_mapping // block_size, slot_mapping % block_size][
+            :num_tokens
+        ]
+    raise ValueError(
+        "Unexpected hidden-state cache dimensions: "
+        f"got {tuple(dimensions)}, expected either "
+        f"({num_hidden_states}, {block_size}) or "
+        f"({block_size}, {num_hidden_states})"
+    )
 
 
 def sanitize_key(key: str) -> str:
@@ -133,6 +151,9 @@ class MooncakeHiddenStatesConnector(KVConnectorBase_V1, SupportsHMA):
         self._block_size = self._get_cache_block_size(
             vllm_config, kv_cache_config, self._hs_group_idx
         )
+        self._num_hidden_states = kv_cache_config.kv_cache_groups[
+            self._hs_group_idx
+        ].kv_cache_spec.num_kv_heads
 
         if (
             self._vllm_config.speculative_config is None
@@ -241,7 +262,11 @@ class MooncakeHiddenStatesConnector(KVConnectorBase_V1, SupportsHMA):
             with torch.cuda.stream(copy_stream):
                 slot_mapping = slot_mapping.to(self._kv_cache.device, non_blocking=True)
                 hidden_states = extract_from_kv_cache(
-                    self._kv_cache, slot_mapping, num_tokens
+                    self._kv_cache,
+                    slot_mapping,
+                    num_tokens,
+                    block_size=self._block_size,
+                    num_hidden_states=self._num_hidden_states,
                 )
                 assert_finite("hidden_states", hidden_states)
                 # Async DtoH copy into pinned host memory.

@@ -218,6 +218,20 @@ def test_q_lora_rank_accepted_with_glm5(monkeypatch):
     assert args.draft_arch == "glm5"
 
 
+def test_q_lora_rank_rejects_negative(monkeypatch):
+    with pytest.raises(SystemExit):
+        _parse(
+            monkeypatch,
+            [
+                "--speculator-type",
+                "dflash",
+                "--draft-arch",
+                "glm5",
+                "--q-lora-rank=-1",
+            ],
+        )
+
+
 # ---------------------------------------------------------------------------
 # Per-speculator-type defaults for num_layers, per_position_loss_weight, loss_fn
 # (best-practices recipe from https://github.com/vllm-project/speculators/issues/979)

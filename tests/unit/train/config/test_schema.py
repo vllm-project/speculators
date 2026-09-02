@@ -12,6 +12,7 @@ from pydantic import ValidationError
 from speculators.train.config import TrainConfig
 from speculators.train.config.schema import (
     CONFIG_DESTS,
+    DFlash2Args,
     DFlashArgs,
     DraftArgs,
     LossArgs,
@@ -58,6 +59,21 @@ def test_flatten_resolves_dflash_derived_defaults():
     assert flat["per_position_loss_weight"] == "dpace"
     assert flat["loss_fn"] == "ce"
     assert flat["block_size"] == 16
+    assert flat["sliding_window_non_causal"] is False
+
+
+def test_flatten_resolves_dflash2_derived_defaults():
+    flat = TrainConfig(speculator_type="dflash2").flatten()
+    assert flat["num_layers"] == 5
+    assert flat["per_position_loss_weight"] == "fixed-exp-decay"
+    assert flat["loss_fn"] == "kl_div"
+    assert flat["block_size"] == 8
+    assert flat["conv_kernel_size"] == 2
+    assert flat["conv_group_size"] == 16
+    assert flat["selector_rank"] == 256
+    assert flat["selector_top_k"] == 16
+    assert flat["selector_loss_alpha"] == pytest.approx(1.0)
+    assert flat["sliding_window_non_causal"] is True
 
 
 def test_flatten_leaves_non_dflash_derived_defaults_unchanged():
@@ -69,6 +85,7 @@ def test_flatten_leaves_non_dflash_derived_defaults_unchanged():
         assert flat["per_position_loss_weight"] == "fixed-exp-decay"
         assert flat["loss_fn"] == "kl_div"
         assert flat["block_size"] == 8
+        assert flat["sliding_window_non_causal"] is False
 
 
 def test_dflash_derived_defaults_do_not_override_explicit_values():
@@ -82,6 +99,32 @@ def test_dflash_derived_defaults_do_not_override_explicit_values():
     assert cfg.loss.loss_fn == "kl_div"
     assert cfg.dflash.per_position_loss_weight == "fixed-exp-decay"
     assert cfg.dflash.block_size == 8
+
+
+def test_dflash2_explicit_values_override_defaults():
+    cfg = TrainConfig(
+        speculator_type="dflash2",
+        draft=DraftArgs(num_layers=3, sliding_window_non_causal=False),
+        loss=LossArgs(loss_fn="ce"),
+        dflash=DFlashArgs(block_size=4),
+        dflash2=DFlash2Args(
+            conv_kernel_size=3,
+            conv_group_size=8,
+            selector_rank=128,
+            selector_top_k=32,
+            selector_loss_alpha=0.25,
+        ),
+    )
+    flat = cfg.flatten()
+    assert flat["num_layers"] == 3
+    assert flat["loss_fn"] == "ce"
+    assert flat["block_size"] == 4
+    assert flat["sliding_window_non_causal"] is False
+    assert flat["conv_kernel_size"] == 3
+    assert flat["conv_group_size"] == 8
+    assert flat["selector_rank"] == 128
+    assert flat["selector_top_k"] == 32
+    assert flat["selector_loss_alpha"] == pytest.approx(0.25)
 
 
 def test_from_flat_inverts_flatten():
@@ -147,3 +190,11 @@ def test_q_lora_rank_accepted_with_glm5_draft_arch():
     )
     assert cfg.draft.q_lora_rank == 32
     assert cfg.draft.kv_lora_rank == 16
+
+
+def test_q_lora_rank_rejects_negative():
+    with pytest.raises(ValidationError):
+        TrainConfig(
+            speculator_type="dspark",
+            draft=DraftArgs(draft_arch="glm5", q_lora_rank=-1),
+        )

@@ -1,4 +1,5 @@
 from collections.abc import Callable
+from pathlib import Path
 from typing import ClassVar
 
 import torch
@@ -67,18 +68,55 @@ class DSparkDraftModel(DFlashDraftModel):
         HuggingFace ``PreTrainedModel.save_pretrained`` overwrites
         ``config.architectures`` with this Python class name. Restore the
         K3-style export contract afterwards so serve can dispatch
-        ``Glm5DSparkForCausalLM``.
+        ``Glm5DSparkForCausalLM``. Hub upload is deferred until after that
+        rewrite so ``push_to_hub=True`` does not ship ``DSparkDraftModel``.
         """
-        super().save_pretrained(save_directory, **kwargs)
         from speculators.models.dflash.glm5 import (  # noqa: PLC0415
             GLM5_DSPARK_ARCHITECTURE,
             is_glm5_mla_config,
         )
 
         if not is_glm5_mla_config(self.config.transformer_layer_config):
+            super().save_pretrained(save_directory, **kwargs)
             return
+
+        push_to_hub = bool(kwargs.pop("push_to_hub", False))
+        hub_kwargs = {
+            key: kwargs.pop(key)
+            for key in ("repo_id", "commit_message", "private", "token", "create_pr")
+            if key in kwargs
+        }
+        files_timestamps: dict[str, float] = {}
+        repo_id = hub_kwargs.get("repo_id")
+        if push_to_hub:
+            from huggingface_hub import create_repo  # noqa: PLC0415
+
+            save_path = Path(str(save_directory))
+            save_path.mkdir(parents=True, exist_ok=True)
+            repo_id = repo_id or save_path.name
+            repo_id = create_repo(
+                repo_id,
+                exist_ok=True,
+                **{
+                    key: hub_kwargs[key]
+                    for key in ("private", "token")
+                    if key in hub_kwargs
+                },
+            ).repo_id
+            files_timestamps = self._get_files_timestamps(save_directory)
+
+        super().save_pretrained(save_directory, push_to_hub=False, **kwargs)
         self.config.architectures = [GLM5_DSPARK_ARCHITECTURE]
         self.config.save_pretrained(save_directory)
+        if push_to_hub:
+            self._upload_modified_files(
+                save_directory,
+                repo_id,
+                files_timestamps,
+                commit_message=hub_kwargs.get("commit_message"),
+                token=hub_kwargs.get("token"),
+                create_pr=hub_kwargs.get("create_pr", False),
+            )
 
     @classmethod
     def from_training_args(

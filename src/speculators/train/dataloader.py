@@ -57,12 +57,14 @@ def _setup_dataloader(
     num_target_layers: int = 3,
     prefetch_factor: int | None = 4,
     preprocess: Callable[[BatchType], BatchType] | None = None,
+    max_batches: int | None = None,
 ) -> DataLoader:
     batch_sampler = MultipackDistributedBatchSamplerV2(
         batch_max_length=total_seq_len,
         lengths=dataset.approx_lengths,
         num_replicas=get_dp_size(),
         rank=get_dp_rank(),
+        max_batches=max_batches,
     )
     use_workers = num_workers > 0
     return DataLoader(
@@ -97,12 +99,15 @@ def create_train_val_loaders(
     verifier_name_or_path: str,
     request_timeout: float | None,
     max_retries: int,
+    generation_validation_retries: int,
+    max_consecutive_generation_failures: int,
     hidden_size: int,
     num_target_layers: int,
     num_workers: int,
     prefetch_factor: int,
     preprocess: Callable[[BatchType], BatchType] | None,
     train_data_ratio: float = 0.9,
+    max_train_batches: int | None = None,
 ) -> tuple[DataLoader, DataLoader]:
     """Create training and validation DataLoaders.
 
@@ -130,6 +135,8 @@ def create_train_val_loaders(
         hidden_states_dtype=hidden_states_dtype,
         request_timeout=request_timeout,
         max_retries=max_retries,
+        generation_validation_retries=generation_validation_retries,
+        max_consecutive_generation_failures=max_consecutive_generation_failures,
     )
     val_dataset: BaseDataset = ArrowDataset(
         datapath=data_path,
@@ -144,6 +151,8 @@ def create_train_val_loaders(
         hidden_states_dtype=hidden_states_dtype,
         request_timeout=request_timeout,
         max_retries=max_retries,
+        generation_validation_retries=generation_validation_retries,
+        max_consecutive_generation_failures=max_consecutive_generation_failures,
     )
 
     train_loader = _setup_dataloader(
@@ -154,6 +163,7 @@ def create_train_val_loaders(
         num_workers=num_workers,
         prefetch_factor=prefetch_factor,
         preprocess=preprocess,
+        max_batches=max_train_batches,
     )
     val_loader = _setup_dataloader(
         val_dataset,

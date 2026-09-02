@@ -46,19 +46,15 @@ from pathlib import Path
 import torch
 import torch.distributed as dist
 
-# Allow importing from the scripts/ directory (peer imports like train.py).
-sys.path.insert(0, str(Path(__file__).resolve().parent))
-
-from train import (
-    build_draft_model,
-    parse_vocab_mappings,
-    set_seed,
-)
-
 from hs_connectors import HiddenStatesBackend
 from speculators.model import SpeculatorModel
 from speculators.models.eagle3.data import shift_batch
 from speculators.models.mtp.data import shift_batch_mtp
+from speculators.train.cli import (
+    build_draft_model,
+    parse_vocab_mappings,
+    set_seed,
+)
 from speculators.train.config import TrainConfig
 from speculators.train.dataloader import create_train_val_loaders
 from speculators.train.distributed import (
@@ -227,6 +223,48 @@ def compute_statistics(values: list[float]) -> dict[str, float]:
     }
 
 
+def select_measured_profiles(
+    all_profiles: list[dict], warmup_steps: int, measured_steps: int
+) -> list[dict]:
+    """Validate the sample count and discard warmup profiles."""
+    total_steps = warmup_steps + measured_steps
+    if len(all_profiles) < total_steps:
+        raise RuntimeError(
+            "Benchmark dataset exhausted before the requested number of steps: "
+            f"got {len(all_profiles)}, requested {total_steps} "
+            f"({warmup_steps} warmup + {measured_steps} measured). Use more "
+            "samples or request fewer benchmark steps."
+        )
+    return all_profiles[warmup_steps:total_steps]
+
+
+def compute_aggregate_throughput(profiles: list[dict]) -> dict[str, float]:
+    """Compute time-weighted throughput for the measured window.
+
+    ``mean(tokens_per_s)`` overweights short, fast steps. Reconstructing each
+    profile's token count and dividing by total elapsed time gives the effective
+    throughput observed by rank 0 over the complete measurement window.
+    """
+    elapsed_s = sum(profile["step_ms"] for profile in profiles) / 1000
+    rank0_tokens = sum(
+        profile["tokens_per_s"] * profile["step_ms"] / 1000 for profile in profiles
+    )
+    return {
+        "measured_time_s": elapsed_s,
+        "rank0_tokens": rank0_tokens,
+        "effective_rank0_tokens_per_s": rank0_tokens / elapsed_s,
+    }
+
+
+def shutdown_dataloader_workers(loader) -> None:
+    """Stop persistent workers before Mooncake/distributed teardown."""
+    iterator = getattr(loader, "_iterator", None)
+    shutdown = getattr(iterator, "_shutdown_workers", None)
+    if callable(shutdown):
+        shutdown()
+        loader._iterator = None
+
+
 # ---------------------------------------------------------------------------
 # Benchmark runner
 # ---------------------------------------------------------------------------
@@ -276,12 +314,18 @@ def _build_train_loader(
         verifier_name_or_path=train_args.verifier_name_or_path,
         request_timeout=train_args.request_timeout,
         max_retries=train_args.max_retries,
+        generation_validation_retries=train_args.generation_validation_retries,
+        # A benchmark must not publish timings from degraded batches. Trip the
+        # landed recovery circuit breaker on the first sample that exhausts its
+        # complete generate/load/validate retry budget.
+        max_consecutive_generation_failures=1,
         hidden_size=hidden_size,
         num_target_layers=num_target_layers,
         num_workers=train_args.num_workers,
         prefetch_factor=train_args.prefetch_factor,
         preprocess=preprocess,
         train_data_ratio=train_args.train_data_ratio,
+        max_train_batches=total_steps,
     )
     return train_loader, False
 
@@ -378,21 +422,18 @@ def run_benchmark(bench_args, train_args) -> dict:
 
     # --- Split warmup / measured profiles ---
     all_profiles = capture.profiles
-    measured_profiles = all_profiles[bench_args.warmup_steps :]
-
-    if not measured_profiles:
-        if rank == 0:
-            print(
-                f"WARNING: Got {len(all_profiles)} profiles but expected "
-                f"{total_steps}. Check warmup_steps={bench_args.warmup_steps}."
-            )
-        measured_profiles = all_profiles
+    measured_profiles = select_measured_profiles(
+        all_profiles,
+        bench_args.warmup_steps,
+        bench_args.measured_steps,
+    )
 
     # --- Aggregate ---
     timing_agg = {}
     for key in TIMING_KEYS:
         values = [s[key] for s in measured_profiles]
         timing_agg[key] = compute_statistics(values)
+    aggregate = compute_aggregate_throughput(measured_profiles)
 
     num_gpus_used = dist.get_world_size() if dist.is_initialized() else 1
 
@@ -409,6 +450,10 @@ def run_benchmark(bench_args, train_args) -> dict:
             "lr": train_args.lr,
             "hidden_states_dtype": train_args.hidden_states_dtype,
             "synthetic_data": is_synthetic,
+            "data_path": train_args.data_path,
+            "hidden_states_backend": train_args.hidden_states_backend,
+            "num_workers": train_args.num_workers,
+            "prefetch_factor": train_args.prefetch_factor,
             "fsdp_shard": train_args.fsdp_shard,
             "num_gpus_used": num_gpus_used,
             "warmup_steps": bench_args.warmup_steps,
@@ -420,6 +465,7 @@ def run_benchmark(bench_args, train_args) -> dict:
             "peak_reserved_mb": round(peak_reserved_mb, 2),
         },
         "timing": timing_agg,
+        "aggregate": aggregate,
     }
 
     if not bench_args.no_per_step:
@@ -437,7 +483,8 @@ def run_benchmark(bench_args, train_args) -> dict:
         _print_summary(results)
 
     # --- Cleanup ---
-    del trainer, draft_model
+    shutdown_dataloader_workers(train_loader)
+    del trainer, train_loader, draft_model
     if torch.cuda.is_available():
         torch.cuda.empty_cache()
     maybe_destroy_distributed()
@@ -459,6 +506,12 @@ def _print_summary(results: dict) -> None:
             f"{stats['std']:>10.2f} "
             f"{stats['min']:>10.2f} {stats['max']:>10.2f}"
         )
+    aggregate = results["aggregate"]
+    print(
+        "\nEffective rank-0 throughput: "
+        f"{aggregate['effective_rank0_tokens_per_s']:.2f} tokens/s "
+        f"over {aggregate['measured_time_s']:.2f} s"
+    )
     print(
         f"\nPeak memory: {memory['peak_allocated_mb']:.1f} MB "
         f"allocated, {memory['peak_reserved_mb']:.1f} MB reserved"
@@ -485,6 +538,17 @@ def _get_gpu_name(result: dict) -> str:
     if info:
         return info[0].get("name", "unknown")
     return "unknown"
+
+
+def _get_effective_throughput(result: dict) -> float | None:
+    aggregate = result.get("aggregate", {})
+    value = aggregate.get("effective_rank0_tokens_per_s")
+    if value is not None:
+        return float(value)
+    profiles = result.get("per_step")
+    if profiles:
+        return compute_aggregate_throughput(profiles)["effective_rank0_tokens_per_s"]
+    return None
 
 
 def compare_benchmarks(baseline_path: str, candidate_path: str) -> None:
@@ -554,6 +618,17 @@ def compare_benchmarks(baseline_path: str, candidate_path: str) -> None:
         print(
             f"{key:<16} {ba_str:<{col_w}} {ca_str:<{col_w}} "
             f"{delta:>+10.2f} {pct:>+9.1f}%"
+        )
+
+    effective_a = _get_effective_throughput(baseline)
+    effective_b = _get_effective_throughput(candidate)
+    if effective_a is not None and effective_b is not None:
+        delta = effective_b - effective_a
+        pct = (delta / effective_a * 100) if effective_a != 0 else 0
+        print(
+            "\nEffective rank-0 throughput: "
+            f"{effective_a:.2f} -> {effective_b:.2f} tokens/s "
+            f"({delta:+.2f}, {pct:+.1f}%)"
         )
 
     # --- Memory comparison ---

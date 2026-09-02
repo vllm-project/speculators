@@ -299,6 +299,34 @@ def test_matching_algorithm_block_does_not_warn():
         )
 
 
+def test_dflash2_consumes_shared_and_exclusive_algorithm_blocks():
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        cfg = TrainConfig.from_sources(
+            cli={
+                "verifier_name_or_path": "m",
+                "speculator_type": "dflash2",
+                "block_size": 4,
+                "conv_kernel_size": 3,
+            },
+            argv=["train.py"],
+        )
+    assert cfg.dflash.block_size == 4
+    assert cfg.dflash2.conv_kernel_size == 3
+
+
+def test_dflash2_exclusive_block_warns_for_other_dflash_family_member():
+    with pytest.warns(UserWarning, match="does not use the 'dflash2'"):
+        TrainConfig.from_sources(
+            cli={
+                "verifier_name_or_path": "m",
+                "speculator_type": "dspark",
+                "selector_top_k": 8,
+            },
+            argv=["train.py"],
+        )
+
+
 def test_default_algorithm_block_does_not_warn():
     # An untouched (all-default) mismatched group is not "set", so it stays silent.
     with warnings.catch_warnings():
@@ -331,6 +359,51 @@ def test_resolve_verifier_from_config_only_succeeds(tmp_path):
     config.write_text("train:\n  verifier:\n    verifier_name_or_path: from-yaml\n")
     cfg = TrainConfig.resolve(["--config", str(config)])
     assert cfg.flatten()["verifier_name_or_path"] == "from-yaml"
+
+
+def test_resolve_dflash2_flags_and_derived_defaults():
+    cfg = TrainConfig.resolve(
+        [
+            "--verifier-name-or-path",
+            "m",
+            "--speculator-type",
+            "dflash2",
+            "--conv-kernel-size",
+            "3",
+            "--conv-group-size",
+            "8",
+            "--selector-rank",
+            "128",
+            "--selector-top-k",
+            "12",
+            "--selector-loss-alpha",
+            "0.3",
+        ]
+    )
+    flat = cfg.flatten()
+    assert flat["num_layers"] == 5
+    assert flat["block_size"] == 8
+    assert flat["loss_fn"] == "kl_div"
+    assert flat["sliding_window_non_causal"] is True
+    assert flat["conv_kernel_size"] == 3
+    assert flat["conv_group_size"] == 8
+    assert flat["selector_rank"] == 128
+    assert flat["selector_top_k"] == 12
+    assert flat["selector_loss_alpha"] == pytest.approx(0.3)
+
+
+def test_resolve_dflash2_allows_explicit_causal_override():
+    cfg = TrainConfig.resolve(
+        [
+            "--verifier-name-or-path",
+            "m",
+            "--speculator-type",
+            "dflash2",
+            "--no-sliding-window-non-causal",
+        ]
+    )
+
+    assert cfg.flatten()["sliding_window_non_causal"] is False
 
 
 def test_resolve_config_error_exits_cleanly(capsys):
@@ -389,7 +462,15 @@ def test_resolve_flag_overrides_config_file(tmp_path):
 
 def test_help_is_grouped_by_concern():
     titles = {group.title for group in build_parser()._action_groups}
-    assert {"general", "verifier", "draft", "data", "optimizer", "mtp"} <= titles
+    assert {
+        "general",
+        "verifier",
+        "draft",
+        "data",
+        "optimizer",
+        "dflash2",
+        "mtp",
+    } <= titles
 
 
 # --------------------------------------------------------------------------- #
@@ -471,6 +552,22 @@ RECIPES: dict[str, dict] = {
         "num_layers": 5,
         "per_position_loss_weight": "dpace",
         "loss_fn": "ce",
+        "target_layer_ids": [2, 18, 33],
+        "on_missing": "generate",
+        "on_generate": "delete",
+    },
+    "dflash2_qwen3_8b_sharegpt_online_5k.sh": {
+        "verifier_name_or_path": "Qwen/Qwen3-8B",
+        "data_path": "./output/dflash2_qwen3_8b_sharegpt",
+        "vllm_endpoint": "http://localhost:8000/v1",
+        "save_path": "./output/dflash2_qwen3_8b_sharegpt/checkpoints",
+        "epochs": 5,
+        "lr": 3e-4,
+        "total_seq_len": 8192,
+        "speculator_type": "dflash2",
+        "block_size": 8,
+        "max_anchors": 3072,
+        "num_layers": 5,
         "target_layer_ids": [2, 18, 33],
         "on_missing": "generate",
         "on_generate": "delete",

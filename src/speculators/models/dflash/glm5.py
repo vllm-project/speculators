@@ -2,9 +2,10 @@
 
 Q is projected from the draft block hidden states; K/V are projected from
 ``cat(target_context, draft)`` through DeepSeek-style MLA (no DSA indexer).
-RoPE is interleaved pair rotation ``(0,1), (2,3), ...`` (vLLM
-``get_rope(..., is_neox_style=False)``, GLM ``rope_interleave=true``) and is
-applied only to the ``qk_rope_head_dim`` side channels.
+RoPE follows ``rope_interleave``: True uses interleaved pair rotation
+``(0,1), (2,3), ...`` (vLLM ``get_rope(..., is_neox_style=False)``); False
+uses NeoX split-half rotation. Applied only to the ``qk_rope_head_dim``
+side channels.
 """
 
 from __future__ import annotations
@@ -26,7 +27,10 @@ from transformers.models.qwen3.modeling_qwen3 import (
 )
 from typing_extensions import Unpack
 
-from speculators.models.dflash.model_definitions import Qwen3DFlashDecoderLayer
+from speculators.models.dflash.model_definitions import (
+    Qwen3DFlashDecoderLayer,
+    apply_rotary_pos_emb,
+)
 
 __all__ = [
     "GLM5_DSPARK_ARCHITECTURE",
@@ -220,6 +224,7 @@ class Glm5DFlashMLAAttention(nn.Module):
         self.attention_dropout = config.attention_dropout
         self.is_causal = False
         self.scaling = 1.0 / math.sqrt(self.qk_head_dim)
+        self.rope_interleave = bool(getattr(config, "rope_interleave", True))
         # K/V already have ``num_heads`` after MLA up-projection + k_rope expand.
         self.num_key_value_groups = 1
         self.head_dim = self.qk_head_dim
@@ -312,7 +317,12 @@ class Glm5DFlashMLAAttention(nn.Module):
         k_rope = k_rope.unsqueeze(1)
 
         cos, sin = position_embeddings
-        q_rope, k_rope = apply_interleaved_rotary_pos_emb(q_rope, k_rope, cos, sin)
+        apply_rope = (
+            apply_interleaved_rotary_pos_emb
+            if self.rope_interleave
+            else apply_rotary_pos_emb
+        )
+        q_rope, k_rope = apply_rope(q_rope, k_rope, cos, sin)
         k_rope = k_rope.expand(-1, self.num_heads, -1, -1)
 
         query_states = torch.cat([q_nope, q_rope], dim=-1)

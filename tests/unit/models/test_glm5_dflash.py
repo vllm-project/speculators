@@ -1,6 +1,7 @@
 """Unit tests for GLM-5 Dense MLA DFlash / DSpark draft layers."""
 
 import json
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -8,10 +9,6 @@ import pytest
 import torch
 from transformers import AutoConfig
 
-from scripts.train import (
-    _apply_glm5_lora_rank_overrides,
-    create_transformer_layer_config,
-)
 from speculators.models.dflash import DFlashSpeculatorConfig
 from speculators.models.dflash.core import DFlashDraftModel
 from speculators.models.dflash.glm5 import (
@@ -27,6 +24,10 @@ from speculators.models.dflash.model_definitions import (
 )
 from speculators.models.dspark import DSparkSpeculatorConfig
 from speculators.models.dspark.core import DSparkDraftModel
+from speculators.train.cli import (
+    _apply_glm5_lora_rank_overrides,
+    create_transformer_layer_config,
+)
 
 
 TINY_GLM5_KWARGS = {
@@ -165,7 +166,9 @@ def test_create_transformer_layer_config_copies_glm5_mla_fields():
         v_head_dim=8,
         qk_head_dim=12,
     )
-    with patch("scripts.train.AutoConfig.from_pretrained", return_value=verifier):
+    with patch(
+        "speculators.train.cli.AutoConfig.from_pretrained", return_value=verifier
+    ):
         config = create_transformer_layer_config(
             "dummy",
             num_layers=2,
@@ -202,6 +205,11 @@ def test_apply_glm5_lora_rank_overrides():
     with pytest.raises(ValueError, match="must be > 0"):
         _apply_glm5_lora_rank_overrides(
             _tiny_glm5_config(), SimpleNamespace(q_lora_rank=None, kv_lora_rank=0)
+        )
+
+    with pytest.raises(ValueError, match="must be >= 0"):
+        _apply_glm5_lora_rank_overrides(
+            _tiny_glm5_config(), SimpleNamespace(q_lora_rank=-1, kv_lora_rank=None)
         )
 
     with pytest.raises(ValueError, match="require --draft-arch glm5"):
@@ -250,6 +258,7 @@ def test_mla_interleaved_rope_rotates_adjacent_pairs():
 def test_mla_attention_calls_interleaved_rope():
     cfg = _tiny_glm5_config()
     attn = Glm5DFlashMLAAttention(cfg, layer_idx=0)
+    assert attn.rope_interleave is True
     bsz, q_len, ctx_len = 1, 2, 4
     hidden = torch.randn(bsz, q_len, cfg.hidden_size)
     target = torch.randn(bsz, ctx_len, cfg.hidden_size)
@@ -262,6 +271,33 @@ def test_mla_attention_calls_interleaved_rope():
     ) as mocked:
         out, _ = attn(hidden, target, (cos, sin), attention_mask=None)
     mocked.assert_called_once()
+    assert out.shape == (bsz, q_len, cfg.hidden_size)
+    assert torch.isfinite(out).all()
+
+
+def test_mla_attention_honors_rope_interleave_false():
+    cfg = _tiny_glm5_config(rope_interleave=False)
+    attn = Glm5DFlashMLAAttention(cfg, layer_idx=0)
+    assert attn.rope_interleave is False
+    bsz, q_len, ctx_len = 1, 2, 4
+    hidden = torch.randn(bsz, q_len, cfg.hidden_size)
+    target = torch.randn(bsz, ctx_len, cfg.hidden_size)
+    kv_len = ctx_len + q_len
+    cos = torch.randn(bsz, kv_len, cfg.qk_rope_head_dim)
+    sin = torch.randn(bsz, kv_len, cfg.qk_rope_head_dim)
+    with (
+        patch(
+            "speculators.models.dflash.glm5.apply_interleaved_rotary_pos_emb",
+            wraps=apply_interleaved_rotary_pos_emb,
+        ) as interleaved,
+        patch(
+            "speculators.models.dflash.glm5.apply_rotary_pos_emb",
+            wraps=apply_rotary_pos_emb,
+        ) as neox,
+    ):
+        out, _ = attn(hidden, target, (cos, sin), attention_mask=None)
+    interleaved.assert_not_called()
+    neox.assert_called_once()
     assert out.shape == (bsz, q_len, cfg.hidden_size)
     assert torch.isfinite(out).all()
 
@@ -397,3 +433,41 @@ def test_glm5_dspark_save_pretrained_export_contract(tmp_path):
     )
     assert upgraded.transformer_layer_config.model_type == "glm5_dspark"
     assert upgraded.architectures == [GLM5_DSPARK_ARCHITECTURE]
+
+
+def test_glm5_dspark_push_to_hub_uploads_after_architecture_rewrite(tmp_path):
+    tl_config = _tiny_glm5_config()
+    config = DSparkSpeculatorConfig(
+        transformer_layer_config=tl_config,
+        draft_vocab_size=64,
+        block_size=4,
+        aux_hidden_state_layer_ids=[0, 1],
+        mask_token_id=0,
+        markov_rank=8,
+        enable_confidence_head=False,
+    )
+    model = DSparkDraftModel(config)
+    out = tmp_path / "glm5_dspark"
+    uploaded: dict[str, object] = {}
+
+    def _upload(save_directory, repo_id, _files_timestamps, **_kwargs):
+        uploaded["architectures"] = json.loads(
+            (Path(save_directory) / "config.json").read_text()
+        )["architectures"]
+        uploaded["repo_id"] = repo_id
+        return "ok"
+
+    with (
+        patch(
+            "huggingface_hub.create_repo",
+            return_value=SimpleNamespace(repo_id="user/glm5-dspark"),
+        ),
+        patch.object(DSparkDraftModel, "_get_files_timestamps", return_value={}),
+        patch.object(DSparkDraftModel, "_upload_modified_files", side_effect=_upload),
+    ):
+        model.save_pretrained(out, push_to_hub=True, repo_id="user/glm5-dspark")
+
+    assert uploaded["architectures"] == [GLM5_DSPARK_ARCHITECTURE]
+    assert uploaded["repo_id"] == "user/glm5-dspark"
+    saved = json.loads((out / "config.json").read_text())
+    assert saved["architectures"] == [GLM5_DSPARK_ARCHITECTURE]
