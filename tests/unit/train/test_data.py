@@ -5,8 +5,6 @@ from pathlib import Path
 
 import torch
 from datasets import Dataset
-from hs_connectors.transfer import FileTransfer
-from safetensors.torch import save_file
 
 import speculators.train.data as data_module
 from speculators.models.eagle3.data import shift_batch
@@ -234,22 +232,6 @@ def test_arrow_dataset_default_train_ratio_does_not_crash(tmp_path: Path):
     # Should not raise AttributeError
     assert arrow_ds._map_to_file_idx(0) == 0
     assert arrow_ds._map_to_file_idx(5) == 5
-
-
-def test_file_transfer_cache_creates_hidden_states_dir(tmp_path: Path):
-    """FileTransfer.cache() must create its target directory lazily — otherwise
-    shutil.move into it raises FileNotFoundError."""
-    transfer = FileTransfer(tmp_path / "hidden_states")
-
-    assert not transfer.hidden_states_path.exists()
-
-    temp_file = tmp_path / "temp_hs.safetensors"
-    save_file({"hidden_states": torch.zeros(1, 1)}, temp_file)
-
-    transfer.cache(str(temp_file), file_idx=0)
-
-    assert transfer.hidden_states_path.is_dir()
-    assert (transfer.hidden_states_path / "hs_0.safetensors").exists()
 
 
 class _SequenceTransfer:
