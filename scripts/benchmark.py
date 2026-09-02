@@ -46,19 +46,15 @@ from pathlib import Path
 import torch
 import torch.distributed as dist
 
-# Allow importing from the scripts/ directory (peer imports like train.py).
-sys.path.insert(0, str(Path(__file__).resolve().parent))
-
-from train import (
-    build_draft_model,
-    parse_vocab_mappings,
-    set_seed,
-)
-
 from hs_connectors import HiddenStatesBackend
 from speculators.model import SpeculatorModel
 from speculators.models.eagle3.data import shift_batch
 from speculators.models.mtp.data import shift_batch_mtp
+from speculators.train.cli import (
+    build_draft_model,
+    parse_vocab_mappings,
+    set_seed,
+)
 from speculators.train.config import TrainConfig
 from speculators.train.dataloader import create_train_val_loaders
 from speculators.train.distributed import (

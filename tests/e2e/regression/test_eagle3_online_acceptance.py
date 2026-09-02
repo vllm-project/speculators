@@ -67,7 +67,7 @@ def test_online_regression(
         max_samples=5000,
         seq_length=8192,
         vllm_kwargs={
-            "gpu_memory_utilization": 0.75,
+            "gpu_memory_utilization": 0.5,
             "allowed_local_media_path": vllm_media_path,
         },
         epochs=3,
