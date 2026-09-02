@@ -81,8 +81,7 @@ def _preprocessing_workers(cpus: int) -> int:
         1,
         min(
             MAX_PREPROCESSING_WORKERS,
-            int(cpus * CPU_BUDGET_FRACTION)
-            // EFFECTIVE_CPUS_PER_PREPROCESSING_WORKER,
+            int(cpus * CPU_BUDGET_FRACTION) // EFFECTIVE_CPUS_PER_PREPROCESSING_WORKER,
         ),
     )
 

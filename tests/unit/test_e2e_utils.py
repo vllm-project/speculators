@@ -1,9 +1,13 @@
 from types import SimpleNamespace
+from typing import TYPE_CHECKING, cast
 from unittest.mock import Mock
 
 import pytest
 
 from tests.e2e import utils
+
+if TYPE_CHECKING:
+    import subprocess
 
 
 class _FakeResponse:
@@ -45,7 +49,10 @@ def test_wait_for_server_requires_stable_health(monkeypatch):
 def test_wait_for_server_checks_process_during_stability(monkeypatch):
     clock = [0.0]
     polls = iter([None, None, 1])
-    process = SimpleNamespace(returncode=1, poll=lambda: next(polls))
+    process = cast(
+        "subprocess.Popen",
+        SimpleNamespace(returncode=1, poll=lambda: next(polls)),
+    )
 
     def advance(seconds):
         clock[0] += seconds
