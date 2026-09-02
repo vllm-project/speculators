@@ -126,8 +126,8 @@ def prepare_data(
             help=(
                 "Number of CPU processes for dataset preprocessing. Each one "
                 "blocks on a single render call at a time, so this is also the "
-                "render concurrency. Defaults to one third of the available CPUs, "
-                "with a minimum of 8 and maximum of 128."
+                "render concurrency. Defaults to a shared render CPU budget using "
+                "75% of available CPUs, with a maximum of 128."
             ),
         ),
     ] = None,

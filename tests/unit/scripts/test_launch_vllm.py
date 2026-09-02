@@ -31,13 +31,22 @@ def test_headless_does_not_get_api_server_defaults():
     assert "--renderer-num-workers" not in args
 
 
-def test_sizing_preserves_the_384_cpu_optimum():
-    assert default_preprocessing_workers(384) == 128
-    assert _preprocessing_workers(384) == 128
-    assert render_throughput_defaults(384) == (32, DEFAULT_RENDERER_NUM_WORKERS)
+def test_sizing_respects_the_combined_budget():
+    assert default_preprocessing_workers(384) == 72
+    assert _preprocessing_workers(384) == 72
+    assert render_throughput_defaults(384) == (18, DEFAULT_RENDERER_NUM_WORKERS)
 
 
 def test_sizing_scales_down_on_small_hosts():
-    assert default_preprocessing_workers(16) == 8
-    assert _preprocessing_workers(16) == 8
-    assert render_throughput_defaults(16) == (2, DEFAULT_RENDERER_NUM_WORKERS)
+    assert default_preprocessing_workers(16) == 3
+    assert _preprocessing_workers(16) == 3
+    assert render_throughput_defaults(16) == (1, DEFAULT_RENDERER_NUM_WORKERS)
+
+
+def test_sizing_uses_one_combined_budget():
+    preprocessing_workers = default_preprocessing_workers(160)
+    api_servers, _ = render_throughput_defaults(160)
+
+    assert preprocessing_workers == 30
+    assert api_servers == 7
+    assert preprocessing_workers * 3 + api_servers * 4 <= int(160 * 0.75)

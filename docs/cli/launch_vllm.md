@@ -43,7 +43,7 @@ See [vLLM CLI documentation](https://docs.vllm.ai/en/latest/cli/) for full list 
 
 [prepare_data.py](prepare_data.md) `--render-endpoint` points at this server and drives its `/v1/chat/completions/render` endpoint. To keep that stage from serializing in vLLM's stock single-process, single-renderer front end, `launch_vllm.py` derives `--api-server-count` from the CPUs available to the process and defaults `--renderer-num-workers` to `2`.
 
-On the standard 384-CPU H100 node, this resolves to `--api-server-count 32 --renderer-num-workers 2`, paired with 128 preprocessing workers—the best measured setting at **16,878 renders/s**. Smaller hosts scale down automatically. Arguments passed after `--` follow the defaults, so an explicit value still wins. No frontend defaults are added with `--headless`.
+On the standard 384-CPU H100 node, this resolves to `--api-server-count 18 --renderer-num-workers 2`, paired with 72 preprocessing workers. The default intentionally leaves 25% of the CPU budget for native runtime threads and other application work; smaller hosts scale down automatically. Arguments passed after `--` follow the defaults, so an explicit value still wins. No frontend defaults are added with `--headless`.
 
 The [training tutorial](../user_guide/tutorials/train.md) pins vLLM 0.27.1 for this path. These flags scale only the HTTP front end (chat-template application and tokenization); the engine and hidden-states connector are unaffected.
 

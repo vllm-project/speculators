@@ -70,9 +70,9 @@ speculators prepare-data \
 
 - **`--seed`** (int, default: `0`) Random seed for reproducibility. Must match the seed used in other scripts.
 
-- **`--num-preprocessing-workers`** (int, default: one third of the available CPUs, at least `8` and at most `128`) Number of CPU processes for dataset preprocessing. Each worker blocks on one render call at a time, so for natural-language input this is also the render concurrency.
+- **`--num-preprocessing-workers`** (int, default: a shared render budget using 75% of available CPUs, at most `128`) Number of CPU processes for dataset preprocessing. Each worker blocks on one render call at a time, so for natural-language input this is also the render concurrency. The default assumes roughly four CPUs per preprocessing worker, including the vLLM front end and native runtime threads.
 
-  [launch_vllm.py](launch_vllm.md) derives a matching front end from the same affinity-aware CPU count. On the standard 384-CPU H100 node, the defaults resolve to `128` workers and `32` API servers with `2` renderer threads each—the best measured pairing at **16,878 renders/s**. Smaller hosts scale down automatically.
+  [launch_vllm.py](launch_vllm.md) derives a matching front end from the same affinity-aware CPU count. On the standard 384-CPU H100 node, the defaults resolve to `72` workers and `18` API servers with `2` renderer threads each, leaving headroom for native runtime threads and other application work. Smaller hosts scale down automatically.
 
 ## Full Example
 

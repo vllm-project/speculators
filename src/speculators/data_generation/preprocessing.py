@@ -31,10 +31,14 @@ log = PipelineLogger(__name__)
 
 _warned_roles: set[str] = set()
 
-# Leave CPU capacity for the vLLM front end while scaling the render clients.
-MIN_PREPROCESSING_WORKERS = 8
+# Account for both the preprocessing workers and the vLLM front end in one
+# budget. A preprocessing worker is estimated at 3 CPUs, and every four of
+# them share one API server estimated at 4 CPUs: 3 + 4 / 4 = 4 CPUs per
+# preprocessing worker. Leave 25% of the available CPUs for native runtime
+# threads and other application work.
+CPU_BUDGET_FRACTION = 0.75
 MAX_PREPROCESSING_WORKERS = 128
-CPUS_PER_PREPROCESSING_WORKER = 3
+EFFECTIVE_CPUS_PER_PREPROCESSING_WORKER = 4
 
 
 def usable_cpu_count() -> int:
@@ -47,12 +51,16 @@ def usable_cpu_count() -> int:
 
 
 def default_preprocessing_workers(cpus: int | None = None) -> int:
-    """Scale preprocessing workers up to the measured 128-worker knee."""
+    """Choose preprocessing workers within the shared render CPU budget."""
     if cpus is None:
         cpus = usable_cpu_count()
     return max(
-        MIN_PREPROCESSING_WORKERS,
-        min(MAX_PREPROCESSING_WORKERS, cpus // CPUS_PER_PREPROCESSING_WORKER),
+        1,
+        min(
+            MAX_PREPROCESSING_WORKERS,
+            int(cpus * CPU_BUDGET_FRACTION)
+            // EFFECTIVE_CPUS_PER_PREPROCESSING_WORKER,
+        ),
     )
 
 

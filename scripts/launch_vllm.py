@@ -42,15 +42,18 @@ if "file" not in _backend_registry:
     _backend_registry["file"] = _InlineFileBackend  # type: ignore[assignment]
 
 
-# Affinity-aware sizing reaches the measured 128 clients + 32 x 2 front end on
-# a 384-CPU node, while keeping the same defaults usable on smaller machines.
+# Keep the preprocessing workers and vLLM front end within one CPU budget.
+# Four preprocessing workers are paired with one API server. The former is
+# estimated at 3 CPUs and the latter at 4 CPUs, so each preprocessing worker
+# represents 4 CPUs of combined capacity. Leave 25% for native runtime
+# threads and other application work.
+CPU_BUDGET_FRACTION = 0.75
 DEFAULT_RENDERER_NUM_WORKERS = 2
 MAX_API_SERVER_COUNT = 32
 WORKERS_PER_API_SERVER = 4
 CPUS_PER_API_SERVER = 4
-MIN_PREPROCESSING_WORKERS = 8
 MAX_PREPROCESSING_WORKERS = 128
-CPUS_PER_PREPROCESSING_WORKER = 3
+EFFECTIVE_CPUS_PER_PREPROCESSING_WORKER = 4
 
 
 def _usable_cpu_count() -> int:
@@ -63,10 +66,14 @@ def _usable_cpu_count() -> int:
 
 
 def _preprocessing_workers(cpus: int) -> int:
-    """Mirror prepare_data.py's worker default in the vLLM environment."""
+    """Mirror prepare_data.py's shared render CPU budget."""
     return max(
-        MIN_PREPROCESSING_WORKERS,
-        min(MAX_PREPROCESSING_WORKERS, cpus // CPUS_PER_PREPROCESSING_WORKER),
+        1,
+        min(
+            MAX_PREPROCESSING_WORKERS,
+            int(cpus * CPU_BUDGET_FRACTION)
+            // EFFECTIVE_CPUS_PER_PREPROCESSING_WORKER,
+        ),
     )
 
 
