@@ -1,8 +1,8 @@
 #!/bin/bash
 # Online MTP Finetuning Script
 #
-# Runs the full online MTP finetuning pipeline: data preparation, vLLM
-# server launch, and training (with hidden states generated on-the-fly
+# Runs the full online MTP finetuning pipeline: vLLM server launch, data
+# preparation, and training (with hidden states generated on-the-fly
 # from the live server). After training, stitches finetuned weights back
 # into the verifier checkpoint.
 #
@@ -58,20 +58,8 @@ VLLM_GPU="0"
 TRAIN_GPU="1"
 # =======================================
 
-# Step 1: Download regenerated dataset and prepare data
-echo "=== Step 1: Downloading dataset and preparing data ==="
-DATASET_DIR="$OUTPUT_DIR/dataset"
-hf download "$DATASET" "$DATASET_FILE" --repo-type dataset --local-dir "$DATASET_DIR"
-
-python scripts/prepare_data.py \
-    --model "$MODEL" \
-    --data "$DATASET_DIR/$DATASET_FILE" \
-    --max-samples "$MAX_SAMPLES" \
-    --output "$OUTPUT_DIR" \
-    --seq-length "$SEQ_LENGTH"
-
-# Step 2: Launch vLLM server in the background
-echo "=== Step 2: Launching vLLM server ==="
+# Step 1: Launch vLLM server in the background
+echo "=== Step 1: Launching vLLM server ==="
 CUDA_VISIBLE_DEVICES="$VLLM_GPU" python scripts/launch_vllm.py "$MODEL" \
     --target-layer-ids 32 \
     -- --port "$VLLM_PORT" &
@@ -91,10 +79,26 @@ until curl -sf "http://localhost:${VLLM_PORT}/health" > /dev/null 2>&1; do
 done
 echo "vLLM server ready."
 
+# Step 2: Download regenerated dataset and prepare data
+# The dataset holds natural-language conversations, so prepare-data needs the
+# target model's render endpoint to apply the chat template, tokenize, and
+# derive loss masks.
+echo "=== Step 2: Downloading dataset and preparing data ==="
+DATASET_DIR="$OUTPUT_DIR/dataset"
+hf download "$DATASET" "$DATASET_FILE" --repo-type dataset --local-dir "$DATASET_DIR"
+
+speculators prepare-data \
+    --model "$MODEL" \
+    --data "$DATASET_DIR/$DATASET_FILE" \
+    --render-endpoint "http://localhost:${VLLM_PORT}" \
+    --max-samples "$MAX_SAMPLES" \
+    --output "$OUTPUT_DIR" \
+    --seq-length "$SEQ_LENGTH"
+
 # Step 3: Train against the live vLLM server
 echo "=== Step 3: Training ==="
 CUDA_VISIBLE_DEVICES="$TRAIN_GPU" python \
-    scripts/train.py \
+    -m speculators.train \
     --verifier-name-or-path "$MODEL" \
     --data-path "$OUTPUT_DIR" \
     --vllm-endpoint "http://localhost:${VLLM_PORT}/v1" \
@@ -111,7 +115,7 @@ CUDA_VISIBLE_DEVICES="$TRAIN_GPU" python \
 
 # Step 4: Stitch finetuned weights back into the verifier
 echo "=== Step 4: Stitching finetuned weights ==="
-python scripts/stitch_mtp.py \
+speculators stitch-mtp \
     "$OUTPUT_DIR/checkpoints/checkpoint_best" \
     "$MODEL" \
     --output-path "$STITCHED_DIR"

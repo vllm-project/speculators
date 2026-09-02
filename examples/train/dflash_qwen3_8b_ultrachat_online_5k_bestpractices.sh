@@ -1,7 +1,7 @@
 #!/bin/bash
 # Online DFlash Training Script -- Best-Practices Recipe
 #
-# Same pipeline as dflash_qwen3_8b_sharegpt_online_5k.sh (data preparation, vLLM
+# Same pipeline as dflash_qwen3_8b_ultrachat_online_5k.sh (data preparation, vLLM
 # server launch, and online training), but using the recipe recommended in
 # https://github.com/vllm-project/speculators/issues/979 ("DFlash Training Best
 # Practices"): D-PACE per-position loss weighting (with cross-entropy), 5 draft
@@ -11,10 +11,8 @@
 # self-contained reference for the full recipe regardless of what the defaults
 # happen to be at the time you read it.
 #
-# Uses UltraChat instead of ShareGPT (the classic example's dataset) since it's
-# one of the two datasets the recipe in #979 was actually validated on
-# (alongside Magpie, which isn't wired into scripts/prepare_data.py's built-in
-# dataset registry).
+# The dataset below is UltraChat prompts with every assistant turn regenerated
+# on-policy by Qwen/Qwen3-8B.
 #
 # Usage: Copy this script, modify the configuration variables below, then run:
 #   bash examples/train/dflash_qwen3_8b_ultrachat_online_5k_bestpractices.sh
@@ -24,7 +22,7 @@
 # and the recipe rationale/ablations at
 # https://github.com/vllm-project/speculators/issues/979
 
-### Example E2E run for DFlash Qwen3-8B on 5k samples from UltraChat ###
+### Example E2E run for DFlash Qwen3-8B on 5k regenerated UltraChat-200k samples ###
 
 # Note: With just 5k samples, the model performance will not be very good, however there
 # are enough samples to verify that the pipeline is working correctly and that the model
@@ -40,8 +38,8 @@ set -euo pipefail
 
 # ============ Configuration ============
 MODEL="Qwen/Qwen3-8B"
-DATASET="ultrachat"               # sharegpt, ultrachat, or path to custom data
-OUTPUT_DIR="./output/dflash_qwen3_8b_ultrachat_bestpractices"
+DATASET="hf:inference-optimization/speculators-ci-datasets:tutorial_regen"  # on-policy regenerated Qwen3-8B data from UltraChat prompts (pretokenized); or a preset/path to custom data
+OUTPUT_DIR="./output/dflash_qwen3_8b_ultrachat_200k_regen_bestpractices"
 VLLM_PORT=8000
 MAX_SAMPLES=5000
 SEQ_LENGTH=8192
@@ -65,8 +63,11 @@ NUM_TRAIN_GPUS=2
 # =======================================
 
 # Step 1: Prepare data
+# The dataset is on-policy regenerated: assistant turns were produced by the
+# target model and ship pretokenized (input_ids + loss_mask). prepare-data just
+# packages them -- no --render-endpoint (or running vLLM server) needed here.
 echo "=== Step 1: Preparing data ==="
-python scripts/prepare_data.py \
+speculators prepare-data \
     --model "$MODEL" \
     --data "$DATASET" \
     --output "$OUTPUT_DIR" \
@@ -98,7 +99,7 @@ echo "vLLM server ready."
 echo "=== Step 3: Training ==="
 CUDA_VISIBLE_DEVICES="$TRAIN_GPUS" torchrun \
     --standalone --nproc_per_node "$NUM_TRAIN_GPUS" \
-    scripts/train.py \
+    -m speculators.train \
     --verifier-name-or-path "$MODEL" \
     --data-path "$OUTPUT_DIR" \
     --vllm-endpoint "http://localhost:${VLLM_PORT}/v1" \

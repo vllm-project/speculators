@@ -53,17 +53,11 @@ GPUS="0,1"
 NUM_GPUS=2
 # =======================================
 
-# Step 1: Prepare data
-echo "=== Step 1: Preparing data ==="
-python scripts/prepare_data.py \
-    --model "$MODEL" \
-    --data "$DATASET" \
-    --max-samples "$MAX_SAMPLES" \
-    --output "$OUTPUT_DIR" \
-    --seq-length "$SEQ_LENGTH"
-
-# Step 2: Launch vLLM server in the background
-echo "=== Step 2: Launching vLLM server ==="
+# Step 1: Launch vLLM server in the background
+# The same server serves two purposes: its render endpoint tokenizes the
+# natural-language dataset in Step 2, and it produces the verifier hidden
+# states extracted in Step 3.
+echo "=== Step 1: Launching vLLM server ==="
 CUDA_VISIBLE_DEVICES="$GPUS" python scripts/launch_vllm.py "$MODEL" \
     -- --data-parallel-size 2 --port "$VLLM_PORT" --gpu-memory-utilization 0.85 &
 VLLM_PID=$!
@@ -74,9 +68,22 @@ until curl -sf "http://localhost:${VLLM_PORT}/health" > /dev/null 2>&1; do
 done
 echo "vLLM server ready."
 
+# Step 2: Prepare data
+# The dataset holds natural-language conversations, so prepare-data needs the
+# target model's render endpoint to apply the chat template, tokenize, and
+# derive loss masks.
+echo "=== Step 2: Preparing data ==="
+speculators prepare-data \
+    --model "$MODEL" \
+    --data "$DATASET" \
+    --render-endpoint "http://localhost:${VLLM_PORT}" \
+    --max-samples "$MAX_SAMPLES" \
+    --output "$OUTPUT_DIR" \
+    --seq-length "$SEQ_LENGTH"
+
 # Step 3: Generate hidden states
 echo "=== Step 3: Generating hidden states ==="
-python scripts/data_generation_offline.py \
+speculators generate-offline-data \
     --preprocessed-data "$OUTPUT_DIR" \
     --endpoint "http://localhost:${VLLM_PORT}/v1" \
     --output "$HIDDEN_STATES_DIR" \
@@ -94,7 +101,7 @@ echo "vLLM server stopped. GPUs freed for training."
 echo "=== Step 5: Training ==="
 CUDA_VISIBLE_DEVICES="$GPUS" torchrun \
     --standalone --nproc_per_node "$NUM_GPUS" \
-    scripts/train.py \
+    -m speculators.train \
     --verifier-name-or-path "$MODEL" \
     --data-path "$OUTPUT_DIR" \
     --hidden-states-path "$HIDDEN_STATES_DIR" \

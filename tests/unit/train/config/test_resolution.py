@@ -490,15 +490,15 @@ def _config_block(lines: list[str]) -> list[str]:
 
 
 def _train_invocation_args(lines: list[str]) -> str:
-    """The argument text after ``scripts/train.py``, with continuations joined."""
-    start = next(i for i, line in enumerate(lines) if "scripts/train.py" in line)
+    """The argument text after ``-m speculators.train``, with continuations joined."""
+    start = next(i for i, line in enumerate(lines) if "-m speculators.train" in line)
     block: list[str] = []
     for line in lines[start:]:
         block.append(line)
         if not line.rstrip().endswith("\\"):
             break
     joined = " ".join(line.rstrip().rstrip("\\").strip() for line in block)
-    return joined.split("scripts/train.py", 1)[1]
+    return joined.split("-m speculators.train", 1)[1]
 
 
 def _recipe_argv(path: Path) -> list[str]:
@@ -520,11 +520,11 @@ def _recipe_argv(path: Path) -> list[str]:
 
 
 RECIPES: dict[str, dict] = {
-    "dflash_qwen3_8b_sharegpt_online_5k.sh": {
+    "dflash_qwen3_8b_ultrachat_online_5k.sh": {
         "verifier_name_or_path": "Qwen/Qwen3-8B",
-        "data_path": "./output/dflash_qwen3_8b_sharegpt",
+        "data_path": "./output/dflash_qwen3_8b_ultrachat_200k_regen",
         "vllm_endpoint": "http://localhost:8000/v1",
-        "save_path": "./output/dflash_qwen3_8b_sharegpt/checkpoints",
+        "save_path": "./output/dflash_qwen3_8b_ultrachat_200k_regen/checkpoints",
         "draft_vocab_size": 32000,
         "epochs": 5,
         "lr": 3e-4,
@@ -539,9 +539,11 @@ RECIPES: dict[str, dict] = {
     },
     "dflash_qwen3_8b_ultrachat_online_5k_bestpractices.sh": {
         "verifier_name_or_path": "Qwen/Qwen3-8B",
-        "data_path": "./output/dflash_qwen3_8b_ultrachat_bestpractices",
+        "data_path": "./output/dflash_qwen3_8b_ultrachat_200k_regen_bestpractices",
         "vllm_endpoint": "http://localhost:8000/v1",
-        "save_path": "./output/dflash_qwen3_8b_ultrachat_bestpractices/checkpoints",
+        "save_path": (
+            "./output/dflash_qwen3_8b_ultrachat_200k_regen_bestpractices/checkpoints"
+        ),
         "draft_vocab_size": 32000,
         "epochs": 5,
         "lr": 3e-4,
@@ -556,11 +558,11 @@ RECIPES: dict[str, dict] = {
         "on_missing": "generate",
         "on_generate": "delete",
     },
-    "dflash2_qwen3_8b_sharegpt_online_5k.sh": {
+    "dflash2_qwen3_8b_ultrachat_online_5k.sh": {
         "verifier_name_or_path": "Qwen/Qwen3-8B",
-        "data_path": "./output/dflash2_qwen3_8b_sharegpt",
+        "data_path": "./output/dflash2_qwen3_8b_ultrachat_200k_regen",
         "vllm_endpoint": "http://localhost:8000/v1",
-        "save_path": "./output/dflash2_qwen3_8b_sharegpt/checkpoints",
+        "save_path": "./output/dflash2_qwen3_8b_ultrachat_200k_regen/checkpoints",
         "epochs": 5,
         "lr": 3e-4,
         "total_seq_len": 8192,
@@ -606,7 +608,7 @@ RECIPES: dict[str, dict] = {
         "total_seq_len": 8192,
         "on_missing": "raise",
     },
-    "eagle3_qwen3_8b_sharegpt_online_5k.sh": {
+    "eagle3_qwen3_8b_ultrachat_online_5k.sh": {
         "verifier_name_or_path": "Qwen/Qwen3-8B",
         "data_path": "./output",
         "vllm_endpoint": "http://localhost:8000/v1",
@@ -633,12 +635,14 @@ RECIPES: dict[str, dict] = {
         "on_missing": "generate",
         "on_generate": "delete",
     },
-    "peagle_qwen3_8b_sharegpt_online_5k.sh": {
+    "peagle_qwen3_8b_ultrachat_online_5k.sh": {
         "verifier_name_or_path": "Qwen/Qwen3-8B",
-        "data_path": "./output/peagle_qwen3_8b_sharegpt",
+        "data_path": "./output/peagle_qwen3_8b_ultrachat_200k_regen",
         "vllm_endpoint": "http://localhost:8108/v1",
-        "hidden_states_path": "./output/peagle_qwen3_8b_sharegpt/hidden_states",
-        "save_path": "./output/peagle_qwen3_8b_sharegpt/checkpoints",
+        "hidden_states_path": (
+            "./output/peagle_qwen3_8b_ultrachat_200k_regen/hidden_states"
+        ),
+        "save_path": "./output/peagle_qwen3_8b_ultrachat_200k_regen/checkpoints",
         "epochs": 5,
         "lr": 6e-4,
         "total_seq_len": 4096,

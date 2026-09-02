@@ -106,7 +106,7 @@ Note: if you are using an experiment tracker (e.g. trackio, wandb, tensorboard, 
 
 Speculator training data must contain responses produced by the target model. You can create it with [Response Regeneration](response_regeneration.md) or supply on-policy data from your own generation pipeline.
 
-Response Regeneration writes speculator-format rows containing `input_ids` and `loss_mask`, which `prepare_data.py` can use directly:
+Response Regeneration writes speculator-format rows containing `input_ids` and `loss_mask`, which `speculators prepare-data` can use directly:
 
 ```bash
 # in speculators venv
@@ -371,7 +371,7 @@ CUDA_VISIBLE_DEVICES=2,3 torchrun --standalone --nproc_per_node 2 \
 ```bash
 # in speculators venv
 CUDA_VISIBLE_DEVICES=2,3 torchrun --standalone --nproc_per_node 2 \
-  scripts/train.py \
+  -m speculators.train \
   --verifier-name-or-path Qwen/Qwen3-8B \
   --data-path ./output \
   --save-path ./output/checkpoints \
@@ -521,7 +521,7 @@ CUDA_VISIBLE_DEVICES=0,1,2,3 torchrun --standalone --nproc_per_node 4 \
 ```bash
 # in speculators venv
 CUDA_VISIBLE_DEVICES=0,1,2,3 torchrun --standalone --nproc_per_node 4 \
-  scripts/train.py \
+  -m speculators.train \
   --verifier-name-or-path Qwen/Qwen3-8B \
   --data-path ./output \
   --save-path ./output/checkpoints \
@@ -673,7 +673,7 @@ CUDA_VISIBLE_DEVICES=2,3 torchrun --standalone --nproc_per_node 2 \
 ```bash
 # in speculators venv
 CUDA_VISIBLE_DEVICES=2,3 torchrun --standalone --nproc_per_node 2 \
-  scripts/train.py \
+  -m speculators.train \
   --verifier-name-or-path Qwen/Qwen3-8B \
   --data-path ./output \
   --save-path ./output/checkpoints \
@@ -947,12 +947,12 @@ python scripts/launch_vllm.py model -- --tensor-parallel-size 2
 
 Each of these runs the full pipeline end to end:
 
-- [`eagle3_qwen3_8b_sharegpt_online_5k.sh`](https://github.com/vllm-project/speculators/blob/main/examples/train/eagle3_qwen3_8b_sharegpt_online_5k.sh) -- Eagle-3, online
+- [`eagle3_qwen3_8b_ultrachat_online_5k.sh`](https://github.com/vllm-project/speculators/blob/main/examples/train/eagle3_qwen3_8b_ultrachat_online_5k.sh) -- Eagle-3, online
 - [`eagle3_llama3_8b_ultrachat_offline_5k.sh`](https://github.com/vllm-project/speculators/blob/main/examples/train/eagle3_llama3_8b_ultrachat_offline_5k.sh) -- Eagle-3, offline
-- [`peagle_qwen3_8b_sharegpt_online_5k.sh`](https://github.com/vllm-project/speculators/blob/main/examples/train/peagle_qwen3_8b_sharegpt_online_5k.sh) -- P-EAGLE
-- [`dflash_qwen3_8b_sharegpt_online_5k.sh`](https://github.com/vllm-project/speculators/blob/main/examples/train/dflash_qwen3_8b_sharegpt_online_5k.sh) -- DFlash, online
+- [`peagle_qwen3_8b_ultrachat_online_5k.sh`](https://github.com/vllm-project/speculators/blob/main/examples/train/peagle_qwen3_8b_ultrachat_online_5k.sh) -- P-EAGLE
+- [`dflash_qwen3_8b_ultrachat_online_5k.sh`](https://github.com/vllm-project/speculators/blob/main/examples/train/dflash_qwen3_8b_ultrachat_online_5k.sh) -- DFlash, online
 - [`dflash_qwen3_8b_ultrachat_online_5k_bestpractices.sh`](https://github.com/vllm-project/speculators/blob/main/examples/train/dflash_qwen3_8b_ultrachat_online_5k_bestpractices.sh) -- DFlash, online, with the [best-practices recipe](https://github.com/vllm-project/speculators/issues/979) (D-PACE, block_size=16)
-- [`dflash2_qwen3_8b_sharegpt_online_5k.sh`](https://github.com/vllm-project/speculators/blob/main/examples/train/dflash2_qwen3_8b_sharegpt_online_5k.sh) -- DFlash2, online
+- [`dflash2_qwen3_8b_ultrachat_online_5k.sh`](https://github.com/vllm-project/speculators/blob/main/examples/train/dflash2_qwen3_8b_ultrachat_online_5k.sh) -- DFlash2, online
 - [`dspark_qwen3_0_6b_sharegpt_online.sh`](https://github.com/vllm-project/speculators/blob/main/examples/train/dspark_qwen3_0_6b_sharegpt_online.sh) -- DSpark, online (targets Qwen3-0.6B)
 - [`mtp_qwen3_5_9b_gsm8k_online.sh`](https://github.com/vllm-project/speculators/blob/main/examples/train/mtp_qwen3_5_9b_gsm8k_online.sh) -- MTP, online
 
