@@ -372,7 +372,7 @@ CUDA_VISIBLE_DEVICES=2,3 torchrun --standalone --nproc_per_node 2 \
 ```bash
 # in speculators venv
 CUDA_VISIBLE_DEVICES=2,3 torchrun --standalone --nproc_per_node 2 \
-  scripts/train.py \
+  -m speculators.train \
   --verifier-name-or-path Qwen/Qwen3-8B \
   --data-path ./output \
   --save-path ./output/checkpoints \
@@ -522,7 +522,7 @@ CUDA_VISIBLE_DEVICES=0,1,2,3 torchrun --standalone --nproc_per_node 4 \
 ```bash
 # in speculators venv
 CUDA_VISIBLE_DEVICES=0,1,2,3 torchrun --standalone --nproc_per_node 4 \
-  scripts/train.py \
+  -m speculators.train \
   --verifier-name-or-path Qwen/Qwen3-8B \
   --data-path ./output \
   --save-path ./output/checkpoints \

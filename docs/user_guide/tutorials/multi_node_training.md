@@ -100,7 +100,7 @@ On the training node, point the trainer at the same Mooncake master and the vLLM
 ```bash
 # in speculators venv
 torchrun --standalone --nproc_per_node 4 \
-  scripts/train.py \
+  -m speculators.train \
   --verifier-name-or-path Qwen/Qwen3-8B \
   --data-path ./output \
   --save-path ./output/checkpoints \
