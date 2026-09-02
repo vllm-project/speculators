@@ -520,7 +520,7 @@ def _recipe_argv(path: Path) -> list[str]:
 
 
 RECIPES: dict[str, dict] = {
-    "dflash_qwen3_8b_ultrachat_200k_regen_online_5k.sh": {
+    "dflash_qwen3_8b_ultrachat_online_5k.sh": {
         "verifier_name_or_path": "Qwen/Qwen3-8B",
         "data_path": "./output/dflash_qwen3_8b_ultrachat_200k_regen",
         "vllm_endpoint": "http://localhost:8000/v1",
@@ -537,7 +537,7 @@ RECIPES: dict[str, dict] = {
         "on_missing": "generate",
         "on_generate": "delete",
     },
-    "dflash_qwen3_8b_ultrachat_200k_regen_online_5k_bestpractices.sh": {
+    "dflash_qwen3_8b_ultrachat_online_5k_bestpractices.sh": {
         "verifier_name_or_path": "Qwen/Qwen3-8B",
         "data_path": "./output/dflash_qwen3_8b_ultrachat_200k_regen_bestpractices",
         "vllm_endpoint": "http://localhost:8000/v1",
@@ -558,7 +558,7 @@ RECIPES: dict[str, dict] = {
         "on_missing": "generate",
         "on_generate": "delete",
     },
-    "dflash2_qwen3_8b_ultrachat_200k_regen_online_5k.sh": {
+    "dflash2_qwen3_8b_ultrachat_online_5k.sh": {
         "verifier_name_or_path": "Qwen/Qwen3-8B",
         "data_path": "./output/dflash2_qwen3_8b_ultrachat_200k_regen",
         "vllm_endpoint": "http://localhost:8000/v1",
@@ -608,7 +608,7 @@ RECIPES: dict[str, dict] = {
         "total_seq_len": 8192,
         "on_missing": "raise",
     },
-    "eagle3_qwen3_8b_ultrachat_200k_regen_online_5k.sh": {
+    "eagle3_qwen3_8b_ultrachat_online_5k.sh": {
         "verifier_name_or_path": "Qwen/Qwen3-8B",
         "data_path": "./output",
         "vllm_endpoint": "http://localhost:8000/v1",
@@ -635,7 +635,7 @@ RECIPES: dict[str, dict] = {
         "on_missing": "generate",
         "on_generate": "delete",
     },
-    "peagle_qwen3_8b_ultrachat_200k_regen_online_5k.sh": {
+    "peagle_qwen3_8b_ultrachat_online_5k.sh": {
         "verifier_name_or_path": "Qwen/Qwen3-8B",
         "data_path": "./output/peagle_qwen3_8b_ultrachat_200k_regen",
         "vllm_endpoint": "http://localhost:8108/v1",

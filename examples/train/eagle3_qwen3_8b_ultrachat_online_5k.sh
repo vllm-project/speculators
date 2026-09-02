@@ -5,7 +5,7 @@
 # and training (with hidden states generated on-the-fly from the live server).
 #
 # Usage: Copy this script, modify the configuration variables below, then run:
-#   bash examples/train/eagle3_qwen3_8b_ultrachat_200k_regen_online_5k.sh
+#   bash examples/train/eagle3_qwen3_8b_ultrachat_online_5k.sh
 #
 # For a detailed walkthrough, see 
 # https://docs.vllm.ai/projects/speculators/en/latest/user_guide/tutorials/train/

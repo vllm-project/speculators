@@ -1,16 +1,16 @@
 #!/bin/bash
-# Online P-EAGLE Training Script
+# Online DFlash Training Script
 #
-# Runs the full online P-EAGLE training pipeline: data preparation, vLLM server launch,
+# Runs the full online DFlash training pipeline: data preparation, vLLM server launch,
 # and training (with hidden states generated on-the-fly from the live server).
 #
 # Usage: Copy this script, modify the configuration variables below, then run:
-#   bash examples/train/peagle_qwen3_8b_ultrachat_200k_regen_online_5k.sh
+#   bash examples/train/dflash_qwen3_8b_ultrachat_online_5k.sh
+#
+# For a detailed walkthrough, see 
+# https://docs.vllm.ai/projects/speculators/en/latest/user_guide/tutorials/train/
 
-### Example E2E run for P-EAGLE Qwen3-8B on 5k regenerated UltraChat-200k samples ###
-
-# P-EAGLE (Parallel EAGLE) extends EAGLE-3 with parallel multi-token prediction using
-# Conditional-On-Distribution (COD) sampling for memory-efficient training.
+### Example E2E run for DFlash Qwen3-8B on 5k regenerated UltraChat-200k samples ###
 
 # Note: With just 5k samples, the model performance will not be very good, however there
 # are enough samples to verify that the pipeline is working correctly and that the model
@@ -22,22 +22,24 @@ set -euo pipefail
 # ============ Configuration ============
 MODEL="Qwen/Qwen3-8B"
 DATASET="hf:inference-optimization/speculators-ci-datasets:tutorial_regen"  # on-policy regenerated Qwen3-8B data (pretokenized); or a preset/path to custom data
-OUTPUT_DIR="./output/peagle_qwen3_8b_ultrachat_200k_regen"
-VLLM_PORT=8108
+OUTPUT_DIR="./output/dflash_qwen3_8b_ultrachat_200k_regen"
+VLLM_PORT=8000
 MAX_SAMPLES=5000
-SEQ_LENGTH=4096
+SEQ_LENGTH=8192
 EPOCHS=5
-LR=6e-4
+LR=3e-4
 
-# P-EAGLE-specific parameters
-SPECULATOR_TYPE="peagle"
-NUM_LAYERS=4
-NUM_DEPTHS=4
-DOWN_SAMPLE_RATIO=0.7
-DOWN_SAMPLE_RATIO_MIN=0.2
+# DFlash-specific parameters
+SPECULATOR_TYPE="dflash"
+BLOCK_SIZE=8
+MAX_ANCHORS=3072
+NUM_LAYERS=5
+DRAFT_VOCAB_SIZE=32000
+TARGET_LAYER_IDS="2 18 33"  # Must match vLLM's eagle_aux_hidden_state_layer_ids
+
 # GPU assignments (online training needs separate GPUs for vLLM and training)
-VLLM_GPUS="2,3"
-TRAIN_GPUS="4,5"
+VLLM_GPUS="0,1"
+TRAIN_GPUS="2,3"
 NUM_TRAIN_GPUS=2
 # =======================================
 
@@ -56,8 +58,8 @@ speculators prepare-data \
 # Step 2: Launch vLLM server in the background
 echo "=== Step 2: Launching vLLM server ==="
 CUDA_VISIBLE_DEVICES="$VLLM_GPUS" python scripts/launch_vllm.py "$MODEL" \
-    --hidden-states-path "$OUTPUT_DIR/hidden_states" \
-    -- --data-parallel-size 2 --port "$VLLM_PORT" --gpu-memory-utilization 0.85 &
+    --target-layer-ids $TARGET_LAYER_IDS \
+    -- --data-parallel-size 2 --port "$VLLM_PORT" &
 VLLM_PID=$!
 
 # Ensure vLLM is cleaned up on exit
@@ -82,18 +84,16 @@ CUDA_VISIBLE_DEVICES="$TRAIN_GPUS" torchrun \
     --verifier-name-or-path "$MODEL" \
     --data-path "$OUTPUT_DIR" \
     --vllm-endpoint "http://localhost:${VLLM_PORT}/v1" \
-    --hidden-states-path "$OUTPUT_DIR/hidden_states" \
     --save-path "$OUTPUT_DIR/checkpoints" \
+    --draft-vocab-size "$DRAFT_VOCAB_SIZE" \
     --epochs "$EPOCHS" \
     --lr "$LR" \
     --total-seq-len "$SEQ_LENGTH" \
     --speculator-type "$SPECULATOR_TYPE" \
+    --block-size "$BLOCK_SIZE" \
+    --max-anchors "$MAX_ANCHORS" \
     --num-layers "$NUM_LAYERS" \
-    --num-depths "$NUM_DEPTHS" \
-    --down-sample-ratio "$DOWN_SAMPLE_RATIO" \
-    --down-sample-ratio-min "$DOWN_SAMPLE_RATIO_MIN" \
-    --no-norm-before-residual \
-    --scheduler-type cosine \
+    --target-layer-ids $TARGET_LAYER_IDS \
     --on-missing generate \
     --on-generate delete
 
