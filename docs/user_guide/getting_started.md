@@ -41,7 +41,6 @@ If a pre-trained speculator isn't available for your target model, you can train
 
 - **Online training** -- Hidden states are generated on-the-fly during training. Easier to get started, lower disk usage.
 - **Offline training** -- Hidden states are pre-generated and cached.
-- **Hybrid training** -- Hidden states are generated on-the-fly during the first epoch, cached, and reused after.
 
 ### Tutorials
 
