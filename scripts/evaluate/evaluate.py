@@ -4,6 +4,8 @@
 Modes:
     throughput   Max throughput run for acceptance rates
     sweep        Full pipeline (gen-len, sweep, CSV)
+    long-context Long-context acceptance rates via OpenAI's MRCR dataset,
+                 bucketed by context length (uses Inspect AI as the harness)
 
 Examples:
     python evaluate.py --target http://localhost:8000/v1 throughput
@@ -18,6 +20,10 @@ Examples:
     python evaluate.py --target http://localhost:8000/v1 throughput \\
         --dataset speedbench/qualitative/coding \\
         --speedbench-data-dir ./speedbench_data
+
+    # Long-context (acceptance rate by context-length bucket, capped at 128k tokens):
+    python evaluate.py --target http://localhost:8000/v1 long-context \\
+        --mrcr-max-context 131072 --mrcr-max-samples-per-bucket 20
 """
 
 from __future__ import annotations
@@ -78,7 +84,8 @@ _SPEEDBENCH_COLUMN_MAPPER = (
 )
 
 
-def _fetch_model_name(target: str) -> str | None:
+def _fetch_model_info(target: str) -> dict | None:
+    """Return the first entry of ``/v1/models`` (includes ``id`` and ``max_model_len``)."""
     base = target.rstrip("/")
     if not base.endswith("/v1"):
         base += "/v1"
@@ -88,10 +95,15 @@ def _fetch_model_name(target: str) -> str | None:
             data = json.loads(resp.read())
         models = data.get("data", [])
         if models:
-            return models[0].get("id")
+            return models[0]
     except (URLError, json.JSONDecodeError, OSError) as e:
-        logger.warning("Could not fetch model name from %s: %s", url, e)
+        logger.warning("Could not fetch model info from %s: %s", url, e)
     return None
+
+
+def _fetch_model_name(target: str) -> str | None:
+    info = _fetch_model_info(target)
+    return info.get("id") if info else None
 
 
 def _sanitize_dir_name(name: str) -> str:
@@ -281,16 +293,34 @@ def _run_subset(
     return acceptance_csv, perf_csv, max_tokens if is_sweep else None
 
 
-def run_benchmark(args: argparse.Namespace) -> None:
-    check_dependencies()
-    is_sweep = args.mode == "sweep"
 
+
+def run_benchmark(args: argparse.Namespace) -> None:
     metrics_url = args.target.rstrip("/").removesuffix("/v1") + "/metrics"
     output_dir = Path(args.output_dir)
     artifacts_dir = output_dir / "artifacts"
     artifacts_dir.mkdir(parents=True, exist_ok=True)
 
     save_eval_provenance(output_dir)
+
+    if args.mode == "long-context":
+        from mrcr_bench import run_mrcr
+        model_info = _fetch_model_info(args.target)
+        run_mrcr(
+            target=args.target,
+            model_info=model_info,
+            metrics_url=metrics_url,
+            output_dir=output_dir,
+            max_concurrency=args.max_concurrency,
+            max_context=args.mrcr_max_context,
+            max_samples_per_bucket=args.mrcr_max_samples_per_bucket,
+            require_metrics=_require_metrics,
+        )
+        logger.info("Benchmarking complete! Results: %s", output_dir)
+        return
+
+    check_dependencies()
+    is_sweep = args.mode == "sweep"
 
     acceptance_csv = None
     perf_csv = None
@@ -382,10 +412,11 @@ def main() -> None:
     )
     parser.add_argument(
         "mode",
-        choices=["throughput", "sweep"],
+        choices=["throughput", "sweep", "long-context"],
         help=(
             "throughput: max-rate run for acceptance rates; "
-            "sweep: full benchmarking pipeline"
+            "sweep: full benchmarking pipeline; "
+            "long-context: acceptance rates across context-length buckets"
         ),
     )
     parser.add_argument(
@@ -442,6 +473,23 @@ def main() -> None:
         default=DEFAULT_DATA_COLUMN_MAPPER,
         help="Column mapping for guidellm in typed key=value format"
         f" (default: {DEFAULT_DATA_COLUMN_MAPPER})",
+    )
+    parser.add_argument(
+        "--mrcr-max-context",
+        type=int,
+        default=131072,
+        dest="mrcr_max_context",
+        help=(
+            "Skip MRCR buckets whose lower token-count edge exceeds this; "
+            "keep at or below the target server's max_model_len (default: 131072)"
+        ),
+    )
+    parser.add_argument(
+        "--mrcr-max-samples-per-bucket",
+        type=int,
+        default=20,
+        dest="mrcr_max_samples_per_bucket",
+        help="Cap samples per context-length bucket to bound eval cost (default: 20)",
     )
     parser.add_argument(
         "--speedbench-data-dir",
