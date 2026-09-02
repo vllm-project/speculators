@@ -74,17 +74,21 @@ def wait_for_server(
     timeout: float = 600.0,
     poll_interval: float = 2.0,
     process: subprocess.Popen | None = None,
+    readiness_stability: float = 5.0,
 ):
-    """Poll vLLM server health endpoint until ready or timeout.
+    """Poll vLLM server health endpoint until stably ready or timeout.
 
     If *process* is provided, checks whether it has exited between polls
     so that startup failures are reported immediately instead of waiting
-    for the full timeout.
+    for the full timeout. A continuous healthy window is required because
+    multi-process vLLM can answer one health request before another API
+    server process finishes starting or fails.
     """
 
     logger.info("Waiting for server")
     url = f"http://localhost:{port}/health"
     deadline = time.monotonic() + timeout
+    healthy_since: float | None = None
     while time.monotonic() < deadline:
         if process is not None and process.poll() is not None:
             raise RuntimeError(
@@ -93,10 +97,18 @@ def wait_for_server(
             )
         try:
             with urllib.request.urlopen(url, timeout=5) as resp:  # noqa: S310
-                if resp.status == 200:
-                    return
+                healthy = resp.status == 200
         except (urllib.error.URLError, ConnectionError, OSError):
-            pass
+            healthy = False
+
+        now = time.monotonic()
+        if healthy:
+            if healthy_since is None:
+                healthy_since = now
+            if now - healthy_since >= readiness_stability:
+                return
+        else:
+            healthy_since = None
         time.sleep(poll_interval)
     raise TimeoutError(f"vLLM server on port {port} not ready after {timeout}s")
 
