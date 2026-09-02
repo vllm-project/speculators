@@ -105,7 +105,8 @@ def parse_args():
         default=None,
         help=(
             "Directory to write vllm_command.txt, vllm.patch, and "
-            "checkpoint_sha256.txt. Defaults to vllm_<model>_<timestamp>/."
+            "checkpoint_sha256.txt. Provenance is only captured when this is "
+            "set; omit it to skip logging (e.g. for ad-hoc test/debug runs)."
         ),
     )
     parser.add_argument(
@@ -346,16 +347,16 @@ def main():
     print("Running command:")
     print(" ".join(cmd))
 
-    if not args.provenance_dir:
-        sanitized = args.model.replace("/", "_").replace(" ", "_")
-        ts = datetime.datetime.now(tz=datetime.timezone.utc).strftime("%Y%m%d_%H%M%S")
-        args.provenance_dir = f"vllm_{sanitized}_{ts}"
-    _save_vllm_provenance(
-        cmd,
-        args.provenance_dir,
-        args.model,
-        skip_hash=args.no_hash_checkpoints,
-    )
+    # Provenance is opt-in: only written when --provenance-dir is passed, so
+    # ad-hoc test/debug launches don't clutter the working directory. Automated
+    # agents should always pass --provenance-dir (see AGENTS.md).
+    if args.provenance_dir:
+        _save_vllm_provenance(
+            cmd,
+            args.provenance_dir,
+            args.model,
+            skip_hash=args.no_hash_checkpoints,
+        )
 
     if not args.dry_run:
         os.execvp(cmd[0], cmd)  # noqa: S606
