@@ -17,6 +17,18 @@
 # is learning something. This is a good sanity check when creating a drafter for a new
 # target model.
 
+# MT-Bench Results (question.jsonl, 80 prompts, 4096 max output tokens):
+# acceptance rate: 16.38%
+# acceptance length: 2.15
+# per-position acceptance:
+#   position 0: 61.19%
+#   position 1: 30.79%
+#   position 2: 13.75%
+#   position 3: 5.59%
+#   position 4: 2.24%
+#   position 5: 0.81%
+#   position 6: 0.30%
+
 set -euo pipefail
 
 # ============ Configuration ============
