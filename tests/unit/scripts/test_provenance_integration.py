@@ -7,6 +7,7 @@ mode that caused PR #958 to be reverted in PR #1008.
 
 from __future__ import annotations
 
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -28,23 +29,33 @@ class TestVenvIsolation:
 
     def test_imports_without_speculators_on_path(self):
         """No ImportError when speculators is absent — the root cause of #1008."""
-        # Strip path entries that would let `speculators` be found, then import.
+        # Strip every path entry that could resolve `speculators` (site/dist
+        # packages, cwd, its own source tree), then *assert* it's unresolvable
+        # via find_spec before importing — a robust guard that fails loudly if
+        # the stripping was incomplete, rather than silently passing.
         snippet = (
-            "import sys; "
-            "sys.path = [p for p in sys.path "
-            "if 'speculators' not in p and 'site-packages' not in p]; "
+            "import importlib.util, sys, sysconfig; "
+            "paths = sysconfig.get_paths(); "
+            "bad = {paths['purelib'], paths['platlib'], ''}; "
+            "sys.path = [p for p in sys.path if p and p not in bad "
+            "and 'site-packages' not in p and 'dist-packages' not in p "
+            "and 'speculators' not in p]; "
             f"sys.path.insert(0, {str(SCRIPTS_DIR)!r}); "
+            "assert importlib.util.find_spec('speculators') is None, "
+            "('speculators still resolvable: %r' % sys.path); "
             "import launch_vllm"
         )
+        env = {k: v for k, v in os.environ.items() if k != "PYTHONPATH"}
         result = subprocess.run(  # noqa: S603
             [sys.executable, "-c", snippet],
             capture_output=True,
             text=True,
             timeout=30,
             check=False,
+            env=env,
         )
         assert result.returncode == 0, (
-            f"launch_vllm.py raised ImportError when speculators was absent.\n"
+            f"launch_vllm.py failed to import when speculators was absent.\n"
             f"stderr: {result.stderr}"
         )
 
@@ -90,7 +101,8 @@ class TestLaunchVllmProvenance:
         content = (provenance_dir / "checkpoint_sha256.txt").read_text()
         assert "not a local path" in content
 
-    def test_default_provenance_dir_created(self, tmp_path: Path):
+    def test_no_provenance_written_without_flag(self, tmp_path: Path):
+        """Provenance is opt-in: no files/dirs created unless --provenance-dir."""
         result = subprocess.run(  # noqa: S603
             [sys.executable, LAUNCH_VLLM, MODEL, "--dry-run"],
             capture_output=True,
@@ -100,13 +112,5 @@ class TestLaunchVllmProvenance:
             check=False,
         )
         assert result.returncode == 0, result.stderr
-        prov_dirs = [
-            d
-            for d in tmp_path.iterdir()
-            if d.is_dir() and d.name.startswith("vllm_gpt2_")
-        ]
-        assert len(prov_dirs) == 1
-        prov = prov_dirs[0]
-        assert (prov / "vllm_command.txt").exists()
-        assert (prov / "vllm.patch").exists()
-        assert (prov / "checkpoint_sha256.txt").exists()
+        # Nothing should be written to the working directory.
+        assert list(tmp_path.iterdir()) == []
