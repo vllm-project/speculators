@@ -117,7 +117,7 @@ class DSparkDraftModel(DFlashDraftModel):
         }
         return dict(shared), dict(shared)
 
-    @conditional_torch_compile
+    @conditional_torch_compile(dynamic=False)
     def forward(
         self,
         hidden_states: torch.Tensor,  # [1, total_seq_len, num_hidden*hidden_size]

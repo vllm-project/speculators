@@ -23,32 +23,39 @@ def select_anchors(
     document_ids: torch.Tensor,  # shape: [1, total_seq_len]
     num_anchors: int,
     block_size: int,
-) -> torch.Tensor:  # shape: [total_anchors]
+) -> tuple[torch.Tensor, torch.Tensor]:  # shapes: [num_docs*num_anchors] x2
     """Sample up to ``num_anchors`` anchor positions from every packed document.
 
-    Anchors are supervised positions (``loss_mask == 1``) drawn uniformly within
-    each document, so short documents are fully covered and long ones are capped.
-    This matches the reference DFlash trainers, which sample per sample rather
-    than per packed sequence. The last ``block_size`` positions are excluded so
-    every anchor block stays in bounds.
+    Mirrors the per-sample contract of the reference DFlash trainers (SpecForge
+    and TorchSpec sample ``[B, num_anchors]``): every document in the packed
+    sequence gets exactly ``num_anchors`` slots, filled with a uniform sample of
+    its supervised positions (``loss_mask == 1``) and padded with
+    ``anchor_valid == False`` when it has fewer. Short documents are fully
+    covered and long ones are capped. The slot count depends only on the number
+    of documents, so the compiled forward sees one static shape per document
+    count. The last ``block_size`` positions are excluded so every anchor block
+    stays in bounds.
 
-    Returns the sorted anchor positions. A sequence without supervised positions
-    yields one anchor at position 0; its block is zeroed by the loss mask, which
-    keeps the downstream shapes non-empty.
+    Returns ``(anchors, anchor_valid)`` flattened to ``[num_docs * num_anchors]``
+    with anchors sorted within each document. A sequence without supervised
+    positions yields one document of fully masked slots.
     """
     loss_mask = loss_mask.squeeze(0)
     document_ids = document_ids.squeeze(0)
     valid = loss_mask.bool().clone()
     valid[-block_size:] = False
 
-    anchors = []
-    for doc in document_ids[valid].unique():
+    docs = document_ids[valid].unique()
+    num_docs = max(docs.numel(), 1)
+    device = loss_mask.device
+    anchors = torch.zeros(num_docs, num_anchors, dtype=torch.long, device=device)
+    anchor_valid = torch.zeros(num_docs, num_anchors, dtype=torch.bool, device=device)
+    for i, doc in enumerate(docs):
         candidates = torch.nonzero(valid & (document_ids == doc)).squeeze(-1)
-        perm = torch.randperm(candidates.numel(), device=candidates.device)
-        anchors.append(candidates[perm[:num_anchors]])
-    if not anchors:
-        return torch.zeros(1, dtype=torch.long, device=loss_mask.device)
+        perm = torch.randperm(candidates.numel(), device=device)[:num_anchors]
+        # Sorted anchors let flex attention use dense (fast) blocks instead of
+        # scattered all-partial (slow) ones; the order never affects the loss.
+        anchors[i, : perm.numel()] = torch.sort(candidates[perm]).values
+        anchor_valid[i, : perm.numel()] = True
 
-    # Sorted anchors let flex attention use dense (fast) blocks instead of
-    # scattered all-partial (slow) ones; the order never affects the loss.
-    return torch.sort(torch.cat(anchors)).values
+    return anchors.flatten(), anchor_valid.flatten()
