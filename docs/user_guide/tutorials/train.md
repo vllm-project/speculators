@@ -131,7 +131,7 @@ speculators prepare-data \
 
 These still need tokens and a loss mask, and both come from the target model's own vLLM server via `--render-endpoint`. That keeps a single tokenizer behind the mask, the hidden states, and serving; a local tokenizer can drift from the deployed chat template and mask the wrong spans.
 
-Start the server as described in Step 2, then:
+Start the server as described in Step 2 -- you need it there anyway, and any vLLM server for the same model will do. Rendering only applies the template and tokenizes, so it writes no hidden states:
 
 ```bash
 speculators prepare-data \
