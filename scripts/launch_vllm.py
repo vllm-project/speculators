@@ -55,6 +55,16 @@ CPUS_PER_API_SERVER = 4
 MAX_PREPROCESSING_WORKERS = 128
 EFFECTIVE_CPUS_PER_PREPROCESSING_WORKER = 4
 
+# The vLLM API-server processes each create their own native thread pools.
+# Keep those pools bounded by default; explicit environment settings still
+# take precedence for users who have measured a different configuration.
+DEFAULT_RENDER_THREAD_ENV = {
+    "OMP_NUM_THREADS": "1",
+    "OPENBLAS_NUM_THREADS": "1",
+    "MKL_NUM_THREADS": "1",
+    "RAYON_NUM_THREADS": "2",
+}
+
 
 def _usable_cpu_count() -> int:
     """Return the CPUs available to this process, respecting affinity."""
@@ -104,6 +114,12 @@ def _with_render_defaults(vllm_args: list[str]) -> list[str]:
         str(renderer_workers),
         *vllm_args,
     ]
+
+
+def _set_render_thread_defaults() -> None:
+    """Bound native pools inherited by vLLM's API-server processes."""
+    for name, value in DEFAULT_RENDER_THREAD_ENV.items():
+        os.environ.setdefault(name, value)
 
 
 def parse_args():
@@ -235,6 +251,8 @@ def main():
     print(" ".join(cmd))
 
     if not args.dry_run:
+        if "--headless" not in vllm_args:
+            _set_render_thread_defaults()
         os.execvp(cmd[0], cmd)  # noqa: S606
 
 

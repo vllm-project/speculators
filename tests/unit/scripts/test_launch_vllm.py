@@ -1,6 +1,9 @@
+import os
+
 from scripts.launch_vllm import (
     DEFAULT_RENDERER_NUM_WORKERS,
     _preprocessing_workers,
+    _set_render_thread_defaults,
     _with_render_defaults,
     render_throughput_defaults,
 )
@@ -29,6 +32,27 @@ def test_headless_does_not_get_api_server_defaults():
     args = _with_render_defaults(["--headless"])
     assert "--api-server-count" not in args
     assert "--renderer-num-workers" not in args
+
+
+def test_render_thread_defaults_are_bounded_and_overrideable(monkeypatch):
+    for name in (
+        "OMP_NUM_THREADS",
+        "OPENBLAS_NUM_THREADS",
+        "MKL_NUM_THREADS",
+        "RAYON_NUM_THREADS",
+    ):
+        monkeypatch.delenv(name, raising=False)
+
+    _set_render_thread_defaults()
+
+    assert os.environ["OMP_NUM_THREADS"] == "1"
+    assert os.environ["OPENBLAS_NUM_THREADS"] == "1"
+    assert os.environ["MKL_NUM_THREADS"] == "1"
+    assert os.environ["RAYON_NUM_THREADS"] == "2"
+
+    monkeypatch.setenv("RAYON_NUM_THREADS", "8")
+    _set_render_thread_defaults()
+    assert os.environ["RAYON_NUM_THREADS"] == "8"
 
 
 def test_sizing_respects_the_combined_budget():
