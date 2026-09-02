@@ -5,7 +5,6 @@ from __future__ import annotations
 import dataclasses
 import fcntl
 import os
-import shutil
 import socket
 import time
 from abc import ABC, abstractmethod
@@ -56,9 +55,6 @@ class HiddenStatesTransfer(ABC):
     @abstractmethod
     def get_generated(self, handle: str) -> dict[str, torch.Tensor] | None:
         """Retrieve a freshly generated sample by its vLLM-returned handle."""
-
-    def cache(self, handle: str, file_idx: int) -> None:  # noqa: B027
-        """Persist a generated sample to the cache location."""
 
     def delete(self, handle: str) -> None:  # noqa: B027
         """Clean up a generated sample (e.g. delete a temp file)."""
@@ -145,11 +141,6 @@ class FileTransfer(HiddenStatesTransfer):
 
     def get_generated(self, handle: str) -> dict[str, torch.Tensor] | None:
         return _load_hs_file(Path(handle))
-
-    def cache(self, handle: str, file_idx: int) -> None:
-        self.hidden_states_path.mkdir(parents=True, exist_ok=True)
-        target = self.hidden_states_path / f"hs_{file_idx}.safetensors"
-        shutil.move(handle, target)
 
     def delete(self, handle: str) -> None:
         Path(handle).unlink()
