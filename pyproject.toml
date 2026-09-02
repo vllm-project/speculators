@@ -55,6 +55,7 @@ keywords = [
 
 [tool.speculators.dependencies]
 base = [
+    "aiohttp",
     "click",
     "datasets>=4.0.0,<=5.0.1",
     "httpx",
@@ -72,7 +73,7 @@ base = [
     "torchaudio",
     "torchvision",
     "tqdm>=4.66.3,<=4.70.0",
-    "transformers>=4.56.1,<5.16.0",
+    "transformers>=5.0.0,<5.16.0",
     "typer>=0.12.0",
 ]
 
@@ -118,6 +119,7 @@ dev = [
     # code quality
     "mypy~=2.1.0",
     "ruff~=0.15.20",
+    "pre-commit~=4.0",
 
     # docs quality
     "mdformat~=1.0.0",

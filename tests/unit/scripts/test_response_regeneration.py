@@ -3,21 +3,31 @@
 No network and no mocked HTTP: the script's seams are exercised directly against
 the real downstream ``_preprocess_batch``, and ``worker`` is driven end to end
 over a fake endpoint.
-
-The script is not a package, so it is imported by path.
 """
 
-import argparse
 import asyncio
 import copy
-import importlib.util
 import json
 import time
-from pathlib import Path
 from typing import Any
 
 import pytest
+import typer
 
+from speculators.cli.regenerate_responses import (
+    _post_chat,
+    _primary_identifier,
+    _sample_from_response,
+    _validate_dataset,
+    _worker,
+    build_boundary_sample,
+    extract_conversation,
+    extract_tools,
+    load_input_dataset,
+    load_seen,
+    prepare_row,
+    regenerate_conversation,
+)
 from speculators.data_generation import vllm_client
 from speculators.data_generation.configs import DATASET_CONFIGS, DatasetConfig
 from speculators.data_generation.preprocessing import _preprocess_batch
@@ -29,26 +39,6 @@ def _no_retry_backoff(monkeypatch):
     # with_retries sleeps RETRY_BACKOFF_BASE ** attempt between retries; zero it
     # so the retry tests don't actually sleep.
     monkeypatch.setattr(vllm_client, "RETRY_BACKOFF_BASE", 0)
-
-
-_SCRIPT_PATH = (
-    Path(__file__).resolve().parents[3]
-    / "scripts"
-    / "response_regeneration"
-    / "script.py"
-)
-
-
-def _load_regen_module():
-    spec = importlib.util.spec_from_file_location("response_regen_script", _SCRIPT_PATH)
-    assert spec is not None
-    assert spec.loader is not None
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
-
-
-regen = _load_regen_module()
 
 
 # ---------------------------------------------------------------------------
@@ -147,6 +137,12 @@ _EXTRACT_CASES = [
         id="empty_messages_falls_back_to_prompt",
     ),
     pytest.param(
+        {"prompt": [{"role": "assistant", "content": "old answer"}]},
+        "prompt",
+        [],
+        id="message_list_prompt_without_user_skipped",
+    ),
+    pytest.param(
         {"messages": ["not-a-dict", {"role": "user", "content": "ok"}]},
         "prompt",
         [{"role": "user", "content": "ok"}],
@@ -180,12 +176,12 @@ _EXTRACT_CASES = [
 
 @pytest.mark.parametrize(("row", "prompt_field", "expected"), _EXTRACT_CASES)
 def test_extract_conversation_turns(row, prompt_field, expected):
-    assert regen.extract_conversation(row, prompt_field)[0] == expected
+    assert extract_conversation(row, prompt_field)[0] == expected
 
 
 def test_extract_conversation_no_usable_input_returns_empty():
     # No conversation field and no prompt_field value -> nothing to regenerate.
-    assert regen.extract_conversation({"answer": "orphan"}, "question")[0] == []
+    assert extract_conversation({"answer": "orphan"}, "question")[0] == []
 
 
 # ---------------------------------------------------------------------------
@@ -194,7 +190,7 @@ def test_extract_conversation_no_usable_input_returns_empty():
 
 
 def test_build_boundary_sample_is_the_mask():
-    input_ids, loss_mask = regen.build_boundary_sample([10, 11, 12, 13], [20, 21, 22])
+    input_ids, loss_mask = build_boundary_sample([10, 11, 12, 13], [20, 21, 22])
     assert input_ids == [10, 11, 12, 13, 20, 21, 22]
     assert loss_mask == [0, 0, 0, 0, 1, 1, 1]
 
@@ -203,7 +199,7 @@ def test_pretokenized_rows_pass_through_preprocessing():
     # A speculator-format regeneration row reaches training already masked: no
     # processor, no re-masking, and the review-only `conversations` field is
     # dropped.
-    input_ids, loss_mask = regen.build_boundary_sample([10, 11, 12], [20, 21])
+    input_ids, loss_mask = build_boundary_sample([10, 11, 12], [20, 21])
     out = _preprocess_batch(
         {
             "input_ids": [input_ids],
@@ -222,8 +218,8 @@ def test_pretokenized_rows_pass_through_preprocessing():
 def test_pretokenized_passthrough_truncates_and_filters():
     # Truncation can cut the completion span away (all-zero mask); such a row must
     # be dropped by minimum_valid_tokens, like the tokenized path.
-    kept = regen.build_boundary_sample([1, 2], [3, 4])  # fits max_length=4
-    cut = regen.build_boundary_sample([1, 2, 3, 4], [5, 6])  # completion truncated off
+    kept = build_boundary_sample([1, 2], [3, 4])  # fits max_length=4
+    cut = build_boundary_sample([1, 2, 3, 4], [5, 6])  # completion truncated off
     out = _preprocess_batch(
         {"input_ids": [kept[0], cut[0]], "loss_mask": [kept[1], cut[1]]},
         is_multimodal=False,  # passthrough returns before this is read
@@ -260,16 +256,16 @@ def test_pretokenized_passthrough_rejects_length_mismatch():
 
 
 def test_primary_identifier_prefers_explicit_id_over_uuid():
-    assert regen._primary_identifier({"id": "abc", "uuid": "zzz"}) == "abc"
+    assert _primary_identifier({"id": "abc", "uuid": "zzz"}) == "abc"
 
 
 def test_primary_identifier_uuid_when_no_id():
-    assert regen._primary_identifier({"uuid": "u1"}) == "u1"
+    assert _primary_identifier({"uuid": "u1"}) == "u1"
 
 
 def test_primary_identifier_ignores_empty_values():
     # An empty-string id is not "present"; resolution falls through to uuid.
-    assert regen._primary_identifier({"id": "", "uuid": "u"}) == "u"
+    assert _primary_identifier({"id": "", "uuid": "u"}) == "u"
 
 
 def test_primary_identifier_falls_back_to_content_hash():
@@ -277,19 +273,19 @@ def test_primary_identifier_falls_back_to_content_hash():
     # intentionally not consulted (the inputs that need this have no id at all).
     row = {"question": "What is 6*7?", "answer": "42"}
     reordered = {"answer": "42", "question": "What is 6*7?"}
-    pid = regen._primary_identifier(row)
+    pid = _primary_identifier(row)
 
     assert pid.startswith("hash_")
     # Same content, different key order -> same key (JSON is sorted).
-    assert regen._primary_identifier(reordered) == pid
+    assert _primary_identifier(reordered) == pid
     # Different content -> different key.
-    assert regen._primary_identifier({"question": "other"}) != pid
+    assert _primary_identifier({"question": "other"}) != pid
     # A nested metadata id is not used as a source.
-    assert regen._primary_identifier({"metadata": {"sample_id": 7}}).startswith("hash_")
+    assert _primary_identifier({"metadata": {"sample_id": 7}}).startswith("hash_")
 
 
 def test_load_seen_missing_file_returns_empty(tmp_path):
-    assert regen.load_seen(str(tmp_path / "nope.jsonl")) == set()
+    assert load_seen(str(tmp_path / "nope.jsonl")) == set()
 
 
 def test_load_seen_reads_id_and_skips_malformed_lines(tmp_path):
@@ -298,7 +294,7 @@ def test_load_seen_reads_id_and_skips_malformed_lines(tmp_path):
         "not json\n" + json.dumps({"id": "P"}) + "\n",
         encoding="utf-8",
     )
-    assert regen.load_seen(str(out)) == {"P"}
+    assert load_seen(str(out)) == {"P"}
 
 
 def test_load_seen_ignores_rows_without_id(tmp_path):
@@ -308,7 +304,7 @@ def test_load_seen_ignores_rows_without_id(tmp_path):
         json.dumps({"conversations": [], "metadata": {"idx": 3}}) + "\n",
         encoding="utf-8",
     )
-    assert regen.load_seen(str(out)) == set()
+    assert load_seen(str(out)) == set()
 
 
 def test_resume_roundtrip_hash_only_row(tmp_path):
@@ -316,7 +312,7 @@ def test_resume_roundtrip_hash_only_row(tmp_path):
     # stores that hash as the top-level id, and load_seen must recover it so a
     # re-run skips the row. This is the exact case the old resume missed.
     row = {"question": "What is 6*7?", "answer": "42"}
-    primary_id = regen._primary_identifier(row)
+    primary_id = _primary_identifier(row)
 
     out = tmp_path / "out.jsonl"
     out.write_text(
@@ -331,7 +327,7 @@ def test_resume_roundtrip_hash_only_row(tmp_path):
         encoding="utf-8",
     )
 
-    assert primary_id in regen.load_seen(str(out))
+    assert primary_id in load_seen(str(out))
 
 
 # ---------------------------------------------------------------------------
@@ -382,7 +378,7 @@ def test_post_chat_retries_transient_failure_then_succeeds():
     )
 
     async def scenario():
-        return await regen._post_chat(
+        return await _post_chat(
             session,
             "http://x/v1/chat/completions",
             {"model": "m"},
@@ -400,7 +396,7 @@ def test_post_chat_raises_after_exhausting_retries():
 
     async def scenario():
         with pytest.raises(RuntimeError, match="HTTP 500"):
-            await regen._post_chat(
+            await _post_chat(
                 session,
                 "http://x/v1/chat/completions",
                 {"model": "m"},
@@ -420,7 +416,7 @@ def test_post_chat_fails_fast_on_permanent_status():
 
     async def scenario():
         with pytest.raises(InvalidResponseError, match="HTTP 404"):
-            await regen._post_chat(
+            await _post_chat(
                 session,
                 "http://x/v1/chat/completions",
                 {"model": "m"},
@@ -488,16 +484,19 @@ def _run_worker(responses, tmp_path, stem):
             "total_request_s": 0.0,
             "start_time": time.perf_counter(),
         }
-        await regen.worker(
-            _FakeSession(responses),
+        await _worker(
+            _FakeSession(responses),  # type: ignore[arg-type]  # fake stands in for ClientSession
             queue,
-            _Args(),
-            out_fh,
-            err_fh,
-            "http://x/v1/chat/completions",
-            _NullProgress(),
-            stats,
-            _detok,
+            model=_Args.model,
+            max_tokens=_Args.max_tokens,
+            endpoint="http://x/v1/chat/completions",
+            sampling_params=_Args.sampling_params,
+            max_retries=_Args.max_retries,
+            out_fh=out_fh,
+            err_fh=err_fh,
+            progress=_NullProgress(),
+            stats=stats,
+            detokenize=_detok,
         )
         return stats
 
@@ -529,7 +528,7 @@ def test_worker_row_identity_and_all_or_nothing_writes(tmp_path):
     # The boundary is the mask: prompt 0s then completion 1s.
     assert rows[0]["input_ids"] == [1, 2, 3, 4]
     assert rows[0]["loss_mask"] == [0, 0, 1, 1]
-    assert regen.load_seen(str(out_path)) == {"conv-abc"}
+    assert load_seen(str(out_path)) == {"conv-abc"}
 
     # Turn 2 fails: turn 1's sample is discarded rather than half-written, which
     # is what lets load_seen treat one row as a finished conversation.
@@ -545,7 +544,7 @@ def test_worker_row_identity_and_all_or_nothing_writes(tmp_path):
     assert stats["errors"] == 1
     assert stats["truncated"] == 0
     assert out_path.read_text() == ""
-    assert regen.load_seen(str(out_path)) == set()
+    assert load_seen(str(out_path)) == set()
     error = json.loads(err_path.read_text())
     assert error["id"] == "conv-abc"
     # The failed conversation still reports the row it had completed.
@@ -600,12 +599,20 @@ def _fake_post(responses):
 
 
 def _regen(
-    item, responses, *, model="m", max_tokens=64, endpoint="ep", sampling_params=None
+    item,
+    responses,
+    *,
+    model="m",
+    max_tokens=64,
+    endpoint="ep",
+    sampling_params=None,
+    reasoning_effort=None,
+    temperature=None,
 ):
     post, sent = _fake_post(responses)
     samples: list = []
     truncated = asyncio.run(
-        regen.regenerate_conversation(
+        regenerate_conversation(
             post,
             item,
             model=model,
@@ -614,6 +621,8 @@ def _regen(
             sampling_params=sampling_params or {},
             samples=samples,
             detokenize=_detok,
+            reasoning_effort=reasoning_effort,
+            temperature=temperature,
         )
     )
     return samples, truncated, sent
@@ -625,24 +634,24 @@ def _regen(
 def test_extract_tools_passthrough_and_json_string():
     tools = [{"type": "function", "function": {"name": "f"}}]
     # A list passes through; a JSON-string column (the Hermes shape) is decoded.
-    assert regen.extract_tools({"tools": tools}) == tools
-    assert regen.extract_tools({"tools": json.dumps(tools)}) == tools
+    assert extract_tools({"tools": tools}) == tools
+    assert extract_tools({"tools": json.dumps(tools)}) == tools
     # Absent / empty -> None (tool-free datasets unchanged).
-    assert regen.extract_tools({"prompt": "hi"}) is None
-    assert regen.extract_tools({"tools": []}) is None
+    assert extract_tools({"prompt": "hi"}) is None
+    assert extract_tools({"tools": []}) is None
 
 
 def test_extract_tools_raises_when_declared_but_unusable():
     # A row that advertises a tools field we cannot read as a list must fail
     # loud, not silently regenerate tool-free.
     with pytest.raises(ValueError):
-        regen.extract_tools({"tools": {"name": "f"}})  # present but not a list
+        extract_tools({"tools": {"name": "f"}})  # present but not a list
     with pytest.raises(ValueError):
-        regen.extract_tools({"tools": "not json"})  # present but not a list
+        extract_tools({"tools": "not json"})  # present but not a list
     # Absent or explicitly empty stays tool-free.
-    assert regen.extract_tools({}) is None
-    assert regen.extract_tools({"tools": []}) is None
-    assert regen.extract_tools({"tools": ""}) is None
+    assert extract_tools({}) is None
+    assert extract_tools({"tools": []}) is None
+    assert extract_tools({"tools": ""}) is None
 
 
 def test_extract_conversation_collects_ordered_results():
@@ -656,7 +665,7 @@ def test_extract_conversation_collects_ordered_results():
             {"role": "tool", "content": "r2"},
         ]
     }
-    assert regen.extract_conversation(row, None)[1] == [("r1", []), ("r2", [])]
+    assert extract_conversation(row, None)[1] == [("r1", []), ("r2", [])]
     # from/value schema (the Hermes shape), non-dict elements skipped.
     conv = {
         "conversations": [
@@ -665,10 +674,10 @@ def test_extract_conversation_collects_ordered_results():
             {"from": "tool", "value": "r"},
         ]
     }
-    assert regen.extract_conversation(conv, None)[1] == [("r", [])]
+    assert extract_conversation(conv, None)[1] == [("r", [])]
     # Tool-free row -> no results.
     only_user = {"messages": [{"role": "user", "content": "q"}]}
-    assert regen.extract_conversation(only_user, None)[1] == []
+    assert extract_conversation(only_user, None)[1] == []
 
 
 def test_extract_conversation_pairs_hermes_results_with_tool_names():
@@ -687,7 +696,7 @@ def test_extract_conversation_pairs_hermes_results_with_tool_names():
             {"from": "gpt", "value": "It is 15C."},
         ]
     }
-    turns, results = regen.extract_conversation(row, None)
+    turns, results = extract_conversation(row, None)
     assert turns == [
         {"role": "system", "content": "sys"},
         {"role": "user", "content": "weather?"},
@@ -704,7 +713,7 @@ def test_extract_conversation_pairs_hermes_results_with_tool_names():
 def test_sample_from_response_rejects_empty_and_missing_token_ids():
     # Neither content nor tool_calls -> empty generation.
     with pytest.raises(ValueError, match="empty assistant generation"):
-        regen._sample_from_response(
+        _sample_from_response(
             _response(prompt_token_ids=[1], token_ids=[2], content=None),
             detokenize=_detok,
             conv_id="c",
@@ -719,7 +728,7 @@ def test_sample_from_response_rejects_empty_and_missing_token_ids():
         "prompt_token_ids": [],
     }
     with pytest.raises(ValueError, match="return_token_ids"):
-        regen._sample_from_response(
+        _sample_from_response(
             bad,
             detokenize=_detok,
             conv_id="c",
@@ -745,6 +754,65 @@ def test_sampling_params_reach_the_request_and_metadata():
     assert sent[0]["max_tokens"] == 64
     # Recorded for reproducibility of the generated row.
     assert samples[0]["metadata"]["sampling_params"] == params
+
+
+def test_reasoning_effort_reaches_request_and_metadata():
+    item = {"idx": 0, "primary_id": "u", "turns": [{"role": "user", "content": "hi"}]}
+    responses = [_response(prompt_token_ids=[1, 2], token_ids=[3], content="hello")]
+    params = {"temperature": 0.6}
+    samples, _, sent = _regen(
+        item, responses, sampling_params=params, reasoning_effort="high"
+    )
+
+    assert sent[0]["reasoning_effort"] == "high"
+    assert samples[0]["metadata"]["sampling_params"] == {
+        "temperature": 0.6,
+        "reasoning_effort": "high",
+    }
+
+
+def test_reasoning_effort_absent_by_default():
+    item = {"idx": 0, "primary_id": "u", "turns": [{"role": "user", "content": "hi"}]}
+    responses = [_response(prompt_token_ids=[1, 2], token_ids=[3], content="hello")]
+    samples, _, sent = _regen(item, responses)
+
+    assert "reasoning_effort" not in sent[0]
+    assert "reasoning_effort" not in samples[0]["metadata"]["sampling_params"]
+
+
+def test_temperature_reaches_request_and_metadata():
+    item = {"idx": 0, "primary_id": "u", "turns": [{"role": "user", "content": "hi"}]}
+    responses = [_response(prompt_token_ids=[1, 2], token_ids=[3], content="hello")]
+    params = {"top_p": 0.95}
+    samples, _, sent = _regen(item, responses, sampling_params=params, temperature=0.6)
+
+    assert sent[0]["temperature"] == 0.6
+    assert samples[0]["metadata"]["sampling_params"] == {
+        "top_p": 0.95,
+        "temperature": 0.6,
+    }
+
+
+def test_temperature_absent_by_default():
+    item = {"idx": 0, "primary_id": "u", "turns": [{"role": "user", "content": "hi"}]}
+    responses = [_response(prompt_token_ids=[1, 2], token_ids=[3], content="hello")]
+    samples, _, sent = _regen(item, responses)
+
+    assert "temperature" not in sent[0]
+    assert "temperature" not in samples[0]["metadata"]["sampling_params"]
+
+
+def test_temperature_and_reasoning_effort_both_recorded():
+    item = {"idx": 0, "primary_id": "u", "turns": [{"role": "user", "content": "hi"}]}
+    responses = [_response(prompt_token_ids=[1, 2], token_ids=[3], content="hello")]
+    samples, _, sent = _regen(item, responses, reasoning_effort="high", temperature=0.8)
+
+    assert sent[0]["reasoning_effort"] == "high"
+    assert sent[0]["temperature"] == 0.8
+    assert samples[0]["metadata"]["sampling_params"] == {
+        "reasoning_effort": "high",
+        "temperature": 0.8,
+    }
 
 
 def test_regenerate_plain_conversation_is_unchanged_and_sends_no_tools():
@@ -865,7 +933,9 @@ def test_prepare_row_normalizes_like_off_policy():
         "input": [{"role": "user", "content": "Hi"}],
         "output": "<original answer to drop>",
     }
-    _, turns, _ = regen.prepare_row(row, DATASET_CONFIGS["nemotron"])
+    result = prepare_row(row, DATASET_CONFIGS["nemotron"])
+    assert result is not None
+    _, turns, _ = result
     assert turns == [{"role": "user", "content": "Hi"}]
 
 
@@ -877,8 +947,10 @@ def test_prepare_row_applies_filter_fn():
         filter_fn=lambda row: row["keep"],
     )
     row = {"keep": False, "conversations": [{"role": "user", "content": "Hi"}]}
-    assert regen.prepare_row(row, config) is None
-    _, turns, _ = regen.prepare_row(row | {"keep": True}, config)
+    assert prepare_row(row, config) is None
+    result = prepare_row(row | {"keep": True}, config)
+    assert result is not None
+    _, turns, _ = result
     assert turns == [{"role": "user", "content": "Hi"}]
 
 
@@ -891,14 +963,60 @@ def test_prepare_row_merges_normalize_output_over_raw_row():
         normalize_fn=lambda row: {"conversations": []},
         prompt_field="prompt",
     )
-    _, turns, _ = regen.prepare_row({"prompt": "Hi"}, config)
+    result = prepare_row({"prompt": "Hi"}, config)
+    assert result is not None
+    _, turns, _ = result
     assert turns == [{"role": "user", "content": "Hi"}]
 
 
 def test_dataset_choice_rejects_multimodal_with_a_reason():
-    with pytest.raises(argparse.ArgumentTypeError, match="does not support images"):
-        regen._dataset_choice("sharegpt4v_coco")
-    assert regen._dataset_choice("ultrachat") == "ultrachat"
+    with pytest.raises(typer.BadParameter, match="does not support images"):
+        _validate_dataset("sharegpt4v_coco")
+    assert _validate_dataset("ultrachat") == "ultrachat"
+
+
+def test_validate_dataset_accepts_local_file(tmp_path):
+    path = tmp_path / "prompts.jsonl"
+    path.touch()
+    assert _validate_dataset(str(path)) == str(path)
+
+
+def test_validate_dataset_rejects_missing_or_unsupported_file(tmp_path):
+    with pytest.raises(typer.BadParameter, match="not a supported dataset"):
+        _validate_dataset("prompts.txt")
+    with pytest.raises(typer.BadParameter, match="does not exist"):
+        _validate_dataset(str(tmp_path / "missing.jsonl"))
+
+
+@pytest.mark.parametrize(
+    ("filename", "data"),
+    [
+        pytest.param(
+            "prompts.jsonl",
+            {"prompt": [{"role": "user", "content": "local prompt"}]},
+            id="jsonl-message-list-prompt",
+        ),
+        pytest.param(
+            "prompts.jsonl",
+            {"prompt": "local prompt"},
+            id="jsonl-string-prompt",
+        ),
+        pytest.param(
+            "prompts.json",
+            [{"prompt": "local prompt"}],
+            id="json-string-prompt",
+        ),
+    ],
+)
+def test_load_input_dataset_from_local_file(tmp_path, filename, data):
+    path = tmp_path / filename
+    path.write_text(json.dumps(data) + "\n", encoding="utf-8")
+
+    config, dataset, split = load_input_dataset(str(path), None, None)
+    assert (config.name, config.prompt_field, split) == ("prompts", "prompt", "train")
+    prepared = prepare_row(next(iter(dataset)), config)
+    assert prepared is not None
+    assert prepared[1] == [{"role": "user", "content": "local prompt"}]
 
 
 def test_tools_and_results_are_read_from_the_normalized_row():
@@ -918,11 +1036,13 @@ def test_tools_and_results_are_read_from_the_normalized_row():
         "tools": [{"type": "function", "function": {"name": "get_weather"}}],
     }
 
-    normalized, _, tool_results = regen.prepare_row(row, config)
+    result = prepare_row(row, config)
+    assert result is not None
+    normalized, _, tool_results = result
 
-    assert regen.extract_tools(normalized) == [
+    assert extract_tools(normalized) == [
         {"type": "function", "function": {"name": "get_weather"}}
     ]
     assert tool_results == [("sunny", [])]
     # the raw row hides the conversation behind `input`: results would be lost
-    assert regen.extract_conversation(row, None)[1] == []
+    assert extract_conversation(row, None)[1] == []

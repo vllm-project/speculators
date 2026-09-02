@@ -337,7 +337,9 @@ def make_batch(
         preprocess=preprocess,
     )
     batch = collate_fn(samples)
-    return {k: v.to(device) for k, v in batch.items()}
+    return {
+        k: v.to(device) if isinstance(v, torch.Tensor) else v for k, v in batch.items()
+    }
 
 
 # ---------------------------------------------------------------------------

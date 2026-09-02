@@ -43,6 +43,8 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
         "verifier_norm.weight",
         # verifier_lm_head is reloaded from the verifier (see load_verifier_weights)
         # and excluded on save, so it is expected to be absent from checkpoints.
+        # lm_head is handled per-instance in __init__: omitted only for full-vocab
+        # drafts, where it is the exact frozen verifier projection.
         "verifier_lm_head.weight",
         "t2d",
         "d2t",
@@ -54,6 +56,16 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
 
     t2d: torch.Tensor | None
     d2t: torch.Tensor | None
+
+    def _make_decoder_layer(
+        self, config: DFlashSpeculatorConfig, layer_idx: int
+    ) -> nn.Module:
+        """Build one draft decoder layer.
+
+        DFlash-family variants override this factory when they wrap the shared
+        attention and MLP with additional modules.
+        """
+        return Qwen3DFlashDecoderLayer(config.transformer_layer_config, layer_idx)  # type: ignore[arg-type]
 
     def __init__(
         self,
@@ -81,7 +93,7 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
         num_draft_layers = tl_config.num_hidden_layers
         self.layers = nn.ModuleList(
             [
-                Qwen3DFlashDecoderLayer(config.transformer_layer_config, layer_idx)  # type: ignore[arg-type]
+                self._make_decoder_layer(config, layer_idx)
                 for layer_idx in range(num_draft_layers)
             ]
         )
@@ -127,11 +139,36 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
             )
 
         self.post_init()
+        # Verifier-owned weights are reconstructed on load. Keep a reduced-vocab
+        # lm_head serialized because current runtimes cannot derive it from the
+        # full verifier head.
+        #
+        # Shadow the ClassVar lists with per-instance copies so full- and
+        # reduced-vocabulary siblings cannot mutate each other's save rules.
+        keys_to_ignore_on_save = list(type(self)._keys_to_ignore_on_save)  # noqa: SLF001
+        keys_to_ignore_on_load_missing = list(
+            type(self)._keys_to_ignore_on_load_missing  # noqa: SLF001
+        )
+        keys_to_ignore_on_save.append("embed_tokens.weight")
+        if not self.use_draft_vocab:
+            keys_to_ignore_on_save.append("lm_head.weight")
+            keys_to_ignore_on_load_missing.append("lm_head.weight")
+        self.__dict__["_keys_to_ignore_on_save"] = keys_to_ignore_on_save
+        self.__dict__["_keys_to_ignore_on_load_missing"] = (
+            keys_to_ignore_on_load_missing
+        )
 
     @property
     def target_layer_ids(self) -> list[int]:
         """Target layer IDs for auxiliary hidden states."""
         return self.config.aux_hidden_state_layer_ids
+
+    def load_verifier_weights(self):
+        """Reconstruct weights intentionally omitted from DFlash checkpoints."""
+        self._load_verifier_weights(
+            overwrite_embed_tokens=True,
+            overwrite_lm_head=not self.use_draft_vocab,
+        )
 
     @classmethod
     def from_training_args(
@@ -205,6 +242,11 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
             if sample_from_anchor_arg is None
             else sample_from_anchor_arg
         )
+        default_non_causal = algorithm == "dflash2"
+        non_causal_arg = kwargs.get("sliding_window_non_causal")
+        sliding_window_non_causal = (
+            default_non_causal if non_causal_arg is None else non_causal_arg
+        )
 
         # Calculate speculative tokens based on sample_from_anchor
         # False: anchor is bonus token (block_size - 1 tokens)
@@ -217,7 +259,7 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
             "block_size": block_size,
             "aux_hidden_state_layer_ids": target_layer_ids,
             "mask_token_id": kwargs.get("mask_token_id"),
-            "sliding_window_non_causal": kwargs.get("sliding_window_non_causal", False),
+            "sliding_window_non_causal": sliding_window_non_causal,
             "sample_from_anchor": sample_from_anchor,
             "speculators_config": SpeculatorsConfig(
                 algorithm=algorithm,
