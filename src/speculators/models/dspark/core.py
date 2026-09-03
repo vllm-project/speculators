@@ -106,6 +106,7 @@ class DSparkDraftModel(DFlashDraftModel):
             "per_position_loss_weight", "fixed-exp-decay"
         )
         dpace_alpha = kwargs.get("dpace_alpha", 0.5)
+        dpard_alpha = kwargs.get("dpard_alpha", 0.5)
         shared = {
             "loss_config": loss_config,
             "tv_loss_fn": tv_loss_fn,
@@ -114,6 +115,7 @@ class DSparkDraftModel(DFlashDraftModel):
             "confidence_head_alpha": confidence_head_alpha,
             "per_position_loss_weight": per_position_loss_weight,
             "dpace_alpha": dpace_alpha,
+            "dpard_alpha": dpard_alpha,
         }
         return dict(shared), dict(shared)
 
@@ -133,6 +135,7 @@ class DSparkDraftModel(DFlashDraftModel):
         confidence_head_alpha: float = 1.0,
         per_position_loss_weight: str = "fixed-exp-decay",
         dpace_alpha: float = 0.5,
+        dpard_alpha: float = 0.5,
         **kwargs,
     ):
         hidden, logits, targets, aligned_loss_mask, anchored_block_indices = (
@@ -207,6 +210,7 @@ class DSparkDraftModel(DFlashDraftModel):
             confidence_head_alpha=confidence_head_alpha,
             per_position_loss_weight=per_position_loss_weight,
             dpace_alpha=dpace_alpha,
+            dpard_alpha=dpard_alpha,
             sample_from_anchor=self.config.sample_from_anchor,
         )
         return None, loss, metrics

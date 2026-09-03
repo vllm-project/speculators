@@ -142,6 +142,20 @@ def tv_loss(
     return elementwise_loss  # noqa: RET504
 
 
+def renyi_half_loss(
+    logits: torch.Tensor,  # shape: [1, seq_len, draft_vocab_size]
+    targets: torch.Tensor,  # shape: [1, seq_len, draft_vocab_size]
+):
+    """Compute per-position Rényi-half divergence.
+
+    ``D_1/2(p, q) = -2 log sum_v sqrt(p_v q_v)`` is evaluated in log space
+    for numerical stability.
+    """
+    draft_logq = torch.nn.functional.log_softmax(logits, dim=-1, dtype=torch.float32)
+    target_logp = torch.nn.functional.log_softmax(targets, dim=-1, dtype=torch.float32)
+    return -2.0 * torch.logsumexp(0.5 * (target_logp + draft_logq), dim=-1)
+
+
 def neg_log_acceptance_loss(
     logits: torch.Tensor,  # shape: [1, seq_len, draft_vocab_size]
     targets: torch.Tensor,  # shape: [1, seq_len, draft_vocab_size]

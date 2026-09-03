@@ -22,6 +22,32 @@ A linear head predicts each position's acceptance probability from the backbone 
 
 DSpark defaults to `sample_from_anchor: True` -- the anchor and all mask positions predict future tokens, producing `block_size` speculative tokens. See [DFlash](dflash.md#sample-from-anchor) for details.
 
+### D-PARD objective
+
+D-PARD combines a Rényi-half actor with detached, acceptance-derived position credit. Select it with:
+
+```bash
+--speculator-type dspark \
+--loss-fn renyi_half \
+--per-position-loss-weight dpard \
+--dpard-alpha 0.5
+```
+
+For target distribution `p_t` and draft distribution `q_t`, the actor is `D_t = -2 log sum_v sqrt(p_t,v q_t,v)`. Position acceptance is `a_t = sum_v min(p_t,v, q_t,v)` and smoothing is `s_t = alpha + (1-alpha) a_t`, where `alpha` is `--dpard-alpha`. D-PARD uses the detached suffix credit `W_t = sum_{k=t}^D product_{i=1}^k s_i`.
+
+The actor loss is `sum_t W_t D_t / valid_position_count`, without credit normalization or a calibration factor. With `sample_from_anchor=True`, the confidence loss is `sum_t exp(-t/gamma) BCE(c_t, sg(a_t)) / valid_position_count`. The confidence head is trained; its position weights remain static.
+
+For the Qwen3-4B B16 native offline recipe, run from the repository root:
+
+```bash
+DATA_PATH=/path/to/native_dataset \
+  bash examples/train/dspark_qwen3_4b_dpard_offline.sh
+```
+
+The [example](../../../examples/train/dspark_qwen3_4b_dpard_offline.sh) trains three draft layers with B16, 512 anchors per packed sequence, seed 42, and alpha 0.5. It requires cached native hidden states for target layers `[1, 17, 33]` and the verifier's final hidden states. Set `OUTPUT_DIR` and `NUM_TRAIN_GPUS` to change the output path and GPU count (default: two).
+
+Training uses 8192-token packing, uniform hidden-state noise in `[-0.05, 0.05]`, causal sliding attention (window 2048), AdamW (weight decay 0.01), and linear LR decay over six epochs. The split reserves one validation row from 36,624; adjust it for other datasets. For a static Rényi control, change `--per-position-loss-weight dpard` to `--per-position-loss-weight fixed-exp-decay` and keep the other settings unchanged.
+
 ## Key Parameters
 
 | Parameter                       | Default   | Description                                                       |
@@ -31,6 +57,9 @@ DSpark defaults to `sample_from_anchor: True` -- the anchor and all mask positio
 | `--enable-confidence-head`      | enabled   | Attach the per-position acceptance head                           |
 | `--confidence-head-with-markov` | enabled   | Feed the Markov previous-token embedding into the confidence head |
 | `--confidence-head-alpha`       | 1.0       | Weight of the confidence-head BCE term                            |
+| `--dpard-alpha`                 | 0.5       | D-PARD acceptance-floor smoothing constant                        |
+
+Set `--per-position-loss-weight dpard` to activate D-PARD. This option requires DSpark and `--loss-fn renyi_half`; invalid combinations fail during configuration validation.
 
 All DFlash parameters (`--block-size`, `--max-anchors`, `--num-layers`, ...) apply unchanged.
 

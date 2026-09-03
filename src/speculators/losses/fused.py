@@ -16,6 +16,7 @@ treated as constant), L the row loss:
     jsd     0.5 * dp * (log(dp / mix) - KL(dp || mix)),  mix = (dp + tp) / 2
     ce      dp - onehot(argmax tp)
     tv      -dp * (1[dp <= tp] - s_s),  s_s = sum of dp where dp <= tp
+    renyi  dp - sqrt(dp * tp) / sum_v sqrt(dp_v * tp_v)
 
 Derived from SpecForge specforge/core/loss.py (Apache-2.0, Unsloth/Liger
 lineage); TV gradient sign convention matches Liger ops/tvd.py.
@@ -49,6 +50,7 @@ _OP_RKL = tl.constexpr(1)
 _OP_JSD = tl.constexpr(2)
 _OP_CE = tl.constexpr(3)
 _OP_TV = tl.constexpr(4)
+_OP_RENYI_HALF = tl.constexpr(5)
 
 # stats [_N_STATS, n_rows]: [0]/[1] draft row max / sum-exp, [2]/[3] same for
 # targets (unused by ce), [4] per-OP -- kl_div/rkl: row loss L | jsd:
@@ -168,6 +170,8 @@ def loss_forward_kernel(  # noqa: C901 -- constexpr OP branches, pruned per inst
             elif OP == _OP_TV:
                 acc += tl.sum(tl.where(mask, tl.minimum(dp, tp), 0.0))
                 extra += tl.sum(tl.where(mask & (dp <= tp), dp, 0.0))
+            elif OP == _OP_RENYI_HALF:
+                acc += tl.sum(tl.where(mask, tl.exp(0.5 * (ldp + ltp)), 0.0))
 
         # Lint exemptions: `in`/merged compares aren't constexpr-foldable here.
         if OP == _OP_KL or OP == _OP_RKL:  # noqa: PLR1714, SIM109
@@ -179,10 +183,14 @@ def loss_forward_kernel(  # noqa: C901 -- constexpr OP branches, pruned per inst
         elif OP == _OP_TV:
             tl.store(loss_ptr + pid, 1.0 - acc)
             tl.store(stats_ptr + 4 * stats_row + pid, extra)
+        elif OP == _OP_RENYI_HALF:
+            affinity = tl.maximum(acc, 1.0e-30)
+            tl.store(loss_ptr + pid, -2.0 * tl.log(affinity))
+            tl.store(stats_ptr + 4 * stats_row + pid, affinity)
 
 
 @triton.jit
-def loss_backward_kernel(
+def loss_backward_kernel(  # noqa: C901 -- constexpr OP branches, pruned per instance
     logits_ptr,
     targets_ptr,
     grad_in_ptr,
@@ -239,6 +247,9 @@ def loss_backward_kernel(
                 grad = 0.5 * dp * (ldp - _log_mix(ldp, ltp) - extra)
             elif OP == _OP_TV:
                 grad = -dp * ((dp <= tp).to(tl.float32) - extra)
+            elif OP == _OP_RENYI_HALF:
+                tilted = tl.exp(0.5 * (ldp + ltp)) / extra
+                grad = dp - tilted
         tl.store(grad_in_ptr + offsets, go * grad, mask=mask)
 
 
@@ -324,6 +335,11 @@ def fused_ce_loss(logits, targets):
 def fused_tv_loss(logits, targets):
     """Per-position TV distance ``[1, T]`` from draft/target logits (fused Triton)."""
     return _FusedLoss.apply(logits, targets, _OP_TV.value)
+
+
+def fused_renyi_half_loss(logits, targets):
+    """Per-position Rényi-half divergence ``[1, T]`` (fused Triton)."""
+    return _FusedLoss.apply(logits, targets, _OP_RENYI_HALF.value)
 
 
 def fused_nla_loss(logits, targets):

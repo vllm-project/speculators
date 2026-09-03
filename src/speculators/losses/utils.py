@@ -112,6 +112,58 @@ def dpace_loss_decay(
     return weight.reshape(1, -1)
 
 
+def dpard_loss_decay(
+    acceptance: torch.Tensor,
+    loss_mask: torch.Tensor,
+    block_size: int,
+    dpard_alpha: float,
+    start_pos: int = 0,
+) -> torch.Tensor:
+    """Compute detached D-PARD suffix-survival weights without calibration."""
+    if acceptance.shape != loss_mask.shape:
+        raise ValueError("acceptance and loss_mask must have matching shapes")
+    if acceptance.shape[-1] % block_size != 0:
+        raise ValueError("sequence length must be divisible by block_size")
+    if not 0.0 < dpard_alpha < 1.0:
+        raise ValueError("dpard_alpha must be strictly between zero and one")
+    if not 0 <= start_pos < block_size:
+        raise ValueError("start_pos must be within the speculative block")
+
+    with torch.no_grad():
+        acceptance_blocks = acceptance.detach().float().reshape(-1, block_size)
+        mask_blocks = loss_mask.detach().float().reshape(-1, block_size)
+        active = mask_blocks[:, start_pos:]
+        smooth = dpard_alpha + (1.0 - dpard_alpha) * acceptance_blocks[:, start_pos:]
+        smooth = torch.where(active > 0, smooth, torch.ones_like(smooth))
+        prefix = torch.cumprod(smooth, dim=-1) * active
+        suffix = torch.flip(
+            torch.cumsum(torch.flip(prefix, dims=(-1,)), dim=-1),
+            dims=(-1,),
+        )
+        output = torch.zeros_like(mask_blocks)
+        output[:, start_pos:] = suffix * active
+    return output.reshape_as(acceptance)
+
+
+def masked_weighted_mean(
+    elementwise_loss: torch.Tensor,
+    position_weight: torch.Tensor,
+    loss_mask: torch.Tensor,
+) -> torch.Tensor:
+    """Average a position-weighted loss by valid positions, then by batch."""
+    if (
+        elementwise_loss.shape != position_weight.shape
+        or position_weight.shape != loss_mask.shape
+    ):
+        raise ValueError(
+            "loss, position weight, and loss mask must have matching shapes"
+        )
+    mask = loss_mask.to(elementwise_loss.dtype)
+    numerator = (elementwise_loss * position_weight * mask).sum(dim=1)
+    denominator = mask.sum(dim=1) + _LOSS_REDUCTION_EPS
+    return (numerator / denominator).mean()
+
+
 def _fused_kernel(name: str):
     """Import a fused loss by name."""
     try:
@@ -144,6 +196,10 @@ def tv_loss(logits: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
     return _fused_kernel("fused_tv_loss")(logits, targets)
 
 
+def renyi_half_loss(logits: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
+    return _fused_kernel("fused_renyi_half_loss")(logits, targets)
+
+
 def neg_log_acceptance_loss(
     logits: torch.Tensor, targets: torch.Tensor
 ) -> torch.Tensor:
@@ -162,6 +218,7 @@ _FUSED_LOSS_FN_MAP: dict[str, Callable[[torch.Tensor, torch.Tensor], torch.Tenso
     "jsd": js_div_loss,
     "ce": ce_loss,
     "tv": tv_loss,
+    "renyi_half": renyi_half_loss,
     "nla": neg_log_acceptance_loss,
     "lk_hybrid": lk_hybrid_loss,
 }
@@ -173,6 +230,7 @@ _EAGER_LOSS_FN_MAP: dict[str, Callable[[torch.Tensor, torch.Tensor], torch.Tenso
     "jsd": eager.js_div_loss,
     "ce": eager.ce_loss,
     "tv": eager.tv_loss,
+    "renyi_half": eager.renyi_half_loss,
     "nla": eager.neg_log_acceptance_loss,
     "lk_hybrid": eager.lk_hybrid_loss,
 }
@@ -290,15 +348,11 @@ def loss_function(
     elementwise_loss = loss_fn(logits, targets)  # shape: [1, seq_len]
 
     loss_mask = loss_mask.to(elementwise_loss.dtype)
-    elementwise_loss = elementwise_loss * loss_mask
+    masked_loss = elementwise_loss * loss_mask
 
+    position_weight = torch.ones_like(elementwise_loss)
     if decay_fn is not None:
-        decay_mult = decay_fn(
-            pos_idx.to(elementwise_loss.dtype), elementwise_loss=elementwise_loss
+        position_weight = decay_fn(
+            pos_idx.to(elementwise_loss.dtype), elementwise_loss=masked_loss
         )
-        elementwise_loss = elementwise_loss * decay_mult
-
-    denominator = loss_mask.sum(dim=1) + _LOSS_REDUCTION_EPS
-
-    batch_loss = torch.sum(elementwise_loss, dim=1) / denominator  # shape: [1]
-    return batch_loss.mean()  # shape: []
+    return masked_weighted_mean(elementwise_loss, position_weight, loss_mask)
