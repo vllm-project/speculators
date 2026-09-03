@@ -59,8 +59,8 @@ class TestSaveTrainCommand:
 
     def test_git_sha_fallback_on_error(self, tmp_path: Path):
         with patch(
-            "speculators.train.utils.subprocess.run",
-            side_effect=OSError("no git"),
+            "speculators.train.utils.git_sha",
+            return_value="unknown",
         ):
             save_train_command(str(tmp_path))
         content = (tmp_path / "train_command.txt").read_text()
@@ -85,6 +85,46 @@ class TestSaveTrainCommand:
         content = (tmp_path / "train_command.txt").read_text()
         assert "old content" not in content
         assert "# Timestamp:" in content
+
+
+# ---------------------------------------------------------------------------
+# speculators.patch tests
+# ---------------------------------------------------------------------------
+
+
+class TestSpeculatorsPatch:
+    def test_creates_patch_file(self, tmp_path: Path):
+        save_train_command(str(tmp_path))
+        assert (tmp_path / "speculators.patch").exists()
+
+    def test_patch_contains_repo_header(self, tmp_path: Path):
+        save_train_command(str(tmp_path))
+        content = (tmp_path / "speculators.patch").read_text()
+        assert content.startswith("# repo: ")
+
+    def test_patch_contains_sha(self, tmp_path: Path):
+        save_train_command(str(tmp_path))
+        content = (tmp_path / "speculators.patch").read_text()
+        first_line = content.split("\n")[0]
+        assert "(" in first_line
+        assert ")" in first_line
+
+    def test_no_patch_when_no_repo(self, tmp_path: Path):
+        with patch(
+            "speculators.train.utils.find_repo_root",
+            return_value=None,
+        ):
+            save_train_command(str(tmp_path))
+        assert not (tmp_path / "speculators.patch").exists()
+
+    def test_patch_failure_does_not_block(self, tmp_path: Path):
+        with patch(
+            "speculators.train.utils.git_diff",
+            side_effect=OSError("git broke"),
+        ):
+            save_train_command(str(tmp_path))
+        assert (tmp_path / "train_command.txt").exists()
+        assert not (tmp_path / "speculators.patch").exists()
 
 
 # ---------------------------------------------------------------------------
