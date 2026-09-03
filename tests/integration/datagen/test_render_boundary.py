@@ -48,7 +48,7 @@ def _patch_encode(monkeypatch, renders: dict[tuple[int, bool], list[int]]):
 
 
 def test_encode_render_sends_training_window(monkeypatch):
-    request = {}
+    request: dict[str, object] = {}
 
     def fake_render(
         endpoint,
@@ -163,6 +163,19 @@ def test_append_row_statuses():
     assert preprocessing._append_row(results, [1, 2, 3], [0, 1, 1], 10, 1) == "kept"
     assert len(results["input_ids"]) == 1
     assert results["seq_len"] == [3]
+
+
+def test_append_boundary_rows_counts_rows_at_limit_as_maybe_truncated():
+    results: dict[str, list] = {"input_ids": [], "loss_mask": [], "seq_len": []}
+    rows: list[preprocessing.BoundaryRow] = [
+        {
+            "input_ids": [1, 2, 3, 4],
+            "loss_mask": [0, 1, 1, 1],
+            "conv": _conv(2),
+        }
+    ]
+
+    assert preprocessing._append_boundary_rows(results, rows, 4, None) == (1, 0, 1)
 
 
 # --------------------------------------------------------------------------- #

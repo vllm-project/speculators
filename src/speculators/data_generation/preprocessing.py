@@ -373,12 +373,18 @@ def _append_boundary_rows(
     max_length: int,
     minimum_valid_tokens: int | None,
 ) -> tuple[int, int, int]:
-    """Append rendered rows and return kept, unsupervised, and clipped counts."""
+    """Append rendered rows and return kept, unsupervised, and
+    maybe-truncated counts.
+    """
     num_kept = 0
     num_unsupervised = 0
-    num_clipped = 0
+    num_maybe_truncated = 0
 
     for row in rows:
+        # vLLM applies the requested right-side truncation before returning the
+        # render. A row at the limit may therefore have been truncated, but the
+        # render response does not expose the original length.
+        maybe_truncated = len(row["input_ids"]) >= max_length
         status = _append_row(
             results,
             row["input_ids"],
@@ -387,18 +393,20 @@ def _append_boundary_rows(
             minimum_valid_tokens,
         )
         num_unsupervised += status == "unsupervised"
-        # Kept-but-truncated only: a row clipped past its boundary reports
-        # as unsupervised above, and would otherwise be counted twice.
-        num_clipped += status == "kept" and len(row["input_ids"]) > max_length
+        num_maybe_truncated += maybe_truncated and status == "kept"
         if status == "kept":
             num_kept += 1
             if "messages" in results:
                 results["messages"].append(_adapt_conv_for_vllm(row["conv"]))
 
-    return num_kept, num_unsupervised, num_clipped
+    return num_kept, num_unsupervised, num_maybe_truncated
 
 
-def _warn_seq_length(num_unsupervised: int, num_clipped: int) -> None:
+def _warn_seq_length(
+    num_unsupervised: int,
+    num_maybe_truncated: int,
+    max_length: int,
+) -> None:
     """Warn when ``--seq-length`` cost supervision: all of it, or just the tail."""
     if num_unsupervised:
         log.warning(
@@ -406,13 +414,11 @@ def _warn_seq_length(num_unsupervised: int, num_clipped: int) -> None:
             f"If unexpected, consider increasing --seq-length to avoid "
             f"truncating assistant responses."
         )
-    if num_clipped:
+    if num_maybe_truncated:
         log.warning(
-            f"Clipped {num_clipped} rows at --seq-length: the assistant turn is "
-            f"cut mid-response, so its tail and closing tokens are never "
-            f"supervised. These rows are kept and look healthy. Raise "
-            f"--seq-length to supervise responses whole -- reasoning traces "
-            f"routinely exceed 2048 tokens."
+            f"{num_maybe_truncated} rows may have been truncated because "
+            f"their seq_length==max_seq_length ({max_length}). The assistant "
+            "turn may be cut mid-response. Raise --seq-length to reduce truncation."
         )
 
 
@@ -426,7 +432,7 @@ def _passthrough_pretokenized(
     """
     results: dict[str, list] = {"input_ids": [], "loss_mask": [], "seq_len": []}
     num_unsupervised = 0
-    num_clipped = 0
+    num_maybe_truncated = 0
     for ids, mask in zip(examples["input_ids"], examples["loss_mask"], strict=True):
         # A per-row length skew survives strict= column pairing; the collator
         # packs each key independently and would shift the mask silently.
@@ -439,8 +445,8 @@ def _passthrough_pretokenized(
         num_unsupervised += status == "unsupervised"
         # Kept-but-truncated only: a row clipped past its boundary reports as
         # unsupervised above, and would otherwise be counted twice.
-        num_clipped += status == "kept" and len(ids) > max_length
-    _warn_seq_length(num_unsupervised, num_clipped)
+        num_maybe_truncated += status == "kept" and len(ids) > max_length
+    _warn_seq_length(num_unsupervised, num_maybe_truncated, max_length)
     return results
 
 
@@ -485,7 +491,7 @@ def _preprocess_batch(
         tools_col = None
 
     num_unsupervised = 0
-    num_clipped = 0
+    num_maybe_truncated = 0
     num_convs_in = 0
     num_convs_empty = 0
 
@@ -502,17 +508,21 @@ def _preprocess_batch(
             continue
 
         num_convs_in += 1
-        num_kept, row_unsupervised, row_clipped = _append_boundary_rows(
+        num_kept, row_unsupervised, row_maybe_truncated = _append_boundary_rows(
             results,
             rows,
             max_length,
             minimum_valid_tokens,
         )
         num_unsupervised += row_unsupervised
-        num_clipped += row_clipped
+        num_maybe_truncated += row_maybe_truncated
         num_convs_empty += num_kept == 0
 
-    _warn_seq_length(num_unsupervised, num_clipped)
+    _warn_seq_length(
+        num_unsupervised,
+        num_maybe_truncated,
+        max_length,
+    )
     if num_convs_empty:
         log.warning(
             f"{num_convs_empty}/{num_convs_in} conversations produced no training "
