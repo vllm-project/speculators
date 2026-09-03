@@ -109,7 +109,7 @@ def test_dpard_credit_rejects_invalid_shape_and_alpha() -> None:
         dpard_loss_decay(acceptance, mask, block_size=4, dpard_alpha=1.0)
 
 
-def test_dpard_metrics_match_literal_valid_position_actor() -> None:
+def test_dpard_metrics_match_literal_valid_block_actor() -> None:
     torch.manual_seed(11)
     logits = torch.randn(1, 6, 7)
     targets = torch.randn(1, 6, 7)
@@ -131,7 +131,8 @@ def test_dpard_metrics_match_literal_valid_position_actor() -> None:
     actor = renyi_half_loss(logits, targets)
     acceptance = 1.0 - tv_loss(logits, targets)
     credit = dpard_loss_decay(acceptance, mask, 3, 0.5)
-    expected = (actor * credit * mask).sum() / mask.sum()
+    valid_blocks = mask.view(-1, 3).any(dim=-1).sum()
+    expected = (actor * credit * mask).sum() / valid_blocks
     torch.testing.assert_close(loss, expected)
     torch.testing.assert_close(metrics["dpard_credit_sum"], credit.sum())
     torch.testing.assert_close(metrics["dpard_credit_total"], mask.sum())
@@ -147,7 +148,7 @@ def test_dpard_metrics_match_literal_valid_position_actor() -> None:
         )
 
 
-def test_dpard_confidence_uses_cumulative_reach_and_valid_position_mean() -> None:
+def test_dpard_confidence_uses_cumulative_reach_and_valid_block_mean() -> None:
     torch.manual_seed(13)
     logits = torch.randn(1, 6, 7)
     targets = torch.randn(1, 6, 7)
@@ -188,7 +189,8 @@ def test_dpard_confidence_uses_cumulative_reach_and_valid_position_mean() -> Non
     reach = torch.ones_like(acceptance_blocks)
     reach[:, 1:] = torch.cumprod(acceptance_blocks[:, :-1], dim=-1)
     reach = reach.view_as(mask) * mask
-    expected_confidence = (bce * reach).sum() / mask.sum()
+    valid_blocks = mask.view(-1, 3).any(dim=-1).sum()
+    expected_confidence = (bce * reach).sum() / valid_blocks
     torch.testing.assert_close(total_loss - actor_loss, expected_confidence)
 
 
@@ -220,6 +222,6 @@ def test_b16_actor_gradient_has_no_acceptance_credit_gradient() -> None:
                 weight[0, start : end + 1] += prefix
         tilted = (p * q).sqrt()
         tilted = tilted / tilted.sum(-1, keepdim=True)
-        expected_grad = (q - tilted) * weight.unsqueeze(-1) / 25.0
+        expected_grad = (q - tilted) * weight.unsqueeze(-1) / 2.0
     actual_grad = torch.autograd.grad(loss, logits)[0]
     torch.testing.assert_close(actual_grad, expected_grad)

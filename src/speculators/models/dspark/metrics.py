@@ -19,7 +19,6 @@ from speculators.losses import (
     dflash_loss_decay,
     dpace_loss_decay,
     dpard_loss_decay,
-    masked_weighted_mean,
     tv_loss,
 )
 from speculators.models.metrics import compute_accuracy_multi_step
@@ -46,6 +45,19 @@ def _masked_decayed_mean(
         )
     denominator = loss_mask.sum(dim=1) + _EPS
     return (weighted.sum(dim=1) / denominator).mean()
+
+
+def _masked_weighted_block_mean(
+    elementwise: torch.Tensor,
+    position_weight: torch.Tensor,
+    loss_mask: torch.Tensor,
+    block_size: int,
+) -> torch.Tensor:
+    """Average a weighted loss over valid speculative blocks."""
+    mask = loss_mask.to(elementwise.dtype)
+    numerator = (elementwise * position_weight * mask).sum()
+    valid_blocks = mask.reshape(-1, block_size).any(dim=-1).sum().clamp_min(1)
+    return numerator / valid_blocks
 
 
 def compute_metrics(
@@ -107,7 +119,12 @@ def compute_metrics(
             dpard_alpha,
             start_pos=start_pos,
         )
-        loss = masked_weighted_mean(actor_local, dpard_credit.detach(), loss_mask)
+        loss = _masked_weighted_block_mean(
+            actor_local,
+            dpard_credit.detach(),
+            loss_mask,
+            block_size,
+        )
         term_losses: dict[str, torch.Tensor] = {}
         with torch.no_grad():
             acceptance_blocks = accept_rate.view(-1, block_size)
@@ -129,9 +146,10 @@ def compute_metrics(
             reach_blocks[:, start_pos:] = reach * active
             confidence_weight = reach_blocks.reshape_as(loss_mask)
         confidence_loss_fn = partial(
-            masked_weighted_mean,
+            _masked_weighted_block_mean,
             position_weight=confidence_weight,
             loss_mask=loss_mask,
+            block_size=block_size,
         )
     else:
         loss, term_losses = compound_loss(
