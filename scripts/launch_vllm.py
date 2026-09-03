@@ -135,6 +135,11 @@ def _set_render_thread_defaults() -> None:
         os.environ.setdefault(name, value)
 
 
+def _enable_scale_out_endpoints() -> None:
+    """Enable vLLM's render route while preserving an explicit user setting."""
+    os.environ.setdefault("VLLM_ENABLE_SCALE_OUT_ENDPOINTS", "1")
+
+
 def parse_args():
     parser = argparse.ArgumentParser(
         description="Launch vLLM for hidden states extraction",
@@ -437,6 +442,7 @@ def main():
     if not args.dry_run:
         if "--headless" not in vllm_args:
             _set_render_thread_defaults()
+            _enable_scale_out_endpoints()
         os.execvp(cmd[0], cmd)  # noqa: S606
 
 

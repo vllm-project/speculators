@@ -2,6 +2,7 @@ import os
 
 from scripts.launch_vllm import (
     DEFAULT_RENDERER_NUM_WORKERS,
+    _enable_scale_out_endpoints,
     _preprocessing_workers,
     _set_render_thread_defaults,
     _with_render_defaults,
@@ -53,6 +54,18 @@ def test_render_thread_defaults_are_bounded_and_overrideable(monkeypatch):
     monkeypatch.setenv("RAYON_NUM_THREADS", "8")
     _set_render_thread_defaults()
     assert os.environ["RAYON_NUM_THREADS"] == "8"
+
+
+def test_scale_out_endpoints_enabled_by_default(monkeypatch):
+    monkeypatch.delenv("VLLM_ENABLE_SCALE_OUT_ENDPOINTS", raising=False)
+    _enable_scale_out_endpoints()
+    assert os.environ["VLLM_ENABLE_SCALE_OUT_ENDPOINTS"] == "1"
+
+
+def test_explicit_scale_out_endpoint_setting_is_preserved(monkeypatch):
+    monkeypatch.setenv("VLLM_ENABLE_SCALE_OUT_ENDPOINTS", "0")
+    _enable_scale_out_endpoints()
+    assert os.environ["VLLM_ENABLE_SCALE_OUT_ENDPOINTS"] == "0"
 
 
 def test_sizing_respects_the_combined_budget():
