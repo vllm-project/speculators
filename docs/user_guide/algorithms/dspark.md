@@ -35,7 +35,7 @@ D-PARD combines a Rényi-half actor with detached, acceptance-derived position c
 
 For target distribution `p_t` and draft distribution `q_t`, the actor is `D_t = -2 log sum_v sqrt(p_t,v q_t,v)`. Position acceptance is `a_t = sum_v min(p_t,v, q_t,v)` and smoothing is `s_t = alpha + (1-alpha) a_t`, where `alpha` is `--dpard-alpha`. D-PARD uses the detached suffix credit `W_t = sum_{k=t}^D product_{i=1}^k s_i`.
 
-The actor loss is `sum_t W_t D_t / valid_position_count`. With `sample_from_anchor=True`, the confidence loss is `sum_t exp(-t/gamma) BCE(c_t, sg(a_t)) / valid_position_count`. The confidence head is trained; its position weights remain static.
+The actor loss is `sum_t W_t D_t / valid_position_count`. The confidence head predicts `a_t`; its BCE uses the detached cumulative-reach weight `r_t = product_{i<t} a_i` and the same valid-position denominator. The actor and confidence weights are dynamic, while the confidence target and both position weights remain detached.
 
 For the Qwen3-4B B16 native offline recipe, run from the repository root:
 

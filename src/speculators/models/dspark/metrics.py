@@ -86,7 +86,12 @@ def compute_metrics(
         decay_fn = partial(
             dflash_loss_decay, gamma=gamma, sample_from_anchor=sample_from_anchor
         )
-    confidence_decay_fn = decay_fn
+    confidence_loss_fn = partial(
+        _masked_decayed_mean,
+        loss_mask=loss_mask,
+        pos_idx=pos_idx,
+        decay_fn=decay_fn,
+    )
     dpard_credit = None
     if per_position_loss_weight == "dpard":
         if set(loss_config) != {"renyi_half"}:
@@ -104,10 +109,29 @@ def compute_metrics(
         )
         loss = masked_weighted_mean(actor_local, dpard_credit.detach(), loss_mask)
         term_losses: dict[str, torch.Tensor] = {}
-        confidence_decay_fn = partial(
-            dflash_loss_decay,
-            gamma=gamma,
-            sample_from_anchor=sample_from_anchor,
+        with torch.no_grad():
+            acceptance_blocks = accept_rate.view(-1, block_size)
+            mask_blocks = loss_mask.to(accept_rate.dtype).view(-1, block_size)
+            active = mask_blocks[:, start_pos:]
+            masked_acceptance = torch.where(
+                active > 0,
+                acceptance_blocks[:, start_pos:],
+                torch.ones_like(active),
+            )
+            reach = torch.cat(
+                [
+                    torch.ones_like(masked_acceptance[:, :1]),
+                    torch.cumprod(masked_acceptance, dim=-1)[:, :-1],
+                ],
+                dim=-1,
+            )
+            reach_blocks = torch.zeros_like(acceptance_blocks)
+            reach_blocks[:, start_pos:] = reach * active
+            confidence_weight = reach_blocks.reshape_as(loss_mask)
+        confidence_loss_fn = partial(
+            masked_weighted_mean,
+            position_weight=confidence_weight,
+            loss_mask=loss_mask,
         )
     else:
         loss, term_losses = compound_loss(
@@ -148,7 +172,7 @@ def compute_metrics(
         bce = binary_cross_entropy_with_logits(
             confidence_logits, c_star, reduction="none"
         )  # [1, T]
-        conf_loss = _masked_decayed_mean(bce, loss_mask, pos_idx, confidence_decay_fn)
+        conf_loss = confidence_loss_fn(bce)
         loss = loss + confidence_head_alpha * conf_loss
 
         with torch.no_grad():

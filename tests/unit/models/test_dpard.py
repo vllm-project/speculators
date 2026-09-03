@@ -5,7 +5,6 @@ import torch
 from torch.nn.functional import binary_cross_entropy_with_logits
 
 from speculators.losses import (
-    dflash_loss_decay,
     dpard_loss_decay,
     masked_weighted_mean,
     resolve_loss_config,
@@ -148,7 +147,7 @@ def test_dpard_metrics_match_literal_valid_position_actor() -> None:
         )
 
 
-def test_dpard_keeps_confidence_on_fixed_exponential_weights() -> None:
+def test_dpard_confidence_uses_cumulative_reach_and_valid_position_mean() -> None:
     torch.manual_seed(13)
     logits = torch.randn(1, 6, 7)
     targets = torch.randn(1, 6, 7)
@@ -185,11 +184,11 @@ def test_dpard_keeps_confidence_on_fixed_exponential_weights() -> None:
     bce = binary_cross_entropy_with_logits(
         confidence_logits, acceptance, reduction="none"
     )
-    pos_idx = torch.arange(6).remainder(3).unsqueeze(0)
-    fixed_weight = dflash_loss_decay(
-        pos_idx.float(), gamma=4.0, sample_from_anchor=True
-    )
-    expected_confidence = (bce * mask * fixed_weight).sum() / mask.sum()
+    acceptance_blocks = acceptance.view(-1, 3)
+    reach = torch.ones_like(acceptance_blocks)
+    reach[:, 1:] = torch.cumprod(acceptance_blocks[:, :-1], dim=-1)
+    reach = reach.view_as(mask) * mask
+    expected_confidence = (bce * reach).sum() / mask.sum()
     torch.testing.assert_close(total_loss - actor_loss, expected_confidence)
 
 
