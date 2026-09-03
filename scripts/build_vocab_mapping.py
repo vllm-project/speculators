@@ -94,9 +94,9 @@ def main():
     output_path = Path(args.output_path)
     output_path.mkdir(parents=True, exist_ok=True)
 
-    # Save as .npy files (expected by training script)
-    d2t_path = output_path / "d2t.npy"
-    t2d_path = output_path / "t2d.npy"
+    # Save as size-keyed .npy files (automatically discovered by training)
+    d2t_path = output_path / f"d2t-{args.draft_vocab_size}.npy"
+    t2d_path = output_path / f"t2d-{args.draft_vocab_size}.npy"
 
     np.save(d2t_path, d2t.cpu().numpy())
     np.save(t2d_path, t2d.cpu().numpy())

@@ -313,11 +313,13 @@ def _load_mappings(d2t_path, t2d_path, expected_draft_vocab_size: int | None):
     d2t = torch.from_numpy(np.load(d2t_path))
     t2d = torch.from_numpy(np.load(t2d_path))
     draft_vocab_size = d2t.shape[0]
-    if expected_draft_vocab_size and expected_draft_vocab_size != draft_vocab_size:
+    if (
+        expected_draft_vocab_size is not None
+        and expected_draft_vocab_size != draft_vocab_size
+    ):
         raise ValueError(
-            f"Explicit vocab mapping (t2d & d2t) files were provided, but don't"
-            f"match the provided --draft-vocab-size {draft_vocab_size}."
-            f"d2t.shape={d2t.shape}, dim 0 should match provided value."
+            f"Vocab mapping d2t has size {draft_vocab_size}, but "
+            f"--draft-vocab-size requires {expected_draft_vocab_size}."
         )
     return d2t, t2d, draft_vocab_size
 
@@ -334,11 +336,13 @@ def parse_vocab_mappings(args: argparse.Namespace):
         return _load_mappings(args.d2t_path, args.t2d_path, args.draft_vocab_size)
 
     data_path = Path(args.data_path)
-    default_t2d_path = data_path / "t2d.npy"
-    default_d2t_path = data_path / "d2t.npy"
-
-    if default_t2d_path.exists() and default_d2t_path.exists():
-        return _load_mappings(default_d2t_path, default_t2d_path, args.draft_vocab_size)
+    if args.draft_vocab_size is not None:
+        default_t2d_path = data_path / f"t2d-{args.draft_vocab_size}.npy"
+        default_d2t_path = data_path / f"d2t-{args.draft_vocab_size}.npy"
+        if default_t2d_path.exists() and default_d2t_path.exists():
+            return _load_mappings(
+                default_d2t_path, default_t2d_path, args.draft_vocab_size
+            )
 
     token_freq_path = args.token_freq_path or data_path / "token_freq.pt"
     token_freq_path = Path(token_freq_path)
@@ -358,16 +362,22 @@ def parse_vocab_mappings(args: argparse.Namespace):
             target_vocab_size=target_vocab_size,
         )
         draft_vocab_size = d2t.shape[0]
-        if args.draft_vocab_size and args.draft_vocab_size != draft_vocab_size:
+        if (
+            args.draft_vocab_size is not None
+            and args.draft_vocab_size != draft_vocab_size
+        ):
             raise ValueError(
-                f"Explicit vocab mapping (t2d & d2t) files were provided, but don't"
-                f"match the provided --draft-vocab-size {draft_vocab_size}."
-                f"d2t.shape={d2t.shape}, dim 0 should match provided value."
+                f"Generated vocab mapping d2t has size {draft_vocab_size}, but "
+                f"--draft-vocab-size requires {args.draft_vocab_size}."
             )
 
-        logger.info(f"Caching vocab mapping files to '{data_path}'")
-        np.save(data_path / "d2t.npy", d2t.cpu().numpy())
-        np.save(data_path / "t2d.npy", t2d.cpu().numpy())
+        d2t_cache_path = data_path / f"d2t-{draft_vocab_size}.npy"
+        t2d_cache_path = data_path / f"t2d-{draft_vocab_size}.npy"
+        logger.info(
+            f"Caching vocab mapping files to '{d2t_cache_path}' and '{t2d_cache_path}'"
+        )
+        np.save(d2t_cache_path, d2t.cpu().numpy())
+        np.save(t2d_cache_path, t2d.cpu().numpy())
 
         return d2t, t2d, draft_vocab_size
 

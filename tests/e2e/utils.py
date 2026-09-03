@@ -43,8 +43,9 @@ def purge_newfiles(fn: Callable[..., Path]):
 
     On exit, deletes top-level files in the resolved directory whose mtime is
     newer than when the wrapped function returned.  Does not recurse into
-    subdirectories.  This prevents generated artifacts (e.g. ``d2t.npy``,
-    ``t2d.npy`` potentially cached by ``train.py``) from persisting in
+    subdirectories.  This prevents generated artifacts (e.g. size-keyed
+    ``d2t-*.npy`` and ``t2d-*.npy`` files potentially cached by ``train.py``)
+    from persisting in
     shared directories (such as the HF snapshot cache) between test runs.
     """
 
