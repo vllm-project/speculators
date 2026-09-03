@@ -18,6 +18,8 @@ from speculators.losses import (
     compound_loss,
     dflash_loss_decay,
     dpace_loss_decay,
+    dpard_loss_decay,
+    masked_weighted_mean,
     tv_loss,
 )
 from speculators.models.metrics import compute_accuracy_multi_step
@@ -58,6 +60,7 @@ def compute_metrics(
     confidence_head_alpha: float = 1.0,
     per_position_loss_weight: str = "fixed-exp-decay",
     dpace_alpha: float = 0.5,
+    dpard_alpha: float = 0.5,
     sample_from_anchor: bool = True,
 ) -> tuple[torch.Tensor, dict]:
     """Compute the DSpark loss and a metrics dict (``*_sum``/``*_total`` pairs)."""
@@ -66,6 +69,12 @@ def compute_metrics(
     seq_len = logits.shape[1]
     pos_idx = (torch.arange(seq_len, device=device) % block_size).unsqueeze(0)
     start_pos = 0 if sample_from_anchor else 1
+
+    # Exact rejection-sampling acceptance is shared by D-PARD, confidence, and
+    # reporting. Position credit is always detached from this tensor.
+    with torch.no_grad():
+        accept_rate = 1.0 - tv_loss_fn(logits, targets)  # [1, T]
+
     if per_position_loss_weight == "dpace":
         decay_fn = partial(
             dpace_loss_decay,
@@ -77,15 +86,40 @@ def compute_metrics(
         decay_fn = partial(
             dflash_loss_decay, gamma=gamma, sample_from_anchor=sample_from_anchor
         )
+    confidence_decay_fn = decay_fn
+    dpard_credit = None
+    if per_position_loss_weight == "dpard":
+        if set(loss_config) != {"renyi_half"}:
+            raise ValueError("D-PARD requires exactly loss_fn=renyi_half")
+        actor_fn, coefficient = loss_config["renyi_half"]
+        if coefficient != 1.0:
+            raise ValueError("D-PARD requires unit Renyi-half coefficient")
+        actor_local = actor_fn(logits, targets)
+        dpard_credit = dpard_loss_decay(
+            accept_rate,
+            loss_mask,
+            block_size,
+            dpard_alpha,
+            start_pos=start_pos,
+        )
+        loss = masked_weighted_mean(actor_local, dpard_credit.detach(), loss_mask)
+        term_losses: dict[str, torch.Tensor] = {}
+        confidence_decay_fn = partial(
+            dflash_loss_decay,
+            gamma=gamma,
+            sample_from_anchor=sample_from_anchor,
+        )
+    else:
+        loss, term_losses = compound_loss(
+            logits,
+            targets,
+            loss_mask,
+            pos_idx,
+            loss_config=loss_config,
+            decay_fn=decay_fn,
+        )
 
-    loss, term_losses = compound_loss(
-        logits, targets, loss_mask, pos_idx, loss_config=loss_config, decay_fn=decay_fn
-    )
-
-    # Analytical per-position acceptance rate = distributional overlap
-    # = 1 - TV; the fused kernel avoids the two full-vocab fp32 softmaxes.
     with torch.no_grad():
-        accept_rate = 1.0 - tv_loss_fn(logits, targets)  # [1, T]
         # Per-block cumulative acceptance product over the draft slots (slot 0
         # is the anchor), shared by the accept-length and calibration metrics.
         num_blocks = seq_len // block_size
@@ -96,12 +130,25 @@ def compute_metrics(
         accept_prefix = (accept_blocks[:, start_pos:] * draft_mask).cumprod(dim=-1)
 
     metrics: dict[str, Any] = {}
+    if dpard_credit is not None:
+        metrics["dpard_credit_sum"] = dpard_credit.sum()
+        metrics["dpard_credit_total"] = loss_mask.sum().clamp_min(1.0)
+        credit_blocks = dpard_credit.view(-1, block_size)
+        mask_blocks = loss_mask.to(dpard_credit.dtype).view(-1, block_size)
+        for pos in range(start_pos, block_size):
+            position_mask = mask_blocks[:, pos]
+            metrics[f"position_{pos}_dpard_credit_sum"] = (
+                credit_blocks[:, pos] * position_mask
+            ).sum()
+            metrics[f"position_{pos}_dpard_credit_total"] = (
+                position_mask.sum().clamp_min(1.0)
+            )
     if confidence_logits is not None:
         c_star = accept_rate.detach().to(confidence_logits.dtype)
         bce = binary_cross_entropy_with_logits(
             confidence_logits, c_star, reduction="none"
         )  # [1, T]
-        conf_loss = _masked_decayed_mean(bce, loss_mask, pos_idx, decay_fn)
+        conf_loss = _masked_decayed_mean(bce, loss_mask, pos_idx, confidence_decay_fn)
         loss = loss + confidence_head_alpha * conf_loss
 
         with torch.no_grad():

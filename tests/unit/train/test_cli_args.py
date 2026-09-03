@@ -118,6 +118,80 @@ def test_dspark_explicit_eager(monkeypatch):
     assert val_kw["tv_loss_fn"] is eager.tv_loss
 
 
+def test_dspark_resolves_eager_renyi_half(monkeypatch):
+    args = _parse(
+        monkeypatch,
+        [
+            "--speculator-type",
+            "dspark",
+            "--loss-implementation",
+            "eager",
+            "--loss-fn",
+            "renyi_half",
+        ],
+    )
+    train_kw, _ = DSparkDraftModel.get_trainer_kwargs(**vars(args))
+    assert train_kw["loss_config"]["renyi_half"][0] is eager.renyi_half_loss
+
+
+def test_dspark_dpard_cli_contract(monkeypatch):
+    args = _parse(
+        monkeypatch,
+        [
+            "--speculator-type",
+            "dspark",
+            "--loss-fn",
+            "renyi_half",
+            "--per-position-loss-weight",
+            "dpard",
+            "--dpard-alpha",
+            "0.5",
+        ],
+    )
+    train_kw, val_kw = DSparkDraftModel.get_trainer_kwargs(**vars(args))
+    assert train_kw["per_position_loss_weight"] == "dpard"
+    assert train_kw["dpard_alpha"] == 0.5
+    assert val_kw["per_position_loss_weight"] == "dpard"
+    assert val_kw["dpard_alpha"] == 0.5
+
+
+@pytest.mark.parametrize(
+    "extra",
+    [
+        [
+            "--speculator-type",
+            "dflash",
+            "--loss-fn",
+            "renyi_half",
+            "--per-position-loss-weight",
+            "dpard",
+        ],
+        [
+            "--speculator-type",
+            "dspark",
+            "--loss-fn",
+            "kl_div",
+            "--per-position-loss-weight",
+            "dpard",
+        ],
+        [
+            "--speculator-type",
+            "dspark",
+            "--loss-fn",
+            "renyi_half",
+            "--per-position-loss-weight",
+            "dpard",
+            "--dpard-alpha",
+            "1.0",
+        ],
+    ],
+)
+def test_dpard_cli_rejects_invalid_combinations(monkeypatch, extra):
+    with pytest.raises(SystemExit) as exc_info:
+        _parse(monkeypatch, extra)
+    assert exc_info.value.code == 2
+
+
 def test_dspark_compound_loss(monkeypatch):
     args = _parse(monkeypatch, ["--loss-fn", '{"ce": 0.1, "tv": 0.9}'])
     train_kw, val_kw = DSparkDraftModel.get_trainer_kwargs(**vars(args))

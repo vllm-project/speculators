@@ -49,9 +49,16 @@ CASES = [
     ("jsd", eager.js_div_loss, "fused_js_div_loss"),
     ("ce", eager.ce_loss, "fused_ce_loss"),
     ("tv", eager.tv_loss, "fused_tv_loss"),
+    ("renyi_half", eager.renyi_half_loss, "fused_renyi_half_loss"),
     ("nla", eager.neg_log_acceptance_loss, "fused_nla_loss"),
     ("lk_hybrid", eager.lk_hybrid_loss, "fused_lk_hybrid_loss"),
 ]
+
+
+def test_fused_renyi_half_entrypoint_exists():
+    fused_losses = pytest.importorskip("speculators.losses.fused")
+    assert callable(fused_losses.fused_renyi_half_loss)
+
 
 # Loss values are fp32 on both paths; gradients allow bf16 1-ulp rounding
 # (both paths quantize at the leaf). A wrong gradient formula errs by orders

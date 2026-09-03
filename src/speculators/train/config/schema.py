@@ -312,7 +312,8 @@ class LossArgs(_Group):
     loss_fn: str | None = Field(
         default=None,
         description="Loss function specification. A name (kl_div, rkl, jsd, ce, tv, "
-        'nla, lk_hybrid) or a JSON dict for a weighted combination, e.g. \'{"ce": 0.1, '
+        "nla, lk_hybrid, renyi_half) or a JSON dict for a weighted combination, "
+        'e.g. \'{"ce": 0.1, '
         '"tv": 0.9}\'. (default: "ce" for dflash, "kl_div" otherwise).',
     )
     ttt_steps: int = Field(
@@ -466,10 +467,12 @@ class DFlashArgs(_Group):
     dflash_decay_gamma: float = Field(
         default=4.0, description="Decay gamma for DFlash-family loss weighting."
     )
-    per_position_loss_weight: Literal["fixed-exp-decay", "dpace"] | None = Field(
-        default=None,
-        description="Per-position loss weight option for D-PACE support "
-        "(default: dpace for dflash, fixed-exp-decay otherwise).",
+    per_position_loss_weight: Literal["fixed-exp-decay", "dpace", "dpard"] | None = (
+        Field(
+            default=None,
+            description="Per-position loss weighting: fixed exponential, D-PACE, or "
+            "D-PARD (default: dpace for dflash, fixed-exp-decay otherwise).",
+        )
     )
     dpace_alpha: float = Field(
         default=0.5,
@@ -523,6 +526,10 @@ class DSparkArgs(_Group):
     )
     confidence_head_alpha: float = Field(
         default=1.0, description="DSpark: weight of the confidence-head BCE term."
+    )
+    dpard_alpha: float = Field(
+        default=0.5,
+        description="DSpark D-PARD acceptance-floor smoothing constant.",
     )
 
 
@@ -746,6 +753,17 @@ class TrainConfig(BaseSettings):
             if not 0.0 < self.dflash.dpace_alpha <= 1.0:
                 raise ValueError(
                     f"--dpace-alpha must be in (0, 1], got {self.dflash.dpace_alpha}"
+                )
+        if self.dflash.per_position_loss_weight == "dpard":
+            if self.speculator_type != "dspark":
+                raise ValueError("D-PARD position weighting requires DSpark")
+            if self.loss.loss_fn != "renyi_half":
+                raise ValueError(
+                    "--per-position-loss-weight=dpard requires --loss-fn=renyi_half"
+                )
+            if not 0.0 < self.dspark.dpard_alpha < 1.0:
+                raise ValueError(
+                    f"--dpard-alpha must be in (0, 1), got {self.dspark.dpard_alpha}"
                 )
         return self
 
