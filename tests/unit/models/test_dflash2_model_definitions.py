@@ -14,6 +14,7 @@ from speculators.models.dflash2.metrics import (
 )
 from speculators.models.dflash2.metrics import (
     compute_selector_loss,
+    selector_confidence_targets,
     selector_training_candidates,
 )
 from speculators.models.dflash2.model_definitions import (
@@ -236,6 +237,97 @@ def test_candidate_codebooks_use_adamw_under_muon_optimizer():
     }
 
 
+def test_selector_confidence_is_conditioned_on_the_predecessor():
+    """Equal hidden states with different predecessors need different confidence."""
+    selector = CandidateSelector(
+        vocab_size=5,
+        hidden_size=2,
+        rank=2,
+        top_k=2,
+        enable_confidence_head=True,
+    )
+    assert selector.confidence_head is not None
+    with torch.no_grad():
+        selector.predecessor_codebook.zero_()
+        selector.predecessor_codebook[1] = torch.tensor([1.0, 0.0])
+        selector.predecessor_codebook[2] = torch.tensor([0.0, 1.0])
+        selector.hidden_projection.weight.copy_(torch.eye(2))
+        selector.confidence_head.weight.copy_(torch.tensor([[2.0, -3.0]]))
+        selector.confidence_head.bias.zero_()
+
+    hidden = torch.ones(1, 2, 2)
+    predecessors = torch.tensor([[1, 2]])
+    actual = selector.confidence_logits(hidden, predecessors)
+
+    torch.testing.assert_close(actual, torch.tensor([[2.0, -3.0]]))
+
+
+def test_selector_confidence_target_is_exact_distribution_overlap():
+    """The label is sum(min(q, p)) over the serving candidate support."""
+    candidate_ids = torch.tensor([[[1, 3]]])
+    selector_logits = torch.log(torch.tensor([[[0.75, 0.25]]]))
+    target_logits = torch.log(torch.tensor([[[0.10, 0.40, 0.20, 0.30]]]))
+
+    actual = selector_confidence_targets(
+        selector_logits=selector_logits,
+        candidate_ids=candidate_ids,
+        target_logits=target_logits,
+    )
+
+    torch.testing.assert_close(actual, torch.tensor([[0.65]]))
+
+
+def test_dflash2_confidence_bce_is_added_and_reaches_the_head():
+    """Confidence uses serving candidates and contributes its configured BCE."""
+    unary_logits = torch.tensor([[[0.1, 1.1, -0.2, 0.4]]])
+    target_logits = torch.log(torch.tensor([[[0.10, 0.40, 0.20, 0.30]]]))
+    serving_candidate_ids = torch.tensor([[[1, 3]]])
+    serving_candidate_logits = torch.log(torch.tensor([[[0.75, 0.25]]]))
+    confidence_logits = torch.tensor([[1.2]], dtype=torch.bfloat16, requires_grad=True)
+    loss_mask = torch.ones(1, 1)
+    loss_config = resolve_loss_config("ce", "eager")
+    tv_loss_fn = resolve_loss_config("tv", "eager")["tv"][0]
+    common = {
+        "unary_logits": unary_logits,
+        "targets": target_logits,
+        "training_candidate_ids": serving_candidate_ids.clone(),
+        "candidate_logits": serving_candidate_logits.clone(),
+        "target_positions": torch.zeros(1, 1, dtype=torch.long),
+        "contains_target": torch.ones(1, 1, dtype=torch.bool),
+        "loss_mask": loss_mask,
+        "block_size": 1,
+        "top_k": 2,
+        "sample_from_anchor": True,
+        "serving_candidate_ids": serving_candidate_ids,
+        "serving_candidate_logits": serving_candidate_logits,
+        "confidence_logits": confidence_logits,
+        "loss_config": loss_config,
+        "tv_loss_fn": tv_loss_fn,
+        "gamma": 4.0,
+        "selector_loss_alpha": 0.0,
+        "per_position_loss_weight": "fixed-exp-decay",
+        "dpace_alpha": 0.5,
+    }
+
+    baseline, _ = compute_dflash2_metrics(**common, confidence_head_alpha=0.0)
+    actual, metrics = compute_dflash2_metrics(**common, confidence_head_alpha=0.25)
+    target = torch.tensor([[0.65]])
+    expected_bce = torch.nn.functional.binary_cross_entropy_with_logits(
+        confidence_logits.float(), target
+    )
+
+    torch.testing.assert_close(actual - baseline, 0.25 * expected_bce)
+    assert metrics["confidence_loss_sum"].dtype == torch.float32
+    torch.testing.assert_close(metrics["confidence_target_mean_sum"], target.sum())
+    torch.testing.assert_close(
+        metrics["confidence_cumprod_bias_sum"],
+        confidence_logits.detach().float().sigmoid().sum() - target.sum(),
+    )
+    actual.backward()
+    assert confidence_logits.grad is not None
+    assert torch.count_nonzero(confidence_logits.grad)
+
+
 def _tiny_config(**overrides) -> DFlash2SpeculatorConfig:
     transformer_config = Qwen3Config(
         hidden_size=16,
@@ -279,6 +371,7 @@ def test_model_uses_canonical_checkpoint_keys():
 
 def test_config_round_trip_preserves_dflash2_contract(tmp_path):
     config = _tiny_config(
+        enable_confidence_head=True,
         speculators_config=SpeculatorsConfig(
             algorithm="dflash2",
             proposal_methods=[GreedyTokenProposalConfig(speculative_tokens=3)],
@@ -287,7 +380,7 @@ def test_config_round_trip_preserves_dflash2_contract(tmp_path):
                 name_or_path="Qwen/Qwen3-4B",
                 architectures=["Qwen3ForCausalLM"],
             ),
-        )
+        ),
     )
 
     config.save_pretrained(tmp_path)
@@ -302,6 +395,17 @@ def test_config_round_trip_preserves_dflash2_contract(tmp_path):
     assert loaded.conv_group_size == config.conv_group_size
     assert loaded.selector_rank == config.selector_rank
     assert loaded.selector_top_k == config.selector_top_k
+    assert loaded.enable_confidence_head is True
+
+
+def test_confidence_enabled_checkpoint_has_canonical_head_keys():
+    model = DFlash2DraftModel(_tiny_config(enable_confidence_head=True))
+
+    assert model.candidate_selector.confidence_head is not None
+    assert {
+        "candidate_selector.confidence_head.weight",
+        "candidate_selector.confidence_head.bias",
+    } <= set(model.state_dict())
 
 
 def test_model_rejects_pruned_draft_vocabulary():
@@ -486,11 +590,78 @@ def test_trainer_kwargs_include_selector_loss_alpha():
     assert val_kwargs["selector_loss_alpha"] == pytest.approx(0.25)
 
 
+def test_trainer_kwargs_include_dflash2_confidence_loss_alpha():
+    train_kwargs, val_kwargs = DFlash2DraftModel.get_trainer_kwargs(
+        loss_fn="ce",
+        loss_implementation="eager",
+        selector_confidence_head_alpha=0.25,
+    )
+
+    assert train_kwargs["confidence_head_alpha"] == pytest.approx(0.25)
+    assert val_kwargs["confidence_head_alpha"] == pytest.approx(0.25)
+
+
+def test_forward_skips_serving_selector_scores_without_confidence_head(monkeypatch):
+    """The baseline selector path must not pay for confidence-only logits."""
+    torch.manual_seed(0)
+    model = DFlash2DraftModel(_tiny_config(enable_confidence_head=False))
+    block_size = model.block_size
+    hidden_size = model.config.transformer_layer_config.hidden_size
+    vocab_size = model.verifier_vocab_size
+    block_indices = torch.arange(block_size)
+    hidden = torch.randn(1, block_size, hidden_size)
+    unary_logits = torch.randn(1, block_size, vocab_size)
+    target_ids = unary_logits.argmin(dim=-1)
+    targets = torch.zeros_like(unary_logits)
+    targets.scatter_(-1, target_ids.unsqueeze(-1), 1.0)
+    aligned_loss_mask = torch.ones(1, block_size)
+
+    monkeypatch.setattr(
+        model,
+        "_backbone_forward",
+        lambda *_args, **_kwargs: (
+            hidden,
+            unary_logits,
+            targets,
+            aligned_loss_mask,
+            block_indices,
+        ),
+    )
+    scored_candidate_ids = []
+    original_score_candidates = model.candidate_selector.score_candidates
+
+    def tracked_score_candidates(*args, **kwargs):
+        scored_candidate_ids.append(args[3].detach().clone())
+        return original_score_candidates(*args, **kwargs)
+
+    monkeypatch.setattr(
+        model.candidate_selector,
+        "score_candidates",
+        tracked_score_candidates,
+    )
+    input_ids = torch.randint(0, vocab_size, (1, block_size))
+    model.forward.__wrapped__(
+        model,
+        hidden_states=torch.empty(1, block_size, 0),
+        input_ids=input_ids,
+        loss_mask=torch.ones(1, block_size),
+        verifier_last_hidden_states=torch.empty(1, block_size, hidden_size),
+        document_ids=torch.zeros(1, block_size, dtype=torch.long),
+        loss_config=resolve_loss_config("ce", "eager"),
+        tv_loss_fn=resolve_loss_config("tv", "eager")["tv"][0],
+    )
+
+    assert len(scored_candidate_ids) == 1
+    torch.testing.assert_close(scored_candidate_ids[0][..., -1], target_ids)
+
+
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA is required")
 def test_tiny_gpu_forward_backward_reaches_all_new_parameters():
     """A real training step must update every convolution and selector tensor."""
     torch.manual_seed(0)
-    model = DFlash2DraftModel(_tiny_config()).to(  # type: ignore[call-arg]
+    model = DFlash2DraftModel(  # type: ignore[call-arg]
+        _tiny_config(enable_confidence_head=True)
+    ).to(
         device="cuda",
         dtype=torch.bfloat16,
     )

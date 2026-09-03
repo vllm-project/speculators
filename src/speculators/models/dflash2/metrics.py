@@ -19,8 +19,26 @@ from speculators.models.dspark.metrics import compute_metrics as compute_unary_m
 __all__ = [
     "compute_metrics",
     "compute_selector_loss",
+    "selector_confidence_targets",
     "selector_training_candidates",
 ]
+
+
+@torch.no_grad()
+def selector_confidence_targets(
+    *,
+    selector_logits: torch.Tensor,
+    candidate_ids: torch.Tensor,
+    target_logits: torch.Tensor,
+) -> torch.Tensor:
+    """Return analytical acceptance probability on the serving support."""
+    proposal_probs = selector_logits.float().softmax(dim=-1)
+    target_log_normalizer = torch.logsumexp(target_logits.float(), dim=-1)
+    candidate_target_probs = torch.exp(
+        target_logits.float().gather(-1, candidate_ids)
+        - target_log_normalizer[..., None]
+    )
+    return torch.minimum(proposal_probs, candidate_target_probs).sum(dim=-1)
 
 
 def selector_training_candidates(
@@ -119,10 +137,14 @@ def compute_metrics(
     top_k: int,
     sample_from_anchor: bool = False,
     *,
+    serving_candidate_ids: torch.Tensor | None = None,
+    serving_candidate_logits: torch.Tensor | None = None,
+    confidence_logits: torch.Tensor | None = None,
     loss_config: LossConfig,
     tv_loss_fn: Callable[[torch.Tensor, torch.Tensor], torch.Tensor] = tv_loss,
     gamma: float = 4.0,
     selector_loss_alpha: float = 1.0,
+    confidence_head_alpha: float = 1.0,
     per_position_loss_weight: str = "fixed-exp-decay",
     dpace_alpha: float = 0.5,
 ) -> tuple[torch.Tensor, dict[str, Any]]:
@@ -160,6 +182,71 @@ def compute_metrics(
     metrics["selector_loss_total"] = one.clone()
     metrics["loss_sum"] = loss.detach().clone()
     metrics["loss_total"] = one.clone()
+
+    if confidence_logits is not None:
+        if serving_candidate_ids is None or serving_candidate_logits is None:
+            raise ValueError(
+                "serving_candidate_ids and serving_candidate_logits are required "
+                "when confidence_logits are provided"
+            )
+        confidence_targets = selector_confidence_targets(
+            selector_logits=serving_candidate_logits,
+            candidate_ids=serving_candidate_ids,
+            target_logits=targets,
+        ).float()
+        pos_idx = (
+            torch.arange(confidence_logits.shape[1], device=confidence_logits.device)
+            % block_size
+        ).unsqueeze(0)
+        if per_position_loss_weight == "dpace":
+            decay_fn = partial(
+                dpace_loss_decay,
+                loss_mask=loss_mask,
+                block_size=block_size,
+                dpace_alpha=dpace_alpha,
+            )
+        else:
+            decay_fn = partial(
+                dflash_loss_decay,
+                gamma=gamma,
+                sample_from_anchor=sample_from_anchor,
+            )
+        confidence_loss = loss_function(
+            confidence_logits,
+            confidence_targets,
+            loss_mask,
+            pos_idx,
+            loss_fn=lambda logits, targets: functional.binary_cross_entropy_with_logits(
+                logits.float(), targets.float(), reduction="none"
+            ),
+            decay_fn=decay_fn,
+        )
+        loss = loss + confidence_head_alpha * confidence_loss
+        valid_float = loss_mask.float()
+        valid_total = valid_float.sum().clamp_min(1.0)
+        confidence_probs = confidence_logits.float().sigmoid()
+        metrics["confidence_loss_sum"] = confidence_loss.detach().clone()
+        metrics["confidence_loss_total"] = one.clone()
+        metrics["confidence_target_mean_sum"] = (confidence_targets * valid_float).sum()
+        metrics["confidence_target_mean_total"] = valid_total
+        metrics["confidence_pred_mean_sum"] = (confidence_probs * valid_float).sum()
+        metrics["confidence_pred_mean_total"] = valid_total.clone()
+        metrics["confidence_abs_error_sum"] = (
+            (confidence_probs - confidence_targets).abs() * valid_float
+        ).sum()
+        metrics["confidence_abs_error_total"] = valid_total.clone()
+        start_pos = 0 if sample_from_anchor else 1
+        num_blocks = confidence_logits.shape[1] // block_size
+        confidence_blocks = confidence_probs.view(num_blocks, block_size)[:, start_pos:]
+        target_blocks = confidence_targets.view(num_blocks, block_size)[:, start_pos:]
+        draft_mask = loss_mask.float().view(num_blocks, block_size)[:, start_pos:]
+        predicted_survival = (confidence_blocks * draft_mask).cumprod(dim=-1)
+        target_survival = (target_blocks * draft_mask).cumprod(dim=-1)
+        metrics["confidence_cumprod_bias_sum"] = (
+            (predicted_survival - target_survival) * draft_mask
+        ).sum()
+        metrics["confidence_cumprod_bias_total"] = draft_mask.sum().clamp_min(1.0)
+        metrics["loss_sum"] = loss.detach().clone()
 
     with torch.no_grad():
         target_ids = targets.argmax(dim=-1)

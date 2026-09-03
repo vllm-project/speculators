@@ -60,6 +60,7 @@ class DFlash2DraftModel(DFlashDraftModel):
             hidden_size=config.transformer_layer_config.hidden_size,
             rank=config.selector_rank,
             top_k=config.selector_top_k,
+            enable_confidence_head=config.enable_confidence_head,
             initializer_range=initializer_range,
         )
 
@@ -90,6 +91,7 @@ class DFlash2DraftModel(DFlashDraftModel):
             conv_group_size=kwargs.get("conv_group_size", 16),
             selector_rank=kwargs.get("selector_rank", 256),
             selector_top_k=kwargs.get("selector_top_k", 16),
+            enable_confidence_head=kwargs.get("enable_selector_confidence_head", False),
         )
         model = cls(config=config)
         model.load_vocab_mappings(t2d, d2t)
@@ -112,6 +114,7 @@ class DFlash2DraftModel(DFlashDraftModel):
             ),
             "dpace_alpha": kwargs.get("dpace_alpha", 0.5),
             "selector_loss_alpha": kwargs.get("selector_loss_alpha", 1.0),
+            "confidence_head_alpha": kwargs.get("selector_confidence_head_alpha", 1.0),
         }
         return dict(shared), dict(shared)
 
@@ -142,6 +145,7 @@ class DFlash2DraftModel(DFlashDraftModel):
         gamma: float = 4.0,
         max_anchors: int = 512,
         selector_loss_alpha: float = 1.0,
+        confidence_head_alpha: float = 1.0,
         per_position_loss_weight: str = "fixed-exp-decay",
         dpace_alpha: float = 0.5,
         **kwargs,
@@ -164,6 +168,19 @@ class DFlash2DraftModel(DFlashDraftModel):
         # shape: [1, num_anchors*block_size]
         candidate_ids = unary_logits.topk(self.candidate_selector.top_k, dim=-1).indices
         # shape: [1, num_anchors*block_size, top_k]
+        serving_candidate_logits = None
+        confidence_logits = None
+        if self.candidate_selector.confidence_head is not None:
+            serving_candidate_logits = self.candidate_selector.score_candidates(
+                unary_logits,
+                hidden,
+                predecessor_ids.reshape(1, -1),
+                candidate_ids,
+            )
+            confidence_logits = self.candidate_selector.confidence_logits(
+                hidden,
+                predecessor_ids.reshape(1, -1),
+            )
         training_candidate_ids, target_positions, contains_target = (
             selector_training_candidates(candidate_ids, target_ids)
         )
@@ -185,10 +202,14 @@ class DFlash2DraftModel(DFlashDraftModel):
             block_size=self.block_size,
             top_k=self.candidate_selector.top_k,
             sample_from_anchor=self.config.sample_from_anchor,
+            serving_candidate_ids=candidate_ids,
+            serving_candidate_logits=serving_candidate_logits,
+            confidence_logits=confidence_logits,
             loss_config=loss_config or _DEFAULT_LOSS_CONFIG,
             tv_loss_fn=tv_loss_fn,
             gamma=gamma,
             selector_loss_alpha=selector_loss_alpha,
+            confidence_head_alpha=confidence_head_alpha,
             per_position_loss_weight=per_position_loss_weight,
             dpace_alpha=dpace_alpha,
         )

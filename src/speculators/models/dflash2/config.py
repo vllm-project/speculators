@@ -43,3 +43,7 @@ class DFlash2SpeculatorConfig(DFlashSpeculatorConfig):
         ge=1,
         description="Number of unary candidates reranked during inference.",
     )
+    enable_confidence_head: bool = Field(
+        default=False,
+        description="Predict acceptance probability for each selector predecessor.",
+    )
