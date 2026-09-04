@@ -60,11 +60,11 @@ class TestMarkovHead:
     def test_vocab_factors_use_adamw_under_muon_optimizer(self):
         head = self._head("gated")
 
-        muon, adamw, excluded = split_named_params_for_muon(head)
+        muon, adamw, muon_excluded = split_named_params_for_muon(head)
 
         assert {name for name, _ in muon} == {"gate_proj.weight"}
         assert {name for name, _ in adamw} == {"gate_proj.bias"}
-        assert {name for name, _ in excluded} == {
+        assert {name for name, _ in muon_excluded} == {
             "markov_w1.weight",
             "markov_w2.weight",
         }
@@ -73,7 +73,7 @@ class TestMarkovHead:
         """The Markov factors are skipped by Muon because a vocabulary index is not a
         feature axis -- not because they want a 10x smaller step than their neighbours.
         """
-        head = self._head("vanilla")
+        head = self._head("gated")
         config = SimpleNamespace(
             optimizer="muon",
             lr=3e-4,
@@ -85,13 +85,20 @@ class TestMarkovHead:
             muon_adjust_lr_fn="match_rms_adamw",
         )
 
+        muon, adamw = build_optimizers(head, config)
+
+        assert isinstance(muon, torch.optim.Muon)
+        assert isinstance(adamw, torch.optim.AdamW)
+        assert len(adamw.param_groups) == 2
+
         groups = {
             name: group
-            for opt in build_optimizers(head, config)
-            for group in opt.param_groups
+            for group in adamw.param_groups
             for name in group.get("param_names") or []
         }
 
+        assert groups["gate_proj.bias"]["lr"] == config.lr
+        assert groups["gate_proj.bias"]["weight_decay"] == config.weight_decay
         for name in ("markov_w1.weight", "markov_w2.weight"):
             assert groups[name]["lr"] == config.muon_lr
             assert groups[name]["weight_decay"] == config.muon_weight_decay
