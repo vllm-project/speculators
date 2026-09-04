@@ -437,3 +437,35 @@ class TestBf16GradientPrecision:
 
         rel_err = ((actual - exact).norm() / exact.norm()).item()
         assert rel_err < 0.02, f"{loss_fn.__name__} bf16 gradient error {rel_err:.1%}"
+
+
+class TestComputeAccuracySingleStepMasked:
+    def test_cond_total_counts_only_evaluable_positions(self):
+        """The eagle3 caller offsets loss_mask (ttt_step:) against prev_correct
+        (:-ttt_step), so a position can be prev-correct yet not evaluable. The
+        conditional denominator must count prev_correct AND loss_mask, or the
+        numerator can never reach the extra positions and cond_acc biases low."""
+        pred = torch.tensor([[1, 2, 3, 4]])
+        tgt = torch.tensor([[1, 2, 3, 4]])  # all correct at this step
+        prev_correct = torch.tensor([[True, True, True, False]])
+        loss_mask = torch.tensor([[1, 1, 0, 1]])  # position 2 not evaluable
+
+        full_correct, full_total, cond_correct, cond_total = (
+            compute_accuracy_single_step(pred, tgt, loss_mask, prev_correct)
+        )
+        # Evaluable positions: 0, 1, 3. Prev-correct among them: 0, 1.
+        assert full_total.item() == pytest.approx(3, abs=1e-4)
+        assert full_correct.item() == pytest.approx(2, abs=1e-4)
+        assert cond_correct.item() == pytest.approx(2, abs=1e-4)
+        # Buggy behavior counted prev_correct.sum() == 3 here.
+        assert cond_total.item() == pytest.approx(2, abs=1e-4)
+
+    def test_masked_no_prev_correct_uses_masked_denominator(self):
+        pred = torch.tensor([[1, 2, 9, 9]])
+        tgt = torch.tensor([[1, 2, 3, 4]])
+        loss_mask = torch.tensor([[1, 1, 1, 0]])
+        _, full_total, _, cond_total = compute_accuracy_single_step(
+            pred, tgt, loss_mask, prev_correct=None
+        )
+        assert full_total.item() == pytest.approx(3, abs=1e-4)
+        assert cond_total.item() == pytest.approx(3, abs=1e-4)
