@@ -31,7 +31,7 @@ logger = logging.getLogger(__name__)
 
 # Compile so the mask builds block-sparse instead of materializing DFlash's huge
 # dense [Q, KV] grid every step. (No benefit for EAGLE3's small autoregressive mask.)
-_compiled_create_block_mask = torch.compile(create_block_mask)
+_compiled_create_block_mask = torch.compile(create_block_mask, dynamic=False)
 
 
 @SpeculatorModel.register("dflash")
@@ -129,6 +129,22 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
         )
         self.verifier_norm.weight.requires_grad = False
         self.block_size = config.block_size
+
+        # The forward is compiled with static shapes and its query length is
+        # num_documents * max_anchors * block_size, so each distinct document
+        # count (times train/val) is one compiled variant. select_anchors bounds
+        # that count at 18 (1-8 exact, then powers of two up to total_seq_len) by
+        # rounding counts above 8 up to a power of two, and nothing else in the
+        # forward has a data-dependent shape, so the limits below cannot be
+        # reached by data; hitting one is a bug, and
+        # dynamo's default reaction, silently running eager, would surface later
+        # as an OOM on this memory-heavy path, so fail immediately instead.
+        dynamo_config = torch._dynamo.config  # noqa: SLF001
+        dynamo_config.recompile_limit = max(dynamo_config.recompile_limit, 64)
+        dynamo_config.accumulated_recompile_limit = max(
+            dynamo_config.accumulated_recompile_limit, 1024
+        )
+        dynamo_config.fail_on_recompile_limit_hit = True
 
         # Warn if using DFlash with sample_from_anchor=True (may not be supported)
         if type(self).__name__ == "DFlashDraftModel" and config.sample_from_anchor:
@@ -343,7 +359,7 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
         total_seq_len = loss_mask.shape[1]
 
         anchor_positions, anchor_valid = select_anchors(
-            loss_mask, max_anchors, self.block_size
+            loss_mask, document_ids, max_anchors, self.block_size
         )
 
         full_attn_mask = None
@@ -387,7 +403,7 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
         """
         device = hidden_states.device
         total_seq_len = hidden_states.shape[1]
-        num_anchors = kwargs.pop("max_anchors", 512)
+        max_anchors = kwargs.pop("max_anchors", 512)
 
         if position_ids is None:
             position_ids = torch.arange(
@@ -395,10 +411,10 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
             ).unsqueeze(0)
 
         full_attn_mask, sliding_window_attn_mask, anchor_positions, anchor_valid = (
-            self._build_attention_mask(loss_mask, num_anchors, document_ids, device)
+            self._build_attention_mask(loss_mask, max_anchors, document_ids, device)
         )
 
-        mask_tokens_size = num_anchors * self.block_size
+        mask_tokens_size = anchor_positions.numel() * self.block_size
 
         mask_token_ids = torch.full(
             (1, mask_tokens_size),
@@ -480,7 +496,7 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
 
         return hidden, logits, targets, aligned_loss_mask, anchored_block_indices
 
-    @conditional_torch_compile
+    @conditional_torch_compile(dynamic=False)
     def forward(
         self,
         hidden_states: torch.Tensor,  # shape: [1,total_seq_len,num_hidden*hidden_size]

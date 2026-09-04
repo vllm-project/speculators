@@ -20,49 +20,46 @@ def get_base_indices_for_anchored_blocks(
 
 def select_anchors(
     loss_mask: torch.Tensor,  # shape: [1, total_seq_len]
+    document_ids: torch.Tensor,  # shape: [1, total_seq_len]
     num_anchors: int,
     block_size: int,
-) -> tuple[torch.Tensor, torch.Tensor]:
-    """Randomly select anchor positions from valid tokens in sequence.
+) -> tuple[torch.Tensor, torch.Tensor]:  # shapes: [num_docs*num_anchors] x2
+    """Sample up to ``num_anchors`` anchor positions from every packed document.
 
-    Args:
-        loss_mask: Binary mask indicating valid positions [1, total_seq_len]
-        n: Number of anchors to select per batch item
-        block_size: Block size (last block_size positions excluded)
+    Mirrors the per-sample contract of the reference DFlash trainers (SpecForge
+    and TorchSpec sample ``[B, num_anchors]``): every document in the packed
+    sequence gets exactly ``num_anchors`` slots, filled with a uniform sample of
+    its supervised positions (``loss_mask == 1``) and padded with
+    ``anchor_valid == False`` when it has fewer. Short documents are fully
+    covered and long ones are capped. The slot count depends only on the number
+    of documents, so the compiled forward sees one static shape per document
+    count; counts above 8 are rounded up to a power of two (extra slots fully
+    masked) so that number stays small on data with many short documents. The
+    last ``block_size`` positions are excluded so every anchor block stays in
+    bounds.
 
-    Returns:
-        tuple: (anchors, anchor_valid)
-            - anchors: Selected anchor indices [num_anchors]
-            - anchor_valid: Boolean mask for valid anchors [num_anchors]
+    Returns ``(anchors, anchor_valid)`` flattened to ``[num_docs * num_anchors]``
+    with anchors sorted within each document. A sequence without supervised
+    positions yields one document of fully masked slots.
     """
-    if loss_mask.ndim != 2:  # noqa: PLR2004
-        raise ValueError(f"Expected [B, T], got {loss_mask.shape}")
+    loss_mask = loss_mask.squeeze(0)
+    document_ids = document_ids.squeeze(0)
+    valid = loss_mask.bool().clone()
+    valid[-block_size:] = False
 
-    if block_size <= 0:
-        raise ValueError(f"Expected block size > 0, got {block_size}")
-
-    valid_mask = loss_mask.bool().clone()
-    valid_mask[:, -block_size:] = False
-
-    valid_indices = torch.nonzero(valid_mask.squeeze(0), as_tuple=False).squeeze(
-        -1
-    )  # shape: [num_non_zero]
-
+    docs = document_ids[valid].unique()
+    num_docs = max(docs.numel(), 1)
+    if num_docs > 8:  # noqa: PLR2004
+        num_docs = 1 << (num_docs - 1).bit_length()
     device = loss_mask.device
-    anchors = torch.zeros(num_anchors, dtype=torch.long, device=device)
-    anchor_valid = torch.zeros(num_anchors, dtype=torch.bool, device=device)
+    anchors = torch.zeros(num_docs, num_anchors, dtype=torch.long, device=device)
+    anchor_valid = torch.zeros(num_docs, num_anchors, dtype=torch.bool, device=device)
+    for i, doc in enumerate(docs):
+        candidates = torch.nonzero(valid & (document_ids == doc)).squeeze(-1)
+        perm = torch.randperm(candidates.numel(), device=device)[:num_anchors]
+        # Sorted anchors let flex attention use dense (fast) blocks instead of
+        # scattered all-partial (slow) ones; the order never affects the loss.
+        anchors[i, : perm.numel()] = torch.sort(candidates[perm]).values
+        anchor_valid[i, : perm.numel()] = True
 
-    k = min(num_anchors, valid_indices.numel())
-
-    # Constrain value of k for torch dynamo
-    torch._check(k <= valid_indices.numel())  # noqa: SLF001
-    torch._check(k >= 0)  # noqa: SLF001
-
-    perm = torch.randperm(valid_indices.numel(), device=loss_mask.device)
-    # Contiguous anchors let flex attention use dense (fast) blocks instead of
-    # scattered all-partial (slow) ones; the order never affects the loss.
-    anchors[:k] = torch.sort(torch.gather(valid_indices, 0, perm[:k])).values
-    anchor_valid[:k] = True
-
-    return anchors, anchor_valid
-    # shape: [num_anchors], [num_anchors]
+    return anchors.flatten(), anchor_valid.flatten()

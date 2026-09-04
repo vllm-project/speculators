@@ -128,7 +128,7 @@ class DFlash2DraftModel(DFlashDraftModel):
         # For token sequence 0 1 2 3 return previous token ids 0 0 1 2
         return torch.cat([block_tokens[:, :1], block_tokens[:, :-1]], dim=1)
 
-    @conditional_torch_compile
+    @conditional_torch_compile(dynamic=False)
     def forward(
         self,
         hidden_states: torch.Tensor,  # shape: [1, total_seq_len,num_hidden*hidden_size]
