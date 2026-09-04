@@ -23,7 +23,7 @@ data_dir="${DATA_DIR:-$repo_root/runs/kimi_k3_dspark/data}"
 run_name="${RUN_NAME:-kimi-k3-dspark-$SLURM_JOB_ID}"
 run_dir="$repo_root/runs/kimi_k3_dspark/$run_name"
 
-if ! compgen -G "$data_dir/*.arrow" >/dev/null || [[ ! -f "$data_dir/d2t.npy" ]]; then
+if ! compgen -G "$data_dir/*.arrow" >/dev/null; then
   echo "No prepared data in $data_dir; run prepare_data.sbatch first." >&2
   exit 1
 fi

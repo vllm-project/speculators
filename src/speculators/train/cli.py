@@ -354,12 +354,11 @@ def _generate_vocab_mappings(args: argparse.Namespace, data_path: Path):
 
     d2t_cache_path = data_path / f"d2t-{draft_vocab_size}.npy"
     t2d_cache_path = data_path / f"t2d-{draft_vocab_size}.npy"
-    if get_rank() == 0:
-        logger.info(
-            f"Caching vocab mapping files to '{d2t_cache_path}' and '{t2d_cache_path}'"
-        )
-        np.save(d2t_cache_path, d2t.cpu().numpy())
-        np.save(t2d_cache_path, t2d.cpu().numpy())
+    logger.info(
+        f"Caching vocab mapping files to '{d2t_cache_path}' and '{t2d_cache_path}'"
+    )
+    np.save(d2t_cache_path, d2t.cpu().numpy())
+    np.save(t2d_cache_path, t2d.cpu().numpy())
 
     return d2t, t2d, draft_vocab_size
 
