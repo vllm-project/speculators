@@ -14,6 +14,7 @@ import sys
 from pathlib import Path
 from unittest.mock import patch
 
+import numpy as np
 import pytest
 
 _SCRIPT_DIR = Path(__file__).resolve().parents[3] / "scripts" / "evaluate"
@@ -57,6 +58,27 @@ class TestParseGenKwargs:
     def test_invalid_json_raises(self, perf_utils):
         with pytest.raises(ValueError, match="Invalid JSON"):
             perf_utils.parse_gen_kwargs("{bad json}")
+
+
+# ---------------------------------------------------------------------------
+# smooth_curve
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("point_count", [2, 3])
+def test_smooth_curve_supports_small_sweeps(perf_utils, point_count):
+    x = list(range(point_count))
+    y = [float(value**2) for value in x]
+
+    x_smooth, y_smooth = perf_utils.smooth_curve(x, y)
+
+    assert len(x_smooth) == 300
+    assert len(y_smooth) == 300
+    assert np.all(np.isfinite(x_smooth))
+    assert np.all(np.isfinite(y_smooth))
+    assert np.all(np.diff(x_smooth) > 0)
+    assert x_smooth[[0, -1]] == pytest.approx([x[0], x[-1]])
+    assert y_smooth[[0, -1]] == pytest.approx([y[0], y[-1]])
 
 
 # ---------------------------------------------------------------------------
