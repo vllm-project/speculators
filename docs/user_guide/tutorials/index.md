@@ -4,7 +4,7 @@ Step-by-step tutorials to guide you through complete workflows, from data prepar
 
 ## [Train a Speculator](train.md)
 
-The main end-to-end walkthrough: prepare data, generate hidden states, train, and serve. Covers Eagle-3, P-EAGLE, DFlash, DSpark, and MTP, in online, offline, or hybrid mode -- pick your algorithm and mode at the top of the page.
+The main end-to-end walkthrough: prepare data, generate hidden states, train, and serve. Covers Eagle-3, P-EAGLE, DFlash, DFlash2, DSpark, and MTP, in online or offline mode -- pick your algorithm and mode at the top of the page.
 
 ## [Response Regeneration](response_regeneration.md)
 

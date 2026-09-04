@@ -71,10 +71,7 @@ torchrun --standalone --nproc_per_node=4 -m speculators.train \
   - `warn`: Skip the sample with a warning, pads to fill batch.
   - `raise`: Raise an error
 
-- **`--on-generate`** (choice: `cache`|`delete`, default: `"delete"`) Behavior after generating new hidden states (only applies if `--on-missing=generate`):
-
-  - `delete`: Delete hidden states after loading (pure online training)
-  - `cache`: Store hidden states for reuse in future epochs (hybrid training)
+- **`--on-generate`** (choice: `delete`, default: `"delete"`) Behavior after generating new hidden states (only applies if `--on-missing=generate`). Generated hidden states are always deleted after loading. Retained for backwards compatibility with existing command lines.
 
 - **`--hidden-states-path`** (str, default: `{data-path}/hidden_states`) Path where cached hidden states files are stored (or will be stored if generating).
 
@@ -284,22 +281,6 @@ speculators train \
   --data-path ./training_data \
   --hidden-states-path ./hidden_states \
   --on-missing raise \
-  --save-path ./checkpoints \
-  --draft-vocab-size 32000 \
-  --epochs 10 \
-  --lr 3e-5
-```
-
-### Hybrid Training (Cache on First Epoch)
-
-```bash
-speculators train \
-  --verifier-name-or-path meta-llama/Llama-3.1-8B-Instruct \
-  --data-path ./training_data \
-  --hidden-states-path ./hidden_states \
-  --vllm-endpoint http://localhost:8000/v1 \
-  --on-missing generate \
-  --on-generate cache \
   --save-path ./checkpoints \
   --draft-vocab-size 32000 \
   --epochs 10 \
