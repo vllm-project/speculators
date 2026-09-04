@@ -34,10 +34,51 @@ def _conv(n: int) -> list[dict]:
 def _patch_encode(monkeypatch, renders: dict[tuple[int, bool], list[int]]):
     """Stub ``_encode_render`` to return crafted ids keyed by (prefix_len, gen)."""
 
-    def fake(conv_prefix, render_endpoint, *, add_generation_prompt, tools=None):
+    def fake(
+        conv_prefix,
+        render_endpoint,
+        *,
+        add_generation_prompt,
+        max_length=None,
+        tools=None,
+    ):
         return renders[(len(conv_prefix), add_generation_prompt)]
 
     monkeypatch.setattr(preprocessing, "_encode_render", fake)
+
+
+def test_encode_render_sends_training_window(monkeypatch):
+    request: dict[str, object] = {}
+
+    def fake_render(
+        endpoint,
+        messages,
+        *,
+        add_generation_prompt,
+        tools=None,
+        truncate_prompt_tokens=None,
+        truncation_side=None,
+    ):
+        request.update(
+            truncate_prompt_tokens=truncate_prompt_tokens,
+            truncation_side=truncation_side,
+        )
+        return [1, 2]
+
+    monkeypatch.setattr(preprocessing, "render_conversation", fake_render)
+
+    result = preprocessing._encode_render(
+        [{"role": "user", "content": "hi"}],
+        "http://x",
+        add_generation_prompt=True,
+        max_length=10,
+    )
+
+    assert result == [1, 2]
+    assert request == {
+        "truncate_prompt_tokens": 10,
+        "truncation_side": "right",
+    }
 
 
 # --------------------------------------------------------------------------- #
@@ -124,6 +165,19 @@ def test_append_row_statuses():
     assert results["seq_len"] == [3]
 
 
+def test_append_boundary_rows_counts_rows_at_limit_as_maybe_truncated():
+    results: dict[str, list] = {"input_ids": [], "loss_mask": [], "seq_len": []}
+    rows: list[preprocessing.BoundaryRow] = [
+        {
+            "input_ids": [1, 2, 3, 4],
+            "loss_mask": [0, 1, 1, 1],
+            "conv": _conv(2),
+        }
+    ]
+
+    assert preprocessing._append_boundary_rows(results, rows, 4, None) == (1, 0, 1)
+
+
 # --------------------------------------------------------------------------- #
 # render_client                                                                #
 # --------------------------------------------------------------------------- #
@@ -135,6 +189,28 @@ class _Resp:
 
     def json(self):
         return self._payload
+
+
+def test_render_conversation_sends_truncation_options(monkeypatch):
+    request_body = {}
+
+    def post(url, *, json, timeout):
+        request_body.update(json)
+        return _Resp(200, {"token_ids": [1, 2]})
+
+    monkeypatch.setattr(render_client.httpx, "post", post)
+    result = render_client.render_conversation(
+        "http://x",
+        [],
+        add_generation_prompt=False,
+        truncate_prompt_tokens=10,
+        truncation_side="right",
+        max_retries=0,
+    )
+
+    assert result == [1, 2]
+    assert request_body["truncate_prompt_tokens"] == 10
+    assert request_body["truncation_side"] == "right"
 
 
 def test_render_conversation_missing_token_ids_raises(monkeypatch):
