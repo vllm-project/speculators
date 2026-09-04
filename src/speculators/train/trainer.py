@@ -179,7 +179,38 @@ def _resolve_scheduler_steps(
     return scheduler_warmup_steps, scheduler_total_steps
 
 
+def _collect_rng_state(device_type: str, device_index: int) -> dict:
+    """Snapshot the torch CPU and current-device generators."""
+    state: dict = {
+        "torch_cpu": torch.get_rng_state(),
+        "device_type": device_type,
+        "device_index": device_index,
+        "device": None,
+    }
+    if torch.accelerator.is_available():
+        device_module = torch.get_device_module(device_type)
+        state["device"] = device_module.get_rng_state(device_index).cpu()
+    return state
+
+
+def _apply_rng_state(state: dict) -> None:
+    """Restore a snapshot produced by :func:`_collect_rng_state`."""
+    torch.set_rng_state(state["torch_cpu"])
+    if state["device"] is not None:
+        torch.get_device_module(state["device_type"]).set_rng_state(
+            state["device"], state["device_index"]
+        )
+
+
 class Trainer:
+    # Loaded on resume and applied once by _maybe_restore_rng_state().
+    _pending_rng_state: dict | None = None
+    # Delay an end-of-epoch snapshot until validation has finished.
+    _epoch_checkpoint_written: bool = False
+    # Set when the sampler lacks the fast-skip API: _epoch_iterator must fetch
+    # and discard the skipped batches instead of relying on a sampler slice.
+    _replay_skip_steps: bool = False
+
     def __init__(
         self,
         model: SpeculatorModel,
@@ -234,6 +265,69 @@ class Trainer:
                 root_logger.warning(f"Failed to read training state {p}: {e}")
         return {}
 
+    def _rng_state_path(self, epoch: int) -> Path:
+        rank = dist.get_rank() if self.is_distributed else 0
+        return self.checkpointer.path / str(epoch) / f"rng_state_rank{rank}.pt"
+
+    def _save_rng_state(self, epoch: int) -> None:
+        """Persist this rank's RNG state next to the checkpoint."""
+        p = self._rng_state_path(epoch)
+        p.parent.mkdir(parents=True, exist_ok=True)
+        torch.save(_collect_rng_state(self.device_type, self.local_rank), p)
+        if self.is_distributed:
+            dist.barrier()
+
+    def _invalidate_rng_state(self, epoch: int) -> None:
+        """Drop this rank's RNG file when deferring the end-of-epoch snapshot.
+
+        A mid-epoch checkpoint may have written RNG state into the same epoch
+        directory. Between the end-of-epoch weight save and the post-validation
+        snapshot that file is stale: a resume in that window would silently
+        replay mid-epoch random draws against end-of-epoch weights. Removing it
+        makes such a resume fall back to the documented no-RNG warning instead.
+        """
+        self._rng_state_path(epoch).unlink(missing_ok=True)
+
+    def _save_end_of_epoch_rng_state(self, epoch: int) -> None:
+        """Snapshot after validation for either end-of-epoch save path."""
+        if self._epoch_checkpoint_written:
+            self._epoch_checkpoint_written = False
+            self._save_rng_state(epoch)
+
+    def _epoch_iterator(self, skip_steps: int):
+        """Restore before a new epoch's iterator, or after a resumed one."""
+        if skip_steps == 0:
+            self._maybe_restore_rng_state()
+        loader_iter = iter(self.train_loader)
+        if skip_steps > 0:
+            if self._replay_skip_steps:
+                # No fast-skip API: fetch and discard the already-trained
+                # batches so the loop never retrains them and local_step
+                # numbering stays aligned with the full epoch. With
+                # num_workers=0 their __getitem__ calls consume random draws
+                # exactly as the original epoch did, so the snapshot must be
+                # applied only after the drain.
+                self._replay_skip_steps = False
+                for _ in range(skip_steps):
+                    next(loader_iter, None)
+            self._maybe_restore_rng_state()
+        return loader_iter
+
+    def _load_rng_state(self) -> dict | None:
+        p = self._rng_state_path(self.checkpointer.previous_epoch)
+        if not p.exists():
+            root_logger.warning(
+                f"No RNG state at {p}; the resumed run will not replay random draws."
+            )
+            return None
+        return torch.load(p, map_location="cpu", weights_only=True)
+
+    def _maybe_restore_rng_state(self) -> None:
+        """Apply the RNG state loaded for resume, once."""
+        if self._pending_rng_state is not None:
+            _apply_rng_state(self._pending_rng_state)
+            self._pending_rng_state = None
+
     def setup_trainer(self):
         if self.checkpointer.previous_epoch != -1:
             root_logger.info(f"Found checkpoint at {self.checkpointer.prev_path}.")
@@ -265,6 +359,7 @@ class Trainer:
                     root_logger.info(
                         f"Resuming training on epoch {self.current_epoch}."
                     )
+                self._pending_rng_state = self._load_rng_state()
             else:
                 root_logger.warning(
                     "`resume_from_checkpoint` is False, starting "
@@ -431,8 +526,9 @@ class Trainer:
                 f"epoch={epoch}, global_step={self.global_step}."
             )
         elif skip_steps > 0:
+            self._replay_skip_steps = True
             root_logger.warning(
-                "Sampler lacks fast-skip API; resume will replay "
+                "Sampler lacks fast-skip API; resume will fetch and discard "
                 f"{skip_steps} batches from the start of the epoch."
             )
         return skip_steps
@@ -448,9 +544,11 @@ class Trainer:
         # Determine how many batches to skip for mid-epoch resume.
         skip_steps = self._prepare_resume_skip(epoch)
 
-        train_loader = self.train_loader
+        train_loader = self._epoch_iterator(skip_steps)
         if self.rank == 0:
-            train_loader = tqdm(train_loader, desc=f"Epoch {epoch}")  # type: ignore[assignment]
+            train_loader = tqdm(  # type: ignore[assignment]
+                train_loader, desc=f"Epoch {epoch}", total=len(self.train_loader)
+            )
 
         step_interval = (
             max(1, round(num_steps * self.config.checkpoint_freq))
@@ -639,6 +737,11 @@ class Trainer:
             self.checkpointer.save_scheduler_state_dict(self.schedulers, epoch)
         if isinstance(epoch, int):
             self._save_training_state(epoch, local_step)
+            if local_step > 0:
+                self._save_rng_state(epoch)  # mid-epoch: resume continues from here
+            else:
+                self._invalidate_rng_state(epoch)
+                self._epoch_checkpoint_written = True  # snapshot after validation
             # Create a human-readable symlink for checkpoint readability.
             # e.g. epoch0_step16626 -> 0/ (mid) or epoch0_end -> 0/ (end)
             if not self.is_distributed or dist.get_rank() == 0:
@@ -663,6 +766,8 @@ class Trainer:
             self.checkpointer.save_checkpoint(self.model, self.optimizers, epoch)
             if self.schedulers:
                 self.checkpointer.save_scheduler_state_dict(self.schedulers, epoch)
+            self._invalidate_rng_state(epoch)
+            self._epoch_checkpoint_written = True
         elif self.config.checkpoint_freq >= 1 and not (
             epoch == 0 or (epoch + 1) % int(self.config.checkpoint_freq) == 0
         ):
@@ -709,3 +814,5 @@ class Trainer:
 
             if self.is_distributed:
                 dist.barrier()
+
+            self._save_end_of_epoch_rng_state(epoch)

@@ -114,7 +114,7 @@ torchrun --standalone --nproc_per_node=4 -m speculators.train \
 
 - **`--train-data-ratio`** (float, default: `0.9`) Ratio of data to use for training, the rest of the provided data will be used for validation.
 
-- **`--no-resume-from-checkpoint`** (flag) Disable automatic checkpoint resumption. Without this flag, this script will automatically load the latest checkpoint in `{save-path}` if one exists.
+- **`--no-resume-from-checkpoint`** (flag) Disable automatic checkpoint resumption. Without this flag, this script automatically loads the latest checkpoint in `{save-path}`. Resumable epoch checkpoints include per-rank torch CPU and accelerator RNG state captured where training will continue. Checkpoints without RNG state still resume with a warning. Exact replay requires `--num-workers 0` because DataLoader worker generators are not checkpointed.
 
 - **`--logger`** (str, default: `""`) Metric logging backend(s). Options: `trackio`, `wandb`, `tensorboard`, `mlflow` Can specify multiple comma-separated: `--logger tensorboard,wandb`. **Warning:** backend must be pip installed before using.
 
