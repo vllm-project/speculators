@@ -129,6 +129,7 @@ class TestCopyTrainCommand:
         (tmp_path / "1" / "model.safetensors").touch()
 
         cp = SingleGPUCheckpointer(str(tmp_path))
+        cp.mark_checkpoint_complete(1)
         cp.update_best_symlink(1)
         cp.cleanup_keep_only_best(1)
 
