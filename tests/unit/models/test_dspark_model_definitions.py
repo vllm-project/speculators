@@ -60,11 +60,11 @@ class TestMarkovHead:
     def test_vocab_factors_use_adamw_under_muon_optimizer(self):
         head = self._head("gated")
 
-        muon, adamw, muon_excluded = split_named_params_for_muon(head)
+        muon, adamw, transition = split_named_params_for_muon(head)
 
         assert {name for name, _ in muon} == {"gate_proj.weight"}
         assert {name for name, _ in adamw} == {"gate_proj.bias"}
-        assert {name for name, _ in muon_excluded} == {
+        assert {name for name, _ in transition} == {
             "markov_w1.weight",
             "markov_w2.weight",
         }
