@@ -14,6 +14,7 @@ import sys
 from pathlib import Path
 from unittest.mock import patch
 
+import numpy as np
 import pytest
 
 _SCRIPT_DIR = Path(__file__).resolve().parents[3] / "scripts" / "evaluate"
@@ -73,6 +74,11 @@ def test_smooth_curve_supports_small_sweeps(perf_utils, point_count):
 
     assert len(x_smooth) == 300
     assert len(y_smooth) == 300
+    assert np.all(np.isfinite(x_smooth))
+    assert np.all(np.isfinite(y_smooth))
+    assert np.all(np.diff(x_smooth) > 0)
+    assert x_smooth[[0, -1]] == pytest.approx([x[0], x[-1]])
+    assert y_smooth[[0, -1]] == pytest.approx([y[0], y[-1]])
 
 
 # ---------------------------------------------------------------------------
