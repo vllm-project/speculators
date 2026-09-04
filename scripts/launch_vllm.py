@@ -140,57 +140,16 @@ def _enable_scale_out_endpoints() -> None:
     os.environ.setdefault("VLLM_ENABLE_SCALE_OUT_ENDPOINTS", "1")
 
 
-def parse_args():
-    parser = argparse.ArgumentParser(
-        description="Launch vLLM for hidden states extraction",
-        usage=(
-            "launch_vllm.py [-h] MODEL [--hidden-states-backend BACKEND] "
-            "[--target-layer-ids TARGET_LAYER_IDS [TARGET_LAYER_IDS ...]] -- *VLLM_ARGS"
-        ),
-    )
-    parser.add_argument(
-        "model", type=str, help="Model name or path to extract hidden states from"
-    )
-
-    parser.add_argument(
-        "--hidden-states-backend",
-        choices=list(_backend_registry.keys()),
-        default="file",
-        help=(
-            "Hidden states transfer backend. Each backend may add its own "
-            "CLI arguments (see below). Default: 'file'."
-        ),
-    )
-    for backend_cls in _backend_registry.values():
-        backend_cls.add_launch_args(parser)
-
-    parser.add_argument(
-        "--target-layer-ids",
-        type=int,
-        nargs="+",
-        help=(
-            "(Optional) A (space separated) list of integer layer ids. Defaults to "
-            "[2, num_hidden_layers // 2, num_hidden_layers - 3]. "
-            "Note: if set, you must also pass the same value into the training process"
-        ),
-    )
-    parser.add_argument(
-        "--include-last-layer",
-        action=argparse.BooleanOptionalAction,
-        default=True,
-        help=(
-            "Append the last layer (num_hidden_layers) to "
-            "target_layer_ids for verifier hidden states extraction. Default: True"
-        ),
-    )
+def _add_shared_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--provenance-dir",
         type=str,
         default=None,
         help=(
             "Directory to write vllm_command.txt, vllm.patch, and "
-            "checkpoint_sha256.txt. Provenance is only captured when this is "
-            "set; omit it to skip logging (e.g. for ad-hoc test/debug runs)."
+            "checkpoint_sha256.txt (plus drafter_checkpoint_sha256.txt in "
+            "eval mode). Provenance is only captured when this is set; omit "
+            "it to skip logging (e.g. for ad-hoc test/debug runs)."
         ),
     )
     parser.add_argument(
@@ -198,26 +157,118 @@ def parse_args():
         action="store_true",
         default=False,
         help=(
-            "Skip SHA256 hashing of .safetensors files. Useful for large "
-            "checkpoints where hashing adds significant launch latency. "
-            "When set, checkpoint_sha256.txt records file sizes and "
-            "modification times instead."
+            "Skip SHA256 hashing of .safetensors files. Useful "
+            "for large checkpoints where hashing adds significant "
+            "launch latency. When set, checkpoint_sha256.txt "
+            "records file sizes and modification times instead."
         ),
     )
     parser.add_argument(
         "--dry-run",
         action="store_true",
-        help="Print the command that would be executed without running it",
+        help="Print the command without running it",
     )
-    parser.add_argument(
+
+
+def parse_args():
+    parser = argparse.ArgumentParser(
+        description="Launch vLLM for training or evaluation",
+    )
+    sub = parser.add_subparsers(dest="subcommand")
+
+    # --- train subcommand (default when no subcommand given) ---
+    train_parser = sub.add_parser(
+        "train",
+        help="Hidden-states extraction for training data generation",
+    )
+    train_parser.add_argument(
+        "model",
+        type=str,
+        help="Model name or path to extract hidden states from",
+    )
+    train_parser.add_argument(
+        "--hidden-states-backend",
+        choices=list(_backend_registry.keys()),
+        default="file",
+        help=(
+            "Hidden states transfer backend. Each backend may "
+            "add its own CLI arguments (see below). "
+            "Default: 'file'."
+        ),
+    )
+    for backend_cls in _backend_registry.values():
+        backend_cls.add_launch_args(train_parser)
+    train_parser.add_argument(
+        "--target-layer-ids",
+        type=int,
+        nargs="+",
+        help=(
+            "(Optional) Space-separated list of integer layer "
+            "ids. Defaults to "
+            "[2, num_hidden_layers // 2, num_hidden_layers - 3]."
+            " Note: if set, you must also pass the same value "
+            "into the training process"
+        ),
+    )
+    train_parser.add_argument(
+        "--include-last-layer",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help=(
+            "Append the last layer (num_hidden_layers) to "
+            "target_layer_ids for verifier hidden states "
+            "extraction. Default: True"
+        ),
+    )
+    train_parser.add_argument(
         "--trust-remote-code",
         action="store_true",
         help=(
-            "Allow custom model configuration code while resolving hidden-state "
-            "layer ids. Pass the same flag after '--' for vLLM itself."
+            "Allow custom model configuration code while resolving "
+            "hidden-state layer ids. Pass the same flag after '--' for "
+            "vLLM itself."
         ),
     )
-    return parser.parse_known_args()
+    _add_shared_args(train_parser)
+
+    # --- eval subcommand ---
+    eval_parser = sub.add_parser(
+        "eval",
+        help="Speculative decoding serving for evaluation",
+    )
+    eval_parser.add_argument(
+        "model",
+        type=str,
+        help="Target model name or path",
+    )
+    eval_parser.add_argument(
+        "--spec-model",
+        type=str,
+        required=True,
+        help="Drafter model name or path",
+    )
+    eval_parser.add_argument(
+        "--spec-tokens",
+        type=int,
+        default=None,
+        help="Number of speculative tokens",
+    )
+    eval_parser.add_argument(
+        "--spec-method",
+        type=str,
+        default=None,
+        help="Speculative decoding method (optional)",
+    )
+    _add_shared_args(eval_parser)
+
+    subcommands = set(sub.choices)
+    argv = sys.argv[1:]
+    if not argv or (argv[0] not in subcommands and not argv[0].startswith("-")):
+        argv = ["train", *argv]
+    args, vllm_args = parser.parse_known_args(argv)
+    if args.subcommand is None:
+        args, vllm_args = parser.parse_known_args(["train"] + sys.argv[1:])
+    return args, vllm_args
 
 
 def _warn(msg: str) -> None:
@@ -283,9 +334,13 @@ def _save_vllm_patch(
 
 
 def _save_checkpoint_sha256(
-    prov_dir: Path, model: str, *, skip_hash: bool = False
+    prov_dir: Path,
+    model: str,
+    *,
+    skip_hash: bool = False,
+    dest_name: str = "checkpoint_sha256.txt",
 ) -> None:
-    dest = prov_dir / "checkpoint_sha256.txt"
+    dest = prov_dir / dest_name
     model_path = os.path.expanduser(model)
     if not os.path.isdir(model_path):
         atomic_write(dest, f"# model: {model} (not a local path)\n")
@@ -323,10 +378,13 @@ def _save_vllm_provenance(
     model: str,
     *,
     skip_hash: bool = False,
+    spec_model: str | None = None,
 ) -> None:
     """Write vllm_command.txt, vllm.patch, and checkpoint_sha256.txt.
 
-    Best-effort — failures warn but never block the vLLM launch.
+    In eval mode (``spec_model`` given) also writes
+    drafter_checkpoint_sha256.txt. Best-effort — failures warn but never
+    block the vLLM launch.
     """
     prov_dir = Path(provenance_dir)
     try:
@@ -355,6 +413,19 @@ def _save_vllm_provenance(
             lambda: _save_checkpoint_sha256(prov_dir, model, skip_hash=skip_hash),
         ),
     ]
+    if spec_model is not None:
+        drafter_dest = "drafter_checkpoint_sha256.txt"
+        writers.append(
+            (
+                drafter_dest,
+                lambda: _save_checkpoint_sha256(
+                    prov_dir,
+                    spec_model,
+                    skip_hash=skip_hash,
+                    dest_name=drafter_dest,
+                ),
+            )
+        )
     for artifact, write in writers:
         try:
             write()
@@ -362,11 +433,7 @@ def _save_vllm_provenance(
             _warn(f"could not save {artifact}: {exc}")
 
 
-def main():
-    args, vllm_args = parse_args()
-    if "--" in vllm_args:
-        vllm_args.remove("--")
-
+def _build_train_cmd(args, vllm_args):
     from transformers import AutoConfig  # noqa: PLC0415
 
     config = AutoConfig.from_pretrained(
@@ -415,7 +482,7 @@ def main():
     backend_cls = _backend_registry[args.hidden_states_backend]
     kv_transfer_config = backend_cls.build_kv_transfer_config(args)
 
-    cmd = [
+    return [
         sys.executable,
         "-m",
         "vllm.entrypoints.cli.main",
@@ -428,6 +495,37 @@ def main():
         *_with_render_defaults(vllm_args),
     ]
 
+
+def _build_eval_cmd(args, vllm_args):
+    cmd = [
+        sys.executable,
+        "-m",
+        "vllm.entrypoints.cli.main",
+        "serve",
+        args.model,
+        "--spec-model",
+        args.spec_model,
+    ]
+    if args.spec_tokens is not None:
+        cmd.extend(["--spec-tokens", str(args.spec_tokens)])
+    if args.spec_method is not None:
+        cmd.extend(["--spec-method", args.spec_method])
+    cmd.extend(vllm_args)
+    return cmd
+
+
+def main():
+    args, vllm_args = parse_args()
+    if "--" in vllm_args:
+        vllm_args.remove("--")
+
+    if args.subcommand == "train":
+        cmd = _build_train_cmd(args, vllm_args)
+    elif args.subcommand == "eval":
+        cmd = _build_eval_cmd(args, vllm_args)
+    else:
+        raise ValueError(f"Unknown subcommand: {args.subcommand}")
+
     print("Running command:")
     print(" ".join(cmd))
 
@@ -437,6 +535,7 @@ def main():
             args.provenance_dir,
             args.model,
             skip_hash=args.no_hash_checkpoints,
+            spec_model=getattr(args, "spec_model", None),
         )
 
     if not args.dry_run:
