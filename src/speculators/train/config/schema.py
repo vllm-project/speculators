@@ -499,6 +499,15 @@ class DFlash2Args(_Group):
         ge=0.0,
         description="DFlash2: weight of the candidate-selector K-way CE term.",
     )
+    enable_selector_confidence_head: bool = Field(
+        default=False,
+        description="DFlash2: attach a predecessor-conditioned confidence head.",
+    )
+    selector_confidence_head_alpha: float = Field(
+        default=1.0,
+        ge=0.0,
+        description="DFlash2: weight of the confidence-head BCE term.",
+    )
 
 
 class DSparkArgs(_Group):
