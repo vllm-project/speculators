@@ -60,6 +60,22 @@ class TestParseGenKwargs:
 
 
 # ---------------------------------------------------------------------------
+# smooth_curve
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("point_count", [2, 3])
+def test_smooth_curve_supports_small_sweeps(perf_utils, point_count):
+    x = list(range(point_count))
+    y = [float(value**2) for value in x]
+
+    x_smooth, y_smooth = perf_utils.smooth_curve(x, y)
+
+    assert len(x_smooth) == 300
+    assert len(y_smooth) == 300
+
+
+# ---------------------------------------------------------------------------
 # run_guidellm — command construction
 # ---------------------------------------------------------------------------
 
