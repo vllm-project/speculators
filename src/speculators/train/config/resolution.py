@@ -141,10 +141,7 @@ def _collect_backend_args() -> tuple[dict[str, list[argparse.Action]], frozenset
         for action in actions:
             dest = action.dest
             if dest in seen_dests:
-                raise RuntimeError(
-                    f"Backend '{name}' and '{seen_dests[dest]}' both register "
-                    f"train-arg dest '{dest}'"
-                )
+                continue
             if dest in CONFIG_DESTS:
                 raise RuntimeError(
                     f"Backend '{name}' train-arg dest '{dest}' collides with "
