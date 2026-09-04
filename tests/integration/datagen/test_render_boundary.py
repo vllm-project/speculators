@@ -198,7 +198,7 @@ def test_render_conversation_sends_truncation_options(monkeypatch):
         request_body.update(json)
         return _Resp(200, {"token_ids": [1, 2]})
 
-    monkeypatch.setattr(render_client.httpx, "post", post)
+    monkeypatch.setattr(render_client, "_post", post)
     result = render_client.render_conversation(
         "http://x",
         [],
