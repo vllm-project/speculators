@@ -355,10 +355,21 @@ class Trainer:
         # Setup optimizer(s). The "muon" option returns two optimizers (Muon for the
         # 2D weight matrices, AdamW for everything else); "adamw" returns a single one.
         self.optimizers = build_optimizers(self.model, self.config)
-        last_epoch = -1
         if self.resume_from_checkpoint and self.checkpointer.previous_epoch != -1:
+            # Loading the optimizer state overwrites each param group's lr with
+            # the decayed value from the checkpoint, and scheduler construction
+            # below stamps the group lr as its base (initial_lr). Re-pin the
+            # configured LRs after loading: a resumed scheduler restores its
+            # true base_lrs from its own state_dict right after, and when that
+            # file is missing the schedule restarts from the configured base
+            # rather than adopting a decayed LR as the base forever.
+            configured_lrs = [
+                [group["lr"] for group in opt.param_groups] for opt in self.optimizers
+            ]
             self.checkpointer.load_optimizer_state_dict(self.model, self.optimizers)
-            last_epoch = self.checkpointer.previous_epoch
+            for opt, lrs in zip(self.optimizers, configured_lrs, strict=True):
+                for group, lr in zip(opt.param_groups, lrs, strict=True):
+                    group["lr"] = lr
 
         # Setup scheduler(s) — one per optimizer so each optimizer's base LR (e.g.
         # Muon's higher LR vs AdamW's) is warmed up / decayed independently.
@@ -376,14 +387,12 @@ class Trainer:
                     opt,
                     num_warmup_steps=scheduler_warmup_steps,
                     num_training_steps=scheduler_total_steps,
-                    last_epoch=last_epoch,
                 )
             return get_cosine_schedule_with_warmup(
                 opt,
                 num_warmup_steps=scheduler_warmup_steps,
                 num_training_steps=scheduler_total_steps,
                 num_cycles=self.config.scheduler_num_cosine_cycles,
-                last_epoch=last_epoch,
             )
 
         self.schedulers = [make_scheduler(opt) for opt in self.optimizers]
