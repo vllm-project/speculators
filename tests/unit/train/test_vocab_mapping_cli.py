@@ -3,6 +3,7 @@
 import argparse
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import Mock
 
 import numpy as np
 import pytest
@@ -108,3 +109,52 @@ def test_parse_vocab_mappings_caches_generated_files_by_size(
     assert (tmp_path / "t2d-4.npy").exists()
     assert not (tmp_path / "d2t.npy").exists()
     assert not (tmp_path / "t2d.npy").exists()
+
+
+def test_parse_vocab_mappings_rank_zero_writes_cache(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    torch.save({0: 3, 1: 2, 2: 1}, tmp_path / "token_freq.pt")
+    monkeypatch.setattr(train_cli, "get_target_vocab_size", lambda *_args, **_kwargs: 8)
+    monkeypatch.setattr(train_cli, "get_rank", lambda: 0)
+    monkeypatch.setattr(train_cli, "is_distributed", lambda: True)
+    broadcast = Mock()
+    monkeypatch.setattr(train_cli.dist, "broadcast_object_list", broadcast)
+
+    d2t, t2d, draft_vocab_size = train_cli.parse_vocab_mappings(_args(tmp_path, 4))
+
+    assert d2t.shape == (4,)
+    assert t2d.shape == (8,)
+    assert draft_vocab_size == 4
+    assert (tmp_path / "d2t-4.npy").exists()
+    assert (tmp_path / "t2d-4.npy").exists()
+    broadcast.assert_called_once()
+
+
+def test_parse_vocab_mappings_broadcasts_to_nonzero_rank(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    monkeypatch.setattr(train_cli, "get_rank", lambda: 1)
+    monkeypatch.setattr(train_cli, "is_distributed", lambda: True)
+
+    expected = (
+        torch.arange(4, dtype=torch.long),
+        torch.ones(8, dtype=torch.bool),
+        4,
+    )
+
+    def broadcast(payload, src):
+        assert src == 0
+        payload[0] = expected
+
+    broadcast_mock = Mock(side_effect=broadcast)
+    monkeypatch.setattr(train_cli.dist, "broadcast_object_list", broadcast_mock)
+
+    d2t, t2d, draft_vocab_size = train_cli.parse_vocab_mappings(_args(tmp_path, 4))
+
+    assert torch.equal(d2t, expected[0])
+    assert torch.equal(t2d, expected[1])
+    assert draft_vocab_size == 4
+    assert not (tmp_path / "d2t-4.npy").exists()
+    assert not (tmp_path / "t2d-4.npy").exists()
+    broadcast_mock.assert_called_once()

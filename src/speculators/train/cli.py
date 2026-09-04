@@ -10,6 +10,7 @@ from pathlib import Path
 
 import numpy as np
 import torch
+import torch.distributed as dist
 import transformers
 from packaging import version
 from transformers import LlamaConfig, PretrainedConfig
@@ -324,15 +325,47 @@ def _load_mappings(d2t_path, t2d_path, expected_draft_vocab_size: int | None):
     return d2t, t2d, draft_vocab_size
 
 
-def parse_vocab_mappings(args: argparse.Namespace):
-    if args.d2t_path or args.t2d_path:
-        if not (args.d2t_path and args.t2d_path):
-            raise ValueError(
-                "Both t2d and d2t must be provided together, or both must be omitted. "
-                f"Got t2d={'provided' if args.t2d_path is not None else 'not provided'}"
-                f"d2t={'provided' if args.d2t_path is not None else 'not provided'}"
-            )
+def _generate_vocab_mappings(args: argparse.Namespace, data_path: Path):
+    token_freq_path = args.token_freq_path or data_path / "token_freq.pt"
+    token_freq_path = Path(token_freq_path)
+    if not token_freq_path.exists():
+        return None
 
+    logger.info("No vocab mappings provided. Regenerating from token frequencies")
+    token_freq_dict = torch.load(token_freq_path, weights_only=True)
+
+    target_vocab_size = get_target_vocab_size(
+        None,
+        args.verifier_name_or_path,
+        trust_remote_code=args.trust_remote_code,
+    )
+
+    d2t, t2d = build_vocab_mappings_from_distribution(
+        token_freq_dict=token_freq_dict,
+        draft_vocab_size=args.draft_vocab_size,
+        target_vocab_size=target_vocab_size,
+    )
+    draft_vocab_size = d2t.shape[0]
+    if args.draft_vocab_size != draft_vocab_size:
+        raise ValueError(
+            f"Generated vocab mapping d2t has size {draft_vocab_size}, but "
+            f"--draft-vocab-size requires {args.draft_vocab_size}."
+        )
+
+    d2t_cache_path = data_path / f"d2t-{draft_vocab_size}.npy"
+    t2d_cache_path = data_path / f"t2d-{draft_vocab_size}.npy"
+    if get_rank() == 0:
+        logger.info(
+            f"Caching vocab mapping files to '{d2t_cache_path}' and '{t2d_cache_path}'"
+        )
+        np.save(d2t_cache_path, d2t.cpu().numpy())
+        np.save(t2d_cache_path, t2d.cpu().numpy())
+
+    return d2t, t2d, draft_vocab_size
+
+
+def _resolve_vocab_mappings(args: argparse.Namespace):
+    if args.d2t_path or args.t2d_path:
         return _load_mappings(args.d2t_path, args.t2d_path, args.draft_vocab_size)
 
     data_path = Path(args.data_path)
@@ -344,42 +377,12 @@ def parse_vocab_mappings(args: argparse.Namespace):
                 default_d2t_path, default_t2d_path, args.draft_vocab_size
             )
 
+        result = _generate_vocab_mappings(args, data_path)
+        if result is not None:
+            return result
+
     token_freq_path = args.token_freq_path or data_path / "token_freq.pt"
     token_freq_path = Path(token_freq_path)
-    if token_freq_path.exists() and args.draft_vocab_size is not None:
-        logger.info("No vocab mappings provided. Regenerating from token frequencies")
-        token_freq_dict = torch.load(token_freq_path, weights_only=True)
-
-        target_vocab_size = get_target_vocab_size(
-            None,
-            args.verifier_name_or_path,
-            trust_remote_code=args.trust_remote_code,
-        )
-
-        d2t, t2d = build_vocab_mappings_from_distribution(
-            token_freq_dict=token_freq_dict,
-            draft_vocab_size=args.draft_vocab_size,
-            target_vocab_size=target_vocab_size,
-        )
-        draft_vocab_size = d2t.shape[0]
-        if (
-            args.draft_vocab_size is not None
-            and args.draft_vocab_size != draft_vocab_size
-        ):
-            raise ValueError(
-                f"Generated vocab mapping d2t has size {draft_vocab_size}, but "
-                f"--draft-vocab-size requires {args.draft_vocab_size}."
-            )
-
-        d2t_cache_path = data_path / f"d2t-{draft_vocab_size}.npy"
-        t2d_cache_path = data_path / f"t2d-{draft_vocab_size}.npy"
-        logger.info(
-            f"Caching vocab mapping files to '{d2t_cache_path}' and '{t2d_cache_path}'"
-        )
-        np.save(d2t_cache_path, d2t.cpu().numpy())
-        np.save(t2d_cache_path, t2d.cpu().numpy())
-
-        return d2t, t2d, draft_vocab_size
 
     logger.warning(
         "No vocab mappings found, and can't generate new ones because either "
@@ -394,6 +397,23 @@ def parse_vocab_mappings(args: argparse.Namespace):
     if hasattr(verifier_config, "text_config"):
         verifier_config = verifier_config.text_config
     return None, None, verifier_config.vocab_size
+
+
+def parse_vocab_mappings(args: argparse.Namespace):
+    if (args.d2t_path or args.t2d_path) and not (args.d2t_path and args.t2d_path):
+        raise ValueError(
+            "Both t2d and d2t must be provided together, or both must be omitted. "
+            f"Got t2d={'provided' if args.t2d_path is not None else 'not provided'}"
+            f"d2t={'provided' if args.d2t_path is not None else 'not provided'}"
+        )
+
+    if not is_distributed():
+        return _resolve_vocab_mappings(args)
+
+    result = _resolve_vocab_mappings(args) if get_rank() == 0 else None
+    payload = [result]
+    dist.broadcast_object_list(payload, src=0)
+    return payload[0]
 
 
 def _build_from_config_only(
