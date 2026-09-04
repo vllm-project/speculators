@@ -1,5 +1,6 @@
 import json
 import logging
+import math
 import time
 import warnings
 from pathlib import Path
@@ -12,6 +13,7 @@ from torch.distributed.checkpoint.state_dict import (
     set_model_state_dict,
 )
 from torch.nn.parallel import DistributedDataParallel
+from torch.optim.lr_scheduler import LambdaLR
 from torch.utils.data import DataLoader
 from tqdm import TqdmExperimentalWarning
 from tqdm.rich import tqdm
@@ -99,6 +101,8 @@ _RECOVERY_SYNC_INTERVAL = 50
 
 # Bound rank skew before the validation metrics reduction.
 _VAL_SYNC_INTERVAL = 50
+WSDDecayStyle = Literal["linear", "cosine", "exponential", "minus_sqrt"]
+_WSD_DECAY_STYLES = {"linear", "cosine", "exponential", "minus_sqrt"}
 
 
 def _should_sync_recovery(
@@ -128,11 +132,15 @@ class TrainerConfig(NamedTuple):
     muon_weight_decay: float = 0.1
     muon_ns_steps: int = 5
     muon_adjust_lr_fn: str = "match_rms_adamw"
-    scheduler_type: Literal["linear", "cosine", "none"] = "linear"
+    scheduler_type: Literal["linear", "cosine", "wsd", "none"] = "linear"
     scheduler_warmup_steps: int | None = None
     scheduler_warmup_ratio: float | None = None
     scheduler_total_steps: int | None = None
     scheduler_num_cosine_cycles: float = 0.5
+    scheduler_warmup_init_lr_ratio: float = 0.0
+    scheduler_min_lr_ratio: float = 0.0
+    scheduler_wsd_decay_ratio: float = 0.2
+    scheduler_wsd_decay_style: WSDDecayStyle = "cosine"
     checkpoint_freq: float = 1
     save_best: bool = False
     hidden_states_dtype: torch.dtype = torch.bfloat16
@@ -177,6 +185,93 @@ def _resolve_scheduler_steps(
         scheduler_warmup_steps = scheduler_total_steps // 100
 
     return scheduler_warmup_steps, scheduler_total_steps
+
+
+def _validate_wsd_schedule(
+    *,
+    num_warmup_steps: int,
+    num_training_steps: int,
+    warmup_init_lr_ratio: float,
+    min_lr_ratio: float,
+    decay_ratio: float,
+    decay_style: WSDDecayStyle,
+) -> tuple[int, int]:
+    if num_training_steps <= 0:
+        raise ValueError("num_training_steps must be greater than zero.")
+    if not 0 <= num_warmup_steps < num_training_steps:
+        raise ValueError(
+            "num_warmup_steps must be non-negative and smaller than num_training_steps."
+        )
+    if not 0.0 <= warmup_init_lr_ratio <= 1.0:
+        raise ValueError("warmup_init_lr_ratio must be between zero and one.")
+    if not 0.0 <= min_lr_ratio <= 1.0:
+        raise ValueError("min_lr_ratio must be between zero and one.")
+    if not 0.0 < decay_ratio <= 1.0:
+        raise ValueError("decay_ratio must be greater than zero and at most one.")
+    if decay_style not in _WSD_DECAY_STYLES:
+        raise ValueError(f"Unknown WSD decay_style: {decay_style!r}.")
+
+    decay_steps = max(1, int(decay_ratio * num_training_steps))
+    decay_start = num_training_steps - decay_steps
+    if decay_start < num_warmup_steps:
+        raise ValueError(
+            "WSD warmup and final decay phases overlap; reduce num_warmup_steps "
+            "or decay_ratio."
+        )
+    return decay_start, decay_steps
+
+
+def _get_wsd_decay_coefficient(
+    decay_progress: float, decay_style: WSDDecayStyle
+) -> float:
+    if decay_style == "linear":
+        return 1.0 - decay_progress
+    if decay_style == "cosine":
+        return 0.5 * (math.cos(math.pi * decay_progress) + 1.0)
+    if decay_style == "exponential":
+        return 2.0 * math.pow(0.5, decay_progress) - 1.0
+    if decay_style == "minus_sqrt":
+        return 1.0 - math.sqrt(decay_progress)
+    raise AssertionError(f"Unhandled WSD decay style: {decay_style}")
+
+
+def _get_wsd_schedule_with_warmup(
+    optimizer: torch.optim.Optimizer,
+    *,
+    num_warmup_steps: int,
+    num_training_steps: int,
+    warmup_init_lr_ratio: float = 0.0,
+    min_lr_ratio: float = 0.0,
+    decay_ratio: float = 0.2,
+    decay_style: WSDDecayStyle = "cosine",
+) -> LambdaLR:
+    """Create a warmup-stable-decay schedule with a configurable final anneal.
+
+    The decay coefficients follow ``lightseekorg/TorchSpec``'s
+    ``torchspec/training/lr_scheduler.py`` at commit ``4f447655``.
+    """
+    decay_start, decay_steps = _validate_wsd_schedule(
+        num_warmup_steps=num_warmup_steps,
+        num_training_steps=num_training_steps,
+        warmup_init_lr_ratio=warmup_init_lr_ratio,
+        min_lr_ratio=min_lr_ratio,
+        decay_ratio=decay_ratio,
+        decay_style=decay_style,
+    )
+
+    def lr_lambda(current_step: int) -> float:
+        if num_warmup_steps > 0 and current_step <= num_warmup_steps:
+            warmup_ratio = current_step / num_warmup_steps
+            return warmup_init_lr_ratio + (1.0 - warmup_init_lr_ratio) * warmup_ratio
+        if current_step <= decay_start:
+            return 1.0
+        if current_step >= num_training_steps:
+            return min_lr_ratio
+        decay_progress = (current_step - decay_start) / decay_steps
+        coefficient = _get_wsd_decay_coefficient(decay_progress, decay_style)
+        return min_lr_ratio + coefficient * (1.0 - min_lr_ratio)
+
+    return LambdaLR(optimizer, lr_lambda)
 
 
 class Trainer:
@@ -377,6 +472,16 @@ class Trainer:
                     num_warmup_steps=scheduler_warmup_steps,
                     num_training_steps=scheduler_total_steps,
                     last_epoch=last_epoch,
+                )
+            if self.config.scheduler_type == "wsd":
+                return _get_wsd_schedule_with_warmup(
+                    opt,
+                    num_warmup_steps=scheduler_warmup_steps,
+                    num_training_steps=scheduler_total_steps,
+                    warmup_init_lr_ratio=self.config.scheduler_warmup_init_lr_ratio,
+                    min_lr_ratio=self.config.scheduler_min_lr_ratio,
+                    decay_ratio=self.config.scheduler_wsd_decay_ratio,
+                    decay_style=self.config.scheduler_wsd_decay_style,
                 )
             return get_cosine_schedule_with_warmup(
                 opt,

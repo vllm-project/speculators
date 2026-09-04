@@ -8,6 +8,9 @@ from speculators.train.checkpointer import SingleGPUCheckpointer
 from speculators.train.config import TrainConfig
 from speculators.train.trainer import (
     TrainerConfig,
+    WSDDecayStyle,
+    _get_wsd_decay_coefficient,
+    _get_wsd_schedule_with_warmup,
     _resolve_scheduler_steps,
 )
 
@@ -72,6 +75,61 @@ def test_scheduler_type_rejects_unsupported_values():
     with pytest.raises(SystemExit):
         TrainConfig.resolve(
             ["--verifier-name-or-path", "x", "--scheduler-type", "constant"]
+        )
+
+
+def test_wsd_scheduler():
+    parameter = torch.nn.Parameter(torch.zeros(()))
+    optimizer = torch.optim.AdamW([parameter], lr=1.0)
+    scheduler = _get_wsd_schedule_with_warmup(
+        optimizer,
+        num_warmup_steps=2,
+        num_training_steps=10,
+        warmup_init_lr_ratio=0.25,
+        min_lr_ratio=0.1,
+        decay_ratio=0.4,
+        decay_style="linear",
+    )
+
+    observed = [scheduler.get_last_lr()[0]]
+    for _ in range(10):
+        optimizer.step()
+        scheduler.step()
+        observed.append(scheduler.get_last_lr()[0])
+
+    assert observed == pytest.approx(
+        [0.25, 0.625, 1.0, 1.0, 1.0, 1.0, 1.0, 0.775, 0.55, 0.325, 0.1]
+    )
+
+
+@pytest.mark.parametrize(
+    ("decay_style", "expected_midpoint"),
+    [
+        ("linear", 0.5),
+        ("cosine", 0.5),
+        ("exponential", 2.0 * 0.5**0.5 - 1.0),
+        ("minus_sqrt", 1.0 - 0.5**0.5),
+    ],
+)
+def test_wsd_decay_styles(
+    decay_style: WSDDecayStyle,
+    expected_midpoint: float,
+):
+    assert _get_wsd_decay_coefficient(0.5, decay_style) == pytest.approx(
+        expected_midpoint
+    )
+
+
+def test_wsd_rejects_overlapping_phases():
+    parameter = torch.nn.Parameter(torch.zeros(()))
+    optimizer = torch.optim.AdamW([parameter], lr=1.0)
+
+    with pytest.raises(ValueError, match="overlap"):
+        _get_wsd_schedule_with_warmup(
+            optimizer,
+            num_warmup_steps=9,
+            num_training_steps=10,
+            decay_ratio=0.2,
         )
 
 
