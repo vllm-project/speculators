@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 #
-# Tokenizes the JSONL into an Arrow dataset and builds the draft vocabulary
-# mapping. Run this once, before any distributed job.
+# Tokenizes the JSONL into an Arrow dataset and collects token frequencies.
+# Run this once, before any distributed job.
 #
 #   SOURCE_JSONL=/path/to/data.jsonl sbatch --export=ALL,SOURCE_JSONL \
 #     examples/train/kimi_k3_dspark/prepare_data.sbatch
