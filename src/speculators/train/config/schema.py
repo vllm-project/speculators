@@ -499,6 +499,34 @@ class DFlash2Args(_Group):
         ge=0.0,
         description="DFlash2: weight of the candidate-selector K-way CE term.",
     )
+    draft_ffn_type: Literal["dense", "moe"] = Field(
+        default="dense",
+        description="DFlash2: dense MLP or routed MoE plus a shared expert. "
+        "Only the feed-forward changes; attention, convolutions and the draft "
+        "block layout stay the same.",
+    )
+    num_experts: int = Field(
+        default=256, ge=1, description="DFlash2 MoE: number of routed experts."
+    )
+    num_experts_per_tok: int = Field(
+        default=8, ge=1, description="DFlash2 MoE: routed experts selected per token."
+    )
+    moe_intermediate_size: int = Field(
+        default=512, ge=1, description="DFlash2 MoE: per-routed-expert width."
+    )
+    shared_expert_intermediate_size: int = Field(
+        default=512, ge=1, description="DFlash2 MoE: shared-expert width."
+    )
+    moe_experts_implementation: Literal[
+        "grouped_mm", "batched_mm", "deepgemm", "sonicmoe", "reference"
+    ] = Field(
+        default="grouped_mm",
+        description="DFlash2 MoE: routed-expert GEMM kernel. Restricted on "
+        "purpose -- an unrecognized name makes Transformers fall back to a "
+        "per-expert Python loop that costs ~68x a grouped GEMM at 256 experts. "
+        "'reference' selects that loop deliberately; 'batched_mm' exhausts "
+        "device memory at production expert counts.",
+    )
 
 
 class DSparkArgs(_Group):
@@ -747,6 +775,20 @@ class TrainConfig(BaseSettings):
                 raise ValueError(
                     f"--dpace-alpha must be in (0, 1], got {self.dflash.dpace_alpha}"
                 )
+        return self
+
+    @model_validator(mode="after")
+    def _validate_moe(self) -> "TrainConfig":
+        """Reject MoE geometry that would otherwise fail deep in a run."""
+        if self.dflash2.draft_ffn_type != "moe":
+            return self
+        if self.speculator_type != "dflash2":
+            raise ValueError("--draft-ffn-type=moe is currently supported by dflash2")
+        if self.dflash2.num_experts_per_tok > self.dflash2.num_experts:
+            raise ValueError(
+                "--num-experts-per-tok cannot exceed --num-experts: "
+                f"{self.dflash2.num_experts_per_tok} > {self.dflash2.num_experts}"
+            )
         return self
 
     def flatten(self) -> dict[str, Any]:

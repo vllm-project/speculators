@@ -31,7 +31,7 @@ class DFlash2DraftModel(DFlashDraftModel):
     """DFlash with local convolution and bilinear candidate reranking."""
 
     config_class: ClassVar[type[DFlash2SpeculatorConfig]] = DFlash2SpeculatorConfig  # type: ignore[misc,assignment]
-    _no_split_modules = ["Qwen3DFlash2DecoderLayer"]
+    _no_split_modules = ["Qwen3DFlash2DecoderLayer", "Qwen35DFlashMoeBlock"]
 
     def __init__(self, config: DFlash2SpeculatorConfig) -> None:
         target_vocab_size = config.transformer_layer_config.vocab_size
@@ -48,13 +48,14 @@ class DFlash2DraftModel(DFlashDraftModel):
             )
         super().__init__(config=config)
 
-        for layer_ in self.layers:
-            assert isinstance(layer_, Qwen3DFlash2DecoderLayer)  # noqa: S101
-            layer_.reset_convolutions()
-
         initializer_range = getattr(
             config.transformer_layer_config, "initializer_range", 0.02
         )
+        for layer_ in self.layers:
+            assert isinstance(layer_, Qwen3DFlash2DecoderLayer)  # noqa: S101
+            layer_.reset_convolutions()
+            layer_.reset_moe_parameters(initializer_range)
+
         self.candidate_selector = CandidateSelector(
             vocab_size=target_vocab_size,
             hidden_size=config.transformer_layer_config.hidden_size,
@@ -73,6 +74,12 @@ class DFlash2DraftModel(DFlashDraftModel):
             block_size=config.block_size,
             conv_kernel_size=config.conv_kernel_size,
             conv_group_size=config.conv_group_size,
+            draft_ffn_type=config.draft_ffn_type,
+            num_experts=config.num_experts,
+            num_experts_per_tok=config.num_experts_per_tok,
+            moe_intermediate_size=config.moe_intermediate_size,
+            shared_expert_intermediate_size=config.shared_expert_intermediate_size,
+            moe_experts_implementation=config.moe_experts_implementation,
         )
 
     @classmethod
@@ -90,6 +97,16 @@ class DFlash2DraftModel(DFlashDraftModel):
             conv_group_size=kwargs.get("conv_group_size", 16),
             selector_rank=kwargs.get("selector_rank", 256),
             selector_top_k=kwargs.get("selector_top_k", 16),
+            draft_ffn_type=kwargs.get("draft_ffn_type", "dense"),
+            num_experts=kwargs.get("num_experts", 256),
+            num_experts_per_tok=kwargs.get("num_experts_per_tok", 8),
+            moe_intermediate_size=kwargs.get("moe_intermediate_size", 512),
+            shared_expert_intermediate_size=kwargs.get(
+                "shared_expert_intermediate_size", 512
+            ),
+            moe_experts_implementation=kwargs.get(
+                "moe_experts_implementation", "grouped_mm"
+            ),
         )
         model = cls(config=config)
         model.load_vocab_mappings(t2d, d2t)
