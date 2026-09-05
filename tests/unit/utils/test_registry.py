@@ -181,6 +181,8 @@ def test_child_registry_does_not_mutate_parent_registry():
     class ChildRegistry(ParentRegistry):
         pass
 
+    assert ChildRegistry.registry is ParentRegistry.registry
+
     @ChildRegistry.register()
     class ChildClass:
         pass
