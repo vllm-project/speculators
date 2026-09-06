@@ -63,9 +63,11 @@ class TestComputeMetrics:
         assert float(loss) < 1e-2
         accept = metrics["accept_rate_sum"] / metrics["accept_rate_total"]
         assert float(accept) > 0.99
-        # One draft slot per block accepted w.p. ~1, plus the anchor token -> ~2.
+        # One draft slot per block accepted w.p. ~1, plus the bonus token -> ~2.
         accept_len = metrics["accept_len_sum"] / metrics["accept_len_total"]
         assert abs(float(accept_len) - 2.0) < 1e-2
+        eal = metrics["eal_sum"] / metrics["eal_total"]
+        assert abs(float(eal) - 2.0) < 1e-2
 
     def test_perfect_draft_anchor_sampled_includes_slot0(self):
         # sample_from_anchor=True (default): slot 0 is the first real prediction,
@@ -87,9 +89,11 @@ class TestComputeMetrics:
         assert float(loss) < 1e-2
         accept = metrics["accept_rate_sum"] / metrics["accept_rate_total"]
         assert float(accept) > 0.99
-        # Two draft slots per block accepted w.p. ~1, plus the anchor token -> ~3.
+        # Two draft slots per block accepted w.p. ~1, plus the bonus token -> ~3.
         accept_len = metrics["accept_len_sum"] / metrics["accept_len_total"]
         assert abs(float(accept_len) - 3.0) < 1e-2
+        eal = metrics["eal_sum"] / metrics["eal_total"]
+        assert abs(float(eal) - 3.0) < 1e-2
 
     def test_accept_rate_equals_softmax_overlap(self):
         """accept_rate (now 1 - tv) matches the explicit softmax-overlap formula."""

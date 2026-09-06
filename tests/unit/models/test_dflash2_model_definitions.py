@@ -388,17 +388,26 @@ def _selector_objective_inputs():
 def test_selector_loss_alpha_zero_preserves_unary_objective():
     (
         selector,
-        unary_logits,
-        hidden_states,
-        predecessor_ids,
-        _target_ids,
+        _unary_logits,
+        _hidden_states,
+        _predecessor_ids,
+        target_ids,
         targets,
         loss_mask,
     ) = _selector_objective_inputs()
+    # The selector corrects the first unary argmax. At the second draft slot the
+    # target is outside unary top-k but injected for training; choosing that
+    # injected target must still end the serving path.
+    unary_logits = torch.full_like(targets, -10.0)
+    unary_logits.scatter_(-1, target_ids.unsqueeze(-1), 5.0)
+    unary_logits.scatter_(-1, ((target_ids + 1) % 7).unsqueeze(-1), 6.0)
+    unary_logits[0, 2, target_ids[0, 2]] = -10.0
+    unary_logits[0, 2, (target_ids[0, 2] + 2) % 7] = 5.0
+    unary_logits.requires_grad_()
     loss_config = resolve_loss_config("ce", "eager")
     tv_loss_fn = resolve_loss_config("tv", "eager")["tv"][0]
 
-    expected, _ = compute_unary_metrics(
+    expected, unary_metrics = compute_unary_metrics(
         unary_logits,
         targets,
         None,
@@ -417,9 +426,9 @@ def test_selector_loss_alpha_zero_preserves_unary_objective():
     training_candidate_ids, target_positions, contains_target = (
         selector_training_candidates(candidate_ids, target_ids)
     )
-    candidate_logits = selector.score_candidates(
-        unary_logits, hidden_states, predecessor_ids, training_candidate_ids
-    )
+    assert contains_target.tolist() == [[True, True, False, True]]
+    candidate_logits = torch.zeros_like(training_candidate_ids, dtype=torch.float32)
+    candidate_logits.scatter_(-1, target_positions.unsqueeze(-1), 1.0)
     actual, metrics = compute_dflash2_metrics(
         unary_logits=unary_logits,
         targets=targets,
@@ -438,6 +447,14 @@ def test_selector_loss_alpha_zero_preserves_unary_objective():
     torch.testing.assert_close(actual, expected)
     torch.testing.assert_close(metrics["unary_loss_sum"], expected.detach())
     assert metrics["selector_loss_sum"] > 0
+    # One selected draft token plus the verifier's bonus token.
+    assert metrics["eal_sum"].item() == 2.0
+    assert metrics["eal_total"].item() == 1.0
+    # The inherited unary EAL would stop at the first drafted position.
+    assert unary_metrics["eal_sum"].item() == 1.0
+    torch.testing.assert_close(
+        metrics["accept_len_sum"], unary_metrics["accept_len_sum"]
+    )
 
 
 def test_selector_loss_reaches_every_selector_parameter():

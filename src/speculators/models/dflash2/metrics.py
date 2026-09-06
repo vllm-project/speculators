@@ -1,4 +1,8 @@
-"""Runtime-aligned selector loss and metrics for DFlash2."""
+"""Runtime-aligned selector loss and metrics for DFlash2.
+
+``eal`` follows the realized greedy selector path. ``accept_len`` remains the
+analytical TV-overlap estimate over the unary logits.
+"""
 
 from collections.abc import Callable
 from functools import partial
@@ -15,6 +19,7 @@ from speculators.losses import (
     tv_loss,
 )
 from speculators.models.dspark.metrics import compute_metrics as compute_unary_metrics
+from speculators.models.metrics import compute_accepted_length_counts
 
 __all__ = [
     "compute_metrics",
@@ -195,6 +200,19 @@ def compute_metrics(
         num_blocks = unary_logits.shape[1] // block_size
         contains_target_blocks = contains_target.view(num_blocks, block_size)
         valid_blocks = valid.view(num_blocks, block_size)
+
+        # Teacher-forced predecessor tokens are exact while the greedy path is
+        # alive. Gate on the original unary candidate set because training may
+        # inject a missing target that would not be available during serving.
+        start_pos = 0 if sample_from_anchor else 1
+        selector_correct = teacher_forced_ids.eq(target_ids) & contains_target
+        eal_sum, eal_total = compute_accepted_length_counts(
+            selector_correct.view(num_blocks, block_size)[:, start_pos:],
+            valid_blocks[:, start_pos:],
+        )
+        metrics["eal_sum"] = eal_sum
+        metrics["eal_total"] = eal_total
+
         oracle_alive = torch.ones(
             num_blocks, dtype=torch.bool, device=unary_logits.device
         )
