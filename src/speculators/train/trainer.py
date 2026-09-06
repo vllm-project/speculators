@@ -526,7 +526,13 @@ class Trainer:
 
                 metrics = {k: v.item() for k, v in metrics.items()}
                 world_size = dist.get_world_size() if self.is_distributed else 1
+                reference_counts = {
+                    k: v
+                    for k, v in metrics.items()
+                    if k.startswith("reference_prefix_acc_")
+                }
                 metrics = normalize_counted_metrics(metrics, world_size)
+                metrics.update(reference_counts)
                 lr_info = (
                     current_lrs
                     if len(current_lrs) > 1
@@ -611,8 +617,15 @@ class Trainer:
             val_metrics = dict(zip(accumulated, stacked.tolist(), strict=True))
 
         world_size = dist.get_world_size() if self.is_distributed else 1
+        # Retain pooled counts before batch averaging for later plotting/reduction.
+        reference_counts = {
+            k: v
+            for k, v in val_metrics.items()
+            if k.startswith("reference_prefix_acc_")
+        }
         val_metrics = {k: v / num_batches for k, v in val_metrics.items()}
         val_metrics = normalize_counted_metrics(val_metrics, world_size)
+        val_metrics.update(reference_counts)
         val_metrics = {f"{k}_epoch": v for k, v in val_metrics.items()}
 
         metric_logger.info(

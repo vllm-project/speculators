@@ -8,6 +8,7 @@ from transformers.models.qwen3.modeling_qwen3 import Qwen3Config
 
 from speculators import SpeculatorModelConfig, SpeculatorsConfig, VerifierConfig
 from speculators.losses import resolve_loss_config
+from speculators.models.dflash.metrics import compute_metrics as compute_unary_metrics
 from speculators.models.dflash2 import DFlash2DraftModel, DFlash2SpeculatorConfig
 from speculators.models.dflash2.metrics import (
     compute_metrics as compute_dflash2_metrics,
@@ -21,7 +22,6 @@ from speculators.models.dflash2.model_definitions import (
     GroupedDynamicCausalConv,
     grouped_dynamic_conv,
 )
-from speculators.models.dspark.metrics import compute_metrics as compute_unary_metrics
 from speculators.proposals import GreedyTokenProposalConfig
 from speculators.train.optimizers import split_named_params_for_muon
 
@@ -405,18 +405,14 @@ def test_selector_loss_alpha_zero_preserves_unary_objective():
     unary_logits[0, 2, (target_ids[0, 2] + 2) % 7] = 5.0
     unary_logits.requires_grad_()
     loss_config = resolve_loss_config("ce", "eager")
-    tv_loss_fn = resolve_loss_config("tv", "eager")["tv"][0]
 
-    expected, unary_metrics = compute_unary_metrics(
+    expected, _ = compute_unary_metrics(
         unary_logits,
         targets,
-        None,
         loss_mask,
         4,
         loss_config=loss_config,
-        tv_loss_fn=tv_loss_fn,
         gamma=4.0,
-        confidence_head_alpha=0.0,
         per_position_loss_weight="fixed-exp-decay",
         dpace_alpha=0.5,
         sample_from_anchor=False,
@@ -432,7 +428,6 @@ def test_selector_loss_alpha_zero_preserves_unary_objective():
     actual, metrics = compute_dflash2_metrics(
         unary_logits=unary_logits,
         targets=targets,
-        training_candidate_ids=training_candidate_ids,
         candidate_logits=candidate_logits,
         target_positions=target_positions,
         contains_target=contains_target,
@@ -440,21 +435,24 @@ def test_selector_loss_alpha_zero_preserves_unary_objective():
         block_size=4,
         top_k=selector.top_k,
         loss_config=loss_config,
-        tv_loss_fn=tv_loss_fn,
         selector_loss_alpha=0.0,
     )
 
     torch.testing.assert_close(actual, expected)
     torch.testing.assert_close(metrics["unary_loss_sum"], expected.detach())
     assert metrics["selector_loss_sum"] > 0
-    # One selected draft token plus the verifier's bonus token.
-    assert metrics["eal_sum"].item() == 2.0
-    assert metrics["eal_total"].item() == 1.0
-    # The inherited unary EAL would stop at the first drafted position.
-    assert unary_metrics["eal_sum"].item() == 1.0
-    torch.testing.assert_close(
-        metrics["accept_len_sum"], unary_metrics["accept_len_sum"]
-    )
+    assert metrics["unary_candidate_recall_at_2_sum"] == 2
+    assert metrics["unary_candidate_recall_at_2_total"] == 3
+    assert set(metrics) == {
+        "loss_sum",
+        "loss_total",
+        "unary_loss_sum",
+        "unary_loss_total",
+        "selector_loss_sum",
+        "selector_loss_total",
+        "unary_candidate_recall_at_2_sum",
+        "unary_candidate_recall_at_2_total",
+    }
 
 
 def test_selector_loss_reaches_every_selector_parameter():
@@ -501,6 +499,48 @@ def test_trainer_kwargs_include_selector_loss_alpha():
 
     assert train_kwargs["selector_loss_alpha"] == pytest.approx(0.25)
     assert val_kwargs["selector_loss_alpha"] == pytest.approx(0.25)
+    assert "tv_loss_fn" not in train_kwargs
+
+
+def test_reference_prefix_uses_original_candidates(monkeypatch):
+    model = DFlash2DraftModel(_tiny_config(sample_from_anchor=True))
+    # Teacher ID 4 replaces the weakest candidate, ID 3, during training.
+    # The selector would choose ID 3 from the original set at inference.
+    logits = torch.zeros(1, 4, 64)
+    logits[..., :4] = torch.tensor([4.0, 3.0, 2.0, 1.0])
+    targets = torch.zeros_like(logits)
+    targets[..., 4] = 10
+    monkeypatch.setattr(
+        model,
+        "_backbone_forward",
+        lambda *a, **k: (
+            torch.ones(1, 4, 16),
+            logits,
+            targets,
+            torch.ones(1, 4),
+            torch.arange(4),
+        ),
+    )
+    monkeypatch.setattr(
+        model.candidate_selector,
+        "score_candidates",
+        lambda u, h, p, ids: u.gather(-1, ids) + 20 * (ids == 3),
+    )
+    inputs = torch.full((1, 8), 3, dtype=torch.long)
+    _, _, metrics = model(
+        hidden_states=torch.zeros(1, 8, 32),
+        input_ids=inputs,
+        verifier_last_hidden_states=torch.zeros(1, 8, 16),
+        loss_mask=torch.ones_like(inputs),
+        document_ids=torch.zeros_like(inputs),
+        loss_config=resolve_loss_config("kl_div", "eager"),
+        max_anchors=1,
+    )
+    assert all(
+        metrics[f"reference_prefix_acc_{i}_{kind}"] == 1
+        for i in range(1, 5)
+        for kind in ("sum", "total")
+    )
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA is required")
@@ -543,13 +583,11 @@ def test_tiny_gpu_forward_backward_reaches_all_new_parameters():
         "document_ids": torch.zeros(1, seq_len, device="cuda", dtype=torch.long),
     }
     eager_kl = resolve_loss_config("kl_div", "eager")
-    eager_tv = resolve_loss_config("tv", "eager")["tv"][0]
 
     _, loss, _ = model(  # type: ignore[call-arg]
         **inputs,
         max_anchors=4,
         loss_config=eager_kl,
-        tv_loss_fn=eager_tv,
     )
     assert torch.isfinite(loss)
     loss.backward()

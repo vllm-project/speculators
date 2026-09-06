@@ -1,10 +1,9 @@
-from collections.abc import Callable
 from typing import Any, ClassVar
 
 import torch
 from transformers import PretrainedConfig
 
-from speculators.losses import LossConfig, kl_div_loss, resolve_loss_config, tv_loss
+from speculators.losses import LossConfig, kl_div_loss, resolve_loss_config
 from speculators.model import SpeculatorModel
 from speculators.models.dflash.config import DFlashSpeculatorConfig
 from speculators.models.dflash.core import DFlashDraftModel
@@ -17,6 +16,7 @@ from speculators.models.dflash2.model_definitions import (
     CandidateSelector,
     Qwen3DFlash2DecoderLayer,
 )
+from speculators.models.metrics import compute_block_reference_metrics
 from speculators.models.utils import conditional_torch_compile
 
 __all__ = [
@@ -101,10 +101,8 @@ class DFlash2DraftModel(DFlashDraftModel):
         """Resolve the unary and selector objectives used during training."""
         implementation = kwargs.get("loss_implementation", "fused")
         loss_config = resolve_loss_config(kwargs["loss_fn"], implementation)
-        tv_loss_fn = resolve_loss_config("tv", implementation)["tv"][0]
         shared = {
             "loss_config": loss_config,
-            "tv_loss_fn": tv_loss_fn,
             "gamma": kwargs.get("dflash_decay_gamma", 4.0),
             "max_anchors": kwargs.get("max_anchors", 512),
             "per_position_loss_weight": kwargs.get(
@@ -138,7 +136,6 @@ class DFlash2DraftModel(DFlashDraftModel):
         document_ids: torch.Tensor,  # shape: [1, total_seq_len]
         position_ids: torch.Tensor | None = None,  # shape: [1, total_seq_len]
         loss_config: LossConfig | None = None,
-        tv_loss_fn: Callable[[torch.Tensor, torch.Tensor], torch.Tensor] = tv_loss,
         gamma: float = 4.0,
         max_anchors: int = 512,
         selector_loss_alpha: float = 1.0,
@@ -167,17 +164,28 @@ class DFlash2DraftModel(DFlashDraftModel):
         training_candidate_ids, target_positions, contains_target = (
             selector_training_candidates(candidate_ids, target_ids)
         )
-        candidate_logits = self.candidate_selector.score_candidates(
+        # Training can replace the last candidate with the teacher target.
+        # Also score that original candidate for the reference metric, sharing
+        # the selector projection and adding just one candidate dot.
+        scored_logits = self.candidate_selector.score_candidates(
             unary_logits,
             hidden,
             predecessor_ids.reshape(1, -1),
-            training_candidate_ids,
+            torch.cat([training_candidate_ids, candidate_ids[..., -1:]], dim=-1),
         )
+        candidate_logits = scored_logits[..., :-1]
+        with torch.no_grad():
+            original_scores = torch.cat(
+                [candidate_logits.detach()[..., :-1], scored_logits.detach()[..., -1:]],
+                dim=-1,
+            )
+            pred_ids = candidate_ids.gather(
+                -1, original_scores.argmax(dim=-1, keepdim=True)
+            ).squeeze(-1)
 
         loss, metrics = compute_metrics(
             unary_logits=unary_logits,
             targets=targets,
-            training_candidate_ids=training_candidate_ids,
             candidate_logits=candidate_logits,
             target_positions=target_positions,
             contains_target=contains_target,
@@ -186,10 +194,21 @@ class DFlash2DraftModel(DFlashDraftModel):
             top_k=self.candidate_selector.top_k,
             sample_from_anchor=self.config.sample_from_anchor,
             loss_config=loss_config or _DEFAULT_LOSS_CONFIG,
-            tv_loss_fn=tv_loss_fn,
             gamma=gamma,
             selector_loss_alpha=selector_loss_alpha,
             per_position_loss_weight=per_position_loss_weight,
             dpace_alpha=dpace_alpha,
+        )
+        metrics.update(
+            compute_block_reference_metrics(
+                pred_ids,
+                input_ids,
+                block_indices,
+                aligned_loss_mask,
+                loss_mask,
+                document_ids,
+                self.block_size,
+                self.config.sample_from_anchor,
+            )
         )
         return None, loss, metrics

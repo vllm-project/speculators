@@ -9,6 +9,7 @@ from speculators.config import SpeculatorsConfig, VerifierConfig
 from speculators.losses import LossConfig, resolve_loss_config
 from speculators.model import SpeculatorModel
 from speculators.models.eagle3.core import Eagle3DraftModel
+from speculators.models.metrics import compute_sampled_reference_metrics
 from speculators.models.peagle.attention import create_peagle_mask_mod
 from speculators.models.peagle.config import PEagleSpeculatorConfig
 from speculators.models.peagle.data import generate_cod_sample_indices
@@ -193,14 +194,26 @@ class PEagleDraftModel(Eagle3DraftModel):
 
         targets = targets[:, orig_positions, :]  # [1, total_sampled, vocab_size]
 
+        pred_ids = logits.detach().argmax(dim=-1)
         loss, metrics = compute_metrics(
             logits=logits,
             targets=targets,
             loss_mask=loss_mask,
             anchor_pos=anchor_pos,
             depth=depth,
-            num_depths=num_depths,
             loss_config=loss_config,
+        )
+        metrics.update(
+            compute_sampled_reference_metrics(
+                pred_ids,
+                input_ids,
+                anchor_pos,
+                depth,
+                num_depths,
+                loss_mask,
+                document_ids,
+                self.d2t,
+            )
         )
 
         return None, loss, metrics
