@@ -10,6 +10,8 @@ from transformers import AutoConfig
 
 __all__ = [
     "build_vocab_mappings_from_distribution",
+    "combine_token_frequency_distributions",
+    "get_target_vocab_size",
     "save_token_frequency_distribution",
 ]
 
@@ -17,15 +19,19 @@ __all__ = [
 def save_token_frequency_distribution(
     dataset: HFDataset,
     output_path: Path | str = "./token_freq.pt",
-):
+) -> None:
     """Save token frequency distribution from the dataset.
+
+    Only tokens where ``loss_mask`` is 1 (assistant tokens) are counted. If
+    ``output_path`` already exists, the dataset is skipped and the existing
+    file is left untouched.
 
     Args:
         dataset: HuggingFace dataset with input_ids and loss_mask
         output_path: Path where to save the token frequency distribution
 
     Returns:
-        Path to the saved frequency distribution file
+        None. The frequency distribution is written to ``output_path``.
     """
     path = Path(output_path)
     if path.exists():
@@ -49,12 +55,22 @@ def save_token_frequency_distribution(
 def combine_token_frequency_distributions(
     token_freq_paths: list[str | Path],
     output_path: str | Path,
-):
-    """Combine multiple token frequency distributions into a single file."""
-    token_freq_dicts = [
+) -> None:
+    """Combine multiple token frequency distributions into a single file.
+
+    Args:
+        token_freq_paths: Paths of token frequency files, as written by
+            :func:`save_token_frequency_distribution`.
+        output_path: Path where to save the combined frequency distribution.
+
+    Returns:
+        None. The combined frequency distribution is written to
+        ``output_path``.
+    """
+    token_freq_dicts: list[dict[int, int]] = [
         torch.load(path, weights_only=True) for path in token_freq_paths
     ]
-    combined_token_freq: Counter[str] = Counter()
+    combined_token_freq: Counter[int] = Counter()
     for token_freq_dict in token_freq_dicts:
         combined_token_freq.update(token_freq_dict)
     combined_token_freq_dict = dict(combined_token_freq)
@@ -97,21 +113,38 @@ def build_vocab_mappings_from_distribution(
 
 
 def get_target_vocab_size(
-    target_vocab_size,
-    target_model_path,
+    target_vocab_size: int | None,
+    target_model_path: str | Path | None,
     trust_remote_code: bool = False,
-):
-    has_vocab = target_vocab_size is not None
-    has_model = target_model_path is not None
+) -> int:
+    """Resolve the vocabulary size of the target (verifier) model.
 
-    if has_vocab and has_model:
+    Exactly one of ``target_vocab_size`` and ``target_model_path`` must be
+    provided. When a model path is given, the vocabulary size is read from
+    the model config, unwrapping ``text_config`` for multimodal models.
+
+    Args:
+        target_vocab_size: Explicit vocabulary size of the target model.
+        target_model_path: Path or model name of the target model to load
+            the config from.
+        trust_remote_code: Whether to trust remote code when loading the
+            model config.
+
+    Returns:
+        The target model's vocabulary size.
+
+    Raises:
+        ValueError: If both or neither of ``target_vocab_size`` and
+            ``target_model_path`` are provided.
+    """
+    if target_vocab_size is not None and target_model_path is not None:
         raise ValueError("Cannot specify both target-vocab-size and target-model-path")
 
-    if not has_vocab and not has_model:
-        raise ValueError("Must specify either target-vocab-size or target-model-path")
-
-    if has_vocab:
+    if target_vocab_size is not None:
         return target_vocab_size
+
+    if target_model_path is None:
+        raise ValueError("Must specify either target-vocab-size or target-model-path")
 
     config = AutoConfig.from_pretrained(
         target_model_path,
