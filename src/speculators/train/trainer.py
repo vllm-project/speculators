@@ -527,7 +527,7 @@ class Trainer:
                 metrics = {k: v.item() for k, v in metrics.items()}
                 world_size = dist.get_world_size() if self.is_distributed else 1
                 reference_counts = {
-                    k: v
+                    k: int(v)
                     for k, v in metrics.items()
                     if k.startswith("reference_prefix_acc_")
                 }
@@ -619,7 +619,7 @@ class Trainer:
         world_size = dist.get_world_size() if self.is_distributed else 1
         # Retain pooled counts before batch averaging for later plotting/reduction.
         reference_counts = {
-            k: v
+            k: int(v)
             for k, v in val_metrics.items()
             if k.startswith("reference_prefix_acc_")
         }
