@@ -31,6 +31,13 @@ Validation rates after the third epoch, with the eligible-start count behind eac
 | dflash2 | 0.579 | 108k | 0.296 | 108k | 0.148 | 108k |
 | dspark  | 0.617 | 108k | 0.335 | 108k | 0.177 | 108k |
 
+Every logged point behind these figures is committed as
+[`training_metrics_curves.csv`](../assets/training_metrics_curves.csv) -- both splits,
+all three positions, each rate with the `sum` and `total` counts behind it -- and
+[`training_metrics_plot.py`](../assets/training_metrics_plot.py) redraws them from that
+file alone, with only matplotlib and the standard library:
+`python docs/assets/training_metrics_plot.py`.
+
 ### Reading these curves
 
 The counts are part of the reading, which is why they are logged and shown. Three
