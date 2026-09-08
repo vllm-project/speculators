@@ -524,6 +524,14 @@ class DSparkArgs(_Group):
     confidence_head_alpha: float = Field(
         default=1.0, description="DSpark: weight of the confidence-head BCE term."
     )
+    anchor_chunk_size: int = Field(
+        default=0,
+        ge=0,
+        description="DSpark: chunk size (in anchors) for memory-efficient loss "
+        "and acceptance-rate computation in DSpark metrics. Processes this "
+        "many anchors at a time to bound peak memory. Set to 0 to disable "
+        "chunking (use full computation, higher memory). (default: 0)",
+    )
 
 
 class PEagleArgs(_Group):
