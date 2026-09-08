@@ -73,7 +73,7 @@ torchrun --standalone --nproc_per_node=4 -m speculators.train \
 
 - **`--on-generate`** (choice: `delete`, default: `"delete"`) Behavior after generating new hidden states (only applies if `--on-missing=generate`). Generated hidden states are always deleted after loading. Retained for backwards compatibility with existing command lines.
 
-- **`--hidden-states-path`** (str, default: `{data-path}/hidden_states`) Path where cached hidden states files are stored (or will be stored if generating).
+- **`--hidden-states-path`** (str, default: `{data-path}/hidden_states`) Path where pre-generated hidden-state files are stored.
 
 - **`--vllm-endpoint`** (str, default: `"http://localhost:8000/v1"`) vLLM endpoint address for generating hidden states on-demand (online training). Ignored if `--on-missing` is not set to `generate`.
 

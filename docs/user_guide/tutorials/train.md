@@ -94,6 +94,7 @@ Note: if you are using an experiment tracker (e.g. trackio, wandb, tensorboard, 
 - Python 3.10+
 - One or more accelerators (NVIDIA GPU, AMD GPU, or Ascend NPU)
 - For offline mode, disk space for the cached hidden states -- see [Estimating Disk Space](#estimating-disk-space-requirements)
+- For DFlash2 serving, use a vLLM build that supports DFlash2 checkpoints in Speculators format.
 - For MTP, a verifier with native MTP layers (e.g. `Qwen/Qwen3.5-9B`, `Qwen/Qwen3.5-0.8B`)
 
 ## Step 1: Prepare Your Data
@@ -696,11 +697,11 @@ Measured on four H100s with the offline commands above -- `Qwen/Qwen3-8B`, the `
 | DFlash2   | 7                     | 1.90              | 52.1%                 | 20 min        |
 | DSpark    | 8                     | 2.02              | 54.2%                 | 17 min        |
 
-DFlash2 differs from the other three rows in two ways, both forced rather than chosen. It requires the full verifier vocabulary, so it trains a 151936-token output layer where the others use the pruned 32000-token one -- which also means it needs a `--data-path` without the `t2d.npy` / `d2t.npy` written by Step 1, since those files set the draft vocabulary and override the CLI. And it was served on vLLM 0.28.1, the first version with DFlash2 support; the other three rows were served on 0.27.1.
+DFlash2 differs from the other three rows in two ways, both forced rather than chosen. It requires the full verifier vocabulary, so it trains a 151936-token output layer where the others use the pruned 32000-token one -- which also means it needs a `--data-path` without the `t2d.npy` / `d2t.npy` written by Step 1, since those files set the draft vocabulary and override the CLI. It was served on vLLM 0.28.1; the other three rows were served on 0.27.1.
 
 Acceptance length is the number of tokens accepted per verifier step, so it is the figure that tracks end-to-end speedup. Compare algorithms on it rather than on the raw accepted/drafted ratio, which falls as a drafter proposes more tokens per step.
 
-End to end on a four-GPU node: about 17 seconds to prepare the data, 56 minutes to generate hidden states, and 15-20 minutes to train each speculator. Because all four read the same hidden-state cache, the four checkpoints together take under two hours.
+End to end on a four-GPU node: about 17 seconds to prepare the data, 56 minutes to generate hidden states, and 15-20 minutes to train each speculator. Including the shared hidden-state generation pass, training all four speculators sequentially takes about 2 hours 7 minutes.
 
 ## Estimating Disk Space Requirements
 
