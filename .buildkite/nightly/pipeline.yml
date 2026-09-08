@@ -1,0 +1,17 @@
+steps:
+  - label: ":crescent_moon: Speculators Nightly Tests"
+    command: |
+      RUNNER=$$(buildkite-agent meta-data get "test-runner" --default "H100")
+      echo "╔══════════════════════════════════════════╗"
+      echo "║       NIGHTLY BUILD SUMMARY              ║"
+      echo "╠══════════════════════════════════════════╣"
+      echo "║ Triggered by : $${BUILDKITE_BUILD_CREATOR}"
+      echo "║ Source        : $${BUILDKITE_SOURCE}"
+      echo "║ Branch        : $${BUILDKITE_BRANCH}"
+      echo "║ Commit        : $${BUILDKITE_COMMIT:0:8}"
+      echo "║ PR            : $${BUILDKITE_PULL_REQUEST:-none}"
+      echo "║ GPU Runner    : $${RUNNER}"
+      echo "╚══════════════════════════════════════════╝"
+
+      echo "--- Uploading nightly tests pipeline"
+      buildkite-agent pipeline upload .buildkite/nightly/nightly-$${RUNNER}.yml
