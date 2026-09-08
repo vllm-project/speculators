@@ -138,6 +138,7 @@ class TrainerConfig(NamedTuple):
     hidden_states_dtype: torch.dtype = torch.bfloat16
     log_freq: int = 1
     fsdp_shard: bool = False
+    gradient_checkpointing: bool = False
     max_steps: int | None = None
 
 
@@ -296,6 +297,15 @@ class Trainer:
     def setup_model(self):
         # Verify model is compatible with training infrastructure
         SpeculatorModel.verify_training_compatible(self.model)
+
+        # Enable gradient checkpointing BEFORE FSDP/DDP wrapping to save
+        # activation memory at the cost of recomputation during backward.
+        # Each decoder layer's forward is checkpointed: only the layer input
+        # is saved for backward; intermediate activations (MLP, attention)
+        # are recomputed. Saves ~10 GB for 5-layer DSpark with 32K seq.
+        if self.config.gradient_checkpointing:
+            self.model.gradient_checkpointing_enable()
+            root_logger.info("Gradient checkpointing enabled")
 
         load_checkpoint = (
             self.resume_from_checkpoint and self.checkpointer.previous_epoch != -1
