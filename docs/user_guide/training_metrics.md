@@ -6,7 +6,7 @@ A start is counted only when every prediction through position *i* is available 
 
 ## Example curves
 
-These runs use Qwen3-8B on `tutorial_regen` for three epochs. Each panel shows the fraction of eligible starts with a matching prefix, smoothed over five logged steps. Higher is better. Labels show each curve’s final smoothed value.
+These runs use Qwen3-8B on the `tutorial_regen` split of [inference-optimization/speculators-ci-datasets](https://huggingface.co/datasets/inference-optimization/speculators-ci-datasets) for three epochs. Each panel shows the fraction of eligible starts with a matching prefix, smoothed over five logged steps. Higher is better. Labels show each curve’s final smoothed value.
 
 ![Training agreement for the first token, first two tokens, and first three tokens across five drafters.](../assets/training_metrics_prefix_agreement.png)
 
@@ -14,16 +14,10 @@ Sampling and training conditioning differ between drafters, so controlled compar
 
 ## Agreement with serving
 
-We evaluated the same five checkpoints with vLLM on `RedHatAI/speculator_benchmarks`. The validation columns below report reference-prefix agreement on `tutorial_regen`.
+We evaluated the same five checkpoints with vLLM on [RedHatAI/speculator_benchmarks](https://huggingface.co/datasets/RedHatAI/speculator_benchmarks). Validation reference agreement comes from the dataset used for the training curves above.
 
 `acceptance_at_pos_i` and `reference_acc_at_pos_i` both measure prefixes through zero-based position *i*. Serving counts accepted prefixes over all drafts; validation counts reference matches over eligible starts.
 
-| drafter | validation 0 | serve 0 | validation 1 | serve 1 | validation 2 | serve 2 |
-| ------- | ------------ | ------- | ------------ | ------- | ------------ | ------- |
-| eagle3  | 0.558        | 0.466   | 0.299        | 0.203   | 0.161        | 0.085   |
-| peagle  | 0.639        | 0.565   | 0.237        | 0.165   | 0.073        | 0.030   |
-| dflash  | 0.605        | 0.533   | 0.310        | 0.225   | 0.153        | 0.081   |
-| dflash2 | 0.579        | 0.482   | 0.296        | 0.195   | 0.148        | 0.072   |
-| dspark  | 0.617        | 0.536   | 0.335        | 0.245   | 0.177        | 0.102   |
+![Paired validation and serving rates for five drafters, sorted by rank at each prefix length.](../assets/training_metrics_serving_comparison.png)
 
-Across these five checkpoints, validation prefix agreement and serving acceptance produce the same ranking at all three positions. This supports using the metric as an ordering signal in this experiment. Absolute rates differ across the datasets and evaluation settings. These serving runs do not measure training overhead.
+Rows are ordered by validation rate; serving gives the same ordering in each panel. This supports the metric as an ordering signal in this experiment. Absolute rates differ across datasets and settings; these serving runs do not measure training overhead.
