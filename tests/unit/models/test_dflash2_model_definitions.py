@@ -537,8 +537,8 @@ def test_reference_prefix_uses_original_candidates(monkeypatch):
         max_anchors=1,
     )
     assert all(
-        metrics[f"reference_prefix_acc_{i}_{kind}"] == 1
-        for i in range(1, 5)
+        metrics[f"reference_acc_at_pos_{i}_{kind}"] == 1
+        for i in range(4)
         for kind in ("sum", "total")
     )
 

@@ -529,7 +529,7 @@ class Trainer:
                 reference_counts = {
                     k: int(v)
                     for k, v in metrics.items()
-                    if k.startswith("reference_prefix_acc_")
+                    if k.startswith("reference_acc_at_pos_")
                 }
                 metrics = normalize_counted_metrics(metrics, world_size)
                 metrics.update(reference_counts)
@@ -621,7 +621,7 @@ class Trainer:
         reference_counts = {
             k: int(v)
             for k, v in val_metrics.items()
-            if k.startswith("reference_prefix_acc_")
+            if k.startswith("reference_acc_at_pos_")
         }
         val_metrics = {k: v / num_batches for k, v in val_metrics.items()}
         val_metrics = normalize_counted_metrics(val_metrics, world_size)

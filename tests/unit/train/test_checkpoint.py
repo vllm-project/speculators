@@ -221,9 +221,9 @@ def test_save_and_load_val_metrics(tmp_path: Path):
     (tmp_path / "0").mkdir()
     metrics = {
         "loss_epoch": 0.123456,
-        "reference_prefix_acc_1_epoch": 0.5,
-        "reference_prefix_acc_1_sum_epoch": 2.0,
-        "reference_prefix_acc_1_total_epoch": 4.0,
+        "reference_acc_at_pos_0_epoch": 0.5,
+        "reference_acc_at_pos_0_sum_epoch": 2.0,
+        "reference_acc_at_pos_0_total_epoch": 4.0,
     }
     cp.save_val_metrics(0, metrics)
     assert json.loads(cp.val_metrics_path(0).read_text()) == metrics
@@ -232,7 +232,7 @@ def test_save_and_load_val_metrics(tmp_path: Path):
 
     # Save better metrics for epoch 1 and update best
     (tmp_path / "1").mkdir()
-    cp.save_val_metrics(1, {"loss_epoch": 0.05, "reference_prefix_acc_1_epoch": 0.7})
+    cp.save_val_metrics(1, {"loss_epoch": 0.05, "reference_acc_at_pos_0_epoch": 0.7})
     cp.update_best_symlink(1)
     assert cp.load_best_val_loss() == pytest.approx(0.05)
 
@@ -241,7 +241,7 @@ def test_best_val_loss_restored_on_resume(tmp_path: Path):
     (tmp_path / "4").mkdir()
 
     cp = SingleGPUCheckpointer(str(tmp_path))
-    cp.save_val_metrics(4, {"loss_epoch": 0.42, "reference_prefix_acc_1_epoch": 0.6})
+    cp.save_val_metrics(4, {"loss_epoch": 0.42, "reference_acc_at_pos_0_epoch": 0.6})
     cp.update_best_symlink(4)
 
     trainer = Trainer.__new__(Trainer)

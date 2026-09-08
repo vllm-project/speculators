@@ -146,8 +146,8 @@ def test_reference_rates_retain_raw_counts_after_batch_and_rank_reduction(
                 "loss_sum": torch.tensor(2.0),
                 "loss_total": torch.tensor(1.0),
                 "loss_step_0": torch.tensor(3.0),
-                "reference_prefix_acc_1_sum": torch.tensor(correct),
-                "reference_prefix_acc_1_total": torch.tensor(total),
+                "reference_acc_at_pos_0_sum": torch.tensor(correct),
+                "reference_acc_at_pos_0_total": torch.tensor(total),
             },
         )
         for correct, total in counts
@@ -164,7 +164,7 @@ def test_reference_rates_retain_raw_counts_after_batch_and_rank_reduction(
     assert metrics == {
         "loss_epoch": 2.0,
         "loss_step_0_epoch": 3.0,
-        "reference_prefix_acc_1_epoch": rate,
-        "reference_prefix_acc_1_sum_epoch": correct,
-        "reference_prefix_acc_1_total_epoch": total,
+        "reference_acc_at_pos_0_epoch": rate,
+        "reference_acc_at_pos_0_sum_epoch": correct,
+        "reference_acc_at_pos_0_total_epoch": total,
     }

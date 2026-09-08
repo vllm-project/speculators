@@ -60,8 +60,8 @@ def test_reference_counts_reach_console_without_rounding(split):
         {
             "loss_sum": torch.tensor(0.5),
             "loss_total": torch.tensor(1.0),
-            "reference_prefix_acc_1_sum": torch.tensor(12345.0),
-            "reference_prefix_acc_1_total": torch.tensor(654321.0),
+            "reference_acc_at_pos_0_sum": torch.tensor(12345.0),
+            "reference_acc_at_pos_0_total": torch.tensor(654321.0),
         },
     )
     loader = MagicMock()
@@ -90,8 +90,8 @@ def test_reference_counts_reach_console_without_rounding(split):
     record.msg = log.call_args.args[0]
     suffix = "_epoch" if split == "val" else ""
     metrics = record.msg[split]
-    assert metrics[f"reference_prefix_acc_1{suffix}"] == pytest.approx(12345 / 654321)
+    assert metrics[f"reference_acc_at_pos_0{suffix}"] == pytest.approx(12345 / 654321)
     FormatDictFilter().filter(record)
-    assert f"{split}/reference_prefix_acc_1_sum{suffix}=24690" in record.msg
-    assert f"{split}/reference_prefix_acc_1_total{suffix}=1308642" in record.msg
+    assert f"{split}/reference_acc_at_pos_0_sum{suffix}=24690" in record.msg
+    assert f"{split}/reference_acc_at_pos_0_total{suffix}=1308642" in record.msg
     assert f"{split}/loss{suffix}=0.500" in record.msg

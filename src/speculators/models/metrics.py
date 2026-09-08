@@ -20,8 +20,8 @@ def compute_reference_prefix_metrics(
 ) -> dict[str, torch.Tensor]:
     """Count complete matching prefixes at every configured draft position.
 
-    Position i uses starts with i observed, supervised references in the anchor's
-    document. Eligibility is independent of whether predictions match.
+    Zero-based position i uses starts with i+1 observed, supervised references
+    in the anchor's document. Eligibility is independent of prediction matches.
     ``d2t`` stores offsets: verifier_id = draft_id + d2t[draft_id].
     """
     horizon = pred_ids.shape[-1]
@@ -54,7 +54,7 @@ def compute_reference_prefix_metrics(
     correct = prefix_correct.sum(dim=(0, 1))
     total = prefix_valid.float().sum(dim=(0, 1))
     return {
-        f"reference_prefix_acc_{i + 1}_{kind}": values[i]
+        f"reference_acc_at_pos_{i}_{kind}": values[i]
         for i in range(horizon)
         for kind, values in (("sum", correct), ("total", total))
     }

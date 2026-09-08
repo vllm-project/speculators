@@ -38,8 +38,8 @@ def test_forward_output_structure(mtp_model, seed):
         "loss_total",
     }
     expected_keys |= {
-        f"reference_prefix_acc_{i}_{kind}"
-        for i in range(1, num_steps + 1)
+        f"reference_acc_at_pos_{i}_{kind}"
+        for i in range(num_steps)
         for kind in ("sum", "total")
     }
     assert set(metrics.keys()) == expected_keys
@@ -52,8 +52,8 @@ def test_forward_output_structure(mtp_model, seed):
         prefix_matches &= logits.argmax(-1).eq(
             input_ids[:, step + 2 : step + 2 + expected_len]
         )
-        assert metrics[f"reference_prefix_acc_{step + 1}_sum"] == prefix_matches.sum()
-        assert metrics[f"reference_prefix_acc_{step + 1}_total"] == expected_len
+        assert metrics[f"reference_acc_at_pos_{step}_sum"] == prefix_matches.sum()
+        assert metrics[f"reference_acc_at_pos_{step}_total"] == expected_len
 
 
 # ===== Loss masking =====
@@ -75,7 +75,7 @@ class TestLossMasking:
                 loss_mask=loss_mask,
             )
         assert total_loss == 0.0
-        assert all(metrics[f"reference_prefix_acc_{i}_total"] == 0 for i in range(1, 4))
+        assert all(metrics[f"reference_acc_at_pos_{i}_total"] == 0 for i in range(3))
 
     def test_partial_mask_changes_loss(self, mtp_model, seed):
         """Masking some positions should change the loss vs no mask."""
@@ -126,7 +126,7 @@ def test_mtp_references_exclude_hidden_state_from_previous_document(mtp_model):
         hidden_states=torch.randn(1, 12, mtp_model.config.hidden_size),
         document_ids=torch.tensor([[0] * 5 + [1] * 5 + [-1] * 2]),
     )
-    assert [metrics[f"reference_prefix_acc_{i}_total"] for i in range(1, 4)] == [
+    assert [metrics[f"reference_acc_at_pos_{i}_total"] for i in range(3)] == [
         6,
         4,
         2,
@@ -140,9 +140,9 @@ def test_short_mtp_sequence_counts_only_observed_positions(mtp_model, seq_len):
         hidden_states=torch.zeros(1, seq_len, mtp_model.config.hidden_size),
     )
     assert len(logits) == max(0, seq_len - 2)
-    assert metrics["reference_prefix_acc_1_total"] == int(seq_len == 3)
+    assert metrics["reference_acc_at_pos_0_total"] == int(seq_len == 3)
     assert (
-        metrics["reference_prefix_acc_2_total"]
-        == metrics["reference_prefix_acc_3_total"]
+        metrics["reference_acc_at_pos_1_total"]
+        == metrics["reference_acc_at_pos_2_total"]
         == 0
     )

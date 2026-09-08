@@ -13,9 +13,9 @@ from speculators.train.utils import normalize_counted_metrics
 
 def _assert_counts(metrics, expected):
     assert len(metrics) == 2 * len(expected)
-    for position, (correct, total) in enumerate(expected, 1):
-        assert metrics[f"reference_prefix_acc_{position}_sum"] == correct
-        assert metrics[f"reference_prefix_acc_{position}_total"] == total
+    for position, (correct, total) in enumerate(expected):
+        assert metrics[f"reference_acc_at_pos_{position}_sum"] == correct
+        assert metrics[f"reference_acc_at_pos_{position}_total"] == total
 
 
 @pytest.mark.parametrize(
@@ -36,8 +36,8 @@ def test_prefix_correlation_and_batch_rank_pooling(predictions, second_correct):
     combined = {key: sum(part[key].item() for part in parts) for key in parts[0]}
     _assert_counts(combined, [(1, 2), (second_correct, 2)])
     assert normalize_counted_metrics(combined, world_size=3) == {
-        "reference_prefix_acc_1": 0.5,
-        "reference_prefix_acc_2": second_correct / 2,
+        "reference_acc_at_pos_0": 0.5,
+        "reference_acc_at_pos_1": second_correct / 2,
     }
 
 
