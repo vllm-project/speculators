@@ -1,7 +1,7 @@
 import logging
 import warnings
 from copy import deepcopy
-from functools import lru_cache, partial
+from functools import cache, partial
 
 import torch
 from transformers import AutoConfig, PretrainedConfig
@@ -30,7 +30,7 @@ GEMMA_STYLE_FINAL_NORM_MODEL_TYPES = frozenset(
 )
 
 
-@lru_cache(maxsize=None)
+@cache
 def _verifier_model_type(name_or_path: str) -> str | None:
     """The verifier's effective model_type, or None when unresolvable."""
     try:
@@ -45,8 +45,8 @@ def _verifier_model_type(name_or_path: str) -> str | None:
     return str(getattr(verifier_config, "model_type", "") or "").lower()
 
 
-def uses_gemma_style_final_norm(config) -> bool:  # noqa: ANN001
-    """Whether the verifier's final norm is `x_norm * (1 + w)` rather than `x_norm * w`."""
+def uses_gemma_style_final_norm(config) -> bool:
+    """Whether the verifier's final norm applies gain ``1 + w`` (not ``w``)."""
     verifier = getattr(getattr(config, "speculators_config", None), "verifier", None)
     name_or_path = getattr(verifier, "name_or_path", None)
     if not name_or_path:
@@ -55,7 +55,7 @@ def uses_gemma_style_final_norm(config) -> bool:  # noqa: ANN001
     return model_type is not None and model_type in GEMMA_STYLE_FINAL_NORM_MODEL_TYPES
 
 
-def resolve_verifier_norm_class(config) -> type:  # noqa: ANN001
+def resolve_verifier_norm_class(config) -> type:
     """The RMSNorm class matching the verifier's final-norm weight convention.
 
     The frozen ``verifier_norm`` must apply the same gain convention the

@@ -20,12 +20,21 @@ from transformers.models.gemma3.modeling_gemma3 import Gemma3RMSNorm
 from transformers.models.qwen3.modeling_qwen3 import Qwen3RMSNorm
 
 from speculators.models.dflash.core import DFlashDraftModel
-from speculators.models.utils import resolve_verifier_norm_class, uses_gemma_style_final_norm
+from speculators.models.utils import (
+    resolve_verifier_norm_class,
+    uses_gemma_style_final_norm,
+)
 
-from .test_checkpoint_key_ownership import _fake_verifier, _make_fake_loader, _make_model
+from .test_checkpoint_key_ownership import (
+    _fake_verifier,
+    _make_fake_loader,
+    _make_model,
+)
 
 
-def _point_at_fake_verifier(model, tmp_path, model_type: str, text_model_type: str = ""):
+def _point_at_fake_verifier(
+    model, tmp_path, model_type: str, text_model_type: str = ""
+):
     """Point the model's verifier at a fake checkpoint dir with this model_type."""
     verifier_dir = tmp_path / model_type / text_model_type
     verifier_dir.mkdir(parents=True)
@@ -70,11 +79,15 @@ def test_detection_by_verifier_model_type(
 
 def test_unresolvable_verifier_defaults_to_plain(monkeypatch: pytest.MonkeyPatch):
     """A verifier config AutoConfig cannot resolve keeps the plain convention."""
+
+    def _raise(*args, **kwargs):
+        raise OSError("cannot resolve")
+
     monkeypatch.setattr(
         "speculators.models.utils.AutoConfig.from_pretrained",
-        lambda *args, **kwargs: (_ for _ in ()).throw(OSError("cannot resolve")),
+        _raise,
     )
-    model = _make_model(DFlashDraftModel, draft_vocab_size=64)  # verifier name_or_path="dummy"
+    model = _make_model(DFlashDraftModel, draft_vocab_size=64)
     assert uses_gemma_style_final_norm(model.config) is False
     assert isinstance(model.verifier_norm, Qwen3RMSNorm)
 
@@ -85,7 +98,9 @@ def test_plain_construction_unchanged():
     assert isinstance(model.verifier_norm, Qwen3RMSNorm)
 
 
-@pytest.mark.parametrize("model_type", ["qwen3_5", "gemma3_text"], ids=["qwen3_5", "gemma3"])
+@pytest.mark.parametrize(
+    "model_type", ["qwen3_5", "gemma3_text"], ids=["qwen3_5", "gemma3"]
+)
 def test_gemma_style_construction_swaps_class(
     tmp_path, monkeypatch: pytest.MonkeyPatch, model_type: str
 ):
