@@ -76,15 +76,25 @@ def _load_subset_records(dataset: str, subset: str) -> list[dict]:
         return [json.loads(line) for line in f if line.strip()]
 
 
-def _to_request(subset: str, index: int, record: dict, max_new_tokens: int) -> Request:
+def _to_request(
+    subset: str, source_index: int, record: dict, max_new_tokens: int
+) -> Request:
+    """Build one request, tagging it with a stable pointer back to its source row.
+
+    ``source_index`` is the record's position in ``<subset>.jsonl`` (not the
+    sampled order), so any downstream report can recover the full prompt with a
+    direct ``jsonl[source_index]`` lookup -- no need to replay the sampler. The
+    ``prompt_sha`` lets that lookup self-verify against dataset drift.
+    """
     prompt = str(record["prompt"])
     return Request(
         messages=[{"role": "user", "content": prompt}],
         max_tokens=max_new_tokens,
-        request_id=f"{subset}-{index}",
+        request_id=f"{subset}-{source_index}",
         metadata={
             "subset": subset,
-            "index": index,
+            "source_index": source_index,
+            "prompt_sha": stable_hash(prompt)[:16],
             "question_id": record.get("question_id") or record.get("task_id"),
             "category": record.get("category"),
             "prompt_preview": " ".join(prompt[:PROMPT_PREVIEW_CHARS].split()),
@@ -104,20 +114,22 @@ def _select_mixed(
 
     Within a subset, records are ranked by a stable content hash and the lowest
     ``samples_per_subset`` are kept -- reproducible and independent of load
-    order. The kept requests from every subset are then interleaved by a stable
-    hash of their id so the concurrent run exercises all subsets at once rather
-    than subset-by-subset.
+    order. Each kept request keeps its *source* row index (its position in
+    ``<subset>.jsonl``, not the sampled order), so a report can recover the full
+    prompt by a direct lookup. The kept requests from every subset are then
+    interleaved by a stable hash of their id so the concurrent run exercises all
+    subsets at once rather than subset-by-subset.
     """
     selected: list[Request] = []
     for subset in subsets:
         records = _load_subset_records(dataset, subset)
         ranked = sorted(
-            records,
-            key=lambda r: stable_hash(f"{selection_seed}:{subset}:{r['prompt']}"),
+            enumerate(records),
+            key=lambda ir: stable_hash(f"{selection_seed}:{subset}:{ir[1]['prompt']}"),
         )
         kept = ranked[:samples_per_subset]
         selected.extend(
-            _to_request(subset, i, rec, max_new_tokens) for i, rec in enumerate(kept)
+            _to_request(subset, src, rec, max_new_tokens) for src, rec in kept
         )
         logger.info("  %s: %d/%d records", subset, len(kept), len(records))
     selected.sort(key=lambda req: stable_hash(req.request_id))
