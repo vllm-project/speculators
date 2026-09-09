@@ -4,12 +4,22 @@
 Modes:
     throughput   Max throughput run for acceptance rates
     sweep        Full pipeline (gen-len, sweep, CSV)
+    long-context Per-request acceptance vs. context length via OpenAI's MRCR
+                 dataset. Deterministically samples a superset-monotonic set
+                 stratified across MRCR's native token bins, records every
+                 request to a Parquet table, and reports acceptance binned by
+                 context length. Requires the server started with
+                 --per-request-spec-decode-metrics detailed and the render
+                 endpoint enabled (VLLM_ENABLE_SCALE_OUT_ENDPOINTS=1).
 
 Examples:
     python evaluate.py --target http://localhost:8000/v1 throughput
     python evaluate.py --target http://localhost:8000/v1 sweep
     python evaluate.py --target http://localhost:8000/v1 sweep \\
         --subsets "HumanEval,qa" --gen-kwargs '{"temperature":0.6}'
+
+    python evaluate.py --target http://localhost:8000/v1 long-context \\
+        --samples-per-bin 20
 
     # SPEED-Bench (run prepare_speedbench.py once first to split data):
     python evaluate.py --target http://localhost:8000/v1 throughput \\
@@ -63,6 +73,9 @@ DEFAULT_SUBSETS = (
 )
 DEFAULT_MAX_CONCURRENCY = 128
 DEFAULT_MAX_REQUESTS = 200
+# long-context: records selected per native MRCR token bin (density/cost knob).
+DEFAULT_SAMPLES_PER_BIN = 20
+DEFAULT_POSITION_BIN_SIZE = 256
 DEFAULT_GEN_LEN_RATE = 128
 DEFAULT_SWEEP_RATE = 10
 DEFAULT_DATA_COLUMN_MAPPER = (
@@ -78,7 +91,8 @@ _SPEEDBENCH_COLUMN_MAPPER = (
 )
 
 
-def _fetch_model_name(target: str) -> str | None:
+def _fetch_model_info(target: str) -> dict | None:
+    """Return the first ``/v1/models`` entry (has ``id`` and ``max_model_len``)."""
     base = target.rstrip("/")
     if not base.endswith("/v1"):
         base += "/v1"
@@ -88,10 +102,15 @@ def _fetch_model_name(target: str) -> str | None:
             data = json.loads(resp.read())
         models = data.get("data", [])
         if models:
-            return models[0].get("id")
+            return models[0]
     except (URLError, json.JSONDecodeError, OSError) as e:
-        logger.warning("Could not fetch model name from %s: %s", url, e)
+        logger.warning("Could not fetch model info from %s: %s", url, e)
     return None
+
+
+def _fetch_model_name(target: str) -> str | None:
+    info = _fetch_model_info(target)
+    return info.get("id") if info else None
 
 
 def _sanitize_dir_name(name: str) -> str:
@@ -281,16 +300,41 @@ def _run_subset(
     return acceptance_csv, perf_csv, max_tokens if is_sweep else None
 
 
+def _run_long_context(args: argparse.Namespace, output_dir: Path) -> None:
+    # Imported lazily so throughput/sweep runs don't pull the long-context deps
+    # (pandas, pyarrow, huggingface_hub).
+    from mrcr import run_mrcr  # noqa: PLC0415
+
+    run_mrcr(
+        target=args.target,
+        model_info=_fetch_model_info(args.target),
+        output_dir=output_dir,
+        max_concurrency=args.max_concurrency,
+        samples_per_bin=args.samples_per_bin,
+        selection_seed=args.selection_seed,
+        position_bin_size=args.position_bin_size,
+    )
+
+
 def run_benchmark(args: argparse.Namespace) -> None:
+    output_dir = Path(args.output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    save_eval_provenance(output_dir)
+
+    if args.mode == "long-context":
+        _run_long_context(args, output_dir)
+    else:
+        _run_guidellm_modes(args, output_dir)
+    logger.info("Benchmarking complete! Results: %s", output_dir)
+
+
+def _run_guidellm_modes(args: argparse.Namespace, output_dir: Path) -> None:
     check_dependencies()
     is_sweep = args.mode == "sweep"
 
     metrics_url = args.target.rstrip("/").removesuffix("/v1") + "/metrics"
-    output_dir = Path(args.output_dir)
     artifacts_dir = output_dir / "artifacts"
     artifacts_dir.mkdir(parents=True, exist_ok=True)
-
-    save_eval_provenance(output_dir)
 
     if not (output_dir / "vllm_command.txt").exists():
         logger.info(
@@ -365,8 +409,6 @@ def run_benchmark(args: argparse.Namespace) -> None:
         with (output_dir / "max_tokens.json").open("w") as f:
             json.dump(all_max_tokens, f, indent=2)
 
-    logger.info("Benchmarking complete! Results: %s", output_dir)
-
 
 def main() -> None:
     logging.basicConfig(
@@ -389,10 +431,11 @@ def main() -> None:
     )
     parser.add_argument(
         "mode",
-        choices=["throughput", "sweep"],
+        choices=["throughput", "sweep", "long-context"],
         help=(
             "throughput: max-rate run for acceptance rates; "
-            "sweep: full benchmarking pipeline"
+            "sweep: full benchmarking pipeline; "
+            "long-context: per-request acceptance vs. context length via MRCR"
         ),
     )
     parser.add_argument(
@@ -457,6 +500,36 @@ def main() -> None:
         help=(
             "Path to directory produced by SPEED-Bench prepare.py. "
             "Required when --dataset is a speedbench/ spec."
+        ),
+    )
+    lc_group = parser.add_argument_group("long-context mode")
+    lc_group.add_argument(
+        "--samples-per-bin",
+        type=int,
+        default=DEFAULT_SAMPLES_PER_BIN,
+        help=(
+            "long-context: records to run per native MRCR token bin. Larger "
+            "context windows fill more bins, so a run at a bigger --max-model-len "
+            f"is a superset of a smaller one (default: {DEFAULT_SAMPLES_PER_BIN})"
+        ),
+    )
+    lc_group.add_argument(
+        "--selection-seed",
+        type=int,
+        default=0,
+        help=(
+            "long-context: seed mixed into the per-record content hash used to "
+            "rank within each bin; changing it picks a different deterministic "
+            "sample (default: 0)"
+        ),
+    )
+    lc_group.add_argument(
+        "--position-bin-size",
+        type=int,
+        default=DEFAULT_POSITION_BIN_SIZE,
+        help=(
+            "long-context: token-position bin width for the by-position report "
+            f"(default: {DEFAULT_POSITION_BIN_SIZE})"
         ),
     )
     args = parser.parse_args()
