@@ -48,15 +48,19 @@ class _StepTimer:
     def __init__(self, enabled: bool = False):
         self.enabled = enabled
         self._marks: dict[str, float] = {}
+        self._memory: dict[str, float] = {}
 
     def reset(self, enabled: bool) -> None:
         self.enabled = enabled
         self._marks.clear()
+        self._memory.clear()
 
     def mark(self, name: str) -> None:
         if self.enabled:
             torch.accelerator.synchronize()
             self._marks[name] = time.perf_counter()
+            if torch.cuda.is_available():
+                self._memory[name] = torch.cuda.memory_allocated() / (1024**2)
 
     def mark_value(self, name: str, value: float) -> None:
         if self.enabled:
@@ -68,7 +72,7 @@ class _StepTimer:
         torch.accelerator.synchronize()
         return time.perf_counter()
 
-    def profile(self, num_tokens: int) -> dict[str, float] | None:
+    def profile(self, num_tokens: int) -> dict | None:
         if not self.enabled:
             return None
         m = self._marks
@@ -80,7 +84,7 @@ class _StepTimer:
         step_ms = (m["opt"] - m["start"]) * 1000 if has_start else 0.0
         tokens_per_s = num_tokens / (step_ms / 1000) if step_ms > 0 else 0.0
         fetch_frac = fetch_ms / step_ms if step_ms > 0 else 0.0
-        return {
+        result: dict = {
             "fetch_ms": fetch_ms,
             "fwd_ms": fwd_ms,
             "bwd_ms": bwd_ms,
@@ -89,6 +93,14 @@ class _StepTimer:
             "tokens_per_s": tokens_per_s,
             "fetch_frac": fetch_frac,
         }
+        if "queue" in m and has_start:
+            result["queue_ms"] = (m["queue"] - m["start"]) * 1000
+            result["h2d_ms"] = (m["fetch"] - m["queue"]) * 1000
+        if "pre_clip" in m:
+            result["clip_ms"] = (m["bwd"] - m["pre_clip"]) * 1000
+        if self._memory:
+            result["memory_mb"] = dict(self._memory)
+        return result
 
 
 warnings.filterwarnings("ignore", category=TqdmExperimentalWarning)
@@ -204,6 +216,7 @@ class Trainer:
         )
         self.checkpointer: BaseCheckpointer = checkpointer_class(self.config.save_path)
 
+        self.profiler = None
         self.setup_trainer()
         self.setup_model()
         self.setup_optimizer()
@@ -479,6 +492,7 @@ class Trainer:
                     will_stop=will_stop,
                 ),
             )
+            timer.mark("queue")
             gpu_batch = {
                 k: v.to(self.local_rank, non_blocking=True)
                 if isinstance(v, torch.Tensor)
@@ -497,6 +511,7 @@ class Trainer:
             timer.mark("fwd")
             self._optimizers_zero_grad()
             loss.backward()
+            timer.mark("pre_clip")
             torch.nn.utils.clip_grad_norm_(self.model.parameters(), 1.0)
 
             metrics["error_records_sum"] = torch.tensor(
@@ -543,6 +558,8 @@ class Trainer:
                     extra={"step": self.global_step},
                 )
             self.global_step += 1
+            if self.profiler is not None:
+                self.profiler.step()
 
             if (
                 self.config.max_steps is not None
