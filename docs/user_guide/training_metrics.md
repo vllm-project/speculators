@@ -4,7 +4,9 @@
 
 A start is counted only when every prediction through position *i* is available and all corresponding reference tokens are supervised within the start's non-padding document. Logs include matching (`_sum`) and eligible (`_total`) counts; validation keys add `_epoch`. A zero total means no observations. Checkpoint selection still uses validation loss.
 
-The shared metrics are reported alongside existing drafter-specific metrics. Those diagnostics retain their current definitions; reference agreement is not a numerical replacement for them.
+The legacy training keys `eal`, `accept_len`, `accept_rate`, `full_acc*`, `cond_acc*`, and `position_*_acc` are no longer reported, including their `_sum`, `_total`, and validation `_epoch` forms. Use the reference metrics for prefix agreement with stored continuations. They use different references and eligibility rules, so historical values are not numerically interchangeable.
+
+DSpark confidence loss, absolute error, predicted mean, and cumulative-product bias remain available. DFlash2 keeps candidate recall, candidate target mass, teacher-forced selector accuracy, and oracle unary-top-K accepted length. These diagnostics retain their existing definitions. Losses and validation-loss checkpoint selection are unchanged.
 
 ## Example curves
 

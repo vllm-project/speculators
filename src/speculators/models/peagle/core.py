@@ -201,7 +201,6 @@ class PEagleDraftModel(Eagle3DraftModel):
             loss_mask=loss_mask,
             anchor_pos=anchor_pos,
             depth=depth,
-            num_depths=num_depths,
             loss_config=loss_config,
         )
         metrics.update(

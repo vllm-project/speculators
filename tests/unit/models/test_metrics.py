@@ -21,7 +21,6 @@ from speculators.losses.eager import (
     reverse_kl_div_loss,
     tv_loss,
 )
-from speculators.models.metrics import compute_accuracy_single_step
 
 
 @pytest.mark.parametrize(
@@ -321,53 +320,6 @@ class TestLKHybridLoss:
     def test_resolve_lk_hybrid(self):
         """resolve_loss_config wires 'lk_hybrid' to the fused implementation."""
         assert resolve_loss_config("lk_hybrid")["lk_hybrid"][0] is losses.lk_hybrid_loss
-
-
-class TestComputeAccuracySingleStep:
-    def test_prev_correct_chain(self):
-        """Conditional accuracy across ttt steps tracks cumulative correctness.
-
-        Step 0: positions [0,1,2] correct, [3] wrong → full=3/4
-        Step 1: positions [0,1,3] correct, [2] wrong → only [0,1] still correct
-        Conditional = 2 correct / 3 prev_correct
-        prev_correct should be mutated to [T, T, F, F].
-        """
-        pred_step0 = torch.tensor([[1, 2, 3, 0]])
-        tgt_step0 = torch.tensor([[1, 2, 3, 4]])
-        prev_correct = torch.ones(1, 4, dtype=torch.bool)
-
-        full_correct_0, full_total_0, cond_correct_0, cond_total_0 = (
-            compute_accuracy_single_step(
-                pred_step0,
-                tgt_step0,
-                loss_mask=None,
-                prev_correct=prev_correct,
-            )
-        )
-        assert full_correct_0.item() == pytest.approx(3, abs=1e-4)
-        assert full_total_0.item() == pytest.approx(4, abs=1e-4)
-        assert cond_correct_0.item() == pytest.approx(3, abs=1e-4)
-        assert cond_total_0.item() == pytest.approx(4, abs=1e-4)
-        assert prev_correct.tolist() == [[True, True, True, False]]
-
-        pred_step1 = torch.tensor([[1, 2, 0, 4]])
-        tgt_step1 = torch.tensor([[1, 2, 5, 4]])
-
-        full_correct_1, full_total_1, cond_correct_1, cond_total_1 = (
-            compute_accuracy_single_step(
-                pred_step1,
-                tgt_step1,
-                loss_mask=None,
-                prev_correct=prev_correct,
-            )
-        )
-        # [0,1] correct on both steps, [2] was correct but now wrong,
-        # [3] was already wrong
-        assert prev_correct.tolist() == [[True, True, False, False]]
-        assert full_correct_1.item() == pytest.approx(2, abs=1e-4)
-        assert full_total_1.item() == pytest.approx(4, abs=1e-4)
-        assert cond_correct_1.item() == pytest.approx(2, abs=1e-4)
-        assert cond_total_1.item() == pytest.approx(3, abs=1e-4)
 
 
 class TestDecayFunctions:

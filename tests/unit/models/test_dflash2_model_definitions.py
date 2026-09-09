@@ -8,6 +8,7 @@ from transformers.models.qwen3.modeling_qwen3 import Qwen3Config
 
 from speculators import SpeculatorModelConfig, SpeculatorsConfig, VerifierConfig
 from speculators.losses import resolve_loss_config
+from speculators.models.dflash.metrics import compute_metrics as compute_unary_metrics
 from speculators.models.dflash2 import DFlash2DraftModel, DFlash2SpeculatorConfig
 from speculators.models.dflash2.metrics import (
     compute_metrics as compute_dflash2_metrics,
@@ -21,7 +22,6 @@ from speculators.models.dflash2.model_definitions import (
     GroupedDynamicCausalConv,
     grouped_dynamic_conv,
 )
-from speculators.models.dspark.metrics import compute_metrics as compute_unary_metrics
 from speculators.proposals import GreedyTokenProposalConfig
 from speculators.train.optimizers import split_named_params_for_muon
 
@@ -405,18 +405,14 @@ def test_selector_loss_alpha_zero_preserves_unary_objective():
     unary_logits[0, 2, (target_ids[0, 2] + 2) % 7] = 5.0
     unary_logits.requires_grad_()
     loss_config = resolve_loss_config("ce", "eager")
-    tv_loss_fn = resolve_loss_config("tv", "eager")["tv"][0]
 
-    expected, unary_metrics = compute_unary_metrics(
+    expected, _ = compute_unary_metrics(
         unary_logits,
         targets,
-        None,
         loss_mask,
         4,
         loss_config=loss_config,
-        tv_loss_fn=tv_loss_fn,
         gamma=4.0,
-        confidence_head_alpha=0.0,
         per_position_loss_weight="fixed-exp-decay",
         dpace_alpha=0.5,
         sample_from_anchor=False,
@@ -440,7 +436,6 @@ def test_selector_loss_alpha_zero_preserves_unary_objective():
         block_size=4,
         top_k=selector.top_k,
         loss_config=loss_config,
-        tv_loss_fn=tv_loss_fn,
         selector_loss_alpha=0.0,
     )
 
@@ -457,14 +452,6 @@ def test_selector_loss_alpha_zero_preserves_unary_objective():
     assert metrics["unary_candidate_target_mass_at_2_total"] == 3
     assert metrics["unary_top_2_oracle_accepted_length_sum"] == 2
     assert metrics["unary_top_2_oracle_accepted_length_total"] == 1
-    # One selected draft token plus the verifier's bonus token.
-    assert metrics["eal_sum"].item() == 2.0
-    assert metrics["eal_total"].item() == 1.0
-    # The inherited unary EAL would stop at the first drafted position.
-    assert unary_metrics["eal_sum"].item() == 1.0
-    torch.testing.assert_close(
-        metrics["accept_len_sum"], unary_metrics["accept_len_sum"]
-    )
 
 
 def test_selector_loss_reaches_every_selector_parameter():
@@ -553,13 +540,11 @@ def test_tiny_gpu_forward_backward_reaches_all_new_parameters():
         "document_ids": torch.zeros(1, seq_len, device="cuda", dtype=torch.long),
     }
     eager_kl = resolve_loss_config("kl_div", "eager")
-    eager_tv = resolve_loss_config("tv", "eager")["tv"][0]
 
     _, loss, _ = model(  # type: ignore[call-arg]
         **inputs,
         max_anchors=4,
         loss_config=eager_kl,
-        tv_loss_fn=eager_tv,
     )
     assert torch.isfinite(loss)
     loss.backward()
@@ -613,7 +598,6 @@ def test_reference_prefix_uses_original_candidates(monkeypatch):
         loss_mask=torch.ones_like(inputs),
         document_ids=torch.zeros_like(inputs),
         loss_config=resolve_loss_config("kl_div", "eager"),
-        tv_loss_fn=resolve_loss_config("tv", "eager")["tv"][0],
         max_anchors=1,
     )
     assert all(
