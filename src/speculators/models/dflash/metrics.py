@@ -12,6 +12,10 @@ from speculators.losses import (
     dpace_loss_decay,
     kl_div_loss,
 )
+from speculators.models.metrics import (
+    compute_accepted_length_counts,
+    compute_accuracy_multi_step,
+)
 
 _DEFAULT_LOSS_CONFIG: LossConfig = {"kl_div": (kl_div_loss, 1.0)}
 
@@ -27,7 +31,7 @@ def compute_metrics(
     dpace_alpha: float = 0.5,
     sample_from_anchor: bool = False,
 ) -> tuple[torch.Tensor, dict]:
-    """Compute loss and component metrics for draft model predictions.
+    """Compute loss and accuracy metrics for draft model predictions.
 
     Args:
         logits: Model logits [1, T, V]
@@ -40,7 +44,12 @@ def compute_metrics(
         dpace_alpha: Smoothing constant for D-Pace loss weighting
 
     Returns:
-        Tuple of (loss, counted loss components).
+        Tuple of (loss, metrics_dict) where metrics_dict contains:
+            - loss: Scalar loss value
+            - full_acc: Overall accuracy
+            - position {i} acc: Accuracy at position i within blocks
+            - eal: Expected Accepted Length, the mean per-block accepted run
+              plus the verifier's bonus token (headline metric)
     """
     if loss_config is None:
         loss_config = _DEFAULT_LOSS_CONFIG
@@ -69,6 +78,13 @@ def compute_metrics(
         decay_fn=decay_fn,
     )
 
+    pred_ids = torch.argmax(logits, dim=-1)
+    target_ids = torch.argmax(targets, dim=-1)
+
+    correct_per_pos, total_per_pos = compute_accuracy_multi_step(
+        pred_ids, target_ids, loss_mask, pos_idx, block_size
+    )
+
     ones = torch.tensor(1.0, device=logits.device)
     metrics: dict[str, Any] = {}
     metrics["loss_sum"] = loss.detach().clone()
@@ -77,4 +93,21 @@ def compute_metrics(
         metrics[f"{term_name}_sum"] = term_val
         metrics[f"{term_name}_total"] = ones.clone()
 
+    # Start position: 0 if sample_from_anchor else 1 (skip anchor)
+    start_pos = 0 if sample_from_anchor else 1
+    metrics["full_acc_sum"] = correct_per_pos[start_pos:].sum()
+    metrics["full_acc_total"] = total_per_pos[start_pos:].sum()
+
+    for pos in range(start_pos, block_size):
+        metrics[f"position_{pos}_acc_sum"] = correct_per_pos[pos]
+        metrics[f"position_{pos}_acc_total"] = total_per_pos[pos]
+
+    # Counted per block so the accepted run is formed before any averaging; the
+    # sum/total pair then pools across batches and ranks like every other metric.
+    eal_sum, eal_total = compute_accepted_length_counts(
+        (pred_ids == target_ids).reshape(-1, block_size)[:, start_pos:],
+        loss_mask.to(torch.bool).reshape(-1, block_size)[:, start_pos:],
+    )
+    metrics["eal_sum"] = eal_sum
+    metrics["eal_total"] = eal_total
     return loss, metrics

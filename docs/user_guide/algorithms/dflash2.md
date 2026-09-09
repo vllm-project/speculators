@@ -31,7 +31,7 @@ The public DFlash2 implementation specifies inference but does not publish its t
 
 `--selector-loss-alpha` controls the second term. Both terms use the configured fixed exponential or D-PACE position weighting. The selector is never trained against a full-vocabulary corrected distribution, matching the candidate set it can rerank at serving time.
 
-Training and validation report unary candidate recall and the [shared prefix agreement](../training_metrics.md), alongside unary and selector losses. Reference-prefix agreement uses teacher-conditioned selector predictions over the original unary top-K candidates. It does not measure the greedy serving path.
+Training and validation report unary candidate recall and target mass, teacher-forced selector accuracy, oracle unary-top-K accepted length, and the [shared prefix agreement](../training_metrics.md), alongside unary and selector losses. Reference-prefix agreement uses teacher-conditioned selector predictions over the original unary top-K candidates. It does not measure the greedy serving path. Existing accuracy and accepted-length metrics are also retained.
 
 DFlash2 currently requires the full verifier vocabulary. Pruned draft vocabularies are rejected because current serving implementations select candidates before any draft-to-target vocabulary mapping.
 

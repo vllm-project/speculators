@@ -4,6 +4,8 @@
 
 A start is counted only when every prediction through position *i* is available and all corresponding reference tokens are supervised within the start's non-padding document. Logs include matching (`_sum`) and eligible (`_total`) counts; validation keys add `_epoch`. A zero total means no observations. Checkpoint selection still uses validation loss.
 
+The shared metrics are reported alongside existing drafter-specific metrics. Those diagnostics retain their current definitions; reference agreement is not a numerical replacement for them.
+
 ## Example curves
 
 These runs use Qwen3-8B on the `tutorial_regen` split of [inference-optimization/speculators-ci-datasets](https://huggingface.co/datasets/inference-optimization/speculators-ci-datasets) for three epochs. Each panel shows the fraction of eligible starts with a matching prefix, smoothed over five logged steps. Higher is better. Labels show each curve’s final smoothed value.

@@ -255,6 +255,15 @@ class Eagle3DraftModel(DraftVocabMixin, SpeculatorModel):
                 # shape: [1, total_seq_len, draft_vocab_size]
             loss = torch.tensor(0.0, device=device)
 
+            # prev_correct is a boolean tensor that is True for tokens that have been
+            # correctly predicted on all previous ttt_steps.
+            # Initialized to True if the token is included in the loss_mask
+            # or if there is no loss_mask
+            prev_correct = (
+                loss_mask.clone()
+                if loss_mask is not None
+                else torch.ones(1, total_seq_len, device=device, dtype=torch.bool)
+            )
             metrics = {}
 
         draft_tokens = []
@@ -303,6 +312,7 @@ class Eagle3DraftModel(DraftVocabMixin, SpeculatorModel):
                     logits,
                     targets,
                     loss_mask,
+                    prev_correct,
                     ttt_step,
                     ttt_step_loss_decay,
                     loss_config=loss_config,
