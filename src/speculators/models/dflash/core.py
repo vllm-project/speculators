@@ -124,9 +124,6 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
             config.transformer_layer_config.hidden_size,
             eps=config.transformer_layer_config.rms_norm_eps,  # type: ignore[arg-type]
         )
-        # Must apply the verifier's own final-norm convention (`x * (1 + w)`
-        # for the Gemma/Qwen3.5 families, `x * w` otherwise) or the
-        # reconstructed verifier targets are silently mis-scaled.
         self.verifier_norm = resolve_verifier_norm_class(config)(
             config.transformer_layer_config.hidden_size,
             eps=config.transformer_layer_config.rms_norm_eps,  # type: ignore[arg-type]

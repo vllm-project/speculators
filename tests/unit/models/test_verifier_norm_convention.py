@@ -25,49 +25,58 @@ from speculators.models.utils import resolve_verifier_norm_class, uses_gemma_sty
 from .test_checkpoint_key_ownership import _fake_verifier, _make_fake_loader, _make_model
 
 
-def _point_at_fake_verifier(
-    model, tmp_path, model_type: str, architectures: list[str], text_model_type: str = ""
-):
-    verifier_dir = tmp_path / model_type / text_model_type / "_".join(architectures)
+def _point_at_fake_verifier(model, tmp_path, model_type: str, text_model_type: str = ""):
+    """Point the model's verifier at a fake checkpoint dir with this model_type."""
+    verifier_dir = tmp_path / model_type / text_model_type
     verifier_dir.mkdir(parents=True)
-    raw = {"model_type": model_type, "architectures": architectures}
+    raw = {"model_type": model_type}
     if text_model_type:  # multimodal wrapper carrying the family in text_config
         raw["text_config"] = {"model_type": text_model_type}
     (verifier_dir / "config.json").write_text(json.dumps(raw))
     model.config.speculators_config.verifier.name_or_path = str(verifier_dir)
-    model.config.speculators_config.verifier.architectures = architectures
 
 
 @pytest.mark.parametrize(
-    ("model_type", "text_model_type", "architectures", "expected"),
+    ("model_type", "text_model_type", "expected"),
     [
-        ("qwen3_5", "", ["Qwen3_5ForConditionalGeneration"], True),
-        ("qwen3", "qwen3_5_text", ["Qwen3_5ForConditionalGeneration"], True),
-        ("gemma3_text", "", ["Gemma3ForConditionalGeneration"], True),
-        ("qwen3", "", ["Gemma3ForCausalLM"], True),  # architectures fallback
-        ("qwen3", "", ["Qwen3ForCausalLM"], False),
-        ("llama", "", ["LlamaForCausalLM"], False),
+        ("qwen3_5", "", True),
+        ("qwen3_5", "qwen3_5_text", True),
+        ("gemma3_text", "", True),
+        ("gemma2", "", True),
+        ("gemma3n", "", False),  # dropped the (1 + w) convention
+        ("gemma4", "gemma4_text", False),  # dropped the (1 + w) convention
+        ("qwen3", "", False),
+        ("llama", "", False),
     ],
     ids=[
         "qwen3_5",
         "qwen3_5_text_nested",
-        "gemma3",
-        "gemma3_arch_fallback",
+        "gemma3_text",
+        "gemma2",
+        "gemma3n_negative",
+        "gemma4_negative",
         "qwen3_negative",
         "llama_negative",
     ],
 )
-def test_detection_by_model_type_and_architectures(
-    tmp_path, model_type: str, text_model_type: str, architectures: list[str], expected: bool
+def test_detection_by_verifier_model_type(
+    tmp_path, model_type: str, text_model_type: str, expected: bool
 ):
     model = _make_model(DFlashDraftModel, draft_vocab_size=64)
-    _point_at_fake_verifier(model, tmp_path, model_type, architectures, text_model_type)
+    _point_at_fake_verifier(model, tmp_path, model_type, text_model_type)
     assert uses_gemma_style_final_norm(model.config) is expected
-    assert (
-        resolve_verifier_norm_class(model.config) is Gemma3RMSNorm
-        if expected
-        else resolve_verifier_norm_class(model.config) is Qwen3RMSNorm
+    assert (resolve_verifier_norm_class(model.config) is Gemma3RMSNorm) is expected
+
+
+def test_unresolvable_verifier_defaults_to_plain(monkeypatch: pytest.MonkeyPatch):
+    """A verifier config AutoConfig cannot resolve keeps the plain convention."""
+    monkeypatch.setattr(
+        "speculators.models.utils.AutoConfig.from_pretrained",
+        lambda *args, **kwargs: (_ for _ in ()).throw(OSError("cannot resolve")),
     )
+    model = _make_model(DFlashDraftModel, draft_vocab_size=64)  # verifier name_or_path="dummy"
+    assert uses_gemma_style_final_norm(model.config) is False
+    assert isinstance(model.verifier_norm, Qwen3RMSNorm)
 
 
 def test_plain_construction_unchanged():
@@ -83,7 +92,7 @@ def test_gemma_style_construction_swaps_class(
     """Gemma-convention verifiers construct verifier_norm as Gemma3RMSNorm
     and load the raw checkpoint weight unchanged (the +1 lives in forward)."""
     model = _make_model(DFlashDraftModel, draft_vocab_size=64)
-    _point_at_fake_verifier(model, tmp_path, model_type, ["XForCausalLM"])
+    _point_at_fake_verifier(model, tmp_path, model_type)
     rebuilt = DFlashDraftModel(model.config)
     assert isinstance(rebuilt.verifier_norm, Gemma3RMSNorm)
 

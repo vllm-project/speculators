@@ -1,9 +1,7 @@
-import json
 import logging
 import warnings
 from copy import deepcopy
-from functools import partial
-from pathlib import Path
+from functools import lru_cache, partial
 
 import torch
 from transformers import AutoConfig, PretrainedConfig
@@ -13,50 +11,57 @@ from transformers.models.qwen3.modeling_qwen3 import Qwen3RMSNorm
 logger = logging.getLogger(__name__)
 
 # Verifier families whose final norm follows the Gemma convention
-# `x_norm * (1 + w)` instead of the plain RMSNorm `x_norm * w`. Matched as a
-# prefix against the verifier's HF `model_type` / `text_config.model_type`
-# (read from its config.json when resolvable) with a fallback to lowercased
-# `architectures`. Qwen3.5 is in here because `Qwen3_5RMSNorm` is an alias of
-# vLLM's `GemmaRMSNorm` (see vllm/model_executor/models/qwen3_5.py) and
-# transformers' `Qwen3_5RMSNorm.forward` computes `output * (1.0 + weight)`.
-GEMMA_STYLE_FINAL_NORM_PREFIXES = ("gemma", "qwen3_5")
+# `x_norm * (1 + w)` instead of the plain RMSNorm `x_norm * w`. Matched
+# exactly against the verifier's effective `model_type` (after text_config
+# extraction) — gemma3n and gemma4 dropped this convention, so prefix
+# matching would over-include. Qwen3.5 is in here because transformers'
+# Qwen3_5RMSNorm computes `output * (1.0 + weight)` and vLLM's is an alias
+# of GemmaRMSNorm.
+GEMMA_STYLE_FINAL_NORM_MODEL_TYPES = frozenset(
+    (
+        "gemma",
+        "gemma2",
+        "gemma3",
+        "gemma3_text",
+        "qwen3_5",
+        "qwen3_5_text",
+        "recurrent_gemma",
+    )
+)
+
+
+@lru_cache(maxsize=None)
+def _verifier_model_type(name_or_path: str) -> str | None:
+    """The verifier's effective model_type, or None when unresolvable."""
+    try:
+        verifier_config = get_verifier_config(name_or_path)
+    except (KeyError, OSError, ValueError):
+        logger.warning(
+            "Could not resolve a config for verifier %s; assuming the plain "
+            "final-norm convention (x * w).",
+            name_or_path,
+        )
+        return None
+    return str(getattr(verifier_config, "model_type", "") or "").lower()
 
 
 def uses_gemma_style_final_norm(config) -> bool:  # noqa: ANN001
     """Whether the verifier's final norm is `x_norm * (1 + w)` rather than `x_norm * w`."""
     verifier = getattr(getattr(config, "speculators_config", None), "verifier", None)
-    if verifier is None:
-        return False
-
-    candidates: list[str] = []
-
-    # Prefer the verifier's own config.json (model_type is the reliable signal,
-    # and the multimodal wrapper keeps the family under text_config).
     name_or_path = getattr(verifier, "name_or_path", None)
-    if name_or_path:
-        config_file = Path(name_or_path) / "config.json"
-        if config_file.is_file():
-            try:
-                hf_config = json.loads(config_file.read_text())
-            except (OSError, ValueError):
-                hf_config = {}
-            candidates.append(str(hf_config.get("model_type", "")))
-            candidates.append(str(hf_config.get("text_config", {}).get("model_type", "")))
-
-    # Fall back to the architectures recorded in the speculator config.
-    candidates.extend(str(a) for a in (getattr(verifier, "architectures", None) or []))
-
-    return any(
-        c.lower().startswith(GEMMA_STYLE_FINAL_NORM_PREFIXES) for c in candidates if c
-    )
+    if not name_or_path:
+        return False
+    model_type = _verifier_model_type(name_or_path)
+    return model_type is not None and model_type in GEMMA_STYLE_FINAL_NORM_MODEL_TYPES
 
 
 def resolve_verifier_norm_class(config) -> type:  # noqa: ANN001
     """The RMSNorm class matching the verifier's final-norm weight convention.
 
-    Generalizes #892's Gemma3 selection: the frozen ``verifier_norm`` must
-    apply the same gain convention the verifier was trained under, or the
-    reconstructed targets are silently mis-scaled.
+    The frozen ``verifier_norm`` must apply the same gain convention the
+    verifier was trained under (`x * (1 + w)` for the Gemma/Qwen3.5
+    families, `x * w` otherwise), or the reconstructed verifier targets
+    are silently mis-scaled.
     """
     if uses_gemma_style_final_norm(config):
         return Gemma3RMSNorm
