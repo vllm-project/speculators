@@ -22,7 +22,7 @@ from __future__ import annotations
 
 import json
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
 from perf_utils import CsvWriter
@@ -59,6 +59,7 @@ class SpecRecord:
 
     prompt_tokens: int
     spec: dict  # the response's speculative_decoding block
+    metadata: dict = field(default_factory=dict)  # verbatim Request.metadata
 
 
 def load_spec_records(table_dir: Path) -> list[SpecRecord]:
@@ -71,7 +72,8 @@ def load_spec_records(table_dir: Path) -> list[SpecRecord]:
         spec = json.loads(row["metrics_json"]).get("speculative_decoding")
         if not spec:
             continue
-        records.append(SpecRecord(row["prompt_tokens"], spec))
+        metadata = json.loads(row["metadata_json"]) if row["metadata_json"] else {}
+        records.append(SpecRecord(row["prompt_tokens"], spec, metadata))
     return records
 
 

@@ -2,7 +2,14 @@
 """Unified evaluation CLI for speculative decoding benchmarking.
 
 Modes:
-    throughput   Max throughput run for acceptance rates
+    throughput   Max-throughput acceptance run. Mixes all subsets (HumanEval,
+                 qa, ...) into a single concurrent pass, records every request
+                 to a Parquet table, and slices acceptance by subset afterward
+                 (one saturated pass instead of N sequential per-subset runs).
+                 Requires the server started with
+                 --per-request-spec-decode-metrics detailed. SPEED-Bench
+                 datasets (--dataset speedbench/...) keep the legacy guidellm
+                 path.
     sweep        Full pipeline (gen-len, sweep, CSV)
     long-context Per-request acceptance vs. context length via OpenAI's MRCR
                  dataset. Deterministically samples a superset-monotonic set
@@ -73,6 +80,8 @@ DEFAULT_SUBSETS = (
 )
 DEFAULT_MAX_CONCURRENCY = 128
 DEFAULT_MAX_REQUESTS = 200
+# throughput: per-request generation cap for the mixed recorded run.
+DEFAULT_MAX_NEW_TOKENS = 2048
 # long-context: records selected per native MRCR token bin (density/cost knob).
 DEFAULT_SAMPLES_PER_BIN = 20
 DEFAULT_POSITION_BIN_SIZE = 256
@@ -330,6 +339,30 @@ def _run_long_context(args: argparse.Namespace, output_dir: Path) -> None:
     )
 
 
+def _run_throughput(args: argparse.Namespace, output_dir: Path) -> None:
+    # Imported lazily so sweep/speedbench runs don't pull the recorded-table deps
+    # (pandas, pyarrow, huggingface_hub).
+    from throughput import run_throughput  # noqa: PLC0415
+
+    subsets = [s.strip() for s in args.subsets.split(",") if s.strip()]
+    run_throughput(
+        target=args.target,
+        model_info=_fetch_model_info(args.target),
+        dataset=args.dataset,
+        subsets=subsets,
+        output_dir=output_dir,
+        max_concurrency=args.max_concurrency,
+        samples_per_subset=args.max_requests,
+        max_new_tokens=args.max_new_tokens,
+        selection_seed=args.selection_seed,
+        top_n_prompts=args.top_n_prompts,
+    )
+
+
+def _is_speedbench(args: argparse.Namespace) -> bool:
+    return args.dataset.startswith("speedbench/")
+
+
 def run_benchmark(args: argparse.Namespace) -> None:
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -337,6 +370,11 @@ def run_benchmark(args: argparse.Namespace) -> None:
 
     if args.mode == "long-context":
         _run_long_context(args, output_dir)
+    elif args.mode == "throughput" and not _is_speedbench(args):
+        # New recorded-table path: all subsets mixed into one concurrent run,
+        # sliced by subset afterward. SPEED-Bench throughput keeps the legacy
+        # per-subset guidellm path (its data isn't the standard subset layout).
+        _run_throughput(args, output_dir)
     else:
         _run_guidellm_modes(args, output_dir)
     logger.info("Benchmarking complete! Results: %s", output_dir)
@@ -482,7 +520,10 @@ def main() -> None:
         "--max-requests",
         type=int,
         default=DEFAULT_MAX_REQUESTS,
-        help=f"Max requests per sweep point (default: {DEFAULT_MAX_REQUESTS})",
+        help=(
+            "Requests per sweep point; for throughput, samples drawn per subset "
+            f"(default: {DEFAULT_MAX_REQUESTS})"
+        ),
     )
     parser.add_argument(
         "--gen-len-rate",
@@ -516,6 +557,35 @@ def main() -> None:
             "Required when --dataset is a speedbench/ spec."
         ),
     )
+    parser.add_argument(
+        "--selection-seed",
+        type=int,
+        default=0,
+        help=(
+            "Seed mixed into the per-record content hash used to deterministically "
+            "sample within each bin/subset (throughput and long-context); changing "
+            "it picks a different deterministic sample (default: 0)"
+        ),
+    )
+    tp_group = parser.add_argument_group("throughput mode")
+    tp_group.add_argument(
+        "--max-new-tokens",
+        type=int,
+        default=DEFAULT_MAX_NEW_TOKENS,
+        help=(
+            "throughput: per-request generation cap for the mixed recorded run "
+            f"(default: {DEFAULT_MAX_NEW_TOKENS})"
+        ),
+    )
+    tp_group.add_argument(
+        "--top-n-prompts",
+        type=int,
+        default=0,
+        help=(
+            "throughput: print the N best- and N worst-acceptance prompts per "
+            "subset at the end (0 disables; default: 0)"
+        ),
+    )
     lc_group = parser.add_argument_group("long-context mode")
     lc_group.add_argument(
         "--samples-per-bin",
@@ -525,16 +595,6 @@ def main() -> None:
             "long-context: records to run per native MRCR token bin. Larger "
             "context windows fill more bins, so a run at a bigger --max-model-len "
             f"is a superset of a smaller one (default: {DEFAULT_SAMPLES_PER_BIN})"
-        ),
-    )
-    lc_group.add_argument(
-        "--selection-seed",
-        type=int,
-        default=0,
-        help=(
-            "long-context: seed mixed into the per-record content hash used to "
-            "rank within each bin; changing it picks a different deterministic "
-            "sample (default: 0)"
         ),
     )
     lc_group.add_argument(
