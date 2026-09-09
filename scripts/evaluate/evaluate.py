@@ -4,8 +4,11 @@
 Modes:
     throughput   Max throughput run for acceptance rates
     sweep        Full pipeline (gen-len, sweep, CSV)
-    long-context Long-context acceptance rates via OpenAI's MRCR dataset,
-                 bucketed by context length (uses Inspect AI as the harness)
+    long-context Long-context acceptance rates via OpenAI's MRCR dataset. Runs a
+                 deterministic sample stratified across MRCR's native token bins
+                 (larger --max-model-len => superset) and bins acceptance by
+                 context length after the fact (requires
+                 --per-request-spec-decode-metrics detailed on the server)
 
 Examples:
     python evaluate.py --target http://localhost:8000/v1 throughput
@@ -21,9 +24,9 @@ Examples:
         --dataset speedbench/qualitative/coding \\
         --speedbench-data-dir ./speedbench_data
 
-    # Long-context (acceptance rate by context-length bucket, capped at 128k tokens):
+    # Long-context: deterministic MRCR sample, ~samples-per-bin per token bin.
     python evaluate.py --target http://localhost:8000/v1 long-context \\
-        --mrcr-max-context 131072 --mrcr-max-samples-per-bucket 20
+        --samples-per-bin 20
 """
 
 from __future__ import annotations
@@ -69,6 +72,9 @@ DEFAULT_SUBSETS = (
 )
 DEFAULT_MAX_CONCURRENCY = 128
 DEFAULT_MAX_REQUESTS = 200
+# long-context: records selected per native MRCR token bin (density/cost knob).
+DEFAULT_SAMPLES_PER_BIN = 20
+DEFAULT_POSITION_BIN_SIZE = 256
 DEFAULT_GEN_LEN_RATE = 128
 DEFAULT_SWEEP_RATE = 10
 DEFAULT_DATA_COLUMN_MAPPER = (
@@ -85,7 +91,7 @@ _SPEEDBENCH_COLUMN_MAPPER = (
 
 
 def _fetch_model_info(target: str) -> dict | None:
-    """Return the first entry of ``/v1/models`` (includes ``id`` and ``max_model_len``)."""
+    """Return the first ``/v1/models`` entry (has ``id`` and ``max_model_len``)."""
     base = target.rstrip("/")
     if not base.endswith("/v1"):
         base += "/v1"
@@ -293,8 +299,6 @@ def _run_subset(
     return acceptance_csv, perf_csv, max_tokens if is_sweep else None
 
 
-
-
 def run_benchmark(args: argparse.Namespace) -> None:
     metrics_url = args.target.rstrip("/").removesuffix("/v1") + "/metrics"
     output_dir = Path(args.output_dir)
@@ -304,17 +308,19 @@ def run_benchmark(args: argparse.Namespace) -> None:
     save_eval_provenance(output_dir)
 
     if args.mode == "long-context":
-        from mrcr_bench import run_mrcr
+        # Imported lazily so throughput/sweep runs don't pull the long-context
+        # deps (pandas, pyarrow, huggingface_hub).
+        from mrcr_bench import run_mrcr  # noqa: PLC0415
+
         model_info = _fetch_model_info(args.target)
         run_mrcr(
             target=args.target,
             model_info=model_info,
-            metrics_url=metrics_url,
             output_dir=output_dir,
             max_concurrency=args.max_concurrency,
-            max_context=args.mrcr_max_context,
-            max_samples_per_bucket=args.mrcr_max_samples_per_bucket,
-            require_metrics=_require_metrics,
+            samples_per_bin=args.samples_per_bin,
+            selection_seed=args.selection_seed,
+            position_bin_size=args.position_bin_size,
         )
         logger.info("Benchmarking complete! Results: %s", output_dir)
         return
@@ -416,7 +422,7 @@ def main() -> None:
         help=(
             "throughput: max-rate run for acceptance rates; "
             "sweep: full benchmarking pipeline; "
-            "long-context: acceptance rates across context-length buckets"
+            "long-context: acceptance rates across the MRCR long-context dataset"
         ),
     )
     parser.add_argument(
@@ -475,29 +481,43 @@ def main() -> None:
         f" (default: {DEFAULT_DATA_COLUMN_MAPPER})",
     )
     parser.add_argument(
-        "--mrcr-max-context",
-        type=int,
-        default=131072,
-        dest="mrcr_max_context",
-        help=(
-            "Skip MRCR buckets whose lower token-count edge exceeds this; "
-            "keep at or below the target server's max_model_len (default: 131072)"
-        ),
-    )
-    parser.add_argument(
-        "--mrcr-max-samples-per-bucket",
-        type=int,
-        default=20,
-        dest="mrcr_max_samples_per_bucket",
-        help="Cap samples per context-length bucket to bound eval cost (default: 20)",
-    )
-    parser.add_argument(
         "--speedbench-data-dir",
         default=None,
         dest="speedbench_data_dir",
         help=(
             "Path to directory produced by SPEED-Bench prepare.py. "
             "Required when --dataset is a speedbench/ spec."
+        ),
+    )
+    lc_group = parser.add_argument_group("long-context mode")
+    lc_group.add_argument(
+        "--samples-per-bin",
+        type=int,
+        default=DEFAULT_SAMPLES_PER_BIN,
+        help=(
+            "long-context: records to run per native MRCR token bin. Larger "
+            "context windows fill more bins, so the selected set at a bigger "
+            f"--max-model-len is a superset of a smaller one (default: "
+            f"{DEFAULT_SAMPLES_PER_BIN})"
+        ),
+    )
+    lc_group.add_argument(
+        "--selection-seed",
+        type=int,
+        default=0,
+        help=(
+            "long-context: seed mixed into the per-record content hash used to "
+            "rank within each bin; changing it picks a different deterministic "
+            "sample (default: 0)"
+        ),
+    )
+    lc_group.add_argument(
+        "--position-bin-size",
+        type=int,
+        default=DEFAULT_POSITION_BIN_SIZE,
+        help=(
+            "long-context: token-position bin width for the by-position report "
+            f"(default: {DEFAULT_POSITION_BIN_SIZE})"
         ),
     )
     args = parser.parse_args()

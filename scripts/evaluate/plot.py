@@ -4,6 +4,8 @@
 Subcommands:
     compare     Multi-version comparison plots (overlay smoothed curves)
     speedup     Pairwise speedup visualization (gradient-shaded region)
+    mrcr        MRCR long-context acceptance length, by request start length
+                and by token position (output of `evaluate.py long-context`)
 
 Examples:
     python plot.py compare \\
@@ -15,19 +17,23 @@ Examples:
         --baseline "No Spec=nospec/results.csv" \\
         --target "Eagle3=eagle3/results.csv" \\
         --metric latency --title "Qwen3-8B"
+
+    python plot.py mrcr --results-dir Qwen3-8B_20260904_143700
 """
 
 from __future__ import annotations
 
 import argparse
+import csv
 import sys
-from collections import defaultdict
+from collections import Counter, defaultdict
 from pathlib import Path
 
 import matplotlib.colors as mcolors
 import matplotlib.pyplot as plt
 import numpy as np
 from matplotlib.cm import ScalarMappable
+from matplotlib.ticker import FixedLocator, FuncFormatter, NullFormatter
 from perf_utils import (
     METRICS,
     load_data,
@@ -35,6 +41,7 @@ from perf_utils import (
     pretty_subset,
     smooth_curve,
 )
+from spec_acceptance import RAW_LOG_FILENAME, load_results
 
 COLOR_CYCLE = [
     "#1f77b4",
@@ -368,6 +375,273 @@ def run_speedup(args: argparse.Namespace) -> None:
 
 
 # ============================================================================
+# MRCR long-context acceptance
+# ============================================================================
+
+# Two-hue small-multiples pair (validated for adjacent CVD separation):
+# request-start-length panel in blue, token-position panel in orange.
+_MRCR_START_COLOR = "#2a78d6"
+_MRCR_POSITION_COLOR = "#eb6834"
+
+
+def _read_bucket_csv(path: Path) -> list[dict]:
+    if not path.exists():
+        return []
+    with path.open(newline="") as f:
+        return list(csv.DictReader(f))
+
+
+_MAX_LABELED_BARS = 40
+
+
+def _plot_acceptance_bars(ax, rows: list[dict], color: str, title: str) -> None:
+    labels = [row["bucket"] for row in rows]
+    values = [float(row["mean_acceptance_length"]) for row in rows]
+    x = range(len(labels))
+    dense = len(labels) > _MAX_LABELED_BARS
+
+    bars = ax.bar(x, values, color=color, width=1.0 if dense else 0.6, zorder=3)
+    if not dense:
+        for bar, value in zip(bars, values, strict=True):
+            ax.text(
+                bar.get_x() + bar.get_width() / 2,
+                bar.get_height(),
+                f"{value:.2f}",
+                ha="center",
+                va="bottom",
+                fontsize=9,
+            )
+
+    # Too many buckets to label every tick -- thin them out instead of
+    # letting them overlap into an unreadable smear.
+    tick_step = max(1, -(-len(labels) // 24)) if dense else 1
+    tick_idx = list(x)[::tick_step]
+    ax.set_xticks(tick_idx)
+    ax.set_xticklabels(
+        [labels[i] for i in tick_idx],
+        rotation=35 if not dense else 90,
+        ha="right" if not dense else "center",
+        fontsize=9 if not dense else 7,
+    )
+    ax.set_title(title, fontsize=13, fontweight="bold")
+    ax.set_xlabel("Context length (tokens)", fontsize=11)
+    ax.set_ylabel("Mean acceptance length", fontsize=11)
+    ax.grid(True, axis="y", alpha=0.3, zorder=0)
+    ax.spines["top"].set_visible(False)
+    ax.spines["right"].set_visible(False)
+
+
+def _load_position_scatter(
+    raw_log: Path, bin_size: int
+) -> tuple[list[int], list[int], list[int], list[float], list[float]]:
+    """Reconstruct per-verify-step (position, acceptance length) data from a raw log.
+
+    Returns ``(bubble_x, bubble_y, bubble_count, line_x, line_y)``: the bubble
+    arrays aggregate steps into ``(position // bin_size, acceptance_length)``
+    counts (one disk per combination); the line arrays are the raw, unbinned
+    per-step pairs used for the mean trend line.
+    """
+    counter: Counter[tuple[int, int]] = Counter()
+    line_x: list[float] = []
+    line_y: list[float] = []
+    for result in load_results(raw_log):
+        accepted = result.metrics.get("per_step_accepted")
+        drafted = result.metrics.get("per_step_drafted")
+        if not accepted or not drafted:
+            continue
+        pos = result.prompt_tokens
+        for accepted_count, _ in zip(accepted, drafted, strict=True):
+            acceptance_length = accepted_count + 1
+            line_x.append(pos)
+            line_y.append(acceptance_length)
+            binned_pos = (pos // bin_size) * bin_size
+            counter[(binned_pos, acceptance_length)] += 1
+            pos += accepted_count + 1
+
+    bubble_x = [key[0] for key in counter]
+    bubble_y = [key[1] for key in counter]
+    bubble_count = [counter[key] for key in counter]
+    return bubble_x, bubble_y, bubble_count, line_x, line_y
+
+
+def _binned_mean_curve(
+    x: list[float], y: list[float], n_bins: int = 40
+) -> tuple[np.ndarray, np.ndarray] | None:
+    """Plain per-bin mean of y over log-spaced bins of x. No model, no error bars."""
+    x_arr = np.asarray(x, dtype=float)
+    y_arr = np.asarray(y, dtype=float)
+    if len(x_arr) < 10:  # noqa: PLR2004
+        return None
+
+    log_x = np.log(x_arr)
+    edges = np.linspace(log_x.min(), log_x.max(), n_bins + 1)
+    bin_idx = np.clip(np.digitize(log_x, edges) - 1, 0, n_bins - 1)
+
+    centers, means = [], []
+    for b in range(n_bins):
+        mask = bin_idx == b
+        if not mask.any():
+            continue
+        centers.append(np.exp(log_x[mask].mean()))
+        means.append(y_arr[mask].mean())
+    return np.array(centers), np.array(means)
+
+
+def _set_log2_ticks(ax) -> None:
+    """Label the (already log-scale) x-axis with powers of 2, e.g. "2^12" for 4096.
+
+    Context lengths are naturally thought of in powers of 2 (MRCR's own
+    bucket edges double each step); matplotlib's default log-scale ticks
+    (4x10^3, 10^4, ...) don't line up with that.
+    """
+    xmin, xmax = ax.get_xlim()
+    if xmin <= 0:
+        return
+    lo_exp = int(np.floor(np.log2(xmin)))
+    hi_exp = int(np.ceil(np.log2(xmax)))
+    ticks = [2**e for e in range(lo_exp, hi_exp + 1) if xmin <= 2**e <= xmax]
+    if not ticks:
+        return
+    ax.xaxis.set_major_locator(FixedLocator(ticks))
+    ax.xaxis.set_major_formatter(
+        FuncFormatter(lambda val, _pos: f"2^{round(np.log2(val))}")
+    )
+    ax.xaxis.set_minor_formatter(NullFormatter())
+
+
+_BUBBLE_JITTER_SEED = 0
+
+
+def _plot_position_scatter(
+    ax,
+    raw_log: Path,
+    *,
+    bin_size: int,
+    alpha: float,
+    min_area: float,
+    max_area: float,
+    y_jitter: float,
+    title: str,
+) -> None:
+    """Disk-per-(position, acceptance length) scatter, sized by step count.
+
+    Disk *area* -- not radius -- scales with count, so the size comparison
+    a reader makes (area) matches the encoded quantity. Bubbles at the same
+    integer acceptance length would otherwise sit on an exact horizontal
+    line and stack directly on top of each other; a small fixed-seed random
+    y-jitter (uniform within +/- `y_jitter`) spreads them out so overlapping
+    disks are still visually distinguishable. The trend line below is fit
+    on the un-jittered values, so jitter never affects the reported mean.
+    """
+    bubble_x, bubble_y, bubble_count, line_x, line_y = _load_position_scatter(
+        raw_log, bin_size
+    )
+    if not bubble_x:
+        ax.axis("off")
+        return
+
+    rng = np.random.default_rng(_BUBBLE_JITTER_SEED)
+    jittered_y = [
+        y + rng.uniform(-y_jitter, y_jitter) if y_jitter else y for y in bubble_y
+    ]
+
+    max_count = max(bubble_count)
+    sizes = [min_area + (max_area - min_area) * (c / max_count) for c in bubble_count]
+    ax.scatter(
+        bubble_x,
+        jittered_y,
+        s=sizes,
+        color=_MRCR_POSITION_COLOR,
+        alpha=alpha,
+        edgecolors="none",
+        zorder=3,
+    )
+
+    trend_result = _binned_mean_curve(line_x, line_y)
+    if trend_result is not None:
+        x_smooth, mean_pred = trend_result
+        ax.plot(
+            x_smooth,
+            mean_pred,
+            color="#0d366b",
+            linewidth=2.5,
+            zorder=4,
+            label="Mean acceptance length",
+        )
+        ax.legend(loc="upper right", framealpha=0.9, fontsize=9)
+
+    ax.set_xscale("log")
+    _set_log2_ticks(ax)
+    ax.set_title(title, fontsize=13, fontweight="bold")
+    ax.set_xlabel("Context length (tokens, token position)", fontsize=11)
+    ax.set_ylabel("Acceptance length", fontsize=11)
+    ax.grid(True, alpha=0.3, zorder=0)
+    ax.spines["top"].set_visible(False)
+    ax.spines["right"].set_visible(False)
+
+
+def run_mrcr(args: argparse.Namespace) -> None:
+    start_rows = _read_bucket_csv(args.results_dir / "acceptance_by_start_length.csv")
+    raw_log = args.raw_log or (args.results_dir / RAW_LOG_FILENAME)
+    has_raw_log = raw_log.exists()
+    position_rows = (
+        []
+        if has_raw_log
+        else _read_bucket_csv(args.results_dir / "acceptance_by_position.csv")
+    )
+
+    if not start_rows and not has_raw_log and not position_rows:
+        print(
+            f"[ERROR] No acceptance data found in {args.results_dir}", file=sys.stderr
+        )
+        sys.exit(1)
+
+    fig, axes = plt.subplots(1, 2, figsize=(13, 5))
+
+    if start_rows:
+        _plot_acceptance_bars(
+            axes[0], start_rows, _MRCR_START_COLOR, "By context length at request start"
+        )
+    else:
+        axes[0].axis("off")
+
+    if has_raw_log:
+        _plot_position_scatter(
+            axes[1],
+            raw_log,
+            bin_size=args.position_bin_size,
+            alpha=args.bubble_alpha,
+            min_area=args.bubble_min_area,
+            max_area=args.bubble_max_area,
+            y_jitter=args.bubble_y_jitter,
+            title="By context length at token position",
+        )
+    elif position_rows:
+        _plot_acceptance_bars(
+            axes[1],
+            position_rows,
+            _MRCR_POSITION_COLOR,
+            "By context length at token position",
+        )
+    else:
+        axes[1].axis("off")
+
+    fig.suptitle(
+        args.title or "MRCR long-context acceptance length",
+        fontsize=14,
+        fontweight="bold",
+    )
+    fig.tight_layout(rect=(0, 0, 1, 0.95))
+
+    output_dir = args.output_dir or args.results_dir
+    output_dir.mkdir(parents=True, exist_ok=True)
+    outpath = output_dir / "mrcr_acceptance_length.png"
+    fig.savefig(outpath, dpi=150)
+    plt.close(fig)
+    print(f"[INFO] Saved {outpath}")
+
+
+# ============================================================================
 # CLI
 # ============================================================================
 
@@ -473,6 +747,89 @@ def main() -> None:
         help="Optional title prefix for plots (e.g. model name)",
     )
     spd.set_defaults(func=run_speedup)
+
+    # --- mrcr ---
+    mrcr = sub.add_parser(
+        "mrcr",
+        help="MRCR long-context acceptance length bar charts",
+        description=(
+            "Bar charts of mean acceptance length by context length, both at "
+            "request start and at token position (output of "
+            "`evaluate.py long-context`)."
+        ),
+    )
+    mrcr.add_argument(
+        "--results-dir",
+        type=Path,
+        required=True,
+        help=(
+            "Directory containing acceptance_by_start_length.csv and "
+            "acceptance_by_position.csv"
+        ),
+    )
+    mrcr.add_argument(
+        "--output-dir",
+        type=Path,
+        default=None,
+        help="Directory for the output PNG (default: --results-dir)",
+    )
+    mrcr.add_argument(
+        "--title",
+        type=str,
+        default=None,
+        help="Optional figure title (e.g. model name)",
+    )
+    mrcr.add_argument(
+        "--raw-log",
+        type=Path,
+        default=None,
+        help=(
+            "Path to raw_requests.jsonl for the per-token-position disk scatter "
+            "(default: <results-dir>/raw_requests.jsonl; falls back to the "
+            "coarser acceptance_by_position.csv bar chart if not found)"
+        ),
+    )
+    mrcr.add_argument(
+        "--position-bin-size",
+        type=int,
+        default=32,
+        help=(
+            "Token width to group positions into for the scatter (default: 32). "
+            "At 1 (exact positions), the model's frequent 1-token-per-step "
+            "advances in the low-acceptance regime mean adjacent same-row "
+            "disks touch and merge into solid bands regardless of opacity; "
+            "coarser bins give real, separable count variation."
+        ),
+    )
+    mrcr.add_argument(
+        "--bubble-alpha",
+        type=float,
+        default=0.12,
+        help="Disk opacity in the per-token-position scatter (default: 0.12)",
+    )
+    mrcr.add_argument(
+        "--bubble-y-jitter",
+        type=float,
+        default=0.25,
+        help=(
+            "Random +/- jitter added to each disk's y-position (acceptance "
+            "length) so disks at the same integer value don't stack exactly "
+            "on top of each other (default: 0.25; 0 disables)"
+        ),
+    )
+    mrcr.add_argument(
+        "--bubble-min-area",
+        type=float,
+        default=10.0,
+        help="Disk area (points^2) for a count-1 cell (default: 10)",
+    )
+    mrcr.add_argument(
+        "--bubble-max-area",
+        type=float,
+        default=280.0,
+        help="Disk area (points^2) for the most frequent cell (default: 280)",
+    )
+    mrcr.set_defaults(func=run_mrcr)
 
     args = parser.parse_args()
 
