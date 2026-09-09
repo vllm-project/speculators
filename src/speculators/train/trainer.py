@@ -304,6 +304,11 @@ class Trainer:
         # is saved for backward; intermediate activations (MLP, attention)
         # are recomputed. Saves ~10 GB for 5-layer DSpark with 32K seq.
         if self.config.gradient_checkpointing:
+            if not self.model.supports_gradient_checkpointing:
+                raise ValueError(
+                    f"{type(self.model).__name__} does not support "
+                    "gradient checkpointing"
+                )
             self.model.gradient_checkpointing_enable()
             root_logger.info("Gradient checkpointing enabled")
 
