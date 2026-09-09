@@ -9,6 +9,7 @@ from launch_vllm import (  # type: ignore[import-not-found]
     _save_vllm_command,
     _save_vllm_patch,
     _save_vllm_provenance,
+    main,
 )
 
 if TYPE_CHECKING:
@@ -143,6 +144,20 @@ class TestSaveVllmProvenance:
         assert (prov_dir / "vllm_command.txt").exists()
         assert (prov_dir / "vllm.patch").exists()
         assert (prov_dir / "checkpoint_sha256.txt").exists()
+        assert not (prov_dir / "drafter_checkpoint_sha256.txt").exists()
+
+    def test_creates_drafter_checkpoint_in_eval_mode(self, tmp_path: Path):
+        prov_dir = tmp_path / "provenance"
+        _save_vllm_provenance(
+            ["python", "serve"],
+            str(prov_dir),
+            "org/model",
+            spec_model="org/drafter",
+        )
+        assert (prov_dir / "checkpoint_sha256.txt").exists()
+        assert (prov_dir / "drafter_checkpoint_sha256.txt").exists()
+        content = (prov_dir / "drafter_checkpoint_sha256.txt").read_text()
+        assert "org/drafter" in content
 
     def test_creates_provenance_dir(self, tmp_path: Path):
         prov_dir = tmp_path / "nested" / "provenance"
@@ -170,3 +185,37 @@ class TestSaveVllmProvenance:
         assert not (prov_dir / "vllm_command.txt").exists()
         assert (prov_dir / "vllm.patch").exists()
         assert (prov_dir / "checkpoint_sha256.txt").exists()
+
+
+class TestRenderSetupGating:
+    """Render thread bounds and scale-out endpoints apply to train mode only."""
+
+    def _run(self, argv: list[str]) -> dict:
+        called = {"render": False, "scaleout": False}
+        with (
+            patch("sys.argv", ["launch_vllm.py", *argv]),
+            patch("launch_vllm._build_train_cmd", return_value=["train-cmd"]),
+            patch("launch_vllm._build_eval_cmd", return_value=["eval-cmd"]),
+            patch(
+                "launch_vllm._set_render_thread_defaults",
+                side_effect=lambda: called.__setitem__("render", True),
+            ),
+            patch(
+                "launch_vllm._enable_scale_out_endpoints",
+                side_effect=lambda: called.__setitem__("scaleout", True),
+            ),
+            patch("launch_vllm.os.execvp"),
+        ):
+            main()
+        return called
+
+    def test_train_sets_render_and_scale_out(self):
+        assert self._run(["train", "gpt2"]) == {"render": True, "scaleout": True}
+
+    def test_eval_does_not_set_render_or_scale_out(self):
+        called = self._run(["eval", "gpt2", "--spec-model", "org/drafter"])
+        assert called == {"render": False, "scaleout": False}
+
+    def test_train_headless_skips_render_and_scale_out(self):
+        called = self._run(["train", "gpt2", "--", "--headless"])
+        assert called == {"render": False, "scaleout": False}

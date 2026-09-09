@@ -42,8 +42,88 @@ def perf_utils():
 
 
 # ---------------------------------------------------------------------------
+# Prometheus metrics aggregation
+# ---------------------------------------------------------------------------
+
+
+def _engine_metrics(engine: int, drafts: int, counts: list[int]) -> str:
+    """Build one engine's consistent cumulative speculative counters."""
+    prefix = "vllm:spec_decode_"
+    labels = f'engine="{engine}"'
+    rows = [
+        f"{prefix}num_drafts_total{{{labels}}} {drafts}",
+        f"{prefix}num_draft_tokens_total{{{labels}}} {drafts * len(counts)}",
+        f"{prefix}num_accepted_tokens_total{{{labels}}} {sum(counts)}",
+    ]
+    rows.extend(
+        f"{prefix}num_accepted_tokens_per_pos_total"
+        f'{{{labels},position="{pos}"}} {value}'
+        for pos, value in enumerate(counts)
+    )
+    return "\n".join(rows)
+
+
+@pytest.mark.parametrize("engines", [1, 2])
+@pytest.mark.parametrize("reverse", [False, True])
+def test_per_position_metrics_sum_engines(perf_utils, engines, reverse):
+    """All positions use the same engine aggregation as the scalar counters."""
+    text = _engine_metrics(0, 10, [8, 4])
+    if engines == 2:
+        text += "\n" + _engine_metrics(1, 20, [18, 6])
+    if reverse:
+        text = "\n".join(reversed(text.splitlines()))
+    result = perf_utils.extract_spec_decode_metrics(
+        perf_utils.parse_prometheus_metrics(text)
+    )
+    drafts = 10 if engines == 1 else 30
+    counts = [8, 4] if engines == 1 else [26, 10]
+    assert result["num_drafts"] == drafts
+    assert result["num_accepted_tokens"] == sum(counts)
+    for pos, count in enumerate(counts):
+        assert result[f"acceptance_at_pos_{pos}"] == pytest.approx(count / drafts)
+    assert result["acceptance_length"] == pytest.approx(
+        1 + sum(result[f"acceptance_at_pos_{pos}"] for pos in range(len(counts)))
+    )
+
+
+def test_per_position_metrics_sum_before_baseline_subtraction(perf_utils):
+    """Subtract aggregate snapshots rather than the largest engine samples."""
+    baseline = _engine_metrics(0, 10, [8, 4]) + "\n" + _engine_metrics(1, 20, [18, 6])
+    current = _engine_metrics(0, 20, [17, 9]) + "\n" + _engine_metrics(1, 30, [27, 10])
+    result = perf_utils.extract_spec_decode_metrics(
+        perf_utils.parse_prometheus_metrics(current),
+        perf_utils.parse_prometheus_metrics(baseline),
+    )
+    assert result["num_drafts"] == 20
+    assert result["num_accepted_tokens"] == 27
+    assert result["acceptance_at_pos_0"] == pytest.approx(18 / 20)
+    assert result["acceptance_at_pos_1"] == pytest.approx(9 / 20)
+    assert result["acceptance_length"] == pytest.approx(1 + 27 / 20)
+
+
+# ---------------------------------------------------------------------------
 # parse_gen_kwargs
 # ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("drafts", [0, 10])
+def test_per_position_metrics_keep_sparse_positions(perf_utils, drafts):
+    """Missing positions stay zero while duplicate series are aggregated."""
+    text = f"vllm:spec_decode_num_drafts_total {drafts}\n" + "\n".join(
+        [
+            "vllm:spec_decode_num_accepted_tokens_per_pos_total"
+            '{engine="0",position="2"} 3',
+            "vllm:spec_decode_num_accepted_tokens_per_pos_total"
+            '{position="2",engine="1"} 4',
+        ]
+    )
+    metrics = perf_utils.parse_prometheus_metrics(text)
+    vector = next(metric for metric in metrics if isinstance(metric, perf_utils.Vector))
+    assert vector.values == [0.0, 0.0, 7.0]
+    result = perf_utils.extract_spec_decode_metrics(metrics)
+    assert result["acceptance_at_pos_0"] == 0
+    assert result["acceptance_at_pos_1"] == 0
+    assert result["acceptance_at_pos_2"] == pytest.approx(7 / drafts if drafts else 0)
 
 
 class TestParseGenKwargs:
