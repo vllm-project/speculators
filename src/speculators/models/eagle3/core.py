@@ -28,6 +28,7 @@ from speculators.proposals.greedy import GreedyTokenProposalConfig
 @SpeculatorModel.register("eagle3")
 class Eagle3DraftModel(DraftVocabMixin, SpeculatorModel):
     config_class: ClassVar[type[Eagle3SpeculatorConfig]] = Eagle3SpeculatorConfig  # type: ignore[misc]
+    supports_gradient_checkpointing = True  # noqa: D003  # Llama/Qwen3 DecoderLayer inherits GradientCheckpointingLayer
     _keys_to_ignore_on_load_missing: ClassVar[list[str]] = [  # type: ignore[misc]
         "embed_tokens.weight",
         "verifier_norm.weight",
