@@ -168,3 +168,9 @@ def run_mrcr(
         context_bin_edges=DEFAULT_CONTEXT_BIN_EDGES,
         position_bin_size=position_bin_size,
     )
+    logger.info(
+        "Render the acceptance figure with:\n"
+        "  python plot.py acceptance --table %s --output %s",
+        table_dir,
+        output_dir / "acceptance.png",
+    )
