@@ -13,8 +13,6 @@ BLOCK_SIZE cap (MAX_FUSED_SIZE_NPU = 4096), which forces the tighter
 multi-block streaming loop.
 """
 
-from types import SimpleNamespace
-
 import pytest
 import torch
 import triton
@@ -188,71 +186,54 @@ def test_eager_implementation_supports_differentiable_targets():
         assert targets.grad is not None, name
 
 
-def test_calculate_settings_respects_npu_cap():
-    """The NPU branch keeps its fixed Unified-Buffer cap at every vocab size.
+def test_tile_configs_stay_register_resident():
+    """Every autotune candidate sits in the measured non-spilling region.
 
-    Runs without NPU hardware -- the helper only reads ``device.type`` -- so
-    upstream CI still covers the branch.
+    This is the invariant that matters: the tile the autotuner ends up on is
+    machine-dependent and not worth asserting, but a candidate that spills to
+    local memory is never competitive on any device. The fixed
+    BLOCK_SIZE=131072 this module used to select was 512 elements/thread and
+    ran the forward kernel ~17x slower than a register-resident tile.
     """
     fused_losses = pytest.importorskip("speculators.losses.fused")
 
-    npu_cases = (
-        (512, 512),
-        (4096, 4096),
-        (8192, 4096),
-        (32768, 4096),
-        (131072, 4096),
-        (151936, 4096),
-    )
-    for vocab, expected in npu_cases:
-        block, _ = fused_losses._calculate_settings(vocab, SimpleNamespace(type="npu"))
-        assert block == expected, (
-            f"NPU cap: vocab={vocab} -> BLOCK_SIZE={block}, expected {expected}"
-        )
+    configs = fused_losses._tile_configs()
+    assert configs, "the autotuner needs at least one candidate"
+
+    warp_size = 64 if getattr(torch.version, "hip", None) is not None else 32
+    for config in configs:
+        block = config.kwargs["BLOCK_SIZE"]
+        threads = config.num_warps * warp_size
+        assert block == triton.next_power_of_2(block)
+        if fused_losses.is_npu_available():
+            assert block <= fused_losses.MAX_FUSED_SIZE_NPU
+            continue
+        elems_per_thread = block // threads
+        assert (
+            fused_losses._MIN_ELEMS_PER_THREAD
+            <= elems_per_thread
+            <= fused_losses._MAX_ELEMS_PER_THREAD
+        ), f"BLOCK_SIZE={block} at {threads} threads is {elems_per_thread} elems/thread"
 
 
-def test_calculate_settings_tile_stays_register_resident():
-    """CUDA tiles never exceed ELEMS_PER_THREAD elements per thread.
+def test_prune_oversized_tiles_never_empties_the_space():
+    """Pruning narrows the space for small vocabs but always leaves a candidate.
 
-    This is the invariant that matters. A wider tile spills to local memory:
-    the previous fixed BLOCK_SIZE=131072 spilled 234 bytes/thread and ran the
-    forward kernel ~17x slower at vocab sizes above 65536. The helper only
-    reads ``device.type``, so this runs without CUDA hardware.
+    A vocab narrower than every candidate tile (the 512-wide test shapes) must
+    still get a config -- an empty list would make the launch unschedulable --
+    and it should get only the narrowest, so tiny shapes do not pay to compile
+    the whole space.
     """
     fused_losses = pytest.importorskip("speculators.losses.fused")
-    device = SimpleNamespace(type="cuda")
 
-    for vocab in (512, 4096, 8192, 32000, 131072, 151936, 262144):
-        block, warps = fused_losses._calculate_settings(vocab, device)
-        threads = warps * 32
-        assert block <= triton.next_power_of_2(vocab)
-        assert block <= fused_losses.MAX_FUSED_SIZE
-        assert block <= threads * fused_losses.ELEMS_PER_THREAD, (
-            f"vocab={vocab}: BLOCK_SIZE={block} exceeds "
-            f"{fused_losses.ELEMS_PER_THREAD} elements/thread at {threads} threads"
-        )
-        assert threads >= fused_losses.MIN_THREADS_PER_PROGRAM
+    configs = fused_losses._tile_configs()
+    blocks = {config.kwargs["BLOCK_SIZE"] for config in configs}
 
-
-def test_calculate_settings_cuda_cases():
-    """The tile stops growing with the vocab once it hits MAX_FUSED_SIZE.
-
-    8192/8 warps is the configuration measured fastest on an A100 at the row
-    counts training uses, for both a 32k draft vocab and a full 152k vocab.
-    """
-    fused_losses = pytest.importorskip("speculators.losses.fused")
-    device = SimpleNamespace(type="cuda")
-
-    cuda_cases = (
-        (512, (512, 256 // 32)),
-        (4096, (4096, 256 // 32)),
-        (8192, (8192, 256 // 32)),
-        (32000, (8192, 256 // 32)),
-        (131072, (8192, 256 // 32)),
-        (151936, (8192, 256 // 32)),
-    )
-    for vocab, expected in cuda_cases:
-        assert fused_losses._calculate_settings(vocab, device) == expected, (
-            f"vocab={vocab} -> {fused_losses._calculate_settings(vocab, device)}, "
-            f"expected {expected}"
-        )
+    for vocab in (128, 512, 4096, 32000, 151936):
+        pruned = fused_losses._prune_oversized_tiles(configs, {"n_cols": vocab})
+        assert pruned, f"vocab={vocab} pruned every candidate"
+        cap = triton.next_power_of_2(vocab)
+        if any(block <= cap for block in blocks):
+            assert all(config.kwargs["BLOCK_SIZE"] <= cap for config in pruned)
+        else:
+            assert {config.kwargs["BLOCK_SIZE"] for config in pruned} == {min(blocks)}

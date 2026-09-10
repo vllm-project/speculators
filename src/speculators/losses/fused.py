@@ -30,37 +30,40 @@ import torch
 import triton
 import triton.language as tl
 
+from speculators.utils.util import is_npu_available
+
 # Ascend NPU's Unified Buffer (~192 KB) cannot fit the double-row load these
 # kernels perform (logits + targets per block) beyond 4096 elements per block;
 # triton-ascend raises "ub overflow" at BLOCK_SIZE >= 8192. CE is single-row
 # but shares the same cap so all _FusedLoss OPs use one path.
 MAX_FUSED_SIZE_NPU = 4096
 
-# CUDA tile selection. Each program holds several fp32 vectors of
-# BLOCK_SIZE / threads elements live at once, so what bounds the tile is
-# elements *per thread*, not BLOCK_SIZE. Past ~32 the working set exceeds the
-# 255-register budget and Triton spills to local memory; measured spill bytes
-# per thread for the forward kernel at V=151936 on an A100:
+# Search space for the row-per-program tile, autotuned per (vocab, OP) on the
+# first launch. Each program keeps several fp32 vectors of BLOCK_SIZE / threads
+# elements live at once, so what bounds the tile is elements *per thread*, not
+# BLOCK_SIZE: register use grows at roughly two per element, exhausting the
+# 255-register budget around 128, after which Triton spills to local memory.
+# Measured registers/spill-bytes per thread, forward kernel, V=151936, A100:
 #
-#     BLOCK_SIZE   warps=8   warps=16   warps=32
-#       131072        1162        532        234
-#        65536         152         38         38
-#        32768           0          0          0
-#         8192           0          0          0
+#     BLOCK_SIZE     warps=4      warps=8     warps=16     warps=32
+#          4096     54/0         32/0         31/0         27/0
+#          8192     96/6         48/0         32/0         31/0
+#         16384    253/0        127/0         64/0         32/0
+#         32768    255/126      254/0         97/0         53/0
+#         65536     32/1222     255/152      128/38        64/38
+#        131072     32/3748      32/1162      32/532       32/234
 #
-# A fixed BLOCK_SIZE of 131072 (the previous behaviour, hit by any vocab
-# > 65536) spilled 234 B/thread and ran the forward at 98 GB/s -- 6% of HBM
-# peak, and 17x slower than the same kernel with a register-resident tile.
-ELEMS_PER_THREAD = 32
-
-# Cap the tile so a full-vocab row is streamed in several register-resident
-# passes rather than one spilling pass. 8192 measured fastest at the shapes
-# training actually uses (>=1024 rows); a wider tile only helps when there are
-# too few rows to fill the device, where the kernel costs <0.3 ms anyway.
-MAX_FUSED_SIZE = 8192
-
-# num_warps=4 measured slower than 8 at every shape tried.
-MIN_THREADS_PER_PROGRAM = 256
+# A spilling tile is never competitive -- the fixed BLOCK_SIZE=131072 this file
+# used to select for any vocab > 65536 spilled 234 B/thread and ran the forward
+# at 98 GB/s, 6% of A100 HBM peak -- so the space is bounded to the
+# register-resident region up front rather than rediscovered at every startup.
+# Which tile *within* that region wins is machine-dependent, which is what the
+# autotuner is for; on an A100 it lands on 8192/8 warps at a 151936 vocab and
+# 16384/16 at 32000.
+_MAX_ELEMS_PER_THREAD = 128
+_MIN_ELEMS_PER_THREAD = 4
+_BLOCK_SIZES = (1024, 2048, 4096, 8192, 16384, 32768)
+_THREADS_PER_PROGRAM = (128, 256, 512, 1024)
 
 # tl.constexpr instances: Triton kernels may only read globals wrapped this way.
 _LOG2 = tl.constexpr(0.6931471805599453)
@@ -81,24 +84,47 @@ _OP_TV = tl.constexpr(4)
 _N_STATS = 5
 
 
-def _calculate_settings(n, device):
-    """Pick (BLOCK_SIZE, num_warps) for a row-per-program launch over ``n`` cols.
+def _tile_configs():
+    """Register-resident (BLOCK_SIZE, num_warps) candidates for the autotuner."""
+    if is_npu_available():
+        # triton-ascend is Unified-Buffer bound rather than register bound:
+        # exactly one tile fits, so there is nothing to search.
+        return [triton.Config({"BLOCK_SIZE": MAX_FUSED_SIZE_NPU}, num_warps=4)]
 
-    Sized so each program's working set stays in registers: the thread count
-    scales with the tile so elements-per-thread is pinned at
-    ``ELEMS_PER_THREAD`` regardless of vocab size.
+    # AMD wavefronts are 64-wide, so a thread count is half as many warps.
+    warp_size = 64 if getattr(torch.version, "hip", None) is not None else 32
+    return [
+        triton.Config({"BLOCK_SIZE": block}, num_warps=threads // warp_size)
+        for threads in _THREADS_PER_PROGRAM
+        for block in _BLOCK_SIZES
+        if _MIN_ELEMS_PER_THREAD <= block // threads <= _MAX_ELEMS_PER_THREAD
+    ]
+
+
+def _prune_oversized_tiles(configs, nargs, **_):
+    """Drop tiles wider than the vocabulary; those only add masked-off lanes.
+
+    Dynamo traces this callback when the launch is inside a compiled region, so
+    it has to stay to simple list operations -- a ``min(..., key=...)`` here
+    fails to trace.
     """
-    if device.type == "npu":
-        # triton-ascend is Unified-Buffer bound, not register bound, and does
-        # not require extra num_warps tuning.
-        return min(triton.next_power_of_2(n), MAX_FUSED_SIZE_NPU), 4
+    cap = triton.next_power_of_2(nargs["n_cols"])
+    keep = [config for config in configs if config.kwargs["BLOCK_SIZE"] <= cap]
+    if keep:
+        return keep
+    # Every tile is oversized for a very narrow vocab. They all still mask
+    # correctly, but only the narrowest are worth compiling.
+    floor = min(config.kwargs["BLOCK_SIZE"] for config in configs)
+    return [config for config in configs if config.kwargs["BLOCK_SIZE"] == floor]
 
-    BLOCK_SIZE = min(triton.next_power_of_2(n), MAX_FUSED_SIZE)
-    threads = max(BLOCK_SIZE // ELEMS_PER_THREAD, MIN_THREADS_PER_PROGRAM)
-    num_warps = threads // 32
-    if getattr(torch.version, "hip", None) is not None:  # AMD wavefronts are 64-wide
-        num_warps //= 2
-    return BLOCK_SIZE, num_warps
+
+# Keyed on OP as well as the vocab: CE streams the row once where the
+# distribution losses stream it three times, so they do not share an optimum.
+_autotune_tile = triton.autotune(
+    configs=_tile_configs(),
+    key=["n_cols", "OP"],
+    prune_configs_by={"early_config_prune": _prune_oversized_tiles},
+)
 
 
 @triton.jit
@@ -124,6 +150,7 @@ def _log_mix(ldp, ltp):
     return mx + tl.log(tl.exp(ldp - mx) + tl.exp(ltp - mx)) - _LOG2
 
 
+@_autotune_tile
 @triton.jit
 def loss_forward_kernel(  # noqa: C901 -- constexpr OP branches, pruned per instance
     logits_ptr,
@@ -210,6 +237,7 @@ def loss_forward_kernel(  # noqa: C901 -- constexpr OP branches, pruned per inst
             tl.store(stats_ptr + 4 * stats_row + pid, extra)
 
 
+@_autotune_tile
 @triton.jit
 def loss_backward_kernel(
     logits_ptr,
@@ -285,7 +313,6 @@ class _FusedLoss(torch.autograd.Function):
         targets_flat = targets.contiguous().view(B * T, V)
         loss = torch.empty(B * T, device=logits.device, dtype=torch.float32)
         stats = torch.empty(_N_STATS, B * T, device=logits.device, dtype=torch.float32)
-        BLOCK_SIZE, num_warps = _calculate_settings(V, logits_flat.device)
         loss_forward_kernel[(B * T,)](
             logits_flat,
             targets_flat,
@@ -294,8 +321,6 @@ class _FusedLoss(torch.autograd.Function):
             stats.stride(0),
             V,
             OP=op,
-            BLOCK_SIZE=BLOCK_SIZE,
-            num_warps=num_warps,
         )
         # CE backward only needs the target argmax cached in stats.
         ctx.save_for_backward(
@@ -303,14 +328,12 @@ class _FusedLoss(torch.autograd.Function):
         )
         ctx.op = op
         ctx.shape = (B, T, V)
-        ctx.settings = (BLOCK_SIZE, num_warps)
         return loss.view(B, T)
 
     @staticmethod
     def backward(ctx, grad_output):
         logits_flat, targets_flat, stats = ctx.saved_tensors
         B, T, V = ctx.shape
-        BLOCK_SIZE, num_warps = ctx.settings
         grad_in = torch.empty_like(logits_flat)
         loss_backward_kernel[(B * T,)](
             logits_flat,
@@ -321,8 +344,6 @@ class _FusedLoss(torch.autograd.Function):
             stats.stride(0),
             V,
             OP=ctx.op,
-            BLOCK_SIZE=BLOCK_SIZE,
-            num_warps=num_warps,
         )
         return grad_in.view(B, T, V), None, None
 
