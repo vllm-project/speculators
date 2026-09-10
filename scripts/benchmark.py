@@ -1220,7 +1220,7 @@ def report_benchmark(result_path: str, output_path: str | None = None) -> None:
     # --- Summary dashboard ---
     summary_fig = _build_summary_fig(results, per_step)
     has_memory = any("memory_mb" in s for s in per_step)
-    summary_height = 500 if has_memory else 350
+    summary_height = 700 if has_memory else 450
     summary_fig.update_layout(
         height=summary_height,
         template="plotly_white",
