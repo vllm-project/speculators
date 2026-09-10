@@ -465,16 +465,21 @@ class Trainer:
         timer = _StepTimer()
         recovery = BatchRecoveryCoordinator("training")
         remaining_steps = len(self.train_loader)
+        accumulated: dict[str, torch.Tensor] = {}
+        batches_since_log = 0
         for local_step_rel, batch in enumerate(train_loader, 1):
             # local_step is 1-based index into the *full* epoch (not the slice).
             local_step = local_step_rel + skip_steps
-            timer.reset(self.global_step % self.config.log_freq == 0)
-
-            timer.mark_value("start", t_before_fetch)
             will_stop = (
                 self.config.max_steps is not None
                 and self.global_step + 1 >= self.config.max_steps
             )
+            timer.reset(
+                self.global_step % self.config.log_freq == 0
+                or local_step_rel == remaining_steps
+                or will_stop
+            )
+            timer.mark_value("start", t_before_fetch)
             recovery.consume(
                 batch,
                 synchronize=_should_sync_recovery(
@@ -509,6 +514,11 @@ class Trainer:
             metrics["error_records_total"] = torch.tensor(
                 1.0 if self.rank == 0 else 0, device=loss.device
             )
+            for k, v in metrics.items():
+                value = v.detach().float()
+                acc = accumulated.get(k)
+                accumulated[k] = value.clone() if acc is None else acc + value
+            batches_since_log += 1
 
             timer.mark("bwd")
             self._optimizers_step()
@@ -525,16 +535,18 @@ class Trainer:
                 num_tokens = int((gpu_batch["document_ids"] != -1).sum().item())
                 profile = timer.profile(num_tokens)
                 if self.is_distributed:
-                    for v in metrics.values():
+                    for v in accumulated.values():
                         dist.reduce(v, dst=0, op=dist.ReduceOp.SUM)
 
-                metrics = {k: v.item() for k, v in metrics.items()}
+                metrics = {k: v.item() for k, v in accumulated.items()}
                 world_size = dist.get_world_size() if self.is_distributed else 1
                 reference_counts = {
                     k: int(v)
                     for k, v in metrics.items()
                     if k.startswith("reference_acc_at_pos_")
                 }
+                # Batch averaging preserves count ratios and averages scalar metrics.
+                metrics = {k: v / batches_since_log for k, v in metrics.items()}
                 metrics = normalize_counted_metrics(metrics, world_size)
                 metrics.update(reference_counts)
                 lr_info = (
@@ -552,6 +564,8 @@ class Trainer:
                     },
                     extra={"step": self.global_step},
                 )
+                accumulated.clear()
+                batches_since_log = 0
             self.global_step += 1
 
             if (

@@ -95,3 +95,87 @@ def test_reference_counts_reach_console_without_rounding(split):
     assert f"{split}/reference_acc_at_pos_0_sum{suffix}=24690" in record.msg
     assert f"{split}/reference_acc_at_pos_0_total{suffix}=1308642" in record.msg
     assert f"{split}/loss{suffix}=0.500" in record.msg
+
+
+@pytest.mark.parametrize("world_size", [1, 2])
+@pytest.mark.parametrize(
+    ("log_freq", "max_steps", "windows"),
+    [
+        (1, None, [[0], [1], [2], [3], [4]]),
+        (3, None, [[0], [1, 2, 3], [4]]),
+        (3, 3, [[0], [1, 2]]),
+    ],
+)
+def test_training_metrics_pool_batches_between_logs(
+    log_freq, max_steps, windows, world_size
+):
+    trainer = MagicMock(spec=Trainer)
+    trainer.rank = 1
+    trainer.local_rank = torch.device("cpu")
+    trainer.device_type = "cpu"
+    trainer.is_distributed = world_size > 1
+    trainer.global_step = 0
+    trainer.config = TrainerConfig(
+        lr=1e-3, num_epochs=1, save_path="/tmp", log_freq=log_freq, max_steps=max_steps
+    )
+    trainer.optimizers = [MagicMock(param_groups=[{"lr": 1e-3}])]
+    trainer._prepare_resume_skip.return_value = 0
+    trainer.model = MagicMock()
+    trainer.model.parameters.return_value = []
+    # Unequal denominators distinguish pooled counts from averaged batch rates.
+    counts = [(0, 1), (8, 10), (1, 2), (0, 0), (1, 1)]
+    trainer.model.side_effect = [
+        (
+            None,
+            torch.tensor(float(i + 1), requires_grad=True),
+            {
+                "loss_sum": torch.tensor(float(i + 1)),
+                "loss_total": torch.tensor(1.0),
+                "loss_step_0": torch.tensor(float(i + 1)),
+                "full_acc_sum": torch.tensor(correct),
+                "full_acc_total": torch.tensor(total),
+                "reference_acc_at_pos_0_sum": torch.tensor(correct),
+                "reference_acc_at_pos_0_total": torch.tensor(total),
+            },
+        )
+        for i, (correct, total) in enumerate(counts)
+    ]
+    loader = MagicMock()
+    loader.__len__.return_value = len(counts)
+    loader.__iter__.return_value = iter(
+        [
+            {"document_ids": torch.zeros(1, 4, dtype=torch.long), "error_records": 0}
+            for _ in counts
+        ]
+    )
+    trainer.train_loader = loader
+
+    with (
+        patch("speculators.train.trainer.torch.accelerator.synchronize"),
+        patch("speculators.train.trainer.dist.get_world_size", return_value=world_size),
+        patch(
+            "speculators.train.trainer.dist.reduce",
+            side_effect=lambda x, **kw: x.mul_(world_size),
+        ),
+        patch("speculators.train.trainer.metric_logger.info") as log,
+    ):
+        Trainer.train_epoch(trainer, 0)
+
+    assert trainer.model.call_count == sum(map(len, windows))
+    assert log.call_count == len(windows)
+    for call, window in zip(log.call_args_list, windows, strict=True):
+        record = call.args[0]
+        metrics = record["train"]
+        correct = sum(counts[i][0] for i in window) * world_size
+        total = sum(counts[i][1] for i in window) * world_size
+        rate = correct / total if total else 0.0
+        assert record["global_step"] == window[-1]
+        assert record["lr"] == 1e-3
+        assert metrics["reference_acc_at_pos_0_sum"] == correct
+        assert metrics["reference_acc_at_pos_0_total"] == total
+        assert metrics["reference_acc_at_pos_0"] == pytest.approx(rate)
+        assert metrics["full_acc"] == pytest.approx(rate)
+        assert metrics["loss"] == pytest.approx(
+            sum(i + 1 for i in window) / len(window)
+        )
+        assert metrics["loss_step_0"] == metrics["loss"]
