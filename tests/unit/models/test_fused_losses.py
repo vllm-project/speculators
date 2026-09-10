@@ -17,6 +17,7 @@ from types import SimpleNamespace
 
 import pytest
 import torch
+import triton
 
 from speculators.losses import eager, resolve_loss_config
 from speculators.utils.util import is_npu_available
@@ -187,13 +188,11 @@ def test_eager_implementation_supports_differentiable_targets():
         assert targets.grad is not None, name
 
 
-def test_calculate_settings_respects_device_cap():
-    """`_calculate_settings` picks the right BLOCK_SIZE for each device without
-    needing NPU or CUDA hardware -- the helper only reads ``device.type``.
+def test_calculate_settings_respects_npu_cap():
+    """The NPU branch keeps its fixed Unified-Buffer cap at every vocab size.
 
-    Exercises the NPU cap (MAX_FUSED_SIZE_NPU = 4096) and the CUDA cap
-    (MAX_FUSED_SIZE = 131072) at vocab sizes that span the boundaries, so
-    upstream CI (which typically has no NPU) still covers the NPU branch.
+    Runs without NPU hardware -- the helper only reads ``device.type`` -- so
+    upstream CI still covers the branch.
     """
     fused_losses = pytest.importorskip("speculators.losses.fused")
 
@@ -211,15 +210,49 @@ def test_calculate_settings_respects_device_cap():
             f"NPU cap: vocab={vocab} -> BLOCK_SIZE={block}, expected {expected}"
         )
 
+
+def test_calculate_settings_tile_stays_register_resident():
+    """CUDA tiles never exceed ELEMS_PER_THREAD elements per thread.
+
+    This is the invariant that matters. A wider tile spills to local memory:
+    the previous fixed BLOCK_SIZE=131072 spilled 234 bytes/thread and ran the
+    forward kernel ~17x slower at vocab sizes above 65536. The helper only
+    reads ``device.type``, so this runs without CUDA hardware.
+    """
+    fused_losses = pytest.importorskip("speculators.losses.fused")
+    device = SimpleNamespace(type="cuda")
+
+    for vocab in (512, 4096, 8192, 32000, 131072, 151936, 262144):
+        block, warps = fused_losses._calculate_settings(vocab, device)
+        threads = warps * 32
+        assert block <= triton.next_power_of_2(vocab)
+        assert block <= fused_losses.MAX_FUSED_SIZE
+        assert block <= threads * fused_losses.ELEMS_PER_THREAD, (
+            f"vocab={vocab}: BLOCK_SIZE={block} exceeds "
+            f"{fused_losses.ELEMS_PER_THREAD} elements/thread at {threads} threads"
+        )
+        assert threads >= fused_losses.MIN_THREADS_PER_PROGRAM
+
+
+def test_calculate_settings_cuda_cases():
+    """The tile stops growing with the vocab once it hits MAX_FUSED_SIZE.
+
+    8192/8 warps is the configuration measured fastest on an A100 at the row
+    counts training uses, for both a 32k draft vocab and a full 152k vocab.
+    """
+    fused_losses = pytest.importorskip("speculators.losses.fused")
+    device = SimpleNamespace(type="cuda")
+
     cuda_cases = (
-        (512, 512),
-        (4096, 4096),
-        (8192, 8192),
-        (131072, 131072),
-        (151936, 131072),
+        (512, (512, 256 // 32)),
+        (4096, (4096, 256 // 32)),
+        (8192, (8192, 256 // 32)),
+        (32000, (8192, 256 // 32)),
+        (131072, (8192, 256 // 32)),
+        (151936, (8192, 256 // 32)),
     )
     for vocab, expected in cuda_cases:
-        block, _ = fused_losses._calculate_settings(vocab, SimpleNamespace(type="cuda"))
-        assert block == expected, (
-            f"CUDA cap: vocab={vocab} -> BLOCK_SIZE={block}, expected {expected}"
+        assert fused_losses._calculate_settings(vocab, device) == expected, (
+            f"vocab={vocab} -> {fused_losses._calculate_settings(vocab, device)}, "
+            f"expected {expected}"
         )

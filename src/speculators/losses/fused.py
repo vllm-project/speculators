@@ -22,20 +22,45 @@ lineage); TV gradient sign convention matches Liger ops/tvd.py.
 """
 
 # Triton kernels idiomatically use uppercase constexpr/dim names (B, T, V,
-# BLOCK_SIZE) and inline block-size tuning thresholds; exempt this file from the
-# pep8-naming and magic-value lints rather than fight those conventions.
-# ruff: noqa: N803, N806, PLR2004
+# BLOCK_SIZE); exempt this file from the pep8-naming lints rather than fight
+# that convention.
+# ruff: noqa: N803, N806
 
 import torch
 import triton
 import triton.language as tl
 
-MAX_FUSED_SIZE = 131072
 # Ascend NPU's Unified Buffer (~192 KB) cannot fit the double-row load these
 # kernels perform (logits + targets per block) beyond 4096 elements per block;
 # triton-ascend raises "ub overflow" at BLOCK_SIZE >= 8192. CE is single-row
 # but shares the same cap so all _FusedLoss OPs use one path.
 MAX_FUSED_SIZE_NPU = 4096
+
+# CUDA tile selection. Each program holds several fp32 vectors of
+# BLOCK_SIZE / threads elements live at once, so what bounds the tile is
+# elements *per thread*, not BLOCK_SIZE. Past ~32 the working set exceeds the
+# 255-register budget and Triton spills to local memory; measured spill bytes
+# per thread for the forward kernel at V=151936 on an A100:
+#
+#     BLOCK_SIZE   warps=8   warps=16   warps=32
+#       131072        1162        532        234
+#        65536         152         38         38
+#        32768           0          0          0
+#         8192           0          0          0
+#
+# A fixed BLOCK_SIZE of 131072 (the previous behaviour, hit by any vocab
+# > 65536) spilled 234 B/thread and ran the forward at 98 GB/s -- 6% of HBM
+# peak, and 17x slower than the same kernel with a register-resident tile.
+ELEMS_PER_THREAD = 32
+
+# Cap the tile so a full-vocab row is streamed in several register-resident
+# passes rather than one spilling pass. 8192 measured fastest at the shapes
+# training actually uses (>=1024 rows); a wider tile only helps when there are
+# too few rows to fill the device, where the kernel costs <0.3 ms anyway.
+MAX_FUSED_SIZE = 8192
+
+# num_warps=4 measured slower than 8 at every shape tried.
+MIN_THREADS_PER_PROGRAM = 256
 
 # tl.constexpr instances: Triton kernels may only read globals wrapped this way.
 _LOG2 = tl.constexpr(0.6931471805599453)
@@ -57,16 +82,20 @@ _N_STATS = 5
 
 
 def _calculate_settings(n, device):
-    max_size = MAX_FUSED_SIZE_NPU if device.type == "npu" else MAX_FUSED_SIZE
-    BLOCK_SIZE = min(triton.next_power_of_2(n), max_size)
-    # triton-ascend does not require extra num_warps tuning
-    num_warps = 4
-    if BLOCK_SIZE >= 32768:
-        num_warps = 32
-    elif BLOCK_SIZE >= 8192:
-        num_warps = 16
-    elif BLOCK_SIZE >= 2048:
-        num_warps = 8
+    """Pick (BLOCK_SIZE, num_warps) for a row-per-program launch over ``n`` cols.
+
+    Sized so each program's working set stays in registers: the thread count
+    scales with the tile so elements-per-thread is pinned at
+    ``ELEMS_PER_THREAD`` regardless of vocab size.
+    """
+    if device.type == "npu":
+        # triton-ascend is Unified-Buffer bound, not register bound, and does
+        # not require extra num_warps tuning.
+        return min(triton.next_power_of_2(n), MAX_FUSED_SIZE_NPU), 4
+
+    BLOCK_SIZE = min(triton.next_power_of_2(n), MAX_FUSED_SIZE)
+    threads = max(BLOCK_SIZE // ELEMS_PER_THREAD, MIN_THREADS_PER_PROGRAM)
+    num_warps = threads // 32
     if getattr(torch.version, "hip", None) is not None:  # AMD wavefronts are 64-wide
         num_warps //= 2
     return BLOCK_SIZE, num_warps
