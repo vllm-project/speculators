@@ -7,6 +7,10 @@ from transformers.models.qwen3.modeling_qwen3 import (
 )
 
 from speculators import SpeculatorModelConfig
+from speculators.models.dflash.glm5 import (
+    GLM5_MLA_MODEL_TYPES,
+    Glm5Config,
+)
 
 __all__ = [
     "DFlashSpeculatorConfig",
@@ -91,6 +95,11 @@ class DFlashSpeculatorConfig(SpeculatorModelConfig):
     def validate_transformer_config(cls, value: Any) -> PretrainedConfig:
         """Validate and convert transformer config."""
         if isinstance(value, dict):
+            model_type = value.get("model_type")
+            # Always construct local Glm5Config so glm5 / glm5_dspark never
+            # resolve to HuggingFace's GLM config via AutoConfig.for_model.
+            if model_type in GLM5_MLA_MODEL_TYPES:
+                return Glm5Config(**value)
             config_class: type[PretrainedConfig] = Qwen3Config
             if "model_type" in value:
                 config_class = AutoConfig.for_model(

@@ -1,9 +1,13 @@
 from typing import Literal
 
-from pydantic import Field
+from pydantic import Field, model_validator
 
 from speculators import SpeculatorModelConfig
 from speculators.models.dflash.config import DFlashSpeculatorConfig
+from speculators.models.dflash.glm5 import (
+    GLM5_DSPARK_ARCHITECTURE,
+    is_glm5_mla_config,
+)
 
 __all__ = [
     "DSparkSpeculatorConfig",
@@ -65,3 +69,10 @@ class DSparkSpeculatorConfig(DFlashSpeculatorConfig):
             "hidden state as the confidence-head input."
         ),
     )
+
+    @model_validator(mode="after")
+    def _align_glm5_dspark_export_contract(self) -> "DSparkSpeculatorConfig":
+        """vLLM-Ascend loads GLM-5 MLA drafts as ``Glm5DSparkForCausalLM``."""
+        if is_glm5_mla_config(self.transformer_layer_config):
+            self.architectures = [GLM5_DSPARK_ARCHITECTURE]
+        return self

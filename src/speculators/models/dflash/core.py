@@ -1,4 +1,5 @@
 import logging
+from copy import deepcopy
 from typing import ClassVar
 
 import torch
@@ -15,6 +16,10 @@ from speculators.model import DraftVocabMixin, SpeculatorModel
 from speculators.models.attention import create_float_mask
 from speculators.models.dflash import DFlashSpeculatorConfig
 from speculators.models.dflash.attention import create_anchor_block_mask_mod
+from speculators.models.dflash.glm5 import (
+    Glm5DFlashDecoderLayer,
+    is_glm5_mla_config,
+)
 from speculators.models.dflash.metrics import compute_metrics
 from speculators.models.dflash.model_definitions import Qwen3DFlashDecoderLayer
 from speculators.models.dflash.utils import (
@@ -37,7 +42,7 @@ _compiled_create_block_mask = torch.compile(create_block_mask)
 @SpeculatorModel.register("dflash")
 class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
     config_class: ClassVar[type[DFlashSpeculatorConfig]] = DFlashSpeculatorConfig  # type: ignore[misc]
-    _no_split_modules = ["Qwen3DFlashDecoderLayer"]
+    _no_split_modules = ["Qwen3DFlashDecoderLayer", "Glm5DFlashDecoderLayer"]
     _keys_to_ignore_on_load_missing: ClassVar[list[str]] = [  # type: ignore[misc]
         "embed_tokens.weight",
         "verifier_norm.weight",
@@ -65,7 +70,12 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
         DFlash-family variants override this factory when they wrap the shared
         attention and MLP with additional modules.
         """
-        return Qwen3DFlashDecoderLayer(config.transformer_layer_config, layer_idx)  # type: ignore[arg-type]
+        decoder_layer_class = (
+            Glm5DFlashDecoderLayer
+            if is_glm5_mla_config(config.transformer_layer_config)
+            else Qwen3DFlashDecoderLayer
+        )
+        return decoder_layer_class(config.transformer_layer_config, layer_idx)  # type: ignore[arg-type]
 
     def __init__(
         self,
@@ -111,18 +121,27 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
             config.transformer_layer_config.hidden_size,
             eps=config.transformer_layer_config.rms_norm_eps,  # type: ignore[arg-type]
         )
+        # GLM-5 MLA RoPE only covers qk_rope_head_dim (interleaved pairs); Qwen3
+        # GQA RoPE covers the full head_dim. Build the cache at the active width
+        # without mutating transformer_layer_config.head_dim.
         rotary_config = flatten_rope_parameters(config.transformer_layer_config)
+        if is_glm5_mla_config(tl_config):
+            rotary_config = deepcopy(rotary_config)
+            rotary_config.head_dim = tl_config.qk_rope_head_dim
         self.rotary_emb = Qwen3RotaryEmbedding(rotary_config)  # type: ignore[arg-type]
 
-        self.fc = nn.Linear(
-            len(self.target_layer_ids) * config.transformer_layer_config.hidden_size,
-            config.transformer_layer_config.hidden_size,
-            bias=False,
+        context_in = (
+            len(self.target_layer_ids) * config.transformer_layer_config.hidden_size
         )
-        self.hidden_norm = Qwen3RMSNorm(
-            config.transformer_layer_config.hidden_size,
-            eps=config.transformer_layer_config.rms_norm_eps,  # type: ignore[arg-type]
-        )
+        context_out = config.transformer_layer_config.hidden_size
+        context_eps = config.transformer_layer_config.rms_norm_eps
+        if is_glm5_mla_config(tl_config):
+            # K3 / vLLM-Ascend export contract: context_proj + context_norm.
+            self.context_proj = nn.Linear(context_in, context_out, bias=False)
+            self.context_norm = Qwen3RMSNorm(context_out, eps=context_eps)  # type: ignore[arg-type]
+        else:
+            self.fc = nn.Linear(context_in, context_out, bias=False)
+            self.hidden_norm = Qwen3RMSNorm(context_out, eps=context_eps)  # type: ignore[arg-type]
         self.verifier_norm = Qwen3RMSNorm(
             config.transformer_layer_config.hidden_size,
             eps=config.transformer_layer_config.rms_norm_eps,  # type: ignore[arg-type]
@@ -369,6 +388,16 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
 
         return full_attn_mask, sliding_window_attn_mask, anchor_positions, anchor_valid
 
+    def _project_context(self, hidden_states: torch.Tensor) -> torch.Tensor:
+        """Project concatenated target aux hiddens into draft width.
+
+        GLM-5 MLA drafts export K3 names (``context_proj`` / ``context_norm``);
+        Qwen3 GQA drafts keep ``fc`` / ``hidden_norm``.
+        """
+        if is_glm5_mla_config(self.config.transformer_layer_config):
+            return self.context_norm(self.context_proj(hidden_states))
+        return self.hidden_norm(self.fc(hidden_states))
+
     def _backbone_forward(
         self,
         hidden_states: torch.Tensor,  # [1, total_seq_len, num_hidden*hidden_size]
@@ -410,8 +439,7 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
         noise_embedding = self.embed_tokens(mask_token_ids)
         # shape: [1, num_anchors*block_size, hidden_size]
 
-        fc_output = self.fc(hidden_states)
-        fc_output = self.hidden_norm(fc_output)
+        fc_output = self._project_context(hidden_states)
         # shape: [1, total_seq_len, hidden_size]
 
         mask_position_ids = get_base_indices_for_anchored_blocks(
