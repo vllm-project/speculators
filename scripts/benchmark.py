@@ -11,7 +11,7 @@ training code path.
 Subcommands:
     run        Run a training benchmark
     compare    Compare two benchmark result files
-    visualize  Generate interactive HTML report from results
+    report  Generate interactive HTML report from results
 
 Examples:
     # Synthetic benchmark (no dataset / vLLM needed)
@@ -35,7 +35,7 @@ Examples:
     python scripts/benchmark.py compare baseline.json candidate.json
 
     # Generate interactive HTML report
-    python scripts/benchmark.py visualize benchmark_20260818.json
+    python scripts/benchmark.py report benchmark_20260818.json
 """
 
 from __future__ import annotations
@@ -1101,7 +1101,87 @@ def _build_appendix_fig(per_step):
     return fig, n_rows
 
 
-def visualize_benchmark(result_path: str, output_path: str | None = None) -> None:
+def _write_markdown_summary(results: dict, md_path: str) -> None:
+    """Write a markdown summary of benchmark results."""
+    cfg = results.get("config", {})
+    prov = results.get("provenance", {})
+    mem = results.get("memory", {})
+    timing = results.get("timing", {})
+    per_step = results.get("per_step")
+    aggregate = results.get("aggregate", {})
+
+    spec = cfg.get("speculator_type", "?")
+    verifier = cfg.get("verifier_name_or_path", "?")
+    gpu_desc = f"{cfg.get('num_gpus_used', 1)} x {_get_gpu_name(results)}"
+    steps_desc = (
+        f"{cfg.get('warmup_steps', '?')} warmup"
+        f" + {cfg.get('measured_steps', '?')} measured"
+    )
+    lines = [
+        f"# Benchmark: {spec} / {verifier}",
+        "",
+        f"- **seq_len**: {cfg.get('total_seq_len', '?')}",
+        f"- **GPUs**: {gpu_desc}",
+        f"- **optimizer**: {cfg.get('optimizer', '?')}",
+        f"- **dtype**: {cfg.get('hidden_states_dtype', '?')}",
+        f"- **synthetic**: {cfg.get('synthetic_data', '?')}",
+        f"- **steps**: {steps_desc}",
+        f"- **git**: `{prov.get('git_sha', 'unknown')[:12]}`",
+        f"- **date**: {prov.get('timestamp', '?')[:10]}",
+        "",
+        "## Timing",
+        "",
+        "| Metric | Mean | Std | 95% CI | Min | Max |",
+        "|--------|------|-----|--------|-----|-----|",
+    ]
+
+    all_keys = list(TIMING_KEYS) + [k for k in DETAIL_TIMING_KEYS if k in timing]
+    for key in all_keys:
+        stats = timing.get(key)
+        if not stats:
+            continue
+        ci = _get_ci(stats, per_step, key)
+        label = f"  {key}" if key in DETAIL_TIMING_KEYS else key
+        lines.append(
+            f"| {label} | {stats['mean']:.2f} | {stats['std']:.2f}"
+            f" | {ci} | {stats['min']:.2f} | {stats['max']:.2f} |"
+        )
+
+    if aggregate:
+        eff = aggregate.get("effective_rank0_tokens_per_s", 0)
+        dur = aggregate.get("measured_time_s", 0)
+        lines += [
+            "",
+            f"**Effective throughput**: {eff:.0f} tokens/s over {dur:.1f}s",
+        ]
+
+    lines += [
+        "",
+        "## Memory",
+        "",
+        f"- **Peak allocated**: {mem.get('peak_allocated_mb', 0):.0f} MB",
+        f"- **Peak reserved**: {mem.get('peak_reserved_mb', 0):.0f} MB",
+        "",
+    ]
+
+    # Phase breakdown percentages
+    if per_step:
+        phase_stats = _get_phase_means(per_step)
+        total_ms = sum(m for _, _, m, _ in phase_stats)
+        if total_ms > 0:
+            lines += ["## Phase Breakdown", ""]
+            lines.append("| Phase | Mean (ms) | % |")
+            lines.append("|-------|-----------|---|")
+            for _, label, mean_val, _ in phase_stats:
+                pct = mean_val / total_ms * 100
+                lines.append(f"| {label} | {mean_val:.1f} | {pct:.1f}% |")
+            lines.append("")
+
+    Path(md_path).write_text("\n".join(lines))
+    print(f"Markdown summary written to {md_path}")
+
+
+def report_benchmark(result_path: str, output_path: str | None = None) -> None:
     """Generate an interactive HTML report from benchmark results."""
     try:
         import plotly  # noqa: PLC0415, F401
@@ -1182,6 +1262,9 @@ def visualize_benchmark(result_path: str, output_path: str | None = None) -> Non
     Path(output_path).write_text(html)
     print(f"Report written to {output_path}")
 
+    md_path = output_path.replace(".html", ".md")
+    _write_markdown_summary(results, md_path)
+
 
 # ---------------------------------------------------------------------------
 # CLI
@@ -1259,9 +1342,9 @@ def build_parser():
     cmp_parser.add_argument("baseline", help="Path to baseline result JSON.")
     cmp_parser.add_argument("candidate", help="Path to candidate result JSON.")
 
-    # --- visualize ---
+    # --- report ---
     viz_parser = subparsers.add_parser(
-        "visualize", help="Generate interactive HTML report from results"
+        "report", help="Generate interactive HTML report from results"
     )
     viz_parser.add_argument("result", help="Path to benchmark result JSON.")
     viz_parser.add_argument(
@@ -1293,8 +1376,8 @@ def main():
         compare_benchmarks(bench_args.baseline, bench_args.candidate)
         return
 
-    if bench_args.command == "visualize":
-        visualize_benchmark(bench_args.result, bench_args.output)
+    if bench_args.command == "report":
+        report_benchmark(bench_args.result, bench_args.output)
         return
 
     # --- run command ---
