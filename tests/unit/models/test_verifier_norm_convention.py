@@ -19,7 +19,7 @@ import torch
 from transformers.models.gemma3.modeling_gemma3 import Gemma3RMSNorm
 from transformers.models.qwen3.modeling_qwen3 import Qwen3RMSNorm
 
-from speculators.models.dflash.core import DFlashDraftModel
+from speculators.models.dflash.core import DFlashDraftModel, DFlashSpeculatorConfig
 from speculators.models.utils import (
     resolve_verifier_norm_class,
     uses_gemma_style_final_norm,
@@ -38,7 +38,7 @@ def _point_at_fake_verifier(
     """Point the model's verifier at a fake checkpoint dir with this model_type."""
     verifier_dir = tmp_path / model_type / text_model_type
     verifier_dir.mkdir(parents=True)
-    raw = {"model_type": model_type}
+    raw: dict = {"model_type": model_type}
     if text_model_type:  # multimodal wrapper carrying the family in text_config
         raw["text_config"] = {"model_type": text_model_type}
     (verifier_dir / "config.json").write_text(json.dumps(raw))
@@ -108,7 +108,7 @@ def test_gemma_style_construction_swaps_class(
     and load the raw checkpoint weight unchanged (the +1 lives in forward)."""
     model = _make_model(DFlashDraftModel, draft_vocab_size=64)
     _point_at_fake_verifier(model, tmp_path, model_type)
-    rebuilt = DFlashDraftModel(model.config)
+    rebuilt = DFlashDraftModel(cast("DFlashSpeculatorConfig", model.config))
     assert isinstance(rebuilt.verifier_norm, Gemma3RMSNorm)
 
     # The weight must load verbatim: the convention is applied in forward,
