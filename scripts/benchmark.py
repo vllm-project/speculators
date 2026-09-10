@@ -992,7 +992,7 @@ def _build_summary_fig(results, per_step):
         xref="paper",
         yref="paper",
         x=0.5,
-        y=1.15,
+        y=1.22,
         showarrow=False,
         font={"size": 13},
     )
@@ -1144,7 +1144,7 @@ def visualize_benchmark(result_path: str, output_path: str | None = None) -> Non
     summary_fig.update_layout(
         height=summary_height,
         template="plotly_white",
-        margin={"t": 80},
+        margin={"t": 110},
     )
     summary_html = summary_fig.to_html(full_html=False, include_plotlyjs="cdn")
 
