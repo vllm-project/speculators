@@ -939,7 +939,7 @@ def _build_summary_fig(results, per_step):
 
     n_rows = 2 if has_memory else 1
     row_heights = [0.6, 0.4] if has_memory else [1.0]
-    titles = [""]
+    titles = ["Mean Step Timing Breakdown"]
     if has_memory:
         titles.append("Mean GPU Memory Allocated (logical) at Phase Boundaries (MB)")
 
@@ -992,7 +992,7 @@ def _build_summary_fig(results, per_step):
         xref="paper",
         yref="paper",
         x=0.5,
-        y=1.22,
+        y=1.32,
         showarrow=False,
         font={"size": 13},
     )
@@ -1224,7 +1224,7 @@ def report_benchmark(result_path: str, output_path: str | None = None) -> None:
     summary_fig.update_layout(
         height=summary_height,
         template="plotly_white",
-        margin={"t": 110},
+        margin={"t": 140},
     )
     summary_html = summary_fig.to_html(full_html=False, include_plotlyjs="cdn")
 
