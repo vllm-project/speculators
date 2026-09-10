@@ -1141,9 +1141,8 @@ def _write_markdown_summary(results: dict, md_path: str) -> None:
         if not stats:
             continue
         ci = _get_ci(stats, per_step, key)
-        label = f"  {key}" if key in DETAIL_TIMING_KEYS else key
         lines.append(
-            f"| {label} | {stats['mean']:.2f} | {stats['std']:.2f}"
+            f"| {key} | {stats['mean']:.2f} | {stats['std']:.2f}"
             f" | {ci} | {stats['min']:.2f} | {stats['max']:.2f} |"
         )
 
