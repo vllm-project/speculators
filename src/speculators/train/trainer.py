@@ -530,7 +530,6 @@ class Trainer:
             timer.mark("opt")
             t_before_fetch = timer.now() or time.perf_counter()
 
-            profile = None
             if timer.enabled:
                 num_tokens = int((gpu_batch["document_ids"] != -1).sum().item())
                 profile = timer.profile(num_tokens)
@@ -568,10 +567,7 @@ class Trainer:
                 batches_since_log = 0
             self.global_step += 1
 
-            if (
-                self.config.max_steps is not None
-                and self.global_step >= self.config.max_steps
-            ):
+            if will_stop:
                 break
 
             if (
