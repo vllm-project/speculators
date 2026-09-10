@@ -992,7 +992,7 @@ def _build_summary_fig(results, per_step):
         xref="paper",
         yref="paper",
         x=0.5,
-        y=1.32,
+        y=1.18,
         showarrow=False,
         font={"size": 13},
     )
