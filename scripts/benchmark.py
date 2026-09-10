@@ -218,6 +218,7 @@ def create_synthetic_batch(
             1, total_seq_len + 1, device=device, dtype=torch.long
         ).unsqueeze(0),
         "document_ids": torch.zeros(1, total_seq_len, dtype=torch.long, device=device),
+        "error_records": 0,
     }
 
 
