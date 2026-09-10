@@ -980,20 +980,21 @@ def _build_summary_fig(results, per_step):
     fig.add_annotation(
         text=(
             f"<b>step: {step_stats['mean']:.1f} ms</b>"
-            f" 95% CI [{step_stats['ci95_lower']:.1f},"
+            f" [{step_stats['ci95_lower']:.1f},"
             f" {step_stats['ci95_upper']:.1f}]"
-            f"  ·  <b>{tps_stats['mean']:.0f} tokens/s</b>"
-            f" 95% CI [{tps_stats['ci95_lower']:.0f},"
+            f"  ·  <b>{tps_stats['mean']:.0f} tok/s</b>"
+            f" [{tps_stats['ci95_lower']:.0f},"
             f" {tps_stats['ci95_upper']:.0f}]"
-            f"  ·  peak: {results['memory']['peak_allocated_mb']:.0f} MB"
-            f"  ·  n={step_stats['count']}"
+            f"  ·  peak {results['memory']['peak_allocated_mb']:.0f} MB"
+            f"<br>"
+            f"<span style='color:#888'>95% CI, n={step_stats['count']}</span>"
         ),
         xref="paper",
         yref="paper",
         x=0.5,
-        y=1.12,
+        y=1.15,
         showarrow=False,
-        font={"size": 14},
+        font={"size": 13},
     )
 
     # --- Memory breakdown: mean at each phase mark with std error bars ---
