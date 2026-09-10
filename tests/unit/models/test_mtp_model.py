@@ -5,8 +5,46 @@ import math
 import pytest
 import torch
 
+from speculators.models.mtp.core import _prepare_mtp_position_ids
+
 BATCH = 1
 SEQ_LEN = 10
+
+
+def test_qwen35_position_ids_are_expanded_for_new_transformers():
+    position_ids = torch.arange(8).unsqueeze(0)
+
+    text_position_ids, rotary_position_ids = _prepare_mtp_position_ids(
+        position_ids, valid_len=6, model_type="qwen3_5_text"
+    )
+
+    assert text_position_ids.shape == (1, 6)
+    assert rotary_position_ids.shape == (3, 1, 6)
+    assert torch.equal(rotary_position_ids[0], text_position_ids)
+    assert torch.equal(rotary_position_ids[1], text_position_ids)
+    assert torch.equal(rotary_position_ids[2], text_position_ids)
+
+
+def test_qwen35_position_ids_accept_existing_mrope_layout():
+    position_ids = torch.arange(24).reshape(3, 2, 4)
+
+    text_position_ids, rotary_position_ids = _prepare_mtp_position_ids(
+        position_ids, valid_len=3, model_type="qwen3_5_moe_text"
+    )
+
+    assert torch.equal(text_position_ids, position_ids[0, :, :3])
+    assert torch.equal(rotary_position_ids, position_ids[:, :, :3])
+
+
+def test_non_qwen35_position_ids_remain_2d():
+    position_ids = torch.arange(8).unsqueeze(0)
+
+    text_position_ids, rotary_position_ids = _prepare_mtp_position_ids(
+        position_ids, valid_len=6, model_type="qwen3"
+    )
+
+    assert torch.equal(text_position_ids, position_ids[:, :6])
+    assert torch.equal(rotary_position_ids, position_ids[:, :6])
 
 
 # ===== Forward output structure =====

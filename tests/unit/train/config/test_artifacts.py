@@ -120,7 +120,11 @@ def test_save_writes_run_yaml_and_train_command(tmp_path):
 def test_no_provenance_sidecar_is_written(tmp_path):
     _resolved(verifier_name_or_path="m").save(str(tmp_path))
     assert not (tmp_path / "run.provenance.yaml").exists()
-    assert {p.name for p in tmp_path.iterdir()} == {"run.yaml", "train_command.txt"}
+    assert {p.name for p in tmp_path.iterdir()} == {
+        "run.yaml",
+        "train_command.txt",
+        "speculators.patch",
+    }
 
 
 def test_dump_yaml_handles_from_flat_config_without_provenance(tmp_path):

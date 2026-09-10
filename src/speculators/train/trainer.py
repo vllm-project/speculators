@@ -150,9 +150,13 @@ def _resolve_scheduler_steps(
     Explicit ``scheduler_warmup_steps`` wins; otherwise ``scheduler_warmup_ratio``
     (a fraction of total steps, validated to ``[0, 1]``) is used; otherwise the
     default of 1% of the resolved total steps. ``scheduler_total_steps`` defaults
-    to ``num_epochs * train_loader_len``.
+    to ``max_steps`` when set, else ``num_epochs * train_loader_len``.
     """
     default_total_steps = config.num_epochs * train_loader_len
+    # max_steps bounds the training loop, so the LR schedule must decay over the
+    # same horizon; otherwise the LR endpoint is never reached.
+    if config.max_steps is not None:
+        default_total_steps = config.max_steps
     scheduler_total_steps = (
         config.scheduler_total_steps
         if config.scheduler_total_steps is not None

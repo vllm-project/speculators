@@ -25,6 +25,49 @@ logger = logging.getLogger(__name__)
 __all__ = ["MTPDraftModel", "compute_step_weights"]
 
 _IGNORE_INDEX = -100
+_QWEN3_5_MODEL_TYPES = {"qwen3_5_text", "qwen3_5_moe_text"}
+_QWEN3_5_MROPE_POSITION_ID_RANK = 3
+_QWEN3_5_MROPE_SECTIONS = 3
+
+
+def _prepare_mtp_position_ids(
+    position_ids: torch.Tensor,
+    valid_len: int,
+    model_type: str,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Prepare mask/layer and rotary position IDs for an MTP step.
+
+    Released transformers versions expand Qwen3.5's 2-D position IDs inside
+    the rotary embedding. Newer versions expect the caller to provide the
+    three MRoPE sections explicitly. Keep the 2-D text positions for mask
+    construction and the decoder layer, while providing the 3-D form to the
+    rotary embedding when needed.
+
+    Returns:
+        A pair of ``(text_position_ids, rotary_position_ids)``.
+    """
+    if position_ids.ndim == _QWEN3_5_MROPE_POSITION_ID_RANK:
+        if model_type not in _QWEN3_5_MODEL_TYPES:
+            raise ValueError(
+                "3-D position_ids are only supported for Qwen3.5 MTP models; "
+                f"got model type {model_type!r}."
+            )
+        if position_ids.shape[0] != _QWEN3_5_MROPE_SECTIONS:
+            raise ValueError(
+                "Qwen3.5 MTP position_ids must have shape [3, batch, seq_len]; "
+                f"got {tuple(position_ids.shape)}."
+            )
+        rotary_position_ids = position_ids[:, :, :valid_len]
+        return rotary_position_ids[0], rotary_position_ids
+
+    step_position_ids = position_ids[:, :valid_len]
+    if model_type in _QWEN3_5_MODEL_TYPES:
+        rotary_position_ids = step_position_ids.unsqueeze(0).expand(
+            _QWEN3_5_MROPE_SECTIONS, -1, -1
+        )
+    else:
+        rotary_position_ids = step_position_ids
+    return step_position_ids, rotary_position_ids
 
 
 def compute_step_weights(beta: float = 0.6, num_steps: int = 3) -> list[float]:
@@ -140,7 +183,8 @@ class MTPDraftModel(DraftVocabMixin, SpeculatorModel):
             embedding source and the prediction target (offset by step+2).
         :param hidden_states: Hidden states from verifier [1, seq_len, hidden_size]
         :param attention_mask: Optional attention mask [1, seq_len]
-        :param position_ids: Optional position IDs [1, seq_len]
+        :param position_ids: Optional position IDs [batch, seq_len]. Qwen3.5
+            also accepts the explicit MRoPE layout [3, batch, seq_len].
         :param loss_mask: Optional binary mask [1, seq_len]; 1=compute loss,
             0=ignore.
         :param step_weights: Per-step loss weights (None = uniform). Training only.
@@ -195,7 +239,11 @@ class MTPDraftModel(DraftVocabMixin, SpeculatorModel):
             metrics["loss_total"] = torch.tensor(1.0, device=device)
             return (all_logits, total_loss, metrics)
 
-        step_pos_ids = position_ids[:, :valid_len]
+        step_pos_ids, rotary_step_pos_ids = _prepare_mtp_position_ids(
+            position_ids,
+            valid_len,
+            self.config.transformer_layer_config.model_type,
+        )
         causal_mask = create_causal_mask(
             config=self.config.transformer_layer_config,
             inputs_embeds=hidden_states[:, :valid_len],
@@ -210,7 +258,7 @@ class MTPDraftModel(DraftVocabMixin, SpeculatorModel):
             step_embeds = self.embed_tokens(
                 input_ids[:, step + 1 : step + 1 + valid_len]
             )
-            step_pos_emb = self.rotary_emb(step_hidden, step_pos_ids)
+            step_pos_emb = self.rotary_emb(step_hidden, rotary_step_pos_ids)
 
             mtp_output = self.mtp_layers[0](
                 hidden_states=step_hidden,
