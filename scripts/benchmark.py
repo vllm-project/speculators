@@ -939,7 +939,7 @@ def _build_summary_fig(results, per_step):
 
     n_rows = 2 if has_memory else 1
     row_heights = [0.6, 0.4] if has_memory else [1.0]
-    titles = ["Mean Step Timing Breakdown"]
+    titles = [""]
     if has_memory:
         titles.append("Mean GPU Memory Allocated (logical) at Phase Boundaries (MB)")
 
