@@ -62,7 +62,7 @@ MAX_FUSED_SIZE_NPU = 4096
 # 16384/16 at 32000.
 _MAX_ELEMS_PER_THREAD = 128
 _MIN_ELEMS_PER_THREAD = 4
-_BLOCK_SIZES = (1024, 2048, 4096, 8192, 16384, 32768)
+_BLOCK_SIZES = (512, 1024, 2048, 4096, 8192, 16384, 32768)
 _THREADS_PER_PROGRAM = (128, 256, 512, 1024)
 
 # tl.constexpr instances: Triton kernels may only read globals wrapped this way.
