@@ -104,6 +104,8 @@ torchrun --standalone --nproc_per_node=4 -m speculators.train \
 
 - **`--fsdp-shard`** (flag) Shard model parameters across GPUs with FSDP. By default, parameters are fully replicated (DDP-like). Enable this when the model does not fit in a single GPU's memory.
 
+- **`--gradient-checkpointing`** (flag) Enable gradient checkpointing on decoder layers to save activation memory at the cost of ~30-50% slower backward. Each decoder layer's forward is checkpointed: only the layer input is saved for backward; intermediate activations (MLP, attention) are recomputed. Saves ~10 GB for a 5-layer DSpark model with 32K sequence length. Recommended for 32K+ sequence lengths or large `--max-anchors`.
+
 ### Training Arguments
 
 - **`--save-path`** (str, default: `"./checkpoints"`) Directory to save model checkpoints.
