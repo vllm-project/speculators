@@ -1511,16 +1511,16 @@ def _comment_timing_table(base: dict, cand: dict | None) -> list[str]:
 # though the wall-clock timings from the same run cannot.
 _KERNEL_CAVEAT = (
     "Device-side durations, so the synchronisation `--profile` adds does not "
-    "distort them. Full breakdown in the HTML report."
+    "distort them."
 )
 
 
 def _comment_kernel_lines(base: dict, cand: dict | None) -> list[str]:
-    """Kernel table for the comment: a before/after diff, or a single-run top-N.
+    """Kernel section: a before/after diff table, or a single-run table and pie.
 
-    Charts are left to the HTML report. A comment cannot render one without
-    either a Mermaid diagram or an image needing somewhere to be hosted, and
-    the numbers carry this on their own.
+    A diff needs the numbers side by side, and a pie of one of the two sides
+    would only invite reading the wrong one. With a single run there is no such
+    ambiguity and the mix is the whole point, so the pie comes back.
     """
     rows = _kernel_diff_rows(base, cand) if cand else []
     if rows:
@@ -1564,6 +1564,47 @@ def _comment_kernel_lines(base: dict, cand: dict | None) -> list[str]:
         ],
         "",
         f"<sub>{_KERNEL_CAVEAT}</sub>",
+        "",
+        *_mermaid_pie(kernels),
+    ]
+
+
+def _mermaid_pie(kernels: dict) -> list[str]:
+    """Kernel mix as a mermaid pie, the chart dialect GitHub renders natively.
+
+    Capped at ``COMMENT_KERNEL_N`` slices on top of the percentage floor: after
+    a large win the surviving kernels bunch up just over the threshold, and a
+    dozen near-equal wedges say nothing.
+    """
+    total = kernels.get("total_device_ms_per_step", 0) or 1.0
+    slices: list[tuple[str, float]] = []
+    tail_ms = 0.0
+    tail_n = 0
+    for k in kernels["kernels"]:
+        over_floor = k["ms_per_step"] / total * 100 >= KERNEL_PIE_MIN_PCT
+        if over_floor and len(slices) < COMMENT_KERNEL_N:
+            # Mermaid delimits labels with double quotes and offers no escape.
+            slices.append(
+                (_short_kernel_name(k["name"], 40).replace('"', "'"), k["ms_per_step"])
+            )
+        else:
+            tail_ms += k["ms_per_step"]
+            tail_n += 1
+    if tail_n:
+        slices.append((f"Other ({tail_n} kernels)", tail_ms))
+
+    # Mermaid sums same-named wedges just as plotly does, and elision can
+    # collide two cuBLAS kernels onto one label.
+    labels = _unique_labels([label for label, _ in slices])
+    return [
+        "```mermaid",
+        "pie showData",
+        f"    title Device time per kernel — {total:.1f} ms/step",
+        *[
+            f'    "{label}" : {ms:.2f}'
+            for label, (_, ms) in zip(labels, slices, strict=True)
+        ],
+        "```",
     ]
 
 
