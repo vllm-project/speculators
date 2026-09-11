@@ -192,6 +192,7 @@ def _write_subset_report(output_dir: Path, records: list) -> None:
             "draft_acceptance_rate",
             "mean_acceptance_length",
         ],
+        overwrite=True,  # full report each run: replace, don't append across reruns
     ).append_rows(rows)
 
 
