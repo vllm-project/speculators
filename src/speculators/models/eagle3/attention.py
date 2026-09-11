@@ -117,10 +117,16 @@ def extend_dense_mask_for_draft_tokens(mask: torch.Tensor, total_seq_len: int):
 
     Dense-mask equivalent of extend_mask_for_draft_tokens (which operates on
     BlockMask). Appends total_seq_len new KV columns where only position
-    (q, new_offset + q) is True — the same diagonal pattern.
+    (q, new_offset + q) is attended (the same diagonal pattern).
+
+    The appended block follows the input mask's semantics: 0 / -inf for an
+    additive float mask (the eager / SDPA path built by create_float_mask,
+    where 0 means attend and -inf blocked), and True/False (or 1/0) for a
+    boolean or integral mask.
 
     Args:
-        mask: Dense boolean mask of shape [1, 1, total_seq_len, kv_len].
+        mask: Dense boolean or additive float mask of shape
+            [1, 1, total_seq_len, kv_len].
         total_seq_len: Number of query positions (= original sequence length).
 
     Returns:
@@ -128,8 +134,13 @@ def extend_dense_mask_for_draft_tokens(mask: torch.Tensor, total_seq_len: int):
     """
     idx = torch.arange(total_seq_len, device=mask.device)
     diag = idx.unsqueeze(1) == idx.unsqueeze(0)
-    diag = diag.to(dtype=mask.dtype).unsqueeze(0).unsqueeze(0)
-    return torch.cat([mask, diag], dim=-1)
+    if mask.dtype.is_floating_point:
+        new_cols = torch.zeros(diag.shape, dtype=mask.dtype, device=mask.device)
+        new_cols.masked_fill_(~diag, float("-inf"))
+    else:
+        new_cols = diag.to(dtype=mask.dtype)
+    new_cols = new_cols.unsqueeze(0).unsqueeze(0)
+    return torch.cat([mask, new_cols], dim=-1)
 
 
 def block_mask_to_dense_attention_mask(
