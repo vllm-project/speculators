@@ -28,8 +28,8 @@ steps:
                   - name: tests
                     image: buildkite/agent:3-ubuntu
                     command:
-                      - chmod +x .buildkite/gpu-tests/scripts/run-tests.sh
-                      - .buildkite/gpu-tests/scripts/run-tests.sh smoke
+                      - chmod +x .buildkite/scripts/run-tests.sh
+                      - .buildkite/scripts/run-tests.sh smoke
 
                     resources:
                       limits:

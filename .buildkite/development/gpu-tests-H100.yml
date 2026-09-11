@@ -32,8 +32,8 @@ steps:
                   - name: tests
                     image: buildkite/agent:3-ubuntu
                     command:
-                      - chmod +x .buildkite/gpu-tests/scripts/run-tests.sh
-                      - .buildkite/gpu-tests/scripts/run-tests.sh unit
+                      - chmod +x .buildkite/scripts/run-tests.sh
+                      - .buildkite/scripts/run-tests.sh unit
 
                     resources:
                       limits:
@@ -104,8 +104,8 @@ steps:
                   - name: tests
                     image: buildkite/agent:3-ubuntu
                     command:
-                      - chmod +x .buildkite/gpu-tests/scripts/run-tests.sh
-                      - .buildkite/gpu-tests/scripts/run-tests.sh integration
+                      - chmod +x .buildkite/scripts/run-tests.sh
+                      - .buildkite/scripts/run-tests.sh integration
 
                     resources:
                       limits:
@@ -151,4 +151,4 @@ steps:
   - label: ":pipeline: Upload Smoke Tests (H100)"
     key: "upload-smoke-tests-h100"
     depends_on: "block-smoke-tests-h100"
-    command: buildkite-agent pipeline upload .buildkite/gpu-tests/smoke-tests-H100.yml
+    command: buildkite-agent pipeline upload .buildkite/development/smoke-tests-H100.yml
