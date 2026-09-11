@@ -27,6 +27,7 @@ class PEagleDraftModel(Eagle3DraftModel):
     """
 
     config_class: ClassVar[type[PEagleSpeculatorConfig]] = PEagleSpeculatorConfig  # type: ignore[misc]
+    supports_gradient_checkpointing = True  # noqa: D003  # Llama/Qwen3 DecoderLayer inherits GradientCheckpointingLayer
     _keys_to_ignore_on_load_missing: ClassVar[list[str]] = [  # type: ignore[misc]
         *Eagle3DraftModel._keys_to_ignore_on_load_missing,  # noqa: SLF001
         "mask_hidden",
