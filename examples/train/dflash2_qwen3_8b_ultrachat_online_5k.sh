@@ -32,7 +32,7 @@ LR=3e-4
 # DFlash2-specific parameters
 SPECULATOR_TYPE="dflash2"
 BLOCK_SIZE=8
-MAX_ANCHORS=3072
+MAX_ANCHORS=512
 NUM_LAYERS=5
 TARGET_LAYER_IDS="2 18 33"  # Must match vLLM's eagle_aux_hidden_state_layer_ids
 
