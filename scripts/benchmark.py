@@ -91,6 +91,52 @@ DETAIL_TIMING_KEYS = (
     "clip_ms",
 )
 
+# Rows shown in the --profile kernel breakdown (markdown table and compare diff).
+KERNEL_TOP_N = 15
+# Mangled C++ kernel names run to several hundred characters and wreck any
+# table they land in; the leading portion is what identifies them.
+KERNEL_NAME_WIDTH = 64
+# Legend entries have less room than a table cell, but not much less: cuBLAS
+# names only become distinguishable once the tile shape survives the elision.
+KERNEL_LABEL_WIDTH = 52
+# Kernels below this share of device time are merged into one "Other" slice.
+# A profiled step launches dozens of kernels and all but a handful are under a
+# millisecond; drawn individually they are an unreadable fringe of hairlines.
+KERNEL_PIE_MIN_PCT = 3.0
+
+
+def _short_kernel_name(name: str, width: int = KERNEL_NAME_WIDTH) -> str:
+    """Shorten a kernel name to ``width`` characters by eliding its middle.
+
+    Mangled C++ and cuBLAS names share long prefixes and differ only near the
+    end (``..._stages_32x3_nn`` against ``..._stages_64x3_tn``), so clipping the
+    tail renders distinct kernels as identical-looking rows. Keeping both ends
+    does not.
+    """
+    if len(name) <= width:
+        return name
+    tail = (width - 1) // 3
+    return name[: width - 1 - tail] + "…" + name[len(name) - tail :]
+
+
+def _unique_labels(labels: list[str]) -> list[str]:
+    """Suffix repeated labels: plotly merges pie slices that share a label.
+
+    Elision can still collide on kernels that differ only in the elided middle,
+    and a silent merge would misattribute their time.
+    """
+    seen: dict[str, int] = {}
+    out = []
+    for label in labels:
+        seen[label] = seen.get(label, 0) + 1
+        out.append(label if seen[label] == 1 else f"{label} #{seen[label]}")
+    return out
+
+
+def _wrap_kernel_name(name: str, width: int = 60) -> str:
+    """Break a kernel name across lines so a hover tooltip stays on screen."""
+    return "<br>".join(name[i : i + width] for i in range(0, len(name), width))
+
 
 # ---------------------------------------------------------------------------
 # Metric capture
@@ -365,11 +411,48 @@ def _aggregate_timing(measured_profiles: list[dict]) -> dict:
     return agg
 
 
-def _run_training(bench_args, trainer, rank) -> None:
-    """Run the training loop, optionally with torch.profiler."""
+def _collect_kernel_breakdown(prof, measured_steps: int) -> dict:
+    """Per-kernel GPU time from a finished profiler, normalized per step.
+
+    ``key_averages()`` emits one entry per launched device kernel alongside the
+    ATen op entries; the CUDA-device-type rows are the kernels themselves, so
+    the breakdown needs no extra instrumentation inside the model. This is how
+    a change to one kernel (an attention backend, a fused loss tile) shows up
+    attributed to that kernel instead of being averaged into ``fwd_ms``.
+
+    User annotations (``ProfilerStep*``, ``Optimizer.step#...``, the inductor
+    ``## Call CompiledFxGraph <hash>`` spans) are also CUDA-typed but are
+    enclosing ranges, not kernels: keeping them would double-count the total,
+    and the graph hashes change whenever the compiled graph does, so they turn
+    a before/after diff into noise.
+    """
+    steps = max(measured_steps, 1)
+    kernels = [
+        {
+            "name": evt.key,
+            "ms_per_step": evt.self_device_time_total / 1000.0 / steps,
+            "calls_per_step": evt.count / steps,
+        }
+        for evt in prof.key_averages()
+        if evt.device_type == torch.autograd.DeviceType.CUDA
+        and not getattr(evt, "is_user_annotation", False)
+        and evt.self_device_time_total > 0
+    ]
+    kernels.sort(key=lambda k: -k["ms_per_step"])
+    return {
+        "total_device_ms_per_step": sum(k["ms_per_step"] for k in kernels),
+        "kernels": kernels,
+    }
+
+
+def _run_training(bench_args, trainer, rank) -> dict | None:
+    """Run the training loop, optionally with torch.profiler.
+
+    Returns the per-kernel GPU breakdown when profiling, else None.
+    """
     if not bench_args.profile:
         trainer.train_epoch(0)
-        return
+        return None
 
     profile_dir = Path(bench_args.profile_dir)
     profile_dir.mkdir(parents=True, exist_ok=True)
@@ -393,6 +476,7 @@ def _run_training(bench_args, trainer, rank) -> None:
         trainer.train_epoch(0)
     if rank == 0:
         print(f"Profile traces written to {profile_dir}")
+    return _collect_kernel_breakdown(prof, bench_args.measured_steps)
 
 
 def run_benchmark(bench_args, train_args) -> dict:
@@ -476,7 +560,7 @@ def run_benchmark(bench_args, train_args) -> dict:
     torch.cuda.reset_peak_memory_stats(local_rank)
 
     # --- Run the real training loop ---
-    _run_training(bench_args, trainer, rank)
+    kernel_breakdown = _run_training(bench_args, trainer, rank)
 
     # --- Remove capture handler ---
     metric_logger.removeHandler(capture)
@@ -534,6 +618,9 @@ def run_benchmark(bench_args, train_args) -> dict:
         results["per_step"] = [
             {"step": i, **p} for i, p in enumerate(measured_profiles)
         ]
+
+    if kernel_breakdown:
+        results["kernels"] = kernel_breakdown
 
     # --- Write results (rank 0 only) ---
     if rank == 0:
@@ -740,6 +827,54 @@ def compare_benchmarks(baseline_path: str, candidate_path: str) -> None:
         )
 
     _print_memory_comparison(baseline, candidate)
+    _print_kernel_comparison(baseline, candidate)
+
+
+def _print_kernel_comparison(baseline, candidate):
+    """Per-kernel GPU time diff, when both runs were profiled.
+
+    This is what localizes a regression or a win to the kernel that caused it:
+    the phase timings only say "forward got slower", the kernel table says
+    which launch did it. Kernels present on only one side (a different attention
+    backend, a renamed Triton kernel) show up with the missing side at zero.
+    """
+    ka = (baseline.get("kernels") or {}).get("kernels")
+    kb = (candidate.get("kernels") or {}).get("kernels")
+    if not ka or not kb:
+        return
+
+    base_ms = {k["name"]: k["ms_per_step"] for k in ka}
+    cand_ms = {k["name"]: k["ms_per_step"] for k in kb}
+    names = sorted(
+        set(base_ms) | set(cand_ms),
+        key=lambda n: -abs(cand_ms.get(n, 0.0) - base_ms.get(n, 0.0)),
+    )
+
+    print(
+        f"\n{'GPU kernel (ms/step, self time)':<54}"
+        f"{'Baseline':>10}{'Candidate':>11}{'Delta':>10}{'Delta %':>10}"
+    )
+    print("-" * 95)
+    for name in names[:KERNEL_TOP_N]:
+        a = base_ms.get(name, 0.0)
+        b = cand_ms.get(name, 0.0)
+        delta = b - a
+        pct = f"{delta / a * 100:>+9.1f}%" if a else f"{'n/a':>10}"
+        label = _short_kernel_name(name, 52)
+        print(f"{label:<54}{a:>10.2f}{b:>11.2f}{delta:>+10.2f}{pct}")
+
+    total_a = baseline["kernels"].get("total_device_ms_per_step", 0)
+    total_b = candidate["kernels"].get("total_device_ms_per_step", 0)
+    delta = total_b - total_a
+    pct = (delta / total_a * 100) if total_a else 0
+    print(
+        f"{'TOTAL device time':<54}{total_a:>10.2f}{total_b:>11.2f}"
+        f"{delta:>+10.2f}{pct:>+9.1f}%"
+    )
+    print(
+        "\n  Ranked by absolute change. Device-side durations, so the "
+        "synchronisation overhead --profile adds does not distort them."
+    )
 
 
 def _print_timing_comparison(baseline, candidate):
@@ -1101,6 +1236,35 @@ def _build_appendix_fig(per_step):
     return fig, n_rows
 
 
+def _kernel_markdown_lines(kernels: dict | None) -> list[str]:
+    """Markdown table of the top GPU kernels, or nothing when not profiled."""
+    if not kernels or not kernels.get("kernels"):
+        return []
+    total = kernels.get("total_device_ms_per_step", 0)
+    lines = [
+        "## Appendix: GPU Kernel Breakdown",
+        "",
+        (
+            f"Top {KERNEL_TOP_N} device kernels by self time, averaged per step "
+            f"({total:.1f} ms of GPU time per step in total). Requires "
+            "`--profile`; the synchronisation it adds inflates the wall-clock "
+            "timings above, but these are device-side durations and stay "
+            "comparable."
+        ),
+        "",
+        "| Kernel | ms/step | % GPU | calls/step |",
+        "|--------|---------|-------|------------|",
+    ]
+    for k in kernels["kernels"][:KERNEL_TOP_N]:
+        pct = k["ms_per_step"] / total * 100 if total else 0
+        lines.append(
+            f"| `{_short_kernel_name(k['name'])}` | {k['ms_per_step']:.2f}"
+            f" | {pct:.1f}% | {k['calls_per_step']:.1f} |"
+        )
+    lines.append("")
+    return lines
+
+
 def _write_markdown_summary(results: dict, md_path: str) -> None:
     """Write a markdown summary of benchmark results."""
     cfg = results.get("config", {})
@@ -1176,8 +1340,87 @@ def _write_markdown_summary(results: dict, md_path: str) -> None:
                 lines.append(f"| {label} | {mean_val:.1f} | {pct:.1f}% |")
             lines.append("")
 
+    lines += _kernel_markdown_lines(results.get("kernels"))
+
     Path(md_path).write_text("\n".join(lines))
     print(f"Markdown summary written to {md_path}")
+
+
+def _build_kernel_pie(kernels: dict):
+    """Pie of device time per kernel, with the sub-5% tail merged into "Other"."""
+    import plotly.graph_objects as go  # noqa: PLC0415
+
+    total = kernels.get("total_device_ms_per_step", 0) or 1.0
+    labels: list[str] = []
+    values: list[float] = []
+    hovers: list[str] = []
+    tail_ms = 0.0
+    tail_n = 0
+
+    for k in kernels["kernels"]:
+        if k["ms_per_step"] / total * 100 < KERNEL_PIE_MIN_PCT:
+            tail_ms += k["ms_per_step"]
+            tail_n += 1
+            continue
+        labels.append(_short_kernel_name(k["name"], KERNEL_LABEL_WIDTH))
+        values.append(k["ms_per_step"])
+        # The legend label is clipped, so the full name lives in the hover.
+        hovers.append(
+            f"<b>{_wrap_kernel_name(k['name'])}</b><br>"
+            f"{k['ms_per_step']:.2f} ms/step &middot; "
+            f"{k['calls_per_step']:.1f} calls/step"
+        )
+
+    if tail_n:
+        labels.append(f"Other ({tail_n} kernels)")
+        values.append(tail_ms)
+        hovers.append(
+            f"<b>{tail_n} kernels</b>, each under {KERNEL_PIE_MIN_PCT:.0f}% "
+            f"of device time<br>{tail_ms:.2f} ms/step combined"
+        )
+
+    fig = go.Figure(
+        go.Pie(
+            labels=_unique_labels(labels),
+            values=values,
+            customdata=hovers,
+            hovertemplate="%{customdata}<extra></extra>",
+            texttemplate="%{percent}",
+            textposition="inside",
+            insidetextorientation="horizontal",
+            sort=False,  # already sorted by time; keep "Other" last
+            direction="clockwise",
+            marker={"line": {"color": "#fff", "width": 1}},
+        )
+    )
+    fig.update_layout(
+        height=420,
+        template="plotly_white",
+        margin={"t": 20, "b": 20, "l": 20, "r": 20},
+        legend={"font": {"family": "ui-monospace, monospace", "size": 10}},
+    )
+    return fig
+
+
+def _kernel_html(kernels: dict | None) -> str:
+    """Collapsible kernel-time pie chart, or "" when the run was not profiled."""
+    if not kernels or not kernels.get("kernels"):
+        return ""
+    total = kernels.get("total_device_ms_per_step", 0)
+    pie_html = _build_kernel_pie(kernels).to_html(
+        full_html=False, include_plotlyjs=False
+    )
+    return f"""
+<details>
+<summary>Appendix: GPU Kernel Breakdown</summary>
+<p class="sub">Share of device time per kernel, averaged over the profiled steps
+({total:.1f} ms of GPU time per step in total). Kernels under
+{KERNEL_PIE_MIN_PCT:.0f}% are grouped as &quot;Other&quot;; hover a slice for its
+full name, absolute time and launch count. Only produced with --profile, whose
+synchronisation inflates the wall-clock timings above &mdash; these are
+device-side durations and stay comparable.</p>
+{pie_html}
+</details>"""
 
 
 def report_benchmark(result_path: str, output_path: str | None = None) -> None:
@@ -1236,22 +1479,31 @@ def report_benchmark(result_path: str, output_path: str | None = None) -> None:
     )
     appendix_html = appendix_fig.to_html(full_html=False, include_plotlyjs=False)
 
+    # --- Kernel breakdown (only present when the run used --profile) ---
+    kernel_html = _kernel_html(results.get("kernels"))
+
     html = f"""<!DOCTYPE html>
 <html><head><meta charset="utf-8">
 <title>Benchmark Report</title>
+<!-- The plotly figures render on a white template, so the page is light-only.
+     Without this the browser paints a dark canvas in dark mode and leaves the
+     text at its (dark grey) authored colour. -->
+<meta name="color-scheme" content="light">
 <style>
   body {{ font-family: system-ui, sans-serif; max-width: 1200px;
-         margin: 0 auto; padding: 20px; color: #333; }}
+         margin: 0 auto; padding: 20px; color: #24292f; background: #fff; }}
   h1 {{ font-size: 1.3em; margin-bottom: 0; }}
-  .sub {{ color: #888; font-size: 0.85em; margin-bottom: 20px; }}
+  .sub {{ color: #656d76; font-size: 0.85em; margin-bottom: 20px; }}
   details {{ margin-top: 30px; }}
   summary {{ cursor: pointer; font-size: 1.1em; font-weight: 600;
              padding: 8px 0; }}
+  details .sub {{ margin-top: 4px; max-width: 900px; }}
 </style>
 </head><body>
 <h1>{heading}</h1>
 <div class="sub">{sub}</div>
 {summary_html}
+{kernel_html}
 <details>
 <summary>Appendix: Per-Step Raw Data</summary>
 {appendix_html}
