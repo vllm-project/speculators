@@ -4,6 +4,7 @@
 Subcommands:
     compare     Multi-version comparison plots (overlay smoothed curves)
     speedup     Pairwise speedup visualization (gradient-shaded region)
+    acceptance  Long-context acceptance-length heatmap from a recorded table
 
 Examples:
     python plot.py compare \\
@@ -15,11 +16,16 @@ Examples:
         --baseline "No Spec=nospec/results.csv" \\
         --target "Eagle3=eagle3/results.csv" \\
         --metric latency --title "Qwen3-8B"
+
+    python plot.py acceptance \\
+        --table long_context/raw_table \\
+        --output long_context/acceptance.png
 """
 
 from __future__ import annotations
 
 import argparse
+import math
 import sys
 from collections import defaultdict
 from pathlib import Path
@@ -28,6 +34,7 @@ import matplotlib.colors as mcolors
 import matplotlib.pyplot as plt
 import numpy as np
 from matplotlib.cm import ScalarMappable
+from matplotlib.gridspec import GridSpec
 from perf_utils import (
     METRICS,
     load_data,
@@ -368,6 +375,228 @@ def run_speedup(args: argparse.Namespace) -> None:
 
 
 # ============================================================================
+# Acceptance (long-context spec-decode)
+# ============================================================================
+
+ACCEPT_ACCENT = "#1f4e79"  # mean-length line
+ACCEPT_BAR = "#3b6fb0"  # tokens-generated bars
+INK = "#1a1a1a"
+MUTED = "#666666"
+TOKENS_PER_K = 1000  # threshold for "k"-suffixed axis labels
+DECIMAL_K_BELOW = 10  # show one decimal for k-labels under this many k
+MIN_CELL_SHARE = 0.005  # heatmap cells below this share are left blank
+
+
+def _steps_from_records(records: list) -> tuple[np.ndarray, np.ndarray]:
+    """Flatten spec records into (context position, committed length) per step.
+
+    Each verify step is placed at the *running* context length at the moment it
+    ran -- the prompt length plus everything committed by earlier steps in that
+    same request -- and commits ``accepted drafts + 1`` (the bonus) tokens.
+    """
+    positions: list[int] = []
+    accepts: list[int] = []
+    for r in records:
+        per_step = r.spec.get("per_step_accepted")
+        if not per_step:
+            continue
+        pos = r.prompt_tokens
+        for a in per_step:
+            positions.append(pos)
+            accepts.append(a + 1)
+            pos += a + 1
+    return np.array(positions), np.array(accepts)
+
+
+def _auto_log2_edges(positions: np.ndarray) -> np.ndarray:
+    """~2 bins per octave spanning the observed context range."""
+    lo, hi = positions.min(), positions.max()
+    n_bins = max(4, int(round(math.log2(hi / lo) * 2)))
+    return np.logspace(math.log2(lo), math.log2(hi), n_bins + 1, base=2)
+
+
+def _context_label(v: float) -> str:
+    if v < TOKENS_PER_K:
+        return f"{v:.0f}"
+    k = v / TOKENS_PER_K
+    # One decimal below 10k: log-spaced edges there sit ~1.4x apart, so whole-k
+    # rounding collapses adjacent edges to the same label (e.g. 1038 and 1456
+    # both -> "1k"). Above 10k whole-k is already unambiguous.
+    return f"{k:.1f}k" if k < DECIMAL_K_BELOW else f"{k:.0f}k"
+
+
+def _acceptance_grid(
+    positions: np.ndarray,
+    accepts: np.ndarray,
+    edges: np.ndarray,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, int]:
+    """Bin steps by context length; return per-bin (frac, tokens, mean_len, ymax).
+
+    ``frac`` is column-normalized: within each context bin, the share of verify
+    steps at each acceptance length (columns sum to 1). ``tokens`` is committed
+    tokens per bin (decoupled from acceptance -> a clean sample-size measure) and
+    ``mean_len`` is committed tokens per step per bin.
+    """
+    n_bins = len(edges) - 1
+    xidx = np.clip(np.digitize(positions, edges) - 1, 0, n_bins - 1)
+    ymax = int(accepts.max())
+    counts = np.zeros((ymax, n_bins))
+    tokens = np.zeros(n_bins)
+    for xi, a in zip(xidx, accepts, strict=True):
+        counts[a - 1, xi] += 1
+        tokens[xi] += a
+    steps = counts.sum(axis=0)
+    frac = np.divide(counts, steps, out=np.zeros_like(counts), where=steps > 0)
+    mean_len = np.divide(tokens, steps, out=np.zeros_like(tokens), where=steps > 0)
+    return frac, tokens, mean_len, ymax
+
+
+def _annotate_cells(ax: plt.Axes, frac: np.ndarray, ymax: int, n_bins: int) -> None:
+    vmax = frac.max()
+    for yi in range(ymax):
+        for xi in range(n_bins):
+            v = frac[yi, xi]
+            if v >= MIN_CELL_SHARE:
+                ax.text(
+                    xi,
+                    yi,
+                    f"{v * 100:.0f}",
+                    ha="center",
+                    va="center",
+                    fontsize=8,
+                    color="white" if v > vmax * 0.55 else INK,
+                )
+
+
+def _draw_acceptance(
+    frac: np.ndarray,
+    tokens: np.ndarray,
+    mean_len: np.ndarray,
+    ymax: int,
+    edges: np.ndarray,
+    *,
+    title: str | None,
+) -> plt.Figure:
+    """Three x-aligned panels sharing one context-length axis.
+
+    A dedicated colorbar column (only under the heatmap) keeps all three left
+    panels the same width, so the line, bars, and heatmap columns line up.
+    """
+    n_bins = len(edges) - 1
+    fig = plt.figure(figsize=(11, 8.5))
+    gs = GridSpec(
+        3,
+        2,
+        width_ratios=[1, 0.025],
+        height_ratios=[1.1, 1.1, 4],
+        hspace=0.08,
+        wspace=0.02,
+    )
+
+    # panel 1: mean acceptance length (summary of the heatmap below)
+    ax_line = fig.add_subplot(gs[0, 0])
+    # Empty bins (no steps) carry mean_len 0; plot them as NaN so the line breaks
+    # over the gap instead of plunging to 0, which reads as a false acceptance dip.
+    line_y = np.where(tokens > 0, mean_len, np.nan)
+    ax_line.plot(range(n_bins), line_y, "-o", color=ACCEPT_ACCENT, lw=2, ms=7, zorder=3)
+    for i, v in enumerate(mean_len):
+        if v:
+            ax_line.text(
+                i, v, f"{v:.2f}", ha="center", va="bottom", fontsize=8, color=MUTED
+            )
+    ax_line.set_ylabel("Mean\naccept len", color=INK)
+    ax_line.grid(axis="y", color="#e6e6e6", lw=0.8)
+    ax_line.set_axisbelow(True)
+    ax_line.margins(y=0.28)
+    ax_line.set_title(
+        title or "Speculative-decoding acceptance vs context length",
+        fontsize=13,
+        fontweight="bold",
+        color=INK,
+        pad=10,
+    )
+    for s in ("top", "right"):
+        ax_line.spines[s].set_visible(False)
+
+    # panel 2: committed tokens generated per bin (how much data backs each column)
+    ax_bar = fig.add_subplot(gs[1, 0], sharex=ax_line)
+    ax_bar.bar(
+        range(n_bins),
+        tokens,
+        width=1.0,
+        color=ACCEPT_BAR,
+        edgecolor="white",
+        linewidth=1.2,
+    )
+    ax_bar.set_ylabel("Tokens\ngenerated", color=INK)
+    ax_bar.margins(y=0.18)
+    for s in ("top", "right"):
+        ax_bar.spines[s].set_visible(False)
+
+    # panel 3: acceptance-length distribution within each context bin
+    ax = fig.add_subplot(gs[2, 0], sharex=ax_line)
+    im = ax.imshow(
+        frac, origin="lower", aspect="auto", cmap="Blues", vmin=0, vmax=frac.max()
+    )
+    _annotate_cells(ax, frac, ymax, n_bins)
+    ax.set_yticks(range(ymax))
+    ax.set_yticklabels(range(1, ymax + 1))
+    ax.set_ylabel("Acceptance length (committed tokens/step)", color=INK)
+    ax.set_xticks(range(n_bins))
+    ax.set_xticklabels(
+        [
+            f"{_context_label(edges[i])}–{_context_label(edges[i + 1])}"
+            for i in range(n_bins)
+        ],
+        fontsize=8,
+    )
+    ax.set_xlabel("Context length at token position (tokens)", color=INK)
+    for shared in (ax_line, ax_bar):  # sharex re-adds labels; keep on heatmap only
+        shared.tick_params(labelbottom=False)
+
+    cax = fig.add_subplot(gs[2, 1])
+    cbar = fig.colorbar(im, cax=cax)
+    cbar.set_label("Share of steps within context bin", color=INK)
+    return fig
+
+
+def run_acceptance(args: argparse.Namespace) -> None:
+    from acceptance_report import load_spec_records  # noqa: PLC0415
+
+    records = load_spec_records(args.table)
+    if not records:
+        print(f"[ERROR] No spec-decode records in {args.table}", file=sys.stderr)
+        sys.exit(1)
+
+    positions, accepts = _steps_from_records(records)
+    if positions.size == 0:
+        print(
+            "[ERROR] No per-step data. Start the server with "
+            "--per-request-spec-decode-metrics detailed",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
+    if args.context_bin_edges:
+        edges = np.array(
+            sorted(int(e) for e in args.context_bin_edges.split(",") if e.strip())
+        )
+    else:
+        edges = _auto_log2_edges(positions)
+
+    frac, tokens, mean_len, ymax = _acceptance_grid(positions, accepts, edges)
+    fig = _draw_acceptance(frac, tokens, mean_len, ymax, edges, title=args.title)
+
+    args.output.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(args.output, dpi=args.dpi, bbox_inches="tight")
+    plt.close(fig)
+    print(
+        f"[INFO] Saved {args.output} "
+        f"({len(accepts)} steps, {len(edges) - 1} context bins)"
+    )
+
+
+# ============================================================================
 # CLI
 # ============================================================================
 
@@ -473,6 +702,37 @@ def main() -> None:
         help="Optional title prefix for plots (e.g. model name)",
     )
     spd.set_defaults(func=run_speedup)
+
+    # --- acceptance ---
+    acc = sub.add_parser(
+        "acceptance",
+        help="Long-context spec-decode acceptance heatmap",
+        description=(
+            "Render a 3-panel figure from a recorded request table: mean "
+            "acceptance length, tokens generated, and the acceptance-length "
+            "distribution -- all sharing one context-length axis."
+        ),
+    )
+    acc.add_argument(
+        "--table",
+        type=Path,
+        required=True,
+        help="raw_table directory produced by the long-context runner",
+    )
+    acc.add_argument(
+        "--output",
+        type=Path,
+        default=Path("acceptance.png"),
+        help="Output PNG path (default: acceptance.png)",
+    )
+    acc.add_argument(
+        "--context-bin-edges",
+        default=None,
+        help="Comma-separated token edges (default: ~2 log2 bins per octave)",
+    )
+    acc.add_argument("--title", default=None, help="Optional plot title")
+    acc.add_argument("--dpi", type=int, default=130, help="Output DPI (default: 130)")
+    acc.set_defaults(func=run_acceptance)
 
     args = parser.parse_args()
 
