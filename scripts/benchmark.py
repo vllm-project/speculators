@@ -11,7 +11,8 @@ training code path.
 Subcommands:
     run        Run a training benchmark
     compare    Compare two benchmark result files
-    report  Generate interactive HTML report from results
+    report     Generate an interactive HTML report from results
+    comment    Render results as markdown for a GitHub PR comment
 
 Examples:
     # Synthetic benchmark (no dataset / vLLM needed)
@@ -36,6 +37,11 @@ Examples:
 
     # Generate interactive HTML report
     python scripts/benchmark.py report benchmark_20260818.json
+
+    # Post a before/after summary on a PR (run both on the same machine first)
+    python scripts/benchmark.py comment after.json --baseline before.json \\
+        --output comment.md
+    gh pr comment 1234 --body-file comment.md
 """
 
 from __future__ import annotations
@@ -45,6 +51,7 @@ import importlib.metadata
 import json
 import logging
 import math
+import shlex
 import socket
 import statistics
 import subprocess
@@ -225,6 +232,11 @@ def collect_provenance() -> dict:
 
     return {
         "git_sha": git_sha,
+        # The invocation is the one piece of provenance a reader cannot
+        # reconstruct from the config dump, because the train args after '--'
+        # are forwarded verbatim. Mirrors train_command.txt, which records argv
+        # for the same reason.
+        "command": shlex.join([Path(sys.argv[0]).name, *sys.argv[1:]]),
         "timestamp": datetime.now(timezone.utc).isoformat(),
         "hostname": socket.gethostname(),
         "python_version": sys.version.split()[0],
@@ -831,34 +843,40 @@ def compare_benchmarks(baseline_path: str, candidate_path: str) -> None:
     _print_kernel_comparison(baseline, candidate)
 
 
-def _print_kernel_comparison(baseline, candidate):
-    """Per-kernel GPU time diff, when both runs were profiled.
+def _kernel_diff_rows(baseline, candidate) -> list[tuple[str, float, float]]:
+    """(name, baseline ms/step, candidate ms/step) ranked by absolute change.
 
     This is what localizes a regression or a win to the kernel that caused it:
-    the phase timings only say "forward got slower", the kernel table says
-    which launch did it. Kernels present on only one side (a different attention
+    the phase timings only say "forward got slower", the kernel rows say which
+    launch did it. Kernels present on only one side (a different attention
     backend, a renamed Triton kernel) show up with the missing side at zero.
+    Empty unless both runs were profiled.
     """
     ka = (baseline.get("kernels") or {}).get("kernels")
     kb = (candidate.get("kernels") or {}).get("kernels")
     if not ka or not kb:
-        return
-
+        return []
     base_ms = {k["name"]: k["ms_per_step"] for k in ka}
     cand_ms = {k["name"]: k["ms_per_step"] for k in kb}
     names = sorted(
         set(base_ms) | set(cand_ms),
         key=lambda n: -abs(cand_ms.get(n, 0.0) - base_ms.get(n, 0.0)),
     )
+    return [(n, base_ms.get(n, 0.0), cand_ms.get(n, 0.0)) for n in names]
+
+
+def _print_kernel_comparison(baseline, candidate):
+    """Per-kernel GPU time diff, when both runs were profiled."""
+    rows = _kernel_diff_rows(baseline, candidate)
+    if not rows:
+        return
 
     print(
         f"\n{'GPU kernel (ms/step, self time)':<54}"
         f"{'Baseline':>10}{'Candidate':>11}{'Delta':>10}{'Delta %':>10}"
     )
     print("-" * 95)
-    for name in names[:KERNEL_TOP_N]:
-        a = base_ms.get(name, 0.0)
-        b = cand_ms.get(name, 0.0)
+    for name, a, b in rows[:KERNEL_TOP_N]:
         delta = b - a
         pct = f"{delta / a * 100:>+9.1f}%" if a else f"{'n/a':>10}"
         label = _short_kernel_name(name, 52)
@@ -1394,6 +1412,312 @@ def _kernel_name_cell(name: str) -> str:
     )
 
 
+# ---------------------------------------------------------------------------
+# GitHub PR comment
+# ---------------------------------------------------------------------------
+
+# A CI job finds its own previous comment by this marker and edits it in place,
+# rather than stacking a new comment on every push.
+COMMENT_MARKER = "<!-- speculators-benchmark -->"
+# Kernel rows in the comment. Fewer than the HTML report: a PR comment is read
+# in a scroll, and GitHub hard-truncates very long ones.
+COMMENT_KERNEL_N = 8
+
+
+# Changes smaller than this are reported without a win/loss marker. A green
+# tick on a 0.5% move reads as a result when it is run-to-run noise.
+MD_NEUTRAL_PCT = 1.0
+
+
+def _md_delta(before: float, after: float, *, lower_is_better=True) -> str:
+    """Signed percentage change, marked when it is big enough to mean anything."""
+    if not before:
+        return "n/a"
+    pct = (after - before) / before * 100
+    if abs(pct) < MD_NEUTRAL_PCT:
+        return f"{pct:+.1f}%"
+    improved = (pct < 0) if lower_is_better else (pct > 0)
+    return f"{'✅' if improved else '🔴'} **{pct:+.1f}%**"
+
+
+def _md_significance(per_step_a, per_step_b, key: str) -> str:
+    """Welch p-value and Cohen's d as a compact cell."""
+    result = _welch_test(per_step_a, per_step_b, key)
+    if not result:
+        return "—"
+    _, p_val, d_val = result
+    p_txt = "p<0.001" if p_val < 0.001 else f"p={p_val:.3f}"  # noqa: PLR2004
+    return f"{p_txt}, d={d_val:+.1f}"
+
+
+def _comment_timing_table(base: dict, cand: dict | None) -> list[str]:
+    """Timing table: before/after with significance, or a single-run summary."""
+    if cand is None:
+        per_step = base.get("per_step")
+        lines = [
+            "| Metric | Mean | 95% CI | Std |",
+            "|---|--:|:-:|--:|",
+        ]
+        for key in TIMING_KEYS:
+            stats = base["timing"].get(key)
+            if stats:
+                ci = _get_ci(stats, per_step, key)
+                lines.append(
+                    f"| `{key}` | {stats['mean']:.2f} | {ci} | {stats['std']:.2f} |"
+                )
+        return lines
+
+    per_a = base.get("per_step", [])
+    per_b = cand.get("per_step", [])
+    lines = [
+        "| Metric | Before | After | Change | Significance |",
+        "|---|--:|--:|--:|:-:|",
+    ]
+    for key in TIMING_KEYS:
+        sa, sb = base["timing"].get(key), cand["timing"].get(key)
+        if not sa or not sb:
+            continue
+        # Throughput is the one metric where up is the win.
+        lower_better = key != "tokens_per_s"
+        lines.append(
+            f"| `{key}` | {sa['mean']:,.1f} | {sb['mean']:,.1f} |"
+            f" {_md_delta(sa['mean'], sb['mean'], lower_is_better=lower_better)} |"
+            f" {_md_significance(per_a, per_b, key)} |"
+        )
+    return lines
+
+
+def _comment_kernel_lines(base: dict, cand: dict | None) -> list[str]:
+    """Kernel diff table and/or a mermaid pie, for whichever runs were profiled.
+
+    Mermaid is the only chart GitHub renders in a comment -- the HTML report's
+    plotly output is stripped, since comments allow no scripts -- so the pie is
+    re-emitted in that dialect rather than linked as an image, which would need
+    somewhere to host it.
+    """
+    lines: list[str] = []
+    rows = _kernel_diff_rows(base, cand) if cand else []
+    if rows:
+        total_a = base["kernels"].get("total_device_ms_per_step", 0)
+        total_b = cand["kernels"].get("total_device_ms_per_step", 0)
+        lines += [
+            "",
+            "### GPU kernel time (ms/step, self time)",
+            "",
+            "| Kernel | Before | After | Change |",
+            "|---|--:|--:|--:|",
+        ]
+        lines += [
+            f"| `{_short_kernel_name(name, 44)}` | {a:.2f} | {b:.2f} |"
+            f" {_md_delta(a, b)} |"
+            for name, a, b in rows[:COMMENT_KERNEL_N]
+        ]
+        lines.append(
+            f"| **Total device time** | **{total_a:.2f}** | **{total_b:.2f}** |"
+            f" {_md_delta(total_a, total_b)} |"
+        )
+        lines += [
+            "",
+            (
+                "<sub>Ranked by absolute change. Device-side durations, so "
+                "the synchronisation `--profile` adds does not distort "
+                "them.</sub>"
+            ),
+        ]
+
+    pie = _mermaid_pie((cand or base).get("kernels"))
+    if pie:
+        lines += ["", *pie]
+    return lines
+
+
+def _mermaid_pie(kernels: dict | None) -> list[str]:
+    """Kernel mix as a mermaid pie, the chart dialect GitHub renders natively.
+
+    Capped at ``COMMENT_KERNEL_N`` slices on top of the percentage floor: after
+    a large win the surviving kernels bunch up just over the threshold, and a
+    dozen near-equal wedges say nothing.
+    """
+    if not kernels or not kernels.get("kernels"):
+        return []
+    total = kernels.get("total_device_ms_per_step", 0) or 1.0
+    slices: list[tuple[str, float]] = []
+    tail_ms = 0.0
+    tail_n = 0
+    for k in kernels["kernels"]:
+        over_floor = k["ms_per_step"] / total * 100 >= KERNEL_PIE_MIN_PCT
+        if over_floor and len(slices) < COMMENT_KERNEL_N:
+            # Mermaid delimits labels with double quotes and offers no escape.
+            slices.append(
+                (_short_kernel_name(k["name"], 40).replace('"', "'"), k["ms_per_step"])
+            )
+        else:
+            tail_ms += k["ms_per_step"]
+            tail_n += 1
+    if tail_n:
+        slices.append((f"Other ({tail_n} kernels)", tail_ms))
+
+    # Mermaid sums same-named wedges just as plotly does, and elision can
+    # collide two cuBLAS kernels onto one label.
+    labels = _unique_labels([label for label, _ in slices])
+    return [
+        "```mermaid",
+        "pie showData",
+        f"    title Device time per kernel — {total:.1f} ms/step",
+        *[
+            f'    "{label}" : {ms:.2f}'
+            for label, (_, ms) in zip(labels, slices, strict=True)
+        ],
+        "```",
+    ]
+
+
+def _comment_provenance(base: dict, cand: dict | None) -> list[str]:
+    """Collapsed provenance: the commands, the environment, the config."""
+    prov = (cand or base).get("provenance", {})
+    cfg = (cand or base).get("config", {})
+
+    commands = []
+    for label, result in (("Before", base), ("After", cand)):
+        cmd = (result or {}).get("provenance", {}).get("command")
+        if cmd:
+            prefix = f"# {label}\n" if cand else ""
+            commands.append(f"{prefix}{cmd}")
+    cmd_block = ["**Command**", "", "```bash", *commands, "```", ""] if commands else []
+
+    env = [
+        ("commit", f"`{prov.get('git_sha', 'unknown')[:12]}`"),
+        ("GPU", f"{cfg.get('num_gpus_used', 1)} x {_get_gpu_name(cand or base)}"),
+        ("torch", prov.get("pytorch_version", "?")),
+        ("CUDA", prov.get("cuda_version", "?")),
+        ("transformers", prov.get("transformers_version", "?")),
+        ("speculators", prov.get("speculators_version", "?")),
+        ("host", prov.get("hostname", "?")),
+        ("run at", prov.get("timestamp", "?")[:19].replace("T", " ") + " UTC"),
+    ]
+    if cand:
+        sha_a = base.get("provenance", {}).get("git_sha", "unknown")[:12]
+        sha_b = prov.get("git_sha", "unknown")[:12]
+        if sha_a != sha_b:
+            env[0] = ("commit", f"`{sha_a}` → `{sha_b}`")
+
+    cfg_keys = (
+        "speculator_type",
+        "verifier_name_or_path",
+        "total_seq_len",
+        "hidden_size",
+        "optimizer",
+        "lr",
+        "hidden_states_dtype",
+        "synthetic_data",
+        "fsdp_shard",
+        "warmup_steps",
+        "measured_steps",
+        "seed",
+    )
+    return [
+        "",
+        "<details>",
+        "<summary>Provenance</summary>",
+        "",
+        *cmd_block,
+        "**Environment**",
+        "",
+        "| | |",
+        "|---|---|",
+        *[f"| {k} | {v} |" for k, v in env],
+        "",
+        "**Config**",
+        "",
+        "| | |",
+        "|---|---|",
+        *[f"| {k} | `{cfg[k]}` |" for k in cfg_keys if k in cfg],
+        "",
+        "</details>",
+    ]
+
+
+def build_comment(base: dict, cand: dict | None) -> str:
+    """Render benchmark results as markdown for a GitHub PR comment.
+
+    GitHub strips scripts, so the interactive report cannot be embedded; this
+    emits the same findings in what a comment does render -- tables, a mermaid
+    pie, and a collapsed provenance block.
+    """
+    cfg = (cand or base).get("config", {})
+    title = (
+        f"{cfg.get('speculator_type', '?')} / "
+        f"{cfg.get('verifier_name_or_path', '?')} · "
+        f"seq_len {cfg.get('total_seq_len', '?')} · "
+        f"{cfg.get('num_gpus_used', 1)}x {_get_gpu_name(cand or base)}"
+    )
+    lines = [COMMENT_MARKER, f"## Training benchmark: {title}", ""]
+
+    if cand:
+        before = base["timing"]["step_ms"]["mean"]
+        after = cand["timing"]["step_ms"]["mean"]
+        tps_a = base["timing"]["tokens_per_s"]["mean"]
+        tps_b = cand["timing"]["tokens_per_s"]["mean"]
+        ratio = before / after if after else 0.0
+        faster = ratio >= 1
+        factor = ratio if faster else (1 / ratio if ratio else 0)
+        lines.append(
+            f"### {'⚡' if faster else '⚠️'} "
+            f"{factor:.2f}× {'faster' if faster else 'slower'} — "
+            f"{before:,.1f} → {after:,.1f} ms/step, "
+            f"{tps_a:,.0f} → {tps_b:,.0f} tok/s"
+        )
+    else:
+        step = base["timing"]["step_ms"]["mean"]
+        tps = base["timing"]["tokens_per_s"]["mean"]
+        lines.append(f"### {step:,.1f} ms/step · {tps:,.0f} tok/s")
+    lines.append("")
+
+    lines += _comment_timing_table(base, cand)
+
+    mem_a = base.get("memory", {}).get("peak_allocated_mb", 0)
+    if cand:
+        mem_b = cand.get("memory", {}).get("peak_allocated_mb", 0)
+        lines += [
+            "",
+            (
+                f"Peak allocated: {mem_a:,.0f} → {mem_b:,.0f} MB "
+                f"({_md_delta(mem_a, mem_b)})"
+            ),
+        ]
+    else:
+        lines += ["", f"Peak allocated: {mem_a:,.0f} MB"]
+
+    lines += _comment_kernel_lines(base, cand)
+    lines += _comment_provenance(base, cand)
+    return "\n".join(lines) + "\n"
+
+
+def comment_benchmark(
+    result_path: str, baseline_path: str | None, output_path: str | None
+) -> None:
+    """Write (or print) the PR-comment markdown for one or two result files."""
+    with open(result_path) as f:
+        cand_or_base = json.load(f)
+    base = cand_or_base
+    cand = None
+    if baseline_path:
+        with open(baseline_path) as f:
+            base = json.load(f)
+        cand = cand_or_base
+
+    text = build_comment(base, cand)
+    if output_path:
+        Path(output_path).write_text(text)
+        print(f"Comment markdown written to {output_path}", file=sys.stderr)
+        print(
+            f"Post it with:  gh pr comment <N> --body-file {output_path}",
+            file=sys.stderr,
+        )
+    else:
+        print(text)
+
+
 def _section_html(title: str, sub: str, fig, height: int, *, with_js=False) -> str:
     """One report section: heading, a line of key data, then its chart.
 
@@ -1659,6 +1983,24 @@ def build_parser():
         help="Output HTML path. Default: <result>_report.html.",
     )
 
+    # --- comment ---
+    comment_parser = subparsers.add_parser(
+        "comment", help="Render results as markdown for a GitHub PR comment"
+    )
+    comment_parser.add_argument("result", help="Path to benchmark result JSON.")
+    comment_parser.add_argument(
+        "--baseline",
+        type=str,
+        default=None,
+        help="Baseline result JSON. Given, the comment becomes a before/after.",
+    )
+    comment_parser.add_argument(
+        "--output",
+        type=str,
+        default=None,
+        help="Write markdown here instead of stdout.",
+    )
+
     return parser
 
 
@@ -1683,6 +2025,10 @@ def main():
 
     if bench_args.command == "report":
         report_benchmark(bench_args.result, bench_args.output)
+        return
+
+    if bench_args.command == "comment":
+        comment_benchmark(bench_args.result, bench_args.baseline, bench_args.output)
         return
 
     # --- run command ---
