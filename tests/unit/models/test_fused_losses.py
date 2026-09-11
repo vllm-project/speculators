@@ -13,10 +13,9 @@ BLOCK_SIZE cap (MAX_FUSED_SIZE_NPU = 4096), which forces the tighter
 multi-block streaming loop.
 """
 
-from types import SimpleNamespace
-
 import pytest
 import torch
+import triton
 
 from speculators.losses import eager, resolve_loss_config
 from speculators.utils.util import is_npu_available
@@ -187,39 +186,54 @@ def test_eager_implementation_supports_differentiable_targets():
         assert targets.grad is not None, name
 
 
-def test_calculate_settings_respects_device_cap():
-    """`_calculate_settings` picks the right BLOCK_SIZE for each device without
-    needing NPU or CUDA hardware -- the helper only reads ``device.type``.
+def test_tile_configs_stay_register_resident():
+    """Every autotune candidate sits in the measured non-spilling region.
 
-    Exercises the NPU cap (MAX_FUSED_SIZE_NPU = 4096) and the CUDA cap
-    (MAX_FUSED_SIZE = 131072) at vocab sizes that span the boundaries, so
-    upstream CI (which typically has no NPU) still covers the NPU branch.
+    This is the invariant that matters: the tile the autotuner ends up on is
+    machine-dependent and not worth asserting, but a candidate that spills to
+    local memory is never competitive on any device. The fixed
+    BLOCK_SIZE=131072 this module used to select was 512 elements/thread and
+    ran the forward kernel ~17x slower than a register-resident tile.
     """
     fused_losses = pytest.importorskip("speculators.losses.fused")
 
-    npu_cases = (
-        (512, 512),
-        (4096, 4096),
-        (8192, 4096),
-        (32768, 4096),
-        (131072, 4096),
-        (151936, 4096),
-    )
-    for vocab, expected in npu_cases:
-        block, _ = fused_losses._calculate_settings(vocab, SimpleNamespace(type="npu"))
-        assert block == expected, (
-            f"NPU cap: vocab={vocab} -> BLOCK_SIZE={block}, expected {expected}"
-        )
+    configs = fused_losses._tile_configs()
+    assert configs, "the autotuner needs at least one candidate"
 
-    cuda_cases = (
-        (512, 512),
-        (4096, 4096),
-        (8192, 8192),
-        (131072, 131072),
-        (151936, 131072),
-    )
-    for vocab, expected in cuda_cases:
-        block, _ = fused_losses._calculate_settings(vocab, SimpleNamespace(type="cuda"))
-        assert block == expected, (
-            f"CUDA cap: vocab={vocab} -> BLOCK_SIZE={block}, expected {expected}"
-        )
+    warp_size = 64 if getattr(torch.version, "hip", None) is not None else 32
+    for config in configs:
+        block = config.kwargs["BLOCK_SIZE"]
+        threads = config.num_warps * warp_size
+        assert block == triton.next_power_of_2(block)
+        if fused_losses.is_npu_available():
+            assert block <= fused_losses.MAX_FUSED_SIZE_NPU
+            continue
+        elems_per_thread = block // threads
+        assert (
+            fused_losses._MIN_ELEMS_PER_THREAD
+            <= elems_per_thread
+            <= fused_losses._MAX_ELEMS_PER_THREAD
+        ), f"BLOCK_SIZE={block} at {threads} threads is {elems_per_thread} elems/thread"
+
+
+def test_prune_oversized_tiles_never_empties_the_space():
+    """Pruning narrows the space for small vocabs but always leaves a candidate.
+
+    A vocab narrower than every candidate tile (the 512-wide test shapes) must
+    still get a config -- an empty list would make the launch unschedulable --
+    and it should get only the narrowest, so tiny shapes do not pay to compile
+    the whole space.
+    """
+    fused_losses = pytest.importorskip("speculators.losses.fused")
+
+    configs = fused_losses._tile_configs()
+    blocks = {config.kwargs["BLOCK_SIZE"] for config in configs}
+
+    for vocab in (128, 512, 4096, 32000, 151936):
+        pruned = fused_losses._prune_oversized_tiles(configs, {"n_cols": vocab})
+        assert pruned, f"vocab={vocab} pruned every candidate"
+        cap = triton.next_power_of_2(vocab)
+        if any(block <= cap for block in blocks):
+            assert all(config.kwargs["BLOCK_SIZE"] <= cap for config in pruned)
+        else:
+            assert {config.kwargs["BLOCK_SIZE"] for config in pruned} == {min(blocks)}
