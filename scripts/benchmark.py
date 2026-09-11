@@ -1066,31 +1066,14 @@ def _get_phase_means(per_step):
     return result
 
 
-def _build_summary_fig(results, per_step):
-    """Build the summary dashboard: aggregate stats as charts."""
+def _build_timing_fig(per_step):
+    """Mean time per training phase as a horizontal bar chart."""
     import plotly.graph_objects as go  # noqa: PLC0415
-    from plotly.subplots import make_subplots  # noqa: PLC0415
-
-    has_memory = any("memory_mb" in s for s in per_step)
-
-    n_rows = 2 if has_memory else 1
-    row_heights = [0.6, 0.4] if has_memory else [1.0]
-    titles = ["Mean Step Timing Breakdown"]
-    if has_memory:
-        titles.append("Mean GPU Memory Allocated (logical) at Phase Boundaries (MB)")
-
-    fig = make_subplots(
-        rows=n_rows,
-        cols=1,
-        subplot_titles=titles,
-        vertical_spacing=0.15,
-        row_heights=row_heights,
-    )
 
     phase_stats = _get_phase_means(per_step)
     total_ms = sum(mean for _, _, mean, _ in phase_stats)
 
-    # --- Timing breakdown: horizontal bar with ms and % ---
+    fig = go.Figure()
     for key, label, mean_val, std_val in reversed(phase_stats):
         pct = mean_val / total_ms * 100 if total_ms > 0 else 0
         fig.add_trace(
@@ -1104,71 +1087,67 @@ def _build_summary_fig(results, per_step):
                 text=f"{mean_val:.1f}ms ({pct:.1f}%)",
                 textposition="auto",
                 showlegend=False,
-            ),
-            row=1,
-            col=1,
+            )
         )
-
     fig.update_layout(barmode="stack", yaxis={"categoryorder": "array"})
+    return fig
 
+
+def _timing_sub(per_step) -> str:
+    """Key numbers for the timing section: step time, throughput, spread."""
     step_stats = compute_statistics([s["step_ms"] for s in per_step])
     tps_stats = compute_statistics([s["tokens_per_s"] for s in per_step])
-    fig.add_annotation(
-        text=(
-            f"<b>step: {step_stats['mean']:.1f} ms</b>"
-            f" [{step_stats['ci95_lower']:.1f},"
-            f" {step_stats['ci95_upper']:.1f}]"
-            f"  ·  <b>{tps_stats['mean']:.0f} tok/s</b>"
-            f" [{tps_stats['ci95_lower']:.0f},"
-            f" {tps_stats['ci95_upper']:.0f}]"
-            f"  ·  peak {results['memory']['peak_allocated_mb']:.0f} MB"
-            f"<br>"
-            f"<span style='color:#888'>95% CI, n={step_stats['count']}</span>"
-        ),
-        xref="paper",
-        yref="paper",
-        x=0.5,
-        y=1.18,
-        showarrow=False,
-        font={"size": 13},
+    return (
+        f"{step_stats['mean']:.1f} ms/step "
+        f"[{step_stats['ci95_lower']:.1f}, {step_stats['ci95_upper']:.1f}] · "
+        f"{tps_stats['mean']:.0f} tok/s "
+        f"[{tps_stats['ci95_lower']:.0f}, {tps_stats['ci95_upper']:.0f}] · "
+        f"n={step_stats['count']} steps · brackets are 95% CI, "
+        "error bars ±1 std"
     )
 
-    # --- Memory breakdown: mean at each phase mark with std error bars ---
-    if has_memory:
-        marks = list(_MEMORY_MARK_LABELS.keys())
-        labels = list(_MEMORY_MARK_LABELS.values())
-        means = []
-        stds = []
-        for mark in marks:
-            vals = [
-                s["memory_mb"][mark]
-                for s in per_step
-                if "memory_mb" in s and mark in s["memory_mb"]
-            ]
-            if vals:
-                means.append(statistics.mean(vals))
-                stds.append(statistics.stdev(vals) if len(vals) > 1 else 0.0)
-            else:
-                means.append(0)
-                stds.append(0)
 
-        mem_row = n_rows
-        fig.add_trace(
-            go.Bar(
-                x=labels,
-                y=means,
-                error_y={"type": "data", "array": stds, "visible": True},
-                marker_color="#636EFA",
-                text=[f"{m:.0f}" for m in means],
-                textposition="outside",
-                showlegend=False,
-            ),
-            row=mem_row,
-            col=1,
+def _build_memory_fig(per_step):
+    """Mean allocated memory at each phase boundary, with std error bars."""
+    import plotly.graph_objects as go  # noqa: PLC0415
+
+    means = []
+    stds = []
+    for mark in _MEMORY_MARK_LABELS:
+        vals = [
+            s["memory_mb"][mark]
+            for s in per_step
+            if "memory_mb" in s and mark in s["memory_mb"]
+        ]
+        means.append(statistics.mean(vals) if vals else 0)
+        stds.append(statistics.stdev(vals) if len(vals) > 1 else 0.0)
+
+    fig = go.Figure(
+        go.Bar(
+            x=list(_MEMORY_MARK_LABELS.values()),
+            y=means,
+            error_y={"type": "data", "array": stds, "visible": True},
+            marker_color="#636EFA",
+            text=[f"{m:.0f}" for m in means],
+            textposition="outside",
+            # The section margins are tight; without this the label on the
+            # tallest bar is clipped at the plot edge.
+            cliponaxis=False,
+            showlegend=False,
         )
-        fig.update_yaxes(rangemode="tozero", row=mem_row, col=1)
-
+    )
+    fig.update_yaxes(rangemode="tozero")
     return fig
+
+
+def _memory_sub(results) -> str:
+    """Key numbers for the memory section: the two peaks torch reports."""
+    mem = results.get("memory", {})
+    return (
+        f"{mem.get('peak_allocated_mb', 0):.0f} MB peak allocated · "
+        f"{mem.get('peak_reserved_mb', 0):.0f} MB peak reserved · "
+        "bars are the mean at each phase boundary, error bars ±1 std"
+    )
 
 
 def _build_appendix_fig(per_step):
@@ -1392,10 +1371,7 @@ def _build_kernel_pie(kernels: dict):
         )
     )
     fig.update_layout(
-        height=420,
-        template="plotly_white",
-        margin={"t": 20, "b": 20, "l": 20, "r": 20},
-        legend={"font": {"family": "ui-monospace, monospace", "size": 10}},
+        legend={"font": {"family": "ui-monospace, monospace", "size": 10}}
     )
     return fig
 
@@ -1418,6 +1394,29 @@ def _kernel_name_cell(name: str) -> str:
     )
 
 
+def _section_html(title: str, sub: str, fig, height: int, *, with_js=False) -> str:
+    """One report section: heading, a line of key data, then its chart.
+
+    Every body section goes through here so the three of them stay visually
+    identical; plotly's own subplot titles and annotations cannot match the
+    surrounding page, which is why the figures carry neither.
+
+    ``with_js`` embeds the plotly bundle and must be set on exactly one section.
+    """
+    fig.update_layout(
+        height=height,
+        template="plotly_white",
+        margin={"t": 30, "b": 40, "l": 20, "r": 20},
+    )
+    fig_html = fig.to_html(
+        full_html=False, include_plotlyjs="cdn" if with_js else False
+    )
+    return f"""
+<h2 class="sec">{title}</h2>
+<p class="sub">{sub}</p>
+{fig_html}"""
+
+
 def _kernel_html(kernels: dict | None) -> tuple[str, str]:
     """Kernel-time pie for the body and top-N table for the appendix.
 
@@ -1432,15 +1431,14 @@ def _kernel_html(kernels: dict | None) -> tuple[str, str]:
         for k in entries
         if k["ms_per_step"] / (total or 1) * 100 >= KERNEL_PIE_MIN_PCT
     )
-    pie_html = _build_kernel_pie(kernels).to_html(
-        full_html=False, include_plotlyjs=False
+    body = _section_html(
+        "GPU Kernel Breakdown",
+        f"{total:.1f} ms GPU time/step · {len(entries)} kernels · "
+        f"{shown} at or above {KERNEL_PIE_MIN_PCT:.0f}%, rest grouped as "
+        '"Other" · hover for full name, ms/step and calls/step',
+        _build_kernel_pie(kernels),
+        height=420,
     )
-    body = f"""
-<h2 class="sec">GPU Kernel Breakdown</h2>
-<p class="sub">{total:.1f} ms GPU time/step · {len(entries)} kernels ·
-{shown} at or above {KERNEL_PIE_MIN_PCT:.0f}%, rest grouped as "Other" ·
-hover for full name, ms/step and calls/step</p>
-{pie_html}"""
 
     rows = "".join(
         f"<tr><td>{_kernel_name_cell(k['name'])}</td>"
@@ -1495,16 +1493,22 @@ def report_benchmark(result_path: str, output_path: str | None = None) -> None:
         f"{prov.get('git_sha', 'unknown')[:12]}"
     )
 
-    # --- Summary dashboard ---
-    summary_fig = _build_summary_fig(results, per_step)
-    has_memory = any("memory_mb" in s for s in per_step)
-    summary_height = 700 if has_memory else 450
-    summary_fig.update_layout(
-        height=summary_height,
-        template="plotly_white",
-        margin={"t": 140},
+    # --- Body sections: timing, memory, kernels ---
+    timing_html = _section_html(
+        "Step Timing Breakdown",
+        _timing_sub(per_step),
+        _build_timing_fig(per_step),
+        height=340,
+        with_js=True,  # first figure on the page carries the plotly bundle
     )
-    summary_html = summary_fig.to_html(full_html=False, include_plotlyjs="cdn")
+    memory_html = ""
+    if any("memory_mb" in s for s in per_step):
+        memory_html = _section_html(
+            "GPU Memory Allocated (logical)",
+            _memory_sub(results),
+            _build_memory_fig(per_step),
+            height=340,
+        )
 
     # --- Appendix: per-step raw data ---
     appendix_fig, n_rows = _build_appendix_fig(per_step)
@@ -1529,12 +1533,12 @@ def report_benchmark(result_path: str, output_path: str | None = None) -> None:
   body {{ font-family: system-ui, sans-serif; max-width: 1200px;
          margin: 0 auto; padding: 20px; color: #24292f; background: #fff; }}
   h1 {{ font-size: 1.3em; margin-bottom: 0; }}
-  .sub {{ color: #656d76; font-size: 0.85em; margin-bottom: 20px; }}
+  h2.sec {{ font-size: 1.1em; font-weight: 600; margin: 34px 0 0; }}
+  .sub {{ color: #656d76; font-size: 0.85em; max-width: 900px;
+          margin: 4px 0 12px; }}
   details {{ margin-top: 30px; }}
   summary {{ cursor: pointer; font-size: 1.1em; font-weight: 600;
              padding: 8px 0; }}
-  h2.sec {{ font-size: 1.1em; font-weight: 600; margin: 30px 0 0; }}
-  .sub {{ margin-top: 4px; max-width: 900px; }}
   table.kernels {{ border-collapse: collapse; font-size: 0.85em; width: 100%; }}
   table.kernels th, table.kernels td {{ text-align: right; padding: 5px 8px;
                                         border-bottom: 1px solid #d8dee4; }}
@@ -1550,7 +1554,8 @@ def report_benchmark(result_path: str, output_path: str | None = None) -> None:
 </head><body>
 <h1>{heading}</h1>
 <div class="sub">{sub}</div>
-{summary_html}
+{timing_html}
+{memory_html}
 {kernel_html}
 {kernel_appendix_html}
 <details>
