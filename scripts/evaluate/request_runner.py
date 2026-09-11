@@ -54,6 +54,11 @@ RowStatus = Literal["ok", "oversized", "error"]
 _RENDER_TIMEOUT_S = 180
 _GENERATE_TIMEOUT_S = 1200
 
+# HTTP statuses the render endpoint uses to reject a prompt that exceeds the
+# model's context window (vLLM: 400; some proxies: 413). Every other status is a
+# genuine failure, not an oversized prompt.
+_CONTEXT_LIMIT_STATUSES = frozenset({400, 413})
+
 # Flat, stable schema for the recorded table. The two ``*_json`` columns keep the
 # runner generic: it never interprets server metrics or caller metadata, it just
 # records them verbatim for the analysis layer to parse.
@@ -145,8 +150,12 @@ def _post(root_url: str, path: str, body: dict, timeout: int) -> dict:
 def _render(root_url: str, model: str, req: Request) -> tuple[int, int] | RowStatus:
     """Return ``(prompt_tokens, granted_max_tokens)`` or a failure status.
 
-    An HTTP error from the render endpoint means the prompt doesn't fit the
-    model's context window -- reported as ``"oversized"``.
+    Only a context-limit rejection means the prompt genuinely doesn't fit --
+    reported as ``"oversized"``. The render endpoint returns 400/413 for that.
+    Any other HTTP status (a missing route, or a transient 5xx) is a *failure*,
+    not an oversized prompt, and must be reported as ``"error"`` -- otherwise an
+    ordered benchmark's ``_all_oversized`` stop rule can halt the whole run on a
+    blip and the table would blame prompt length for a server fault.
     """
     try:
         rendered = _post(
@@ -156,8 +165,13 @@ def _render(root_url: str, model: str, req: Request) -> tuple[int, int] | RowSta
             timeout=_RENDER_TIMEOUT_S,
         )
         return len(rendered["token_ids"]), rendered["sampling_params"]["max_tokens"]
-    except HTTPError:
-        return "oversized"
+    except HTTPError as e:
+        if e.code in _CONTEXT_LIMIT_STATUSES:
+            return "oversized"
+        logger.warning(
+            "Render endpoint returned HTTP %s for %s: %s", e.code, req.request_id, e
+        )
+        return "error"
     except (URLError, OSError, json.JSONDecodeError, KeyError, TypeError) as e:
         logger.warning("Render failed for %s: %s", req.request_id, e)
         return "error"
@@ -251,6 +265,11 @@ def run_requests(
     table directory, readable via :func:`load_table`.
     """
     table_dir.mkdir(parents=True, exist_ok=True)
+    # Start from a clean table: a reuse of this directory by a shorter run would
+    # otherwise leave stale higher-index part files that load_table() reads back,
+    # silently mixing the previous run's rows into this one's reports.
+    for stale in table_dir.glob("part-*.parquet"):
+        stale.unlink()
     n_ok = n_oversized = n_error = 0
 
     with ThreadPoolExecutor(max_workers=max_concurrency) as pool:

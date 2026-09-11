@@ -64,17 +64,29 @@ def main() -> None:
     )
     args = parser.parse_args()
 
+    # Validate bin arguments up front, before any file I/O -- _bucket_label
+    # assumes strictly ascending edges, so sort + de-duplicate the user's input
+    # and require at least two distinct edges; otherwise unordered or too-few
+    # edges silently misaggregate the report.
+    context_bin_edges = DEFAULT_CONTEXT_BIN_EDGES
+    if args.context_bin_edges:
+        try:
+            edges = sorted(
+                {int(e) for e in args.context_bin_edges.split(",") if e.strip()}
+            )
+        except ValueError:
+            parser.error("--context-bin-edges must be comma-separated integers")
+        if len(edges) < 2:  # noqa: PLR2004
+            parser.error("--context-bin-edges needs at least two distinct edges")
+        context_bin_edges = tuple(edges)
+    if args.position_bin_size < 1:
+        parser.error("--position-bin-size must be at least 1")
+
     records = load_spec_records(args.table)
     if not records:
         logger.error("No spec-decode records found in %s", args.table)
         sys.exit(1)
     logger.info("Loaded %d spec-decode records from %s", len(records), args.table)
-
-    context_bin_edges = DEFAULT_CONTEXT_BIN_EDGES
-    if args.context_bin_edges:
-        context_bin_edges = tuple(
-            int(e) for e in args.context_bin_edges.split(",") if e.strip()
-        )
 
     write_report(
         args.output_dir or args.table.parent,

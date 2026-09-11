@@ -210,6 +210,8 @@ def write_report(
 
     by_start = bin_by_start_length(records, context_bin_edges)
     _print_bucket_table("Acceptance by context length at request start", by_start)
+    # overwrite: a report is written whole each run (e.g. re-binning the same
+    # table into the same output_dir), so replace it rather than append.
     CsvWriter(
         output_dir / "acceptance_by_start_length.csv",
         [
@@ -221,6 +223,7 @@ def write_report(
             "draft_acceptance_rate",
             "mean_acceptance_length",
         ],
+        overwrite=True,
     ).append_rows(by_start)
 
     by_position = bin_by_position(records, position_bin_size)
@@ -241,4 +244,5 @@ def write_report(
             "draft_acceptance_rate",
             "mean_acceptance_length",
         ],
+        overwrite=True,
     ).append_rows(by_position)

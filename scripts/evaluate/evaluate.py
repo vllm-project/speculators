@@ -91,6 +91,20 @@ _SPEEDBENCH_COLUMN_MAPPER = (
 )
 
 
+def _positive_int(value: str) -> int:
+    """argparse type: accept only integers >= 1.
+
+    Guards flags whose non-positive values fail late and expensively -- e.g. a
+    negative --samples-per-bin becomes a negative list slice that runs nearly the
+    whole dataset, and a non-positive --position-bin-size only blows up at the
+    reporting step, after the entire inference run.
+    """
+    parsed = int(value)
+    if parsed < 1:
+        raise argparse.ArgumentTypeError(f"must be >= 1, got {parsed}")
+    return parsed
+
+
 def _fetch_model_info(target: str) -> dict | None:
     """Return the first ``/v1/models`` entry (has ``id`` and ``max_model_len``)."""
     base = target.rstrip("/")
@@ -505,7 +519,7 @@ def main() -> None:
     lc_group = parser.add_argument_group("long-context mode")
     lc_group.add_argument(
         "--samples-per-bin",
-        type=int,
+        type=_positive_int,
         default=DEFAULT_SAMPLES_PER_BIN,
         help=(
             "long-context: records to run per native MRCR token bin. Larger "
@@ -525,7 +539,7 @@ def main() -> None:
     )
     lc_group.add_argument(
         "--position-bin-size",
-        type=int,
+        type=_positive_int,
         default=DEFAULT_POSITION_BIN_SIZE,
         help=(
             "long-context: token-position bin width for the by-position report "
