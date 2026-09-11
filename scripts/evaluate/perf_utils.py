@@ -458,12 +458,21 @@ def parse_sweep_results(
 
 
 class CsvWriter:
-    """Append rows incrementally to a CSV file, writing the header on first row."""
+    """Append rows incrementally to a CSV file, writing the header on first row.
 
-    def __init__(self, path: Path, columns: list[str]) -> None:
+    Pass ``overwrite=True`` for a report written in full each run: the first
+    write then truncates any existing file (and re-emits the header) instead of
+    appending, so regenerating a fixed-name report replaces it rather than
+    accumulating stale rows across runs. Subsequent writes on the same instance
+    still append.
+    """
+
+    def __init__(
+        self, path: Path, columns: list[str], *, overwrite: bool = False
+    ) -> None:
         self.path = path
         self.columns = columns
-        self._started = self.path.exists()
+        self._started = False if overwrite else self.path.exists()
 
     def append(self, row: dict) -> None:
         self.append_rows([row])
