@@ -15,5 +15,6 @@ Speculators provides a comprehensive framework for:
 - [Getting Started](getting_started.md) - Start here if you're new to Speculators
 - [Features](features.md) - Detailed documentation on core features
 - [Loss Functions](loss_functions.md) - Training losses available via `--loss-fn`
+- [Training Metrics](training_metrics.md) - Shared prefix agreement with saved rates and counts
 - [Algorithms](algorithms/index.md) - Overview of supported algorithms
 - [Tutorials](tutorials/index.md) - Step-by-step guides

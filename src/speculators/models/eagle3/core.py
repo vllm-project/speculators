@@ -17,6 +17,7 @@ from speculators.models.eagle3.attention import (
 )
 from speculators.models.eagle3.metrics import compute_metrics
 from speculators.models.eagle3.model_definitions import model_classes
+from speculators.models.metrics import compute_reference_prefix_metrics
 from speculators.models.utils import (
     conditional_torch_compile,
     flatten_rope_parameters,
@@ -358,6 +359,17 @@ class Eagle3DraftModel(DraftVocabMixin, SpeculatorModel):
             # shape: [1, total_seq_len]
 
         if return_loss:
+            if draft_tokens:
+                metrics.update(
+                    compute_reference_prefix_metrics(
+                        torch.stack(draft_tokens, dim=-1),
+                        original_input_ids,
+                        torch.arange(total_seq_len, device=device) + 1,
+                        loss_mask,
+                        document_ids,
+                        d2t=self.d2t,
+                    )
+                )
             metrics["loss_sum"] = loss.detach().clone()
             metrics["loss_total"] = torch.tensor(1.0, device=device)
             return draft_tokens, loss, metrics

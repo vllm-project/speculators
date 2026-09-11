@@ -125,3 +125,46 @@ def test_val_epoch_empty_loader_returns_empty_metrics():
     trainer = _make_val_trainer(0, is_distributed=False)
     result = trainer.val_epoch(0)
     assert result == {}
+
+
+@pytest.mark.parametrize(
+    ("counts", "expected"),
+    [
+        ([(2.0, 2.0), (0.0, 6.0)], (0.25, 4.0, 16.0)),
+        ([(0.0, 0.0), (0.0, 0.0)], (0.0, 0.0, 0.0)),
+    ],
+)
+def test_reference_rates_retain_raw_counts_after_batch_and_rank_reduction(
+    counts, expected
+):
+    trainer = _make_val_trainer(2, is_distributed=True)
+    cast("MagicMock", trainer.model).side_effect = [
+        (
+            None,
+            torch.tensor(2.0),
+            {
+                "loss_sum": torch.tensor(2.0),
+                "loss_total": torch.tensor(1.0),
+                "loss_step_0": torch.tensor(3.0),
+                "reference_acc_at_pos_0_sum": torch.tensor(correct),
+                "reference_acc_at_pos_0_total": torch.tensor(total),
+            },
+        )
+        for correct, total in counts
+    ]
+    with (
+        patch(
+            "speculators.train.trainer.dist.all_reduce",
+            side_effect=lambda x, **kw: x.mul_(2),
+        ),
+        patch("speculators.train.trainer.dist.get_world_size", return_value=2),
+    ):
+        metrics = trainer.val_epoch(0)
+    rate, correct, total = expected
+    assert metrics == {
+        "loss_epoch": 2.0,
+        "loss_step_0_epoch": 3.0,
+        "reference_acc_at_pos_0_epoch": rate,
+        "reference_acc_at_pos_0_sum_epoch": correct,
+        "reference_acc_at_pos_0_total_epoch": total,
+    }

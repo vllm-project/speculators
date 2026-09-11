@@ -17,6 +17,7 @@ from speculators.models.dflash2.model_definitions import (
     CandidateSelector,
     Qwen3DFlash2DecoderLayer,
 )
+from speculators.models.metrics import compute_block_reference_metrics
 from speculators.models.utils import conditional_torch_compile
 
 __all__ = [
@@ -167,12 +168,24 @@ class DFlash2DraftModel(DFlashDraftModel):
         training_candidate_ids, target_positions, contains_target = (
             selector_training_candidates(candidate_ids, target_ids)
         )
-        candidate_logits = self.candidate_selector.score_candidates(
+        # Training can replace the last candidate with the teacher target.
+        # Also score that original candidate for the reference metric, sharing
+        # the selector projection and adding just one candidate dot.
+        scored_logits = self.candidate_selector.score_candidates(
             unary_logits,
             hidden,
             predecessor_ids.reshape(1, -1),
-            training_candidate_ids,
+            torch.cat([training_candidate_ids, candidate_ids[..., -1:]], dim=-1),
         )
+        candidate_logits = scored_logits[..., :-1]
+        with torch.no_grad():
+            original_scores = torch.cat(
+                [candidate_logits.detach()[..., :-1], scored_logits.detach()[..., -1:]],
+                dim=-1,
+            )
+            pred_ids = candidate_ids.gather(
+                -1, original_scores.argmax(dim=-1, keepdim=True)
+            ).squeeze(-1)
 
         loss, metrics = compute_metrics(
             unary_logits=unary_logits,
@@ -191,5 +204,17 @@ class DFlash2DraftModel(DFlashDraftModel):
             selector_loss_alpha=selector_loss_alpha,
             per_position_loss_weight=per_position_loss_weight,
             dpace_alpha=dpace_alpha,
+        )
+        metrics.update(
+            compute_block_reference_metrics(
+                pred_ids,
+                input_ids,
+                block_indices,
+                aligned_loss_mask,
+                loss_mask,
+                document_ids,
+                self.block_size,
+                self.config.sample_from_anchor,
+            )
         )
         return None, loss, metrics
