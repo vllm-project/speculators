@@ -56,4 +56,4 @@ DFlash is based on research from Z Lab: [DFlash Project Page](https://z-lab.ai/p
 
 - [DFlash2](dflash2.md) -- Adds local convolution and candidate selection
 - [DSpark](dspark.md) -- Builds on DFlash with a sequential Markov head and a confidence head
-- [Train a Speculator](../tutorials/train.md) -- Step-by-step training guide (select DFlash or DSpark, then online, offline, or hybrid)
+- [Train a Speculator](../tutorials/train.md) -- Step-by-step training guide (select DFlash, DFlash2, or DSpark, then online or offline)

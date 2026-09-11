@@ -159,7 +159,6 @@ class ArrowDataset(BaseDataset):
         transfer: HiddenStatesTransfer | None = None,
         vllm_endpoint: str = "http://localhost:8000/v1",
         on_missing: Literal["generate", "skip", "warn", "raise"] = "generate",
-        on_generate: Literal["cache", "delete"] = "delete",
         train_ratio: float = 1.0,
         split: Literal["train", "val"] = "train",
         transform: TransformTensors | None = None,
@@ -193,7 +192,6 @@ class ArrowDataset(BaseDataset):
         self.transfer = transfer or FileTransfer(Path(datapath) / "hidden_states")
         self.vllm_endpoint = vllm_endpoint
         self.on_missing = on_missing
-        self.on_generate = on_generate
         self.client: openai.OpenAI | None = None
         self.model = model
         self.request_timeout = request_timeout
@@ -236,7 +234,6 @@ class ArrowDataset(BaseDataset):
 
     def _generate_hidden_states_once(
         self,
-        index: int,
         dataset_item: dict,
         client_item: ClientItem,
     ) -> dict[str, torch.Tensor]:
@@ -260,19 +257,15 @@ class ArrowDataset(BaseDataset):
             # transfer performs manifest/checksum validation first.
             check_hidden_states(loaded_hs, dataset_item["input_ids"].tolist())
 
-            file_idx = self._map_to_file_idx(index)
-            if self.on_generate == "cache":
-                self.transfer.cache(handle, file_idx)
-            else:
-                try:
-                    self.transfer.delete(handle)
-                except Exception as cleanup_error:  # noqa: BLE001
-                    logger.warning(
-                        "Loaded a valid hidden-state sample but failed to delete "
-                        "handle %s: %s",
-                        handle,
-                        cleanup_error,
-                    )
+            try:
+                self.transfer.delete(handle)
+            except Exception as cleanup_error:  # noqa: BLE001
+                logger.warning(
+                    "Loaded a valid hidden-state sample but failed to delete "
+                    "handle %s: %s",
+                    handle,
+                    cleanup_error,
+                )
             return loaded_hs
         except Exception:
             if handle is not None:
@@ -295,7 +288,6 @@ class ArrowDataset(BaseDataset):
                 client_item = build_client_item(dataset_item)
                 loaded_hs = self.generation_recovery.run(
                     lambda: self._generate_hidden_states_once(
-                        index,
                         dataset_item,
                         client_item,
                     ),

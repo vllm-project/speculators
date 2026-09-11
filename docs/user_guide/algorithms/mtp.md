@@ -41,5 +41,5 @@ MTP finetuning is based on the FastMTP method from Tencent: [FastMTP Repository]
 
 ## See Also
 
-- [Train a Speculator](../tutorials/train.md) -- Step-by-step training guide (select MTP, then online, offline, or hybrid)
+- [Train a Speculator](../tutorials/train.md) -- Step-by-step training guide (select MTP, then online or offline)
 - [vLLM Recipes](https://recipes.vllm.ai/) -- Deployment commands for serving MTP models
