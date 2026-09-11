@@ -43,8 +43,9 @@ def purge_newfiles(fn: Callable[..., Path]):
 
     On exit, deletes top-level files in the resolved directory whose mtime is
     newer than when the wrapped function returned.  Does not recurse into
-    subdirectories.  This prevents generated artifacts (e.g. ``d2t.npy``,
-    ``t2d.npy`` potentially cached by ``train.py``) from persisting in
+    subdirectories.  This prevents generated artifacts (e.g. size-keyed
+    ``d2t-*.npy`` and ``t2d-*.npy`` files potentially cached by ``train.py``)
+    from persisting in
     shared directories (such as the HF snapshot cache) between test runs.
     """
 
@@ -403,7 +404,7 @@ def run_training(
     save_path: Path,
     seq_length: int = 512,
     port: int = 8321,
-    draft_vocab_size: int = 8192,
+    draft_vocab_size: int | None = 8192,
     epochs: int = 1,
     lr: float = 3e-4,
     online: bool = True,
@@ -430,8 +431,6 @@ def run_training(
         f"http://localhost:{port}/v1",
         "--save-path",
         str(save_path),
-        "--draft-vocab-size",
-        str(draft_vocab_size),
         "--epochs",
         str(epochs),
         "--lr",
@@ -445,6 +444,8 @@ def run_training(
         "--hidden-states-backend",
         hidden_states_backend,
     ]
+    if draft_vocab_size is not None:
+        train_cmd += ["--draft-vocab-size", str(draft_vocab_size)]
     if mooncake_master is not None:
         train_cmd += ["--mooncake-master", mooncake_master]
     if mooncake_metadata_server is not None:

@@ -4,6 +4,11 @@ loss = compound_loss(logits, targets) + conf_alpha * BCE(confidence, accept_rate
 
 The confidence target ``accept_rate = sum_v min(q_v, p_v) = 1 - d_TV`` is the
 analytical acceptance rate (the overlap ``tv_loss`` already computes).
+
+Two acceptance lengths are reported, both counting the verifier's bonus token:
+``accept_len`` from that analytical rate (acceptance under rejection sampling)
+and ``eal`` from greedy argmax matches (acceptance at temperature 0, and the
+value comparable across the DFlash family).
 """
 
 from collections.abc import Callable
@@ -20,7 +25,10 @@ from speculators.losses import (
     dpace_loss_decay,
     tv_loss,
 )
-from speculators.models.metrics import compute_accuracy_multi_step
+from speculators.models.metrics import (
+    compute_accepted_length_counts,
+    compute_accuracy_multi_step,
+)
 
 __all__ = [
     "compute_metrics",
@@ -141,7 +149,7 @@ def compute_metrics(
         metrics["accept_rate_total"] = mask_f.sum().clamp_min(1.0)
 
     # Expected accepted draft length per block (DSpark's tau): the cumulative
-    # acceptance product summed over draft slots, plus the always-emitted anchor.
+    # acceptance product summed over draft slots, plus the always-emitted bonus.
     with torch.no_grad():
         per_block_len = accept_prefix.sum(dim=-1) + 1.0
         block_valid = (draft_mask.sum(dim=-1) > 0).to(accept_rate.dtype)
@@ -159,5 +167,14 @@ def compute_metrics(
     for pos in range(start_pos, block_size):
         metrics[f"position_{pos}_acc_sum"] = correct_per_pos[pos]
         metrics[f"position_{pos}_acc_total"] = total_per_pos[pos]
+
+    # Greedy counterpart to accept_len, on the same per-block/bonus-token
+    # convention, so DFlash-family runs compare on one number.
+    eal_sum, eal_total = compute_accepted_length_counts(
+        (pred_ids == target_ids).reshape(num_blocks, block_size)[:, start_pos:],
+        draft_mask.to(torch.bool),
+    )
+    metrics["eal_sum"] = eal_sum
+    metrics["eal_total"] = eal_total
 
     return loss, metrics
