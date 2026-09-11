@@ -11,6 +11,7 @@ from transformers.masking_utils import create_causal_mask
 from speculators import SpeculatorModel
 from speculators.config import SpeculatorsConfig, VerifierConfig
 from speculators.model import DraftVocabMixin
+from speculators.models.metrics import compute_reference_prefix_metrics
 from speculators.models.mtp.config import MTPSpeculatorConfig
 from speculators.models.mtp.model_definitions import (
     mtp_model_classes,
@@ -164,6 +165,7 @@ class MTPDraftModel(DraftVocabMixin, SpeculatorModel):
         loss_mask: torch.Tensor | None = None,
         step_weights: list[float] | None = None,
         return_dict: bool = True,  # noqa: ARG002
+        document_ids: torch.Tensor | None = None,
         **kwargs: Any,  # noqa: ARG002
     ) -> tuple:
         """Forward pass for MTP multi-token prediction (teacher-forced).
@@ -187,6 +189,8 @@ class MTPDraftModel(DraftVocabMixin, SpeculatorModel):
             0=ignore.
         :param step_weights: Per-step loss weights (None = uniform). Training only.
         :param return_dict: Unused, kept for interface compatibility.
+        :param document_ids: Optional document IDs; -1 marks padding. Used to
+            exclude references that cross packed-document boundaries.
         :param kwargs: Absorbs unexpected batch keys
             (lengths, verifier_last_hidden_states)
         :return: Tuple of (logits_list, loss, metrics)
@@ -217,7 +221,20 @@ class MTPDraftModel(DraftVocabMixin, SpeculatorModel):
         # Cap steps so short sequences still produce partial results.
         effective_steps = min(num_steps, max(0, seq_len - 2))
         valid_len = seq_len - effective_steps - 1
+        horizon = num_steps
+        prediction_ids = input_ids.new_zeros(batch_size, max(valid_len, 0), horizon)
+        observed = torch.arange(horizon, device=device) < effective_steps
         if valid_len <= 0 or effective_steps == 0:
+            metrics.update(
+                compute_reference_prefix_metrics(
+                    prediction_ids,
+                    input_ids,
+                    torch.arange(max(valid_len, 0), device=device) + 2,
+                    loss_mask,
+                    document_ids,
+                    observed=torch.zeros_like(observed),
+                )
+            )
             metrics["loss_sum"] = total_loss.detach().clone()
             metrics["loss_total"] = torch.tensor(1.0, device=device)
             return (all_logits, total_loss, metrics)
@@ -253,6 +270,7 @@ class MTPDraftModel(DraftVocabMixin, SpeculatorModel):
 
             logits = self.lm_head(mtp_output)
             all_logits.append(logits)
+            prediction_ids[..., step] = logits.detach().argmax(dim=-1)
 
             step_targets = input_ids[:, step + 2 : step + 2 + valid_len]
             if loss_mask is not None:
@@ -273,6 +291,21 @@ class MTPDraftModel(DraftVocabMixin, SpeculatorModel):
 
             current_hidden = mtp_output
 
+        if document_ids is not None:
+            # The initial hidden state is one token before the input anchor.
+            observed = observed & (
+                document_ids[:, :valid_len] == document_ids[:, 1 : valid_len + 1]
+            ).unsqueeze(-1)
+        metrics.update(
+            compute_reference_prefix_metrics(
+                prediction_ids,
+                input_ids,
+                torch.arange(valid_len, device=device) + 2,
+                loss_mask,
+                document_ids,
+                observed=observed,
+            )
+        )
         metrics["loss_sum"] = total_loss.detach().clone()
         metrics["loss_total"] = torch.tensor(1.0, device=device)
 

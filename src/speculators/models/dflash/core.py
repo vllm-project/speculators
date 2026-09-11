@@ -21,6 +21,7 @@ from speculators.models.dflash.utils import (
     get_base_indices_for_anchored_blocks,
     select_anchors,
 )
+from speculators.models.metrics import compute_block_reference_metrics
 from speculators.models.utils import (
     conditional_torch_compile,
     flatten_rope_parameters,
@@ -497,7 +498,7 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
         dpace_alpha: float = 0.5,
         **kwargs,
     ):
-        _, logits, targets, aligned_loss_mask, _ = self._backbone_forward(
+        _, logits, targets, aligned_loss_mask, block_indices = self._backbone_forward(
             hidden_states,
             input_ids,
             loss_mask,
@@ -507,6 +508,7 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
             max_anchors=max_anchors,
             **kwargs,
         )
+        pred_ids = logits.detach().argmax(dim=-1)
         loss, metrics = compute_metrics(
             logits,
             targets,
@@ -517,5 +519,18 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
             per_position_loss_weight=per_position_loss_weight,
             dpace_alpha=dpace_alpha,
             sample_from_anchor=self.config.sample_from_anchor,
+        )
+        metrics.update(
+            compute_block_reference_metrics(
+                pred_ids,
+                input_ids,
+                block_indices,
+                aligned_loss_mask,
+                loss_mask,
+                document_ids,
+                self.block_size,
+                self.config.sample_from_anchor,
+                self.d2t,
+            )
         )
         return None, loss, metrics
