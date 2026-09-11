@@ -149,7 +149,10 @@ class ClassRegistryMixin:
                 f"Got imporoper name arg {name}."
             )
 
-        if cls.registry is None:
+        # A subclass inherits its parent's registry attribute until it writes its
+        # own. Allocate a new registry before registering so a subclass cannot
+        # mutate its parent's registrations.
+        if "registry" not in cls.__dict__ or cls.registry is None:
             cls.registry = {}
 
         if name in cls.registry:
