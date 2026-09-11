@@ -50,6 +50,7 @@ import statistics
 import subprocess
 import sys
 from datetime import datetime, timezone
+from html import escape as html_escape
 from pathlib import Path
 
 import torch
@@ -91,8 +92,8 @@ DETAIL_TIMING_KEYS = (
     "clip_ms",
 )
 
-# Rows shown in the --profile kernel breakdown (markdown table and compare diff).
-KERNEL_TOP_N = 15
+# Rows shown in the --profile kernel breakdown tables and the compare diff.
+KERNEL_TOP_N = 20
 # Mangled C++ kernel names run to several hundred characters and wreck any
 # table they land in; the leading portion is what identifies them.
 KERNEL_NAME_WIDTH = 64
@@ -102,7 +103,7 @@ KERNEL_LABEL_WIDTH = 52
 # Kernels below this share of device time are merged into one "Other" slice.
 # A profiled step launches dozens of kernels and all but a handful are under a
 # millisecond; drawn individually they are an unreadable fringe of hairlines.
-KERNEL_PIE_MIN_PCT = 3.0
+KERNEL_PIE_MIN_PCT = 2.0
 
 
 def _short_kernel_name(name: str, width: int = KERNEL_NAME_WIDTH) -> str:
@@ -1242,14 +1243,11 @@ def _kernel_markdown_lines(kernels: dict | None) -> list[str]:
         return []
     total = kernels.get("total_device_ms_per_step", 0)
     lines = [
-        "## Appendix: GPU Kernel Breakdown",
+        f"## Appendix: Top {KERNEL_TOP_N} GPU Kernels",
         "",
         (
-            f"Top {KERNEL_TOP_N} device kernels by self time, averaged per step "
-            f"({total:.1f} ms of GPU time per step in total). Requires "
-            "`--profile`; the synchronisation it adds inflates the wall-clock "
-            "timings above, but these are device-side durations and stay "
-            "comparable."
+            f"{total:.1f} ms GPU time/step · {len(kernels['kernels'])} kernels"
+            " · self time, averaged over the profiled steps"
         ),
         "",
         "| Kernel | ms/step | % GPU | calls/step |",
@@ -1347,7 +1345,7 @@ def _write_markdown_summary(results: dict, md_path: str) -> None:
 
 
 def _build_kernel_pie(kernels: dict):
-    """Pie of device time per kernel, with the sub-5% tail merged into "Other"."""
+    """Pie of device time per kernel, with the sub-2% tail merged into "Other"."""
     import plotly.graph_objects as go  # noqa: PLC0415
 
     total = kernels.get("total_device_ms_per_step", 0) or 1.0
@@ -1367,7 +1365,7 @@ def _build_kernel_pie(kernels: dict):
         # The legend label is clipped, so the full name lives in the hover.
         hovers.append(
             f"<b>{_wrap_kernel_name(k['name'])}</b><br>"
-            f"{k['ms_per_step']:.2f} ms/step &middot; "
+            f"{k['ms_per_step']:.2f} ms/step · "
             f"{k['calls_per_step']:.1f} calls/step"
         )
 
@@ -1402,25 +1400,63 @@ def _build_kernel_pie(kernels: dict):
     return fig
 
 
-def _kernel_html(kernels: dict | None) -> str:
-    """Collapsible kernel-time pie chart, or "" when the run was not profiled."""
+def _kernel_name_cell(name: str) -> str:
+    """Kernel name as HTML, carrying the full name in a tooltip when clipped.
+
+    Deliberately a ``span.kname`` rather than a ``<code>``: viewers and browser
+    extensions routinely restyle ``code`` -- a dark chip behind every cell is
+    the common one -- and a class we style ourselves cannot be hijacked that
+    way. Elided names get a dotted underline and a help cursor so it is visible
+    that there is more to hover for; whole ones stay plain.
+    """
+    short = _short_kernel_name(name)
+    if short == name:
+        return f'<span class="kname">{html_escape(name)}</span>'
+    return (
+        f'<span class="kname trunc" title="{html_escape(name)}">'
+        f"{html_escape(short)}</span>"
+    )
+
+
+def _kernel_html(kernels: dict | None) -> tuple[str, str]:
+    """Kernel-time pie for the body and top-N table for the appendix.
+
+    Returns ``("", "")`` when the run was not profiled.
+    """
     if not kernels or not kernels.get("kernels"):
-        return ""
+        return "", ""
+    entries = kernels["kernels"]
     total = kernels.get("total_device_ms_per_step", 0)
+    shown = sum(
+        1
+        for k in entries
+        if k["ms_per_step"] / (total or 1) * 100 >= KERNEL_PIE_MIN_PCT
+    )
     pie_html = _build_kernel_pie(kernels).to_html(
         full_html=False, include_plotlyjs=False
     )
-    return f"""
+    body = f"""
+<h2 class="sec">GPU Kernel Breakdown</h2>
+<p class="sub">{total:.1f} ms GPU time/step · {len(entries)} kernels ·
+{shown} at or above {KERNEL_PIE_MIN_PCT:.0f}%, rest grouped as "Other" ·
+hover for full name, ms/step and calls/step</p>
+{pie_html}"""
+
+    rows = "".join(
+        f"<tr><td>{_kernel_name_cell(k['name'])}</td>"
+        f"<td>{k['ms_per_step']:.2f}</td>"
+        f"<td>{(k['ms_per_step'] / total * 100 if total else 0):.1f}%</td>"
+        f"<td>{k['calls_per_step']:.1f}</td></tr>"
+        for k in entries[:KERNEL_TOP_N]
+    )
+    appendix = f"""
 <details>
-<summary>Appendix: GPU Kernel Breakdown</summary>
-<p class="sub">Share of device time per kernel, averaged over the profiled steps
-({total:.1f} ms of GPU time per step in total). Kernels under
-{KERNEL_PIE_MIN_PCT:.0f}% are grouped as &quot;Other&quot;; hover a slice for its
-full name, absolute time and launch count. Only produced with --profile, whose
-synchronisation inflates the wall-clock timings above &mdash; these are
-device-side durations and stay comparable.</p>
-{pie_html}
+<summary>Appendix: Top {KERNEL_TOP_N} GPU Kernels</summary>
+<table class="kernels">
+<thead><tr><th>Kernel</th><th>ms/step</th><th>% GPU</th><th>calls/step</th></tr>
+</thead><tbody>{rows}</tbody></table>
 </details>"""
+    return body, appendix
 
 
 def report_benchmark(result_path: str, output_path: str | None = None) -> None:
@@ -1480,7 +1516,7 @@ def report_benchmark(result_path: str, output_path: str | None = None) -> None:
     appendix_html = appendix_fig.to_html(full_html=False, include_plotlyjs=False)
 
     # --- Kernel breakdown (only present when the run used --profile) ---
-    kernel_html = _kernel_html(results.get("kernels"))
+    kernel_html, kernel_appendix_html = _kernel_html(results.get("kernels"))
 
     html = f"""<!DOCTYPE html>
 <html><head><meta charset="utf-8">
@@ -1497,13 +1533,26 @@ def report_benchmark(result_path: str, output_path: str | None = None) -> None:
   details {{ margin-top: 30px; }}
   summary {{ cursor: pointer; font-size: 1.1em; font-weight: 600;
              padding: 8px 0; }}
-  details .sub {{ margin-top: 4px; max-width: 900px; }}
+  h2.sec {{ font-size: 1.1em; font-weight: 600; margin: 30px 0 0; }}
+  .sub {{ margin-top: 4px; max-width: 900px; }}
+  table.kernels {{ border-collapse: collapse; font-size: 0.85em; width: 100%; }}
+  table.kernels th, table.kernels td {{ text-align: right; padding: 5px 8px;
+                                        border-bottom: 1px solid #d8dee4; }}
+  table.kernels th {{ color: #656d76; font-weight: 600; }}
+  table.kernels tbody tr:nth-child(odd) {{ background: #f6f8fa; }}
+  table.kernels th:first-child, table.kernels td:first-child
+      {{ text-align: left; }}
+  .kname {{ font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+            font-size: 0.95em; color: #0550ae; background: none;
+            white-space: nowrap; padding: 0; border-radius: 0; }}
+  .kname.trunc {{ border-bottom: 1px dotted #8c959f; cursor: help; }}
 </style>
 </head><body>
 <h1>{heading}</h1>
 <div class="sub">{sub}</div>
 {summary_html}
 {kernel_html}
+{kernel_appendix_html}
 <details>
 <summary>Appendix: Per-Step Raw Data</summary>
 {appendix_html}
