@@ -383,6 +383,7 @@ ACCEPT_BAR = "#3b6fb0"  # tokens-generated bars
 INK = "#1a1a1a"
 MUTED = "#666666"
 TOKENS_PER_K = 1000  # threshold for "k"-suffixed axis labels
+DECIMAL_K_BELOW = 10  # show one decimal for k-labels under this many k
 MIN_CELL_SHARE = 0.005  # heatmap cells below this share are left blank
 
 
@@ -415,7 +416,13 @@ def _auto_log2_edges(positions: np.ndarray) -> np.ndarray:
 
 
 def _context_label(v: float) -> str:
-    return f"{v / TOKENS_PER_K:.0f}k" if v >= TOKENS_PER_K else f"{v:.0f}"
+    if v < TOKENS_PER_K:
+        return f"{v:.0f}"
+    k = v / TOKENS_PER_K
+    # One decimal below 10k: log-spaced edges there sit ~1.4x apart, so whole-k
+    # rounding collapses adjacent edges to the same label (e.g. 1038 and 1456
+    # both -> "1k"). Above 10k whole-k is already unambiguous.
+    return f"{k:.1f}k" if k < DECIMAL_K_BELOW else f"{k:.0f}k"
 
 
 def _acceptance_grid(
@@ -488,9 +495,10 @@ def _draw_acceptance(
 
     # panel 1: mean acceptance length (summary of the heatmap below)
     ax_line = fig.add_subplot(gs[0, 0])
-    ax_line.plot(
-        range(n_bins), mean_len, "-o", color=ACCEPT_ACCENT, lw=2, ms=7, zorder=3
-    )
+    # Empty bins (no steps) carry mean_len 0; plot them as NaN so the line breaks
+    # over the gap instead of plunging to 0, which reads as a false acceptance dip.
+    line_y = np.where(tokens > 0, mean_len, np.nan)
+    ax_line.plot(range(n_bins), line_y, "-o", color=ACCEPT_ACCENT, lw=2, ms=7, zorder=3)
     for i, v in enumerate(mean_len):
         if v:
             ax_line.text(
