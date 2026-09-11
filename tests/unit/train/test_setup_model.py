@@ -192,6 +192,16 @@ def checkpoint_dir(tmp_path, tiny_model_on_gpu):
     ckpt_dir = tmp_path / "ckpt"
     checkpointer = SingleGPUCheckpointer(ckpt_dir)
     optimizer = torch.optim.AdamW(tiny_model_on_gpu.parameters(), lr=1e-4)
+    # Take one real step so the saved optimizer state is non-empty: the resume
+    # tests assert that it is actually restored, and a never-stepped AdamW
+    # would make that assertion vacuous. Weights are re-pinned to 42.0 after.
+    trainable = [p for p in tiny_model_on_gpu.parameters() if p.requires_grad]
+    torch.stack([p.float().sum() for p in trainable]).sum().backward()
+    optimizer.step()
+    optimizer.zero_grad(set_to_none=True)
+    with torch.no_grad():
+        for p in trainable:
+            p.fill_(42.0)
     checkpointer.save_checkpoint(tiny_model_on_gpu, optimizer, epoch=0)
     return ckpt_dir
 
