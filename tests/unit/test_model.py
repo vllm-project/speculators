@@ -324,3 +324,21 @@ def test_save_ignore_keys_are_ignored_on_load_missing(model_class):
         "checkpoints but does not list them in _keys_to_ignore_on_load_missing; "
         "loading a checkpoint will raise on the absent key(s)."
     )
+
+
+@pytest.mark.smoke
+def test_speculator_model_gradient_checkpointing_opt_in(
+    speculator_model_test_config,
+):
+    model = SpeculatorTestModel(speculator_model_test_config)
+    
+    # HF requires at least one module (or the top level model) to have this attribute
+    # In real speculator models, the inner transformer layers provide this.
+    model.gradient_checkpointing = False
+    
+    assert not getattr(model, "is_gradient_checkpointing", False)
+    
+    # Enables gradient checkpointing and sets the property correctly
+    model.gradient_checkpointing_enable()
+    
+    assert getattr(model, "is_gradient_checkpointing", False) is True
