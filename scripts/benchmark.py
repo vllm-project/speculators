@@ -1433,10 +1433,15 @@ def _kernel_name_cell(name: str) -> str:
 
 # A CI job finds its own previous comment by this marker and edits it in place,
 # rather than stacking a new comment on every push.
-COMMENT_MARKER = "<!-- speculators-benchmark -->"
+COMMENT_MARKER_ID = "speculators-benchmark"
 # Kernel rows in the comment. Fewer than the HTML report: a PR comment is read
 # in a scroll, and GitHub hard-truncates very long ones.
 COMMENT_KERNEL_N = 8
+
+
+def _comment_marker(label: str | None = None) -> str:
+    """The hidden marker a job greps for to find the comment it should update."""
+    return f"<!-- {COMMENT_MARKER_ID}{f':{label}' if label else ''} -->"
 
 
 # Changes smaller than this are reported without a win/loss marker. A green
@@ -1502,88 +1507,63 @@ def _comment_timing_table(base: dict, cand: dict | None) -> list[str]:
     return lines
 
 
-def _comment_kernel_lines(base: dict, cand: dict | None) -> list[str]:
-    """Kernel diff table and/or a mermaid pie, for whichever runs were profiled.
+# Appended to every kernel table: the reason these numbers can be trusted even
+# though the wall-clock timings from the same run cannot.
+_KERNEL_CAVEAT = (
+    "Device-side durations, so the synchronisation `--profile` adds does not "
+    "distort them. Full breakdown in the HTML report."
+)
 
-    Mermaid is the only chart GitHub renders in a comment -- the HTML report's
-    plotly output is stripped, since comments allow no scripts -- so the pie is
-    re-emitted in that dialect rather than linked as an image, which would need
-    somewhere to host it.
+
+def _comment_kernel_lines(base: dict, cand: dict | None) -> list[str]:
+    """Kernel table for the comment: a before/after diff, or a single-run top-N.
+
+    Charts are left to the HTML report. A comment cannot render one without
+    either a Mermaid diagram or an image needing somewhere to be hosted, and
+    the numbers carry this on their own.
     """
-    lines: list[str] = []
     rows = _kernel_diff_rows(base, cand) if cand else []
     if rows:
         total_a = base["kernels"].get("total_device_ms_per_step", 0)
         total_b = cand["kernels"].get("total_device_ms_per_step", 0)
-        lines += [
+        return [
             "",
             "### GPU kernel time (ms/step, self time)",
             "",
             "| Kernel | Before | After | Change |",
             "|---|--:|--:|--:|",
-        ]
-        lines += [
-            f"| `{_short_kernel_name(name, 44)}` | {a:.2f} | {b:.2f} |"
-            f" {_md_delta(a, b)} |"
-            for name, a, b in rows[:COMMENT_KERNEL_N]
-        ]
-        lines.append(
-            f"| **Total device time** | **{total_a:.2f}** | **{total_b:.2f}** |"
-            f" {_md_delta(total_a, total_b)} |"
-        )
-        lines += [
-            "",
+            *[
+                f"| `{_short_kernel_name(name, 44)}` | {a:.2f} | {b:.2f} |"
+                f" {_md_delta(a, b)} |"
+                for name, a, b in rows[:COMMENT_KERNEL_N]
+            ],
             (
-                "<sub>Ranked by absolute change. Device-side durations, so "
-                "the synchronisation `--profile` adds does not distort "
-                "them.</sub>"
+                f"| **Total device time** | **{total_a:.2f}** | **{total_b:.2f}** |"
+                f" {_md_delta(total_a, total_b)} |"
             ),
+            "",
+            f"<sub>Ranked by absolute change. {_KERNEL_CAVEAT}</sub>",
         ]
 
-    pie = _mermaid_pie((cand or base).get("kernels"))
-    if pie:
-        lines += ["", *pie]
-    return lines
-
-
-def _mermaid_pie(kernels: dict | None) -> list[str]:
-    """Kernel mix as a mermaid pie, the chart dialect GitHub renders natively.
-
-    Capped at ``COMMENT_KERNEL_N`` slices on top of the percentage floor: after
-    a large win the surviving kernels bunch up just over the threshold, and a
-    dozen near-equal wedges say nothing.
-    """
+    # No baseline to diff against: show where the time goes in the one run.
+    kernels = base.get("kernels") if cand is None else None
     if not kernels or not kernels.get("kernels"):
         return []
-    total = kernels.get("total_device_ms_per_step", 0) or 1.0
-    slices: list[tuple[str, float]] = []
-    tail_ms = 0.0
-    tail_n = 0
-    for k in kernels["kernels"]:
-        over_floor = k["ms_per_step"] / total * 100 >= KERNEL_PIE_MIN_PCT
-        if over_floor and len(slices) < COMMENT_KERNEL_N:
-            # Mermaid delimits labels with double quotes and offers no escape.
-            slices.append(
-                (_short_kernel_name(k["name"], 40).replace('"', "'"), k["ms_per_step"])
-            )
-        else:
-            tail_ms += k["ms_per_step"]
-            tail_n += 1
-    if tail_n:
-        slices.append((f"Other ({tail_n} kernels)", tail_ms))
-
-    # Mermaid sums same-named wedges just as plotly does, and elision can
-    # collide two cuBLAS kernels onto one label.
-    labels = _unique_labels([label for label, _ in slices])
+    total = kernels.get("total_device_ms_per_step", 0)
     return [
-        "```mermaid",
-        "pie showData",
-        f"    title Device time per kernel — {total:.1f} ms/step",
+        "",
+        f"### GPU kernel time — {total:.1f} ms/step total",
+        "",
+        "| Kernel | ms/step | % GPU | calls/step |",
+        "|---|--:|--:|--:|",
         *[
-            f'    "{label}" : {ms:.2f}'
-            for label, (_, ms) in zip(labels, slices, strict=True)
+            f"| `{_short_kernel_name(k['name'], 44)}` | {k['ms_per_step']:.2f} |"
+            f" {(k['ms_per_step'] / total * 100 if total else 0):.1f}% |"
+            f" {k['calls_per_step']:.1f} |"
+            for k in kernels["kernels"][:COMMENT_KERNEL_N]
         ],
-        "```",
+        "",
+        f"<sub>{_KERNEL_CAVEAT}</sub>",
     ]
 
 
@@ -1652,12 +1632,17 @@ def _comment_provenance(base: dict, cand: dict | None) -> list[str]:
     ]
 
 
-def build_comment(base: dict, cand: dict | None) -> str:
+def build_comment(base: dict, cand: dict | None, label: str | None = None) -> str:
     """Render benchmark results as markdown for a GitHub PR comment.
 
     GitHub strips scripts, so the interactive report cannot be embedded; this
-    emits the same findings in what a comment does render -- tables, a mermaid
-    pie, and a collapsed provenance block.
+    emits the same findings in what a comment does render -- tables and a
+    collapsed provenance block.
+
+    ``label`` names the variant. Config and commit are identical whenever the
+    thing being measured is an uncommitted patch, so without it two comments on
+    the same PR are indistinguishable. It also scopes the marker, giving each
+    variant its own comment to update instead of one they fight over.
     """
     cfg = (cand or base).get("config", {})
     title = (
@@ -1666,7 +1651,11 @@ def build_comment(base: dict, cand: dict | None) -> str:
         f"seq_len {cfg.get('total_seq_len', '?')} · "
         f"{cfg.get('num_gpus_used', 1)}x {_get_gpu_name(cand or base)}"
     )
-    lines = [COMMENT_MARKER, f"## Training benchmark: {title}", ""]
+    lines = [
+        _comment_marker(label),
+        f"## Training benchmark{f' — {label}' if label else ''}: {title}",
+        "",
+    ]
 
     if cand:
         before = base["timing"]["step_ms"]["mean"]
@@ -1712,7 +1701,10 @@ def build_comment(base: dict, cand: dict | None) -> str:
 
 
 def comment_benchmark(
-    result_path: str, baseline_path: str | None, output_path: str | None
+    result_path: str,
+    baseline_path: str | None,
+    output_path: str | None,
+    label: str | None = None,
 ) -> None:
     """Write (or print) the PR-comment markdown for one or two result files."""
     with open(result_path) as f:
@@ -1724,7 +1716,7 @@ def comment_benchmark(
             base = json.load(f)
         cand = cand_or_base
 
-    text = build_comment(base, cand)
+    text = build_comment(base, cand, label)
     if output_path:
         Path(output_path).write_text(text)
         print(f"Comment markdown written to {output_path}", file=sys.stderr)
@@ -2018,6 +2010,16 @@ def build_parser():
         default=None,
         help="Write markdown here instead of stdout.",
     )
+    comment_parser.add_argument(
+        "--label",
+        type=str,
+        default=None,
+        help=(
+            "Name for this variant, shown in the heading. Needed to tell apart "
+            "several comments on one PR, whose config and commit are otherwise "
+            "identical; also scopes the marker so each gets its own comment."
+        ),
+    )
 
     return parser
 
@@ -2046,7 +2048,12 @@ def main():
         return
 
     if bench_args.command == "comment":
-        comment_benchmark(bench_args.result, bench_args.baseline, bench_args.output)
+        comment_benchmark(
+            bench_args.result,
+            bench_args.baseline,
+            bench_args.output,
+            bench_args.label,
+        )
         return
 
     # --- run command ---
