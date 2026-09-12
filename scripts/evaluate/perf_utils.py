@@ -212,7 +212,15 @@ def smooth_curve(
     if len(x) < 2:  # noqa: PLR2004
         return x, y
 
-    spline = UnivariateSpline(x, y, s=len(x) * np.var(y))
+    # SciPy's default cubic spline requires at least four data points (m > k).
+    # Small sweeps can legitimately produce only two or three successful points,
+    # so lower the spline degree to fit the available data.
+    spline = UnivariateSpline(
+        x,
+        y,
+        k=min(3, len(x) - 1),
+        s=len(x) * np.var(y),
+    )
     x_dense = np.linspace(x.min(), x.max(), n_dense)
     y_dense = spline(x_dense)
 
