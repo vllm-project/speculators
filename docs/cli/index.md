@@ -44,12 +44,12 @@ flowchart TD
     B --> C --> D -- "hs_i.safetensors files\ncontaining {hidden_states}" --> E
     F --> G --> H
 
-    click B "prepare_data/" _self
-    click F "prepare_data/" _self
-    click C "launch_vllm/" _self
-    click G "launch_vllm/" _self
-    click D "data_generation_offline/" _self
-    click E "train/" _self
-    click A "response_regeneration/" _self
-    click H "train/" _self
+    click B "prepare_data.md" _self
+    click F "prepare_data.md" _self
+    click C "launch_vllm.md" _self
+    click G "launch_vllm.md" _self
+    click D "data_generation_offline.md" _self
+    click E "train.md" _self
+    click A "response_regeneration.md" _self
+    click H "train.md" _self
 ```

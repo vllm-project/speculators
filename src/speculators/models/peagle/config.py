@@ -18,7 +18,8 @@ class PEagleSpeculatorConfig(Eagle3SpeculatorConfig):
     P-EAGLE extends EAGLE-3 with parallel multi-token prediction using
     Conditional Drop Token (COD) sampling for memory-efficient training.
 
-    :param mask_token_id: Token ID used for masking
+    Attributes:
+        mask_token_id: Token ID used for masking
     """
 
     speculators_model_type: Literal["peagle"] = "peagle"  # type: ignore[assignment]
