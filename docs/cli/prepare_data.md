@@ -5,7 +5,7 @@ Converts on-policy target-model data into the format consumed by speculator trai
 1. Natural-language conversations whose assistant responses were produced by the target model.
 2. Speculator-format rows that already contain `input_ids` and `loss_mask`.
 
-For natural-language conversations, `prepare_data.py` asks the target model's vLLM `/render` endpoint to apply the serving chat template, tokenize each assistant turn, and derive its loss mask. Rendering only converts the data's representation: it does not generate responses or turn an arbitrary dataset into on-policy data.
+For natural-language conversations, `speculators prepare-data` asks the target model's vLLM `/render` endpoint to apply the serving chat template, tokenize each assistant turn, and derive its loss mask. Rendering only converts the data's representation: it does not generate responses or turn an arbitrary dataset into on-policy data.
 
 The output is ready for online training or offline hidden-state generation.
 
@@ -14,7 +14,12 @@ The output is ready for online training or offline hidden-state generation.
 Given a natural-language JSONL file such as:
 
 ```json
-{"conversations":[{"role":"user","content":"Hello"},{"role":"assistant","content":"Hello! How can I help?"}]}
+{
+    "conversations": [
+        { "role": "user", "content": "Hello" },
+        { "role": "assistant", "content": "Hello! How can I help?" }
+    ]
+}
 ```
 
 where the assistant response came from the target model:

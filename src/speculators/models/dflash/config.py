@@ -18,11 +18,12 @@ class DFlashSpeculatorConfig(SpeculatorModelConfig):
     """
     Configuration for DFlash speculator with vocabulary mapping.
 
-    DFlash features vocabulary mapping between draft (64K) and target (128K)
+    DFlash features vocabulary mapping between draft (32K) and target (128K)
     vocabularies, enabling cross-tokenizer speculation.
 
-    :param transformer_layer_config: Configuration for the transformer decoder layer
-    :param draft_vocab_size: Size of draft model vocabulary for speculation
+    Attributes:
+        transformer_layer_config: Configuration for the transformer decoder layer
+        draft_vocab_size: Size of draft model vocabulary for speculation
     """
 
     speculators_model_type: Literal["dflash"] = "dflash"

@@ -1,4 +1,8 @@
-"""Training entrypoint — core logic moved from scripts/train.py."""
+"""Training entrypoint for ``speculators train`` / ``torchrun -m speculators.train``.
+
+``scripts/train.py`` is kept only as a deprecated backward-compatible shim
+around this module.
+"""
 
 import argparse
 import gc
