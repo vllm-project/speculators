@@ -14,12 +14,7 @@ The output is ready for online training or offline hidden-state generation.
 Given a natural-language JSONL file such as:
 
 ```json
-{
-    "conversations": [
-        { "role": "user", "content": "Hello" },
-        { "role": "assistant", "content": "Hello! How can I help?" }
-    ]
-}
+{"conversations":[{"role":"user","content":"Hello"},{"role":"assistant","content":"Hello! How can I help?"}]}
 ```
 
 where the assistant response came from the target model:
