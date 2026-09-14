@@ -7,6 +7,7 @@ quality:
 	ruff format --check
 	python -m mdformat --check $(MDFILES)
 	mypy --check-untyped-defs
+	python scripts/sync_provenance.py --check
 
 # style the code according to accepted standards for the repo
 # Note: We run `ruff format` twice. Once to fix long lines before lint check
@@ -17,3 +18,4 @@ style:
 	ruff check --fix
 	ruff format --silent
 	python -m mdformat $(MDFILES)
+	python scripts/sync_provenance.py

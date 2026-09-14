@@ -169,6 +169,28 @@ def test_multiple_registries_isolation():
     assert "TestClass2" not in Registry1.registry
 
 
+@pytest.mark.regression
+def test_child_registry_does_not_mutate_parent_registry():
+    class ParentRegistry(ClassRegistryMixin):
+        pass
+
+    @ParentRegistry.register()
+    class ParentClass:
+        pass
+
+    class ChildRegistry(ParentRegistry):
+        pass
+
+    assert ChildRegistry.registry is ParentRegistry.registry
+
+    @ChildRegistry.register()
+    class ChildClass:
+        pass
+
+    assert ParentRegistry.registry == {"ParentClass": ParentClass}
+    assert ChildRegistry.registry == {"ChildClass": ChildClass}
+
+
 # ===== Auto-Discovery Tests =====
 
 

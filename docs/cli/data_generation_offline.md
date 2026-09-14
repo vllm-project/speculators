@@ -1,4 +1,4 @@
-# data_generation_offline.py
+# generate-offline-data
 
 Generates training data for speculator models by extracting hidden states from a running vLLM server. Connects to a vLLM endpoint via the OpenAI-compatible API and saves output as individual `.safetensors` files for offline training.
 
@@ -13,7 +13,7 @@ Generates training data for speculator models by extracting hidden states from a
 ## Basic Usage
 
 ```bash
-python scripts/data_generation_offline.py \
+speculators generate-offline-data \
   --preprocessed-data ./preprocessed_dataset \
   --output ./training_data \
   --max-samples 5000
@@ -29,7 +29,7 @@ python scripts/data_generation_offline.py \
 
 ### Data Arguments
 
-- **`--preprocessed-data`** (str, required) Path to preprocessed dataset (produced by [prepare_data.py](prepare_data.md)).
+- **`--preprocessed-data`** (str, required) Path to preprocessed dataset (produced by [prepare-data](prepare_data.md)).
 
 - **`--max-samples`** (int, default: `None`) Maximum number of samples to process. If `None`, processes all samples.
 
@@ -60,7 +60,7 @@ python scripts/data_generation_offline.py \
 ## Full Example
 
 ```bash
-python scripts/data_generation_offline.py \
+speculators generate-offline-data \
   --endpoint http://localhost:8000/v1 \
   --preprocessed-data ./preprocessed_dataset \
   --output ./hidden_states \

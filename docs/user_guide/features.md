@@ -30,6 +30,10 @@ The multipack batch sampler uses an LPT (Longest Processing Time First) bin-pack
 
 Training automatically resumes from the latest checkpoint, restoring model weights, optimizer state, and scheduler state. The checkpointer tracks the best validation loss and maintains a symlink to the best checkpoint for easy model selection.
 
+## Multi-Node Hidden-States Transfer
+
+The `hs_connectors` package provides a pluggable backend system for transferring hidden states between vLLM and the trainer. The default **filesystem** backend uses safetensors files on a shared filesystem for single-node setups. For multi-node training — where the target model spans multiple nodes or extraction and training run on separate machines — the **Mooncake** backend streams hidden states over TCP or RDMA through a distributed key-value store, with no shared filesystem required. See [Multi-Node Training](tutorials/multi_node_training.md) for setup details.
+
 ## Seamless Integration with vLLM
 
 Trained models are saved in a special speculators format that vLLM can load directly. Point vLLM at a checkpoint or a HuggingFace model and it automatically detects the speculator, pairs it with the target model, and enables speculative decoding — no extra configuration needed.

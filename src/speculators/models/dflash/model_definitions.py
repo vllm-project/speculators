@@ -180,7 +180,7 @@ class Qwen3DFlashDecoderLayer(GradientCheckpointingLayer):
         # necessary, but kept here for BC
         position_embeddings: tuple[torch.Tensor, torch.Tensor] | None = None,
         **kwargs: Unpack[FlashAttentionKwargs],
-    ) -> tuple[torch.FloatTensor, tuple[torch.FloatTensor, torch.FloatTensor] | None]:
+    ) -> torch.Tensor:
         # The main difference between this method and the qwen 3 layer it is
         # built from is that it
         # passes the extra hidden states to the self attention from the verifier model.
@@ -204,4 +204,4 @@ class Qwen3DFlashDecoderLayer(GradientCheckpointingLayer):
         residual = hidden_states
         hidden_states = self.post_attention_layernorm(hidden_states)
         hidden_states = self.mlp(hidden_states)
-        return residual + hidden_states  # type: ignore[operator,return-value]
+        return residual + hidden_states  # type: ignore[operator]

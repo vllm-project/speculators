@@ -96,7 +96,11 @@ def build_vocab_mappings_from_distribution(
     return draft_to_target, target_to_draft
 
 
-def get_target_vocab_size(target_vocab_size, target_model_path):
+def get_target_vocab_size(
+    target_vocab_size,
+    target_model_path,
+    trust_remote_code: bool = False,
+):
     has_vocab = target_vocab_size is not None
     has_model = target_model_path is not None
 
@@ -109,7 +113,10 @@ def get_target_vocab_size(target_vocab_size, target_model_path):
     if has_vocab:
         return target_vocab_size
 
-    config = AutoConfig.from_pretrained(target_model_path)
+    config = AutoConfig.from_pretrained(
+        target_model_path,
+        trust_remote_code=trust_remote_code,
+    )
 
     # For multimodal models (Qwen3VL, etc.), extract text_config
     if hasattr(config, "text_config"):

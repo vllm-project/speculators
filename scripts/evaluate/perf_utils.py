@@ -301,7 +301,7 @@ def parse_prometheus_metrics(raw_text: str) -> list[Metric]:
         pos_values.sort()
         values = [0.0] * (pos_values[-1][0] + 1)
         for pos, val in pos_values:
-            values[pos] = val
+            values[pos] += val
         metrics.append(Vector(name=name, values=values))
 
     return metrics
@@ -565,7 +565,7 @@ def run_guidellm(
 
     if subset is not None:
         data = f"kind=huggingface,source={dataset}"
-        data += f",load_kwargs.data_files={subset}.jsonl"
+        data += f",load_kwargs.data_files={subset}.jsonl,load_kwargs.split=train"
     else:
         data = f"kind=json_file,path={dataset}"
     cmd.extend(["--data", data])

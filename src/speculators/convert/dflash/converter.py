@@ -117,7 +117,13 @@ class DFlashConverter:
             # z-lab reads hidden_states[layer_id + 1] (index 0 is the embedding
             # output) while speculators uses the layer id directly.
             # Source: z-lab utils.extract_context_feature.
-            aux_hidden_state_layer_ids = [i + 1 for i in target_layer_ids]
+            # Exclude the last verifier layer — it is always included
+            # implicitly by launch_vllm.py (--include-last-layer) and split
+            # off as verifier_last_hidden_states during training.
+            num_verifier_layers = verifier_config_dict["num_hidden_layers"]
+            aux_hidden_state_layer_ids = [
+                i + 1 for i in target_layer_ids if i + 1 != num_verifier_layers
+            ]
 
         speculators_config = SpeculatorsConfig(
             algorithm="dflash",
@@ -142,6 +148,67 @@ class DFlashConverter:
             speculators_config=speculators_config,
         )
 
+    def _remap_weights(
+        self,
+        weights: dict[str, torch.Tensor],
+        config: DFlashSpeculatorConfig,
+        model: DFlashDraftModel,
+    ) -> dict[str, torch.Tensor]:
+        """Remap checkpoint weights to match DFlashDraftModel's state dict.
+
+        Handles Laguna-style fused ``qkv_proj`` → separate ``q/k/v_proj``,
+        drops ``g_proj`` and ``aux_hidden_norms`` (no DFlash equivalent), and
+        slices ``fc.weight`` when the source has more target layers than needed.
+        """
+        has_fused_qkv = any("qkv_proj" in k for k in weights)
+        if not has_fused_qkv:
+            return weights
+
+        tl = config.transformer_layer_config
+        q_dim = tl.num_attention_heads * tl.head_dim
+        kv_dim = tl.num_key_value_heads * tl.head_dim
+
+        remapped: dict[str, torch.Tensor] = {}
+        dropped: list[str] = []
+
+        for key, tensor in weights.items():
+            if "qkv_proj" in key:
+                projection_keys = [
+                    key.replace("qkv_proj", proj)
+                    for proj in ("q_proj", "k_proj", "v_proj")
+                ]
+                conflicts = [pk for pk in projection_keys if pk in weights]
+                if conflicts:
+                    raise ValueError(
+                        f"Checkpoint contains both fused qkv_proj and separate "
+                        f"projection keys: {conflicts}"
+                    )
+                q, k, v = tensor.split([q_dim, kv_dim, kv_dim], dim=0)
+                remapped[projection_keys[0]] = q
+                remapped[projection_keys[1]] = k
+                remapped[projection_keys[2]] = v
+            elif ".g_proj." in key or key.startswith("aux_hidden_norms."):
+                dropped.append(key)
+            elif key == "fc.weight":
+                model_fc_dim = model.fc.in_features
+                if tensor.shape[1] > model_fc_dim:
+                    logger.info(
+                        f"Slicing fc.weight from {tensor.shape[1]} to {model_fc_dim}"
+                    )
+                    remapped[key] = tensor[:, :model_fc_dim]
+                else:
+                    remapped[key] = tensor
+            else:
+                remapped[key] = tensor
+
+        if dropped:
+            logger.info(f"Dropped {len(dropped)} incompatible keys: {dropped}")
+        logger.info(
+            f"Remapped {sum(1 for k in weights if 'qkv_proj' in k)} fused qkv_proj "
+            f"→ separate q/k/v_proj"
+        )
+        return remapped
+
     def _save(
         self,
         config: DFlashSpeculatorConfig,
@@ -151,6 +218,7 @@ class DFlashConverter:
         model = DFlashDraftModel(config=config)
 
         body = {k: v for k, v in weights.items() if k not in ("t2d", "d2t")}
+        body = self._remap_weights(body, config, model)
         missing, unexpected = model.load_state_dict(body, strict=False)
         if unexpected:
             raise ValueError(

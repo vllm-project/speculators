@@ -1,5 +1,5 @@
 steps:
-  - label: ":gear: Speculators Unit and Integration Tests"
+  - label: ":gear: Speculators Unit, Integration, and Smoke Tests"
     command: |
       RUNNER=$$(buildkite-agent meta-data get "test-runner" --default "H100")
       echo "╔══════════════════════════════════════════╗"

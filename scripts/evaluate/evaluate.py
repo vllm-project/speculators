@@ -25,8 +25,9 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import shlex
 import sys
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from urllib.error import URLError
 from urllib.request import urlopen
@@ -44,6 +45,13 @@ from perf_utils import (
     parse_sweep_results,
     print_acceptance_report,
     run_guidellm,
+)
+
+from speculators.provenance import (
+    atomic_write,
+    find_package_repo,
+    git_sha,
+    package_versions,
 )
 
 logger = logging.getLogger("evaluate")
@@ -88,6 +96,30 @@ def _fetch_model_name(target: str) -> str | None:
 
 def _sanitize_dir_name(name: str) -> str:
     return name.replace("/", "_").replace(" ", "_")
+
+
+def save_eval_provenance(output_dir: Path) -> None:
+    """Write ``eval_command.txt`` into *output_dir*.
+
+    Records the full command line, timestamp, and package versions so the
+    eval can be reproduced.  Best-effort — never blocks the eval on failure.
+    """
+    try:
+        sha = git_sha(find_package_repo("speculators"))
+        versions = package_versions()
+        header = "\n".join(
+            [
+                f"# Timestamp: {datetime.now(timezone.utc).isoformat()}",
+                f"# Git SHA: {sha}",
+                *versions,
+            ]
+        )
+        atomic_write(
+            output_dir / "eval_command.txt",
+            f"{header}\n{shlex.join(sys.argv)}\n",
+        )
+    except OSError:
+        logger.warning("Failed to save eval_command.txt", exc_info=True)
 
 
 def _require_metrics(metrics_url: str) -> list:
@@ -258,6 +290,15 @@ def run_benchmark(args: argparse.Namespace) -> None:
     artifacts_dir = output_dir / "artifacts"
     artifacts_dir.mkdir(parents=True, exist_ok=True)
 
+    save_eval_provenance(output_dir)
+
+    if not (output_dir / "vllm_command.txt").exists():
+        logger.info(
+            "No vllm_command.txt found. To co-locate vLLM provenance "
+            "with eval results: launch_vllm.py --provenance-dir %s",
+            output_dir,
+        )
+
     acceptance_csv = None
     perf_csv = None
     all_max_tokens: dict[str, int] = {}
@@ -418,7 +459,6 @@ def main() -> None:
             "Required when --dataset is a speedbench/ spec."
         ),
     )
-
     args = parser.parse_args()
 
     if args.output_dir is None:

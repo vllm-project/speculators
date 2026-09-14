@@ -1,16 +1,19 @@
 import json
 import os
+import shutil
+import signal
 import subprocess
 import sys
 import time
 import urllib.error
 import urllib.request
 from collections.abc import Callable, Iterable
-from contextlib import contextmanager
+from contextlib import contextmanager, suppress
 from functools import wraps
 from pathlib import Path
 from textwrap import indent
 
+import pytest
 from loguru import logger
 from PIL import Image
 
@@ -19,6 +22,8 @@ from speculators.data_generation.preprocessing import load_raw_dataset
 __all__ = [
     "SCRIPTS_DIR",
     "VLLM_PYTHON",
+    "launch_mooncake_master",
+    "launch_mooncake_master_context",
     "launch_vllm_server",
     "launch_vllm_server_context",
     "purge_newfiles",
@@ -27,6 +32,7 @@ __all__ = [
     "run_stitch_mtp",
     "run_training",
     "run_vllm_engine",
+    "stop_mooncake_master",
     "stop_vllm_server",
     "wait_for_server",
 ]
@@ -37,8 +43,9 @@ def purge_newfiles(fn: Callable[..., Path]):
 
     On exit, deletes top-level files in the resolved directory whose mtime is
     newer than when the wrapped function returned.  Does not recurse into
-    subdirectories.  This prevents generated artifacts (e.g. ``d2t.npy``,
-    ``t2d.npy`` potentially cached by ``train.py``) from persisting in
+    subdirectories.  This prevents generated artifacts (e.g. size-keyed
+    ``d2t-*.npy`` and ``t2d-*.npy`` files potentially cached by ``train.py``)
+    from persisting in
     shared directories (such as the HF snapshot cache) between test runs.
     """
 
@@ -61,6 +68,31 @@ def purge_newfiles(fn: Callable[..., Path]):
 
 VLLM_PYTHON = os.environ.get("VLLM_PYTHON", sys.executable)
 SCRIPTS_DIR = Path(__file__).resolve().parent.parent.parent / "scripts"
+PROCESS_GROUP_CLEANUP_TIMEOUT = 5.0
+PROCESS_GROUP_POLL_INTERVAL = 0.1
+
+
+def _signal_process_group(process_group_id: int, sig: int) -> None:
+    """Signal a vLLM process group, ignoring an already-gone group."""
+    if process_group_id == os.getpgrp():
+        raise RuntimeError("Refusing to signal the test runner's process group")
+    with suppress(ProcessLookupError):
+        os.killpg(process_group_id, sig)
+
+
+def _wait_for_process_group_exit(
+    process_group_id: int,
+    timeout: float = PROCESS_GROUP_CLEANUP_TIMEOUT,
+) -> bool:
+    """Wait until no process remains in a vLLM process group."""
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        try:
+            os.killpg(process_group_id, 0)
+        except ProcessLookupError:
+            return True
+        time.sleep(PROCESS_GROUP_POLL_INTERVAL)
+    return False
 
 
 def wait_for_server(
@@ -68,17 +100,21 @@ def wait_for_server(
     timeout: float = 600.0,
     poll_interval: float = 2.0,
     process: subprocess.Popen | None = None,
+    readiness_stability: float = 5.0,
 ):
-    """Poll vLLM server health endpoint until ready or timeout.
+    """Poll vLLM server health endpoint until stably ready or timeout.
 
     If *process* is provided, checks whether it has exited between polls
     so that startup failures are reported immediately instead of waiting
-    for the full timeout.
+    for the full timeout. A continuous healthy window is required because
+    multi-process vLLM can answer one health request before another API
+    server process finishes starting or fails.
     """
 
     logger.info("Waiting for server")
     url = f"http://localhost:{port}/health"
     deadline = time.monotonic() + timeout
+    healthy_since: float | None = None
     while time.monotonic() < deadline:
         if process is not None and process.poll() is not None:
             raise RuntimeError(
@@ -87,10 +123,18 @@ def wait_for_server(
             )
         try:
             with urllib.request.urlopen(url, timeout=5) as resp:  # noqa: S310
-                if resp.status == 200:
-                    return
+                healthy = resp.status == 200
         except (urllib.error.URLError, ConnectionError, OSError):
-            pass
+            healthy = False
+
+        now = time.monotonic()
+        if healthy:
+            if healthy_since is None:
+                healthy_since = now
+            if now - healthy_since >= readiness_stability:
+                return
+        else:
+            healthy_since = None
         time.sleep(poll_interval)
     raise TimeoutError(f"vLLM server on port {port} not ready after {timeout}s")
 
@@ -105,6 +149,10 @@ def launch_vllm_server(
     target_layer_ids: list[int] | None = None,
     enforce_eager: bool = False,
     allowed_local_media_path: str | None = None,
+    hidden_states_backend: str = "file",
+    mooncake_master: str | None = None,
+    mooncake_metadata_server: str | None = None,
+    mooncake_protocol: str | None = None,
 ) -> subprocess.Popen:
     """Launch a vLLM server configured for hidden-state extraction.
 
@@ -117,7 +165,15 @@ def launch_vllm_server(
         model,
         "--hidden-states-path",
         str(hidden_states_path),
+        "--hidden-states-backend",
+        hidden_states_backend,
     ]
+    if mooncake_master is not None:
+        cmd += ["--mooncake-master", mooncake_master]
+    if mooncake_metadata_server is not None:
+        cmd += ["--mooncake-metadata-server", mooncake_metadata_server]
+    if mooncake_protocol is not None:
+        cmd += ["--mooncake-protocol", mooncake_protocol]
     if target_layer_ids is not None:
         cmd += ["--target-layer-ids"] + [str(lid) for lid in target_layer_ids]
     if enforce_eager:
@@ -136,32 +192,49 @@ def launch_vllm_server(
     ]
     logger.info("Starting vLLM server: {}", " ".join(cmd))
 
-    process = subprocess.Popen(cmd)  # noqa: S603
+    # vLLM creates an engine process and multiple API-server descendants.
+    # Isolate the whole tree so teardown cannot leave workers attached to the
+    # pytest process group or interfere with the next test's launch.
+    process = subprocess.Popen(cmd, start_new_session=True)  # noqa: S603
 
     try:
         wait_for_server(port, process=process)
         logger.info("vLLM server ready on port {}", port)
     except Exception:
-        process.terminate()
-        try:
-            process.wait(timeout=30)
-        except subprocess.TimeoutExpired:
-            process.kill()
-            process.wait()
+        stop_vllm_server(process)
         raise
 
     return process
 
 
 def stop_vllm_server(process: subprocess.Popen):
-    """Gracefully stop a vLLM server subprocess."""
+    """Gracefully stop a vLLM server and all of its descendants."""
+    process_group_id = process.pid
     if process.poll() is None:
+        # Give vLLM's process manager the first opportunity to shut down its
+        # children cleanly and reap them.
         process.terminate()
         try:
             process.wait(timeout=30)
         except subprocess.TimeoutExpired:
-            process.kill()
-            process.wait(timeout=10)
+            _signal_process_group(process_group_id, signal.SIGTERM)
+            try:
+                process.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                _signal_process_group(process_group_id, signal.SIGKILL)
+                process.wait(timeout=10)
+
+    # The manager may have exited before all descendants were reaped. The
+    # dedicated session lets us clean up those stragglers without touching
+    # pytest or unrelated processes, then wait for the reset to complete.
+    _signal_process_group(process_group_id, signal.SIGTERM)
+    if not _wait_for_process_group_exit(process_group_id):
+        _signal_process_group(process_group_id, signal.SIGKILL)
+        if not _wait_for_process_group_exit(process_group_id):
+            logger.error(
+                "vLLM process group {} did not exit after forced cleanup",
+                process_group_id,
+            )
     if process.returncode not in (0, -15):  # -15 = SIGTERM (expected)
         logger.error("vLLM server exited with code {}", process.returncode)
     logger.info("vLLM server stopped (exit code {})", process.returncode)
@@ -174,6 +247,64 @@ def launch_vllm_server_context(*args, **kwargs):
         yield
     finally:
         stop_vllm_server(process)
+
+
+def launch_mooncake_master(port: int) -> subprocess.Popen:
+    """Launch a mooncake_master process.
+
+    Returns the subprocess. Caller is responsible for stopping it
+    via stop_mooncake_master().
+
+    The process is started in its own session (start_new_session=True)
+    because the installed ``mooncake_master`` entry-point is a Python
+    wrapper that spawns the real binary via subprocess.call().  Killing
+    only the wrapper leaves the child binary running as an orphan.
+    Using a dedicated session lets stop_mooncake_master() kill the
+    entire process group at once.
+    """
+    exe = shutil.which("mooncake_master")
+    if exe is None:
+        pytest.skip("mooncake_master not found on PATH")
+
+    cmd = [exe, "--port", str(port)]
+    logger.info("Starting mooncake_master: {}", " ".join(cmd))
+    proc = subprocess.Popen(cmd, start_new_session=True)  # noqa: S603
+    time.sleep(2)
+
+    if proc.poll() is not None:
+        raise RuntimeError(
+            f"mooncake_master exited immediately with code {proc.returncode}"
+        )
+    return proc
+
+
+def stop_mooncake_master(process: subprocess.Popen):
+    """Stop the mooncake_master process group."""
+    if process.poll() is not None:
+        logger.info("mooncake_master already exited (code {})", process.returncode)
+        return
+
+    pgid = os.getpgid(process.pid)
+
+    os.killpg(pgid, signal.SIGTERM)
+    try:
+        process.wait(timeout=10)
+    except subprocess.TimeoutExpired:
+        os.killpg(pgid, signal.SIGKILL)
+        process.wait(timeout=10)
+
+    if process.returncode not in (0, -15, -signal.SIGKILL):
+        logger.error("mooncake_master exited with code {}", process.returncode)
+    logger.info("mooncake_master stopped (exit code {})", process.returncode)
+
+
+@contextmanager
+def launch_mooncake_master_context(port: int):
+    process = launch_mooncake_master(port)
+    try:
+        yield
+    finally:
+        stop_mooncake_master(process)
 
 
 def setup_dummy_sharegpt4v_coco(coco_dir: Path):
@@ -202,6 +333,7 @@ def run_prepare_data(
     max_samples: int = 50,
     seq_length: int = 512,
     timeout: float | None = None,
+    render_endpoint: str | None = None,
 ):
     """Tokenize data using prepare_data.py."""
     cmd = [
@@ -218,6 +350,8 @@ def run_prepare_data(
         "--seq-length",
         str(seq_length),
     ]
+    if render_endpoint is not None:
+        cmd += ["--render-endpoint", render_endpoint]
     logger.info("Preparing data: {}", " ".join(cmd))
     result = subprocess.run(  # noqa: S603
         cmd, check=False, timeout=timeout
@@ -270,7 +404,7 @@ def run_training(
     save_path: Path,
     seq_length: int = 512,
     port: int = 8321,
-    draft_vocab_size: int = 8192,
+    draft_vocab_size: int | None = 8192,
     epochs: int = 1,
     lr: float = 3e-4,
     online: bool = True,
@@ -281,6 +415,10 @@ def run_training(
     target_layer_ids: list[int] | None = None,
     num_layers: int | None = None,
     log_freq: int = 1,
+    hidden_states_backend: str = "file",
+    mooncake_master: str | None = None,
+    mooncake_metadata_server: str | None = None,
+    mooncake_protocol: str | None = None,
 ):
     train_cmd = [
         sys.executable,
@@ -293,8 +431,6 @@ def run_training(
         f"http://localhost:{port}/v1",
         "--save-path",
         str(save_path),
-        "--draft-vocab-size",
-        str(draft_vocab_size),
         "--epochs",
         str(epochs),
         "--lr",
@@ -305,7 +441,17 @@ def run_training(
         speculator_type,
         "--log-freq",
         str(log_freq),
+        "--hidden-states-backend",
+        hidden_states_backend,
     ]
+    if draft_vocab_size is not None:
+        train_cmd += ["--draft-vocab-size", str(draft_vocab_size)]
+    if mooncake_master is not None:
+        train_cmd += ["--mooncake-master", mooncake_master]
+    if mooncake_metadata_server is not None:
+        train_cmd += ["--mooncake-metadata-server", mooncake_metadata_server]
+    if mooncake_protocol is not None:
+        train_cmd += ["--mooncake-protocol", mooncake_protocol]
     if online:
         train_cmd += [
             "--on-missing",

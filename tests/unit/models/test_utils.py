@@ -6,7 +6,10 @@ from typing import cast
 import pytest
 from transformers import PretrainedConfig
 
-from speculators.models.utils import resolve_draft_intermediate_size
+from speculators.models.utils import (
+    flatten_rope_parameters,
+    resolve_draft_intermediate_size,
+)
 
 
 def _fake_verifier(**fields) -> PretrainedConfig:
@@ -60,3 +63,37 @@ def test_resolve_requires_intermediate_or_hidden_size():
 
     with pytest.raises(ValueError, match="--draft-config"):
         resolve_draft_intermediate_size(verifier)
+
+
+# ---------------------------------------------------------------------------
+# flatten_rope_parameters
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.smoke
+def test_flatten_rope_parameters_nested():
+    config = _fake_verifier(
+        rope_parameters={
+            "sliding_attention": {"rope_type": "default", "rope_theta": 10000.0},
+            "full_attention": {"rope_type": "yarn", "rope_theta": 1000000.0},
+        }
+    )
+    result = flatten_rope_parameters(config)
+    assert result is not config
+    assert result.rope_parameters == {"rope_type": "default", "rope_theta": 10000.0}
+
+
+@pytest.mark.smoke
+def test_flatten_rope_parameters_already_flat():
+    config = _fake_verifier(
+        rope_parameters={"rope_type": "default", "rope_theta": 10000.0}
+    )
+    result = flatten_rope_parameters(config)
+    assert result is config
+
+
+@pytest.mark.smoke
+def test_flatten_rope_parameters_none():
+    config = _fake_verifier()
+    result = flatten_rope_parameters(config)
+    assert result is config
