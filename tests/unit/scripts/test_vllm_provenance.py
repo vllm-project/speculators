@@ -188,10 +188,10 @@ class TestSaveVllmProvenance:
 
 
 class TestRenderSetupGating:
-    """Render thread bounds and scale-out endpoints apply to train mode only."""
+    """Render thread bounds apply to non-headless train mode only."""
 
     def _run(self, argv: list[str]) -> dict:
-        called = {"render": False, "scaleout": False}
+        called = {"render": False}
         with (
             patch("sys.argv", ["launch_vllm.py", *argv]),
             patch("launch_vllm._build_train_cmd", return_value=["train-cmd"]),
@@ -200,22 +200,18 @@ class TestRenderSetupGating:
                 "launch_vllm._set_render_thread_defaults",
                 side_effect=lambda: called.__setitem__("render", True),
             ),
-            patch(
-                "launch_vllm._enable_scale_out_endpoints",
-                side_effect=lambda: called.__setitem__("scaleout", True),
-            ),
             patch("launch_vllm.os.execvp"),
         ):
             main()
         return called
 
-    def test_train_sets_render_and_scale_out(self):
-        assert self._run(["train", "gpt2"]) == {"render": True, "scaleout": True}
+    def test_train_sets_render_defaults(self):
+        assert self._run(["train", "gpt2"]) == {"render": True}
 
-    def test_eval_does_not_set_render_or_scale_out(self):
+    def test_eval_does_not_set_render_defaults(self):
         called = self._run(["eval", "gpt2", "--spec-model", "org/drafter"])
-        assert called == {"render": False, "scaleout": False}
+        assert called == {"render": False}
 
-    def test_train_headless_skips_render_and_scale_out(self):
+    def test_train_headless_skips_render_defaults(self):
         called = self._run(["train", "gpt2", "--", "--headless"])
-        assert called == {"render": False, "scaleout": False}
+        assert called == {"render": False}
