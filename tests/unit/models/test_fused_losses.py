@@ -216,6 +216,135 @@ def test_tile_configs_stay_register_resident():
         ), f"BLOCK_SIZE={block} at {threads} threads is {elems_per_thread} elems/thread"
 
 
+# Widen the search past the register-resident bound so the bound is measured
+# rather than assumed: these are the tiles _tile_configs() deliberately never
+# offers, at 128+ elements per thread where Triton starts spilling.
+_SPILLING_BLOCK_SIZES = (65536, 131072)
+_SWEEP_VOCAB = 151936  # Qwen3, the shape this module was tuned against
+_SWEEP_ROWS = 256
+
+
+# A tile that spills should be losing outright, not by a hair; anything less
+# and bounding the search space up front would not be worth the lost coverage.
+_SPILL_PENALTY = 2.0
+
+
+def _time_tile(launch, block, warps):
+    """Compile one tile, then time it. Returns (ms, spill bytes per thread).
+
+    ``launch`` takes the tile and enqueues the kernel, returning the compiled
+    kernel that Triton hands back -- that object is where ``n_spills`` lives.
+    """
+    compiled = launch(block, warps)
+    ms = triton.testing.do_bench(lambda: launch(block, warps), warmup=10, rep=25)
+    return ms, compiled.n_spills
+
+
+@requires_cuda
+@pytest.mark.slow
+def test_autotuner_never_picks_a_spilling_tile():
+    """Tune over the *unbounded* space and show a spilling tile never wins.
+
+    ``_tile_configs()`` prunes the search to the register-resident region up
+    front, which is only sound if nothing worth having lives outside it. So
+    time the whole space -- spilling tiles included -- and assert the winner
+    both spills nothing and came from the pruned space.
+
+    Deliberately not asserted: that every spilling tile loses to every
+    register-resident one. It does not. 8192 at 4 warps spills 6 B/thread and
+    is still 1.4x faster than 16384 at 4 warps, which is inside the bound and
+    spills nothing. What holds, and what pruning actually rests on, is that the
+    winner is never one of them.
+    """
+    fused_losses = pytest.importorskip("speculators.losses.fused")
+
+    cap = triton.next_power_of_2(_SWEEP_VOCAB)
+    offered = {
+        (config.kwargs["BLOCK_SIZE"], config.num_warps)
+        for config in fused_losses._tile_configs()
+        if config.kwargs["BLOCK_SIZE"] <= cap
+    }
+    widened = sorted(
+        offered
+        | {
+            (block, warps)
+            for block in _SPILLING_BLOCK_SIZES
+            for warps in (4, 8, 16, 32)
+            if block <= cap
+        }
+    )
+
+    rows, vocab = _SWEEP_ROWS, _SWEEP_VOCAB
+    logits = torch.randn(rows, vocab, device="cuda", dtype=torch.bfloat16)
+    targets = torch.randn(rows, vocab, device="cuda", dtype=torch.bfloat16)
+    loss = torch.empty(rows, device="cuda", dtype=torch.float32)
+    stats = torch.empty(fused_losses._N_STATS, rows, device="cuda", dtype=torch.float32)
+    grad_in = torch.empty_like(logits)
+    grad_out = torch.ones(rows, device="cuda", dtype=torch.float32)
+    op = fused_losses._OP_KL.value
+
+    def run_forward(block, warps):
+        return fused_losses.loss_forward_kernel.fn[(rows,)](
+            logits,
+            targets,
+            loss,
+            stats,
+            stats.stride(0),
+            vocab,
+            OP=op,
+            BLOCK_SIZE=block,
+            num_warps=warps,
+        )
+
+    def run_backward(block, warps):
+        return fused_losses.loss_backward_kernel.fn[(rows,)](
+            logits,
+            targets,
+            grad_in,
+            grad_out,
+            stats,
+            stats.stride(0),
+            vocab,
+            OP=op,
+            BLOCK_SIZE=block,
+            num_warps=warps,
+        )
+
+    timings = {}
+    for block, warps in widened:
+        fwd_ms, fwd_spills = _time_tile(run_forward, block, warps)
+        bwd_ms, bwd_spills = _time_tile(run_backward, block, warps)
+        timings[block, warps] = (fwd_ms + bwd_ms, fwd_spills + bwd_spills)
+
+    spilling = {tile for tile, (_, spills) in timings.items() if spills}
+    assert spilling, (
+        "the widened space compiled without a single spill, so this test "
+        "proves nothing -- raise _SPILLING_BLOCK_SIZES for this GPU"
+    )
+
+    winner = min(timings, key=lambda tile: timings[tile][0])
+    winner_ms, winner_spills = timings[winner]
+    assert winner_spills == 0, (
+        f"the fastest tile {winner[0]}/{winner[1]}w spills {winner_spills} "
+        f"B/thread; the pruned search space assumes that never happens"
+    )
+    assert winner in offered, (
+        f"the fastest tile {winner[0]}/{winner[1]}w is outside the pruned "
+        f"space, so _tile_configs() is leaving performance on the table"
+    )
+
+    # Spilling hard has to be a cliff rather than a slope, or bounding the
+    # space up front would not be worth the coverage it gives up. The worst
+    # tile in the widened space is 131072 at 4 warps -- 1024 elements/thread,
+    # the shape this module used to hardcode for any vocab past 65536.
+    worst_ms, worst_spills = max(timings.values(), key=lambda entry: entry[0])
+    assert worst_spills > 0, "the slowest tile in the widened space did not spill"
+    assert worst_ms > _SPILL_PENALTY * winner_ms, (
+        f"the worst spilling tile is only {worst_ms / winner_ms:.2f}x the "
+        f"winner, which makes the register-resident bound unmotivated here"
+    )
+
+
 def test_prune_oversized_tiles_never_empties_the_space():
     """Pruning narrows the space for small vocabs but always leaves a candidate.
 

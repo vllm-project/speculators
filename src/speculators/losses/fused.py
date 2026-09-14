@@ -53,10 +53,15 @@ MAX_FUSED_SIZE_NPU = 4096
 #         65536     32/1222     255/152      128/38        64/38
 #        131072     32/3748      32/1162      32/532       32/234
 #
-# A spilling tile is never competitive -- the fixed BLOCK_SIZE=131072 this file
-# used to select for any vocab > 65536 spilled 234 B/thread and ran the forward
-# at 98 GB/s, 6% of A100 HBM peak -- so the space is bounded to the
-# register-resident region up front rather than rediscovered at every startup.
+# Spilling is not disqualifying on its own: 8192 at 4 warps sits inside the
+# bound, spills 6 B/thread and still runs within 8% of the winner. The cutoff
+# is drawn where spills stop being incidental. Every tile above it spills at
+# least 38 B/thread and lands between 1.3x and 22x the winner (kl, V=151936,
+# 2048 rows, A100) -- among them the fixed BLOCK_SIZE=131072 this file used to
+# select for any vocab > 65536, which at 234 B/thread ran the forward at
+# 98 GB/s, 6% of A100 HBM peak. Bounding the space up front beats rediscovering
+# that at every startup; test_autotuner_never_picks_a_spilling_tile times the
+# unbounded space and checks that nothing above the cutoff wins.
 # Which tile *within* that region wins is machine-dependent, which is what the
 # autotuner is for; on an A100 it lands on 8192/8 warps at a 151936 vocab and
 # 16384/16 at 32000.
