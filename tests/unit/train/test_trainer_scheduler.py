@@ -40,6 +40,28 @@ def test_scheduler_total_steps_only_defaults_warmup_to_one_percent_of_total():
     assert warmup_steps == 10
 
 
+def test_max_steps_sets_scheduler_total_steps():
+    # max_steps stops the training loop early; the scheduler must decay over the
+    # same horizon (30), not num_epochs * loader_len (100).
+    warmup_steps, total_steps = _resolve_scheduler_steps(
+        make_config(max_steps=30),
+        20,
+    )
+
+    assert total_steps == 30
+    assert warmup_steps == 0  # 1% of 30
+
+
+def test_scheduler_total_steps_override_wins_over_max_steps():
+    warmup_steps, total_steps = _resolve_scheduler_steps(
+        make_config(max_steps=30, scheduler_total_steps=250),
+        20,
+    )
+
+    assert total_steps == 250
+    assert warmup_steps == 2  # 1% of 250
+
+
 def test_scheduler_warmup_ratio_uses_scheduler_total_steps():
     warmup_steps, total_steps = _resolve_scheduler_steps(
         make_config(scheduler_total_steps=200, scheduler_warmup_ratio=0.1),

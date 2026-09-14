@@ -854,11 +854,18 @@ def load_and_preprocess_dataset(
             )
 
         pretokenized = {"input_ids", "loss_mask"} <= set(raw_dataset.column_names)
-        if not pretokenized and not processor_has_chat_template:
+        # With a render endpoint the chat template is applied server-side, so a
+        # local processor without a chat_template attribute is fine.
+        if (
+            not pretokenized
+            and not processor_has_chat_template
+            and render_endpoint is None
+        ):
             raise ValueError(
                 f"Processor for {target_model_path} does not support chat templates. "
-                "Please use a model with a pre-configured chat template or provide "
-                "pre-tokenized input_ids and loss_mask columns."
+                "Please use a model with a pre-configured chat template, provide "
+                "pre-tokenized input_ids and loss_mask columns, or pass "
+                "--render-endpoint so vLLM renders conversations server-side."
             )
 
         log.info(f"Loaded {len(raw_dataset)} samples")

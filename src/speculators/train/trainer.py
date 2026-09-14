@@ -150,6 +150,7 @@ class TrainerConfig(NamedTuple):
     hidden_states_dtype: torch.dtype = torch.bfloat16
     log_freq: int = 1
     fsdp_shard: bool = False
+    gradient_checkpointing: bool = False
     max_steps: int | None = None
 
 
@@ -162,9 +163,13 @@ def _resolve_scheduler_steps(
     Explicit ``scheduler_warmup_steps`` wins; otherwise ``scheduler_warmup_ratio``
     (a fraction of total steps, validated to ``[0, 1]``) is used; otherwise the
     default of 1% of the resolved total steps. ``scheduler_total_steps`` defaults
-    to ``num_epochs * train_loader_len``.
+    to ``max_steps`` when set, else ``num_epochs * train_loader_len``.
     """
     default_total_steps = config.num_epochs * train_loader_len
+    # max_steps bounds the training loop, so the LR schedule must decay over the
+    # same horizon; otherwise the LR endpoint is never reached.
+    if config.max_steps is not None:
+        default_total_steps = config.max_steps
     scheduler_total_steps = (
         config.scheduler_total_steps
         if config.scheduler_total_steps is not None
@@ -309,6 +314,20 @@ class Trainer:
     def setup_model(self):
         # Verify model is compatible with training infrastructure
         SpeculatorModel.verify_training_compatible(self.model)
+
+        # Enable gradient checkpointing BEFORE FSDP/DDP wrapping to save
+        # activation memory at the cost of recomputation during backward.
+        # Each decoder layer's forward is checkpointed: only the layer input
+        # is saved for backward; intermediate activations (MLP, attention)
+        # are recomputed. Saves ~10 GB for 5-layer DSpark with 32K seq.
+        if self.config.gradient_checkpointing:
+            if not self.model.supports_gradient_checkpointing:
+                raise ValueError(
+                    f"{type(self.model).__name__} does not support "
+                    "gradient checkpointing"
+                )
+            self.model.gradient_checkpointing_enable()
+            root_logger.info("Gradient checkpointing enabled")
 
         load_checkpoint = (
             self.resume_from_checkpoint and self.checkpointer.previous_epoch != -1
