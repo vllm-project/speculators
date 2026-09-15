@@ -9,21 +9,21 @@ Uses the real Trainer class so measurements stay in sync with the actual
 training code path.
 
 Subcommands:
-    run       Run a training benchmark
-    compare   Compare two benchmark result files
+    run        Run a training benchmark
+    compare    Compare two benchmark result files
 
 Examples:
     # Synthetic benchmark (no dataset / vLLM needed)
-    python scripts/benchmark.py run --synthetic \\
+    python scripts/benchmark.py run --synthetic \
         -- --verifier-name-or-path Qwen/Qwen3-8B --total-seq-len 4096
 
     # Real data benchmark
-    python scripts/benchmark.py run \\
-        -- --verifier-name-or-path Qwen/Qwen3-8B --data-path ./output \\
+    python scripts/benchmark.py run \
+        -- --verifier-name-or-path Qwen/Qwen3-8B --data-path ./output \
         --on-missing skip
 
     # Multi-GPU
-    torchrun --standalone --nproc_per_node 2 scripts/benchmark.py run \\
+    torchrun --standalone --nproc_per_node 2 scripts/benchmark.py run \
         --synthetic -- --verifier-name-or-path Qwen/Qwen3-8B
 
     # Compare two runs
@@ -36,6 +36,7 @@ import argparse
 import importlib.metadata
 import json
 import logging
+import math
 import socket
 import statistics
 import subprocess
@@ -65,7 +66,7 @@ from speculators.train.distributed import (
 from speculators.train.logger import setup_root_logger
 from speculators.train.trainer import Trainer, TrainerConfig
 
-BENCHMARK_VERSION = "1.0"
+BENCHMARK_VERSION = "1.1"
 
 TIMING_KEYS = (
     "step_ms",
@@ -76,6 +77,11 @@ TIMING_KEYS = (
     "tokens_per_s",
 )
 
+DETAIL_TIMING_KEYS = (
+    "queue_ms",
+    "h2d_ms",
+    "clip_ms",
+)
 
 # ---------------------------------------------------------------------------
 # Metric capture
@@ -203,6 +209,7 @@ def create_synthetic_batch(
             1, total_seq_len + 1, device=device, dtype=torch.long
         ).unsqueeze(0),
         "document_ids": torch.zeros(1, total_seq_len, dtype=torch.long, device=device),
+        "error_records": 0,
     }
 
 
@@ -212,14 +219,23 @@ def create_synthetic_batch(
 
 
 def compute_statistics(values: list[float]) -> dict[str, float]:
-    """Compute summary statistics for a list of measurements."""
+    """Compute summary statistics with 95% confidence interval."""
+    from scipy import stats as sp_stats  # noqa: PLC0415
+
+    n = len(values)
+    mean = statistics.mean(values)
+    std = statistics.stdev(values) if n > 1 else 0.0
+    sem = std / math.sqrt(n) if n > 1 else 0.0
+    ci_half = sp_stats.t.ppf(0.975, n - 1) * sem if n > 1 else 0.0
     return {
-        "mean": statistics.mean(values),
-        "std": statistics.stdev(values) if len(values) > 1 else 0.0,
+        "mean": mean,
+        "std": std,
         "min": min(values),
         "max": max(values),
         "median": statistics.median(values),
-        "count": len(values),
+        "count": n,
+        "ci95_lower": mean - ci_half,
+        "ci95_upper": mean + ci_half,
     }
 
 
@@ -315,9 +331,6 @@ def _build_train_loader(
         request_timeout=train_args.request_timeout,
         max_retries=train_args.max_retries,
         generation_validation_retries=train_args.generation_validation_retries,
-        # A benchmark must not publish timings from degraded batches. Trip the
-        # landed recovery circuit breaker on the first sample that exhausts its
-        # complete generate/load/validate retry budget.
         max_consecutive_generation_failures=1,
         hidden_size=hidden_size,
         num_target_layers=num_target_layers,
@@ -328,6 +341,19 @@ def _build_train_loader(
         max_train_batches=total_steps,
     )
     return train_loader, False
+
+
+def _aggregate_timing(measured_profiles: list[dict]) -> dict:
+    """Compute statistics for all timing keys across measured profiles."""
+    agg = {}
+    for key in TIMING_KEYS:
+        values = [s[key] for s in measured_profiles]
+        agg[key] = compute_statistics(values)
+    for key in DETAIL_TIMING_KEYS:
+        values = [s[key] for s in measured_profiles if key in s]
+        if values:
+            agg[key] = compute_statistics(values)
+    return agg
 
 
 def run_benchmark(bench_args, train_args) -> dict:
@@ -429,10 +455,7 @@ def run_benchmark(bench_args, train_args) -> dict:
     )
 
     # --- Aggregate ---
-    timing_agg = {}
-    for key in TIMING_KEYS:
-        values = [s[key] for s in measured_profiles]
-        timing_agg[key] = compute_statistics(values)
+    timing_agg = _aggregate_timing(measured_profiles)
     aggregate = compute_aggregate_throughput(measured_profiles)
 
     num_gpus_used = dist.get_world_size() if dist.is_initialized() else 1
@@ -492,26 +515,62 @@ def run_benchmark(bench_args, train_args) -> dict:
     return results
 
 
+def _get_ci(stats: dict, per_step: list[dict] | None, key: str) -> str:
+    """Format 95% CI, recomputing from per-step data if needed."""
+    lo = stats.get("ci95_lower")
+    hi = stats.get("ci95_upper")
+    if lo is not None and hi is not None:
+        return f"[{lo:.2f}, {hi:.2f}]"
+    if per_step:
+        recomputed = compute_statistics([s[key] for s in per_step if key in s])
+        return f"[{recomputed['ci95_lower']:.2f}, {recomputed['ci95_upper']:.2f}]"
+    return "n/a"
+
+
 def _print_summary(results: dict) -> None:
     """Print a compact summary of benchmark results to stdout."""
     timing = results["timing"]
     memory = results["memory"]
+    per_step = results.get("per_step")
 
-    print(f"\n{'Metric':<16} {'Mean':>10} {'Std':>10} {'Min':>10} {'Max':>10}")
-    print("-" * 58)
+    hdr = (
+        f"{'Metric':<16} {'Mean':>10} {'Std':>10} "
+        f"{'95% CI':>20} {'Min':>10} {'Max':>10}"
+    )
+    print(f"\n{hdr}")
+    print("-" * len(hdr))
     for key in TIMING_KEYS:
         stats = timing[key]
         print(
             f"{key:<16} {stats['mean']:>10.2f} "
             f"{stats['std']:>10.2f} "
+            f"{_get_ci(stats, per_step, key):>20} "
             f"{stats['min']:>10.2f} {stats['max']:>10.2f}"
         )
-    aggregate = results["aggregate"]
-    print(
-        "\nEffective rank-0 throughput: "
-        f"{aggregate['effective_rank0_tokens_per_s']:.2f} tokens/s "
-        f"over {aggregate['measured_time_s']:.2f} s"
-    )
+
+    detail_keys = [k for k in DETAIL_TIMING_KEYS if k in timing]
+    if detail_keys:
+        print(
+            f"\n{'Detail':<16} {'Mean':>10} {'Std':>10} "
+            f"{'95% CI':>20} {'Min':>10} {'Max':>10}"
+        )
+        print("-" * len(hdr))
+        for key in detail_keys:
+            stats = timing[key]
+            print(
+                f"  {key:<14} {stats['mean']:>10.2f} "
+                f"{stats['std']:>10.2f} "
+                f"{_get_ci(stats, per_step, key):>20} "
+                f"{stats['min']:>10.2f} {stats['max']:>10.2f}"
+            )
+
+    aggregate = results.get("aggregate")
+    if aggregate:
+        print(
+            "\nEffective rank-0 throughput: "
+            f"{aggregate['effective_rank0_tokens_per_s']:.2f} tokens/s "
+            f"over {aggregate['measured_time_s']:.2f} s"
+        )
     print(
         f"\nPeak memory: {memory['peak_allocated_mb']:.1f} MB "
         f"allocated, {memory['peak_reserved_mb']:.1f} MB reserved"
@@ -549,6 +608,41 @@ def _get_effective_throughput(result: dict) -> float | None:
     if profiles:
         return compute_aggregate_throughput(profiles)["effective_rank0_tokens_per_s"]
     return None
+
+
+def _welch_test(per_step_a, per_step_b, key):
+    """Welch's t-test and Cohen's d for a metric between two runs.
+
+    Returns (t_stat, p_value, cohens_d) or None if per-step data is missing.
+    """
+    from scipy import stats as sp_stats  # noqa: PLC0415
+
+    if not per_step_a or not per_step_b:
+        return None
+    a = [s[key] for s in per_step_a if key in s]
+    b = [s[key] for s in per_step_b if key in s]
+    min_samples = 2
+    if len(a) < min_samples or len(b) < min_samples:
+        return None
+    t_stat, p_value = sp_stats.ttest_ind(a, b, equal_var=False)
+    # Cohen's d (pooled)
+    na, nb = len(a), len(b)
+    va = statistics.variance(a)
+    vb = statistics.variance(b)
+    sp = math.sqrt(((na - 1) * va + (nb - 1) * vb) / (na + nb - 2))
+    cohens_d = (statistics.mean(b) - statistics.mean(a)) / sp if sp > 0 else 0.0
+    return t_stat, p_value, cohens_d
+
+
+def _fmt_welch(per_step_a, per_step_b, key):
+    """Format Welch's t-test result for a single metric."""
+    result = _welch_test(per_step_a, per_step_b, key)
+    if not result:
+        return f" {'n/a':>10} {'n/a':>10}"
+    _, p_val, d_val = result
+    p_threshold = 0.001
+    p_fmt = f"{p_val:.2e}" if p_val < p_threshold else f"{p_val:.4f}"
+    return f" {p_fmt:>10} {d_val:>+10.3f}"
 
 
 def compare_benchmarks(baseline_path: str, candidate_path: str) -> None:
@@ -593,32 +687,7 @@ def compare_benchmarks(baseline_path: str, candidate_path: str) -> None:
     print(f"Candidate: {candidate_path}")
     print(f"  Git SHA: {sha_b}")
 
-    # --- Timing comparison ---
-    col_w = 26
-    print(
-        f"\n{'Metric':<16} "
-        f"{'Baseline (mean +/- std)':<{col_w}} "
-        f"{'Candidate (mean +/- std)':<{col_w}} "
-        f"{'Delta':>10} {'Delta %':>10}"
-    )
-    print("-" * (16 + col_w * 2 + 22))
-
-    for key in TIMING_KEYS:
-        ba = baseline.get("timing", {}).get(key, {})
-        ca = candidate.get("timing", {}).get(key, {})
-        ba_mean = ba.get("mean", 0)
-        ba_std = ba.get("std", 0)
-        ca_mean = ca.get("mean", 0)
-        ca_std = ca.get("std", 0)
-        delta = ca_mean - ba_mean
-        pct = (delta / ba_mean * 100) if ba_mean != 0 else 0
-
-        ba_str = f"{ba_mean:>8.2f} +/- {ba_std:<6.2f}"
-        ca_str = f"{ca_mean:>8.2f} +/- {ca_std:<6.2f}"
-        print(
-            f"{key:<16} {ba_str:<{col_w}} {ca_str:<{col_w}} "
-            f"{delta:>+10.2f} {pct:>+9.1f}%"
-        )
+    _print_timing_comparison(baseline, candidate)
 
     effective_a = _get_effective_throughput(baseline)
     effective_b = _get_effective_throughput(candidate)
@@ -631,7 +700,61 @@ def compare_benchmarks(baseline_path: str, candidate_path: str) -> None:
             f"({delta:+.2f}, {pct:+.1f}%)"
         )
 
-    # --- Memory comparison ---
+    _print_memory_comparison(baseline, candidate)
+
+
+def _print_timing_comparison(baseline, candidate):
+    """Print the timing comparison table with optional significance tests."""
+    per_step_a = baseline.get("per_step", [])
+    per_step_b = candidate.get("per_step", [])
+    has_stats = bool(per_step_a and per_step_b)
+
+    col_w = 26
+    stat_cols = f"{'p-value':>10} {'Cohen d':>10}" if has_stats else ""
+    print(
+        f"\n{'Metric':<16} "
+        f"{'Baseline (mean +/- std)':<{col_w}} "
+        f"{'Candidate (mean +/- std)':<{col_w}} "
+        f"{'Delta':>10} {'Delta %':>10} {stat_cols}"
+    )
+    line_w = 16 + col_w * 2 + 22 + (22 if has_stats else 0)
+    print("-" * line_w)
+
+    all_timing_keys = list(TIMING_KEYS)
+    for key in DETAIL_TIMING_KEYS:
+        if key in baseline.get("timing", {}) or key in candidate.get("timing", {}):
+            all_timing_keys.append(key)
+
+    for key in all_timing_keys:
+        ba = baseline.get("timing", {}).get(key, {})
+        ca = candidate.get("timing", {}).get(key, {})
+        ba_mean = ba.get("mean", 0)
+        ba_std = ba.get("std", 0)
+        ca_mean = ca.get("mean", 0)
+        ca_std = ca.get("std", 0)
+        delta = ca_mean - ba_mean
+        pct = (delta / ba_mean * 100) if ba_mean != 0 else 0
+
+        label = f"  {key}" if key in DETAIL_TIMING_KEYS else key
+        ba_str = f"{ba_mean:>8.2f} +/- {ba_std:<6.2f}"
+        ca_str = f"{ca_mean:>8.2f} +/- {ca_std:<6.2f}"
+        stat_str = _fmt_welch(per_step_a, per_step_b, key) if has_stats else ""
+        print(
+            f"{label:<16} {ba_str:<{col_w}} {ca_str:<{col_w}} "
+            f"{delta:>+10.2f} {pct:>+9.1f}%{stat_str}"
+        )
+
+    if has_stats:
+        print(
+            "\n  p-value: Welch's t-test (two-tailed). "
+            "Cohen's d: pooled effect size "
+            "(|d|<0.2 negligible, 0.2-0.5 small, "
+            "0.5-0.8 medium, >0.8 large)."
+        )
+
+
+def _print_memory_comparison(baseline, candidate):
+    """Print the memory comparison table."""
     print(f"\n{'Memory':<24} {'Baseline':>12} {'Candidate':>12} {'Delta':>12}")
     print("-" * 62)
     for key in ("peak_allocated_mb", "peak_reserved_mb"):
@@ -689,7 +812,6 @@ def build_parser():
         action="store_true",
         help="Omit per-step timing data from the output JSON.",
     )
-
     # --- compare ---
     cmp_parser = subparsers.add_parser(
         "compare", help="Compare two benchmark result files"
