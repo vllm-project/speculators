@@ -115,13 +115,33 @@ def render_throughput_defaults(cpus: int | None = None) -> tuple[int, int]:
     return api_servers, DEFAULT_RENDERER_NUM_WORKERS
 
 
+def _vllm_supports_scale_out_flag() -> bool:
+    """Return whether the installed vLLM accepts ``--enable-scale-out``."""
+    try:
+        from dataclasses import fields  # noqa: PLC0415
+
+        from vllm.entrypoints.launchers.cli_args import (  # noqa: PLC0415
+            SharedRuntimeArgs,
+        )
+    except ImportError:
+        return False
+
+    try:
+        return any(
+            field.name == "enable_scale_out" for field in fields(SharedRuntimeArgs)
+        )
+    except TypeError:
+        return False
+
+
 def _with_render_defaults(vllm_args: list[str]) -> list[str]:
     """Enable and tune render endpoints, unless no API server is wanted."""
     if "--headless" in vllm_args:
         return vllm_args
     api_servers, renderer_workers = render_throughput_defaults()
+    scale_out_args = ["--enable-scale-out"] if _vllm_supports_scale_out_flag() else []
     return [
-        "--enable-scale-out",
+        *scale_out_args,
         "--api-server-count",
         str(api_servers),
         "--renderer-num-workers",
