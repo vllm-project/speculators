@@ -1,4 +1,6 @@
 import os
+import subprocess
+import sys
 
 from scripts.launch_vllm import (
     DEFAULT_RENDERER_NUM_WORKERS,
@@ -10,11 +12,24 @@ from scripts.launch_vllm import (
 from speculators.data_generation.preprocessing import default_preprocessing_workers
 
 
-def test_defaults_added_when_absent():
+def test_defaults_match_installed_vllm_cli():
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "vllm.entrypoints.cli.main",
+            "serve",
+            "--help",
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+    supports_scale_out = "--enable-scale-out" in (result.stdout + result.stderr)
     args = _with_render_defaults(["--port", "8000"])
     api_servers, renderer_workers = render_throughput_defaults()
-    assert args == [
-        "--enable-scale-out",
+    expected = [
         "--api-server-count",
         str(api_servers),
         "--renderer-num-workers",
@@ -22,6 +37,9 @@ def test_defaults_added_when_absent():
         "--port",
         "8000",
     ]
+    if supports_scale_out:
+        expected.insert(0, "--enable-scale-out")
+    assert args == expected
 
 
 def test_explicit_flag_follows_default():
