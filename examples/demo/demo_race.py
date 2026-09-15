@@ -62,7 +62,7 @@ def read_counters(url):
     how deep into each draft the speculator actually got.
     """
     text = urllib.request.urlopen(f"{url}/metrics").read().decode()
-    counters = {}
+    counters: dict[str, float] = {}
     for name, labels, value in re.findall(r"^(\S+?)\{(.*?)\}\s+(\S+)$", text, re.M):
         position = re.search(r'position="(\d+)"', labels)
         key = f"{name}[{position.group(1)}]" if position else name
@@ -242,7 +242,10 @@ def verdict(left, right, done):
         result = f"{RED}{BOLD}TEXT DIFFERS{RESET}"
     wall = left.seconds / right.seconds
     speed = right.tokens_per_second / (left.tokens_per_second or 1)
-    return f" {result}   {BOLD}{wall:.2f}x{RESET} wall-clock, {BOLD}{speed:.2f}x{RESET} tok/s"
+    return (
+        f" {result}   {BOLD}{wall:.2f}x{RESET} wall-clock,"
+        f" {BOLD}{speed:.2f}x{RESET} tok/s"
+    )
 
 
 def drafting_note(right):
@@ -250,7 +253,10 @@ def drafting_note(right):
     if not right.after:
         return None
     if not right.drafting:
-        return f"{YELLOW}no speculation ran -- the right-hand engine drafted nothing{RESET}"
+        return (
+            f"{YELLOW}no speculation ran"
+            f" -- the right-hand engine drafted nothing{RESET}"
+        )
     per_step, used, by_position = right.drafting
     return (
         f"{YELLOW}drafter: {per_step:.2f} tokens accepted per step, "
