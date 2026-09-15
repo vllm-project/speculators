@@ -13,10 +13,9 @@ BLOCK_SIZE cap (MAX_FUSED_SIZE_NPU = 4096), which forces the tighter
 multi-block streaming loop.
 """
 
-from types import SimpleNamespace
-
 import pytest
 import torch
+import triton
 
 from speculators.losses import eager, resolve_loss_config
 from speculators.utils.util import is_npu_available
@@ -187,39 +186,183 @@ def test_eager_implementation_supports_differentiable_targets():
         assert targets.grad is not None, name
 
 
-def test_calculate_settings_respects_device_cap():
-    """`_calculate_settings` picks the right BLOCK_SIZE for each device without
-    needing NPU or CUDA hardware -- the helper only reads ``device.type``.
+def test_tile_configs_stay_register_resident():
+    """Every autotune candidate sits in the measured non-spilling region.
 
-    Exercises the NPU cap (MAX_FUSED_SIZE_NPU = 4096) and the CUDA cap
-    (MAX_FUSED_SIZE = 131072) at vocab sizes that span the boundaries, so
-    upstream CI (which typically has no NPU) still covers the NPU branch.
+    This is the invariant that matters: the tile the autotuner ends up on is
+    machine-dependent and not worth asserting, but a candidate that spills to
+    local memory is never competitive on any device. The fixed
+    BLOCK_SIZE=131072 this module used to select was 512 elements/thread and
+    ran the forward kernel ~17x slower than a register-resident tile.
     """
     fused_losses = pytest.importorskip("speculators.losses.fused")
 
-    npu_cases = (
-        (512, 512),
-        (4096, 4096),
-        (8192, 4096),
-        (32768, 4096),
-        (131072, 4096),
-        (151936, 4096),
+    configs = fused_losses._tile_configs()
+    assert configs, "the autotuner needs at least one candidate"
+
+    warp_size = 64 if getattr(torch.version, "hip", None) is not None else 32
+    for config in configs:
+        block = config.kwargs["BLOCK_SIZE"]
+        threads = config.num_warps * warp_size
+        assert block == triton.next_power_of_2(block)
+        if fused_losses.is_npu_available():
+            assert block <= fused_losses.MAX_FUSED_SIZE_NPU
+            continue
+        elems_per_thread = block // threads
+        assert (
+            fused_losses._MIN_ELEMS_PER_THREAD
+            <= elems_per_thread
+            <= fused_losses._MAX_ELEMS_PER_THREAD
+        ), f"BLOCK_SIZE={block} at {threads} threads is {elems_per_thread} elems/thread"
+
+
+# Widen the search past the register-resident bound so the bound is measured
+# rather than assumed: these are the tiles _tile_configs() deliberately never
+# offers, at 128+ elements per thread where Triton starts spilling.
+_SPILLING_BLOCK_SIZES = (65536, 131072)
+_SWEEP_VOCAB = 151936  # Qwen3, the shape this module was tuned against
+_SWEEP_ROWS = 256
+
+
+# A tile that spills should be losing outright, not by a hair; anything less
+# and bounding the search space up front would not be worth the lost coverage.
+_SPILL_PENALTY = 2.0
+
+
+def _time_tile(launch, block, warps):
+    """Compile one tile, then time it. Returns (ms, spill bytes per thread).
+
+    ``launch`` takes the tile and enqueues the kernel, returning the compiled
+    kernel that Triton hands back -- that object is where ``n_spills`` lives.
+    """
+    compiled = launch(block, warps)
+    ms = triton.testing.do_bench(lambda: launch(block, warps), warmup=10, rep=25)
+    return ms, compiled.n_spills
+
+
+@requires_cuda
+@pytest.mark.slow
+def test_autotuner_never_picks_a_spilling_tile():
+    """Tune over the *unbounded* space and show a spilling tile never wins.
+
+    ``_tile_configs()`` prunes the search to the register-resident region up
+    front, which is only sound if nothing worth having lives outside it. So
+    time the whole space -- spilling tiles included -- and assert the winner
+    both spills nothing and came from the pruned space.
+
+    Deliberately not asserted: that every spilling tile loses to every
+    register-resident one. It does not. 8192 at 4 warps spills 6 B/thread and
+    is still 1.4x faster than 16384 at 4 warps, which is inside the bound and
+    spills nothing. What holds, and what pruning actually rests on, is that the
+    winner is never one of them.
+    """
+    fused_losses = pytest.importorskip("speculators.losses.fused")
+
+    cap = triton.next_power_of_2(_SWEEP_VOCAB)
+    offered = {
+        (config.kwargs["BLOCK_SIZE"], config.num_warps)
+        for config in fused_losses._tile_configs()
+        if config.kwargs["BLOCK_SIZE"] <= cap
+    }
+    widened = sorted(
+        offered
+        | {
+            (block, warps)
+            for block in _SPILLING_BLOCK_SIZES
+            for warps in (4, 8, 16, 32)
+            if block <= cap
+        }
     )
-    for vocab, expected in npu_cases:
-        block, _ = fused_losses._calculate_settings(vocab, SimpleNamespace(type="npu"))
-        assert block == expected, (
-            f"NPU cap: vocab={vocab} -> BLOCK_SIZE={block}, expected {expected}"
+
+    rows, vocab = _SWEEP_ROWS, _SWEEP_VOCAB
+    logits = torch.randn(rows, vocab, device="cuda", dtype=torch.bfloat16)
+    targets = torch.randn(rows, vocab, device="cuda", dtype=torch.bfloat16)
+    loss = torch.empty(rows, device="cuda", dtype=torch.float32)
+    stats = torch.empty(fused_losses._N_STATS, rows, device="cuda", dtype=torch.float32)
+    grad_in = torch.empty_like(logits)
+    grad_out = torch.ones(rows, device="cuda", dtype=torch.float32)
+    op = fused_losses._OP_KL.value
+
+    def run_forward(block, warps):
+        return fused_losses.loss_forward_kernel.fn[(rows,)](
+            logits,
+            targets,
+            loss,
+            stats,
+            stats.stride(0),
+            vocab,
+            OP=op,
+            BLOCK_SIZE=block,
+            num_warps=warps,
         )
 
-    cuda_cases = (
-        (512, 512),
-        (4096, 4096),
-        (8192, 8192),
-        (131072, 131072),
-        (151936, 131072),
-    )
-    for vocab, expected in cuda_cases:
-        block, _ = fused_losses._calculate_settings(vocab, SimpleNamespace(type="cuda"))
-        assert block == expected, (
-            f"CUDA cap: vocab={vocab} -> BLOCK_SIZE={block}, expected {expected}"
+    def run_backward(block, warps):
+        return fused_losses.loss_backward_kernel.fn[(rows,)](
+            logits,
+            targets,
+            grad_in,
+            grad_out,
+            stats,
+            stats.stride(0),
+            vocab,
+            OP=op,
+            BLOCK_SIZE=block,
+            num_warps=warps,
         )
+
+    timings = {}
+    for block, warps in widened:
+        fwd_ms, fwd_spills = _time_tile(run_forward, block, warps)
+        bwd_ms, bwd_spills = _time_tile(run_backward, block, warps)
+        timings[block, warps] = (fwd_ms + bwd_ms, fwd_spills + bwd_spills)
+
+    spilling = {tile for tile, (_, spills) in timings.items() if spills}
+    assert spilling, (
+        "the widened space compiled without a single spill, so this test "
+        "proves nothing -- raise _SPILLING_BLOCK_SIZES for this GPU"
+    )
+
+    winner = min(timings, key=lambda tile: timings[tile][0])
+    winner_ms, winner_spills = timings[winner]
+    assert winner_spills == 0, (
+        f"the fastest tile {winner[0]}/{winner[1]}w spills {winner_spills} "
+        f"B/thread; the pruned search space assumes that never happens"
+    )
+    assert winner in offered, (
+        f"the fastest tile {winner[0]}/{winner[1]}w is outside the pruned "
+        f"space, so _tile_configs() is leaving performance on the table"
+    )
+
+    # Spilling hard has to be a cliff rather than a slope, or bounding the
+    # space up front would not be worth the coverage it gives up. The worst
+    # tile in the widened space is 131072 at 4 warps -- 1024 elements/thread,
+    # the shape this module used to hardcode for any vocab past 65536.
+    worst_ms, worst_spills = max(timings.values(), key=lambda entry: entry[0])
+    assert worst_spills > 0, "the slowest tile in the widened space did not spill"
+    assert worst_ms > _SPILL_PENALTY * winner_ms, (
+        f"the worst spilling tile is only {worst_ms / winner_ms:.2f}x the "
+        f"winner, which makes the register-resident bound unmotivated here"
+    )
+
+
+def test_prune_oversized_tiles_never_empties_the_space():
+    """Pruning narrows the space for small vocabs but always leaves a candidate.
+
+    A vocab narrower than every candidate tile (the 512-wide test shapes) must
+    still get a config -- an empty list would make the launch unschedulable --
+    and it should get only the narrowest, so tiny shapes do not pay to compile
+    the whole space.
+    """
+    fused_losses = pytest.importorskip("speculators.losses.fused")
+
+    configs = fused_losses._tile_configs()
+    blocks = {config.kwargs["BLOCK_SIZE"] for config in configs}
+
+    for vocab in (128, 512, 4096, 32000, 151936):
+        pruned = fused_losses._prune_oversized_tiles(configs, {"n_cols": vocab})
+        assert pruned, f"vocab={vocab} pruned every candidate"
+        cap = triton.next_power_of_2(vocab)
+        if any(block <= cap for block in blocks):
+            assert all(config.kwargs["BLOCK_SIZE"] <= cap for config in pruned)
+        else:
+            assert {config.kwargs["BLOCK_SIZE"] for config in pruned} == {min(blocks)}
