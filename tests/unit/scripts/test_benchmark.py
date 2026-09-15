@@ -16,13 +16,17 @@ import torch
 sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "scripts"))
 
 from benchmark import (  # type: ignore[import-not-found]
+    BENCHMARK_VERSION,
     _aggregate_kernel_rows,
     _aggregate_timing,
+    _build_kernel_pie,
     _fmt_welch,
     _gather_per_rank,
+    _get_phase_means,
     _MetricCapture,
     _phase_peaks,
     _print_summary,
+    _report_paths,
     _run_training,
     _SyntheticLoader,
     _welch_test,
@@ -32,6 +36,7 @@ from benchmark import (  # type: ignore[import-not-found]
     compute_statistics,
     create_synthetic_batch,
     measured_step_window,
+    report_benchmark,
     select_measured_profiles,
     shutdown_dataloader_workers,
 )
@@ -730,3 +735,191 @@ class TestCompareBenchmarks:
         assert "rank0 peak_allocated" in output
         assert "phase fwd" in output
         assert "-200.0" in output
+
+
+# ---------------------------------------------------------------------------
+# report
+# ---------------------------------------------------------------------------
+
+
+def _make_per_step(n=4):
+    """Per-step profiles shaped like the trainer's, with memory marks."""
+    return [
+        {
+            "step": i,
+            "fetch_ms": 7.0,
+            "fwd_ms": 30.0,
+            "bwd_ms": 62.0,  # includes clip_ms, as the trainer reports it
+            "opt_ms": 8.0,
+            "step_ms": 107.0,
+            "tokens_per_s": 1000.0 + i,
+            "fetch_frac": 7.0 / 107.0,
+            "queue_ms": 5.0,
+            "h2d_ms": 2.0,
+            "clip_ms": 2.0,
+            "memory_mb": {
+                "queue": 100.0,
+                "fetch": 110.0,
+                "fwd": 200.0,
+                "pre_clip": 300.0,
+                "bwd": 150.0,
+                "opt": 160.0,
+            },
+        }
+        for i in range(n)
+    ]
+
+
+def _make_report_result(per_step=None, kernels=True, verifier="Qwen/Qwen3-8B"):
+    """A complete, current-version result dict for the report command."""
+    per_step = _make_per_step() if per_step is None else per_step
+    measured = [{k: v for k, v in s.items() if k != "step"} for s in per_step]
+    result = {
+        "benchmark_version": BENCHMARK_VERSION,
+        "provenance": {
+            "git_sha": "abcdef1234567890",
+            "timestamp": "2026-01-01T00:00:00+00:00",
+            "gpu_info": [{"name": "H100", "total_memory_gb": 80.0}],
+        },
+        "config": {
+            "speculator_type": "eagle3",
+            "verifier_name_or_path": verifier,
+            "total_seq_len": 8192,
+            "num_gpus_used": 1,
+            "optimizer": "muon",
+            "hidden_states_dtype": "bfloat16",
+            "synthetic_data": True,
+            "warmup_steps": 2,
+            "measured_steps": len(per_step),
+            "profiled": kernels,
+        },
+        "memory": {
+            "per_rank": [
+                {"rank": 0, "peak_allocated_mb": 2048.0, "peak_reserved_mb": 3072.0}
+            ],
+            "phases": {"fwd": 200.0, "pre_clip": 300.0},
+        },
+        "timing": _aggregate_timing(measured),
+        "aggregate": compute_aggregate_throughput(measured),
+        "per_step": per_step,
+    }
+    if kernels:
+        rows = [{"name": "bigKernel", "ms_per_step": 95.0, "calls_per_step": 2.0}]
+        rows += [
+            {"name": f"tiny{i}", "ms_per_step": 1.0, "calls_per_step": 1.0}
+            for i in range(5)
+        ]
+        result["kernels"] = {
+            "total_device_ms_per_step": sum(k["ms_per_step"] for k in rows),
+            "kernels": rows,
+            "num_ranks": 1,
+        }
+    return result
+
+
+class TestReportPaths:
+    def test_default_names_derive_from_the_result_file(self, tmp_path):
+        html, md = _report_paths(str(tmp_path / "run.json"), None)
+        assert html == tmp_path / "run_report.html"
+        assert md == tmp_path / "run_report.md"
+
+    def test_uppercase_extension_still_yields_distinct_outputs(self, tmp_path):
+        html, md = _report_paths(str(tmp_path / "RUN.JSON"), None)
+        assert html == tmp_path / "RUN_report.html"
+        assert md == tmp_path / "RUN_report.md"
+
+    def test_explicit_output(self, tmp_path):
+        html, md = _report_paths(str(tmp_path / "run.json"), str(tmp_path / "r.html"))
+        assert html == tmp_path / "r.html"
+        assert md == tmp_path / "r.md"
+
+    def test_markdown_output_would_clobber_the_html(self, tmp_path):
+        with pytest.raises(SystemExit, match="collide"):
+            _report_paths(str(tmp_path / "run.json"), str(tmp_path / "out.md"))
+
+    def test_output_over_the_input_rejected(self, tmp_path):
+        with pytest.raises(SystemExit, match="collide"):
+            _report_paths(str(tmp_path / "run.json"), str(tmp_path / "run.json"))
+
+
+class TestPhaseMeans:
+    def test_clip_is_subtracted_from_backward(self):
+        means = {
+            label: mean for _, label, mean, _ in _get_phase_means(_make_per_step())
+        }
+        assert means["Backward"] == pytest.approx(60.0)  # 62 reported - 2 clip
+        assert means["Grad clip"] == pytest.approx(2.0)
+
+    def test_phases_sum_to_the_step(self):
+        per_step = _make_per_step()
+        total = sum(mean for _, _, mean, _ in _get_phase_means(per_step))
+        assert total == pytest.approx(per_step[0]["step_ms"])
+
+
+class TestKernelPie:
+    def test_small_kernels_merge_into_one_other_slice(self):
+        result = _make_report_result()
+        fig = _build_kernel_pie(result["kernels"])
+        labels = list(fig.data[0].labels)
+        values = list(fig.data[0].values)
+        assert labels[0] == "bigKernel"
+        assert labels[-1] == "Other (5 kernels)"  # each tiny kernel is 1% of 100
+        assert values[-1] == pytest.approx(5.0)
+
+
+class TestReportBenchmark:
+    def _write(self, tmp_path, result):
+        path = tmp_path / "run.json"
+        path.write_text(json.dumps(result))
+        return path
+
+    def test_writes_html_and_markdown(self, tmp_path, capsys):
+        path = self._write(tmp_path, _make_report_result())
+        report_benchmark(str(path))
+
+        html = (tmp_path / "run_report.html").read_text()
+        md = (tmp_path / "run_report.md").read_text()
+        assert json.loads(path.read_text())  # input untouched
+        # The plotly bundle is inlined so the report renders without a network.
+        assert "cdn.plot.ly/plotly" not in html
+        assert "Plotly.newPlot" in html
+        assert "GPU Kernel Breakdown" in html
+        assert "| 0 | 2048 | 3072 |" in md
+        assert "bigKernel" in md
+        assert "Grad clip" in md
+        out = capsys.readouterr().out
+        assert "run_report.html" in out
+        assert "run_report.md" in out
+
+    def test_unprofiled_run_omits_the_kernel_sections(self, tmp_path):
+        path = self._write(tmp_path, _make_report_result(kernels=False))
+        report_benchmark(str(path))
+
+        html = (tmp_path / "run_report.html").read_text()
+        md = (tmp_path / "run_report.md").read_text()
+        assert "GPU Kernel Breakdown" not in html
+        assert "GPU Kernels" not in md
+        assert "Step Timing Breakdown" in html
+
+    def test_metadata_is_escaped(self, tmp_path):
+        attack = "<script>alert(1)</script>"
+        path = self._write(tmp_path, _make_report_result(verifier=attack))
+        report_benchmark(str(path))
+
+        html = (tmp_path / "run_report.html").read_text()
+        assert attack not in html
+        assert "&lt;script&gt;" in html
+
+    def test_old_result_file_rejected(self, tmp_path):
+        result = _make_report_result()
+        result["benchmark_version"] = "1.0"
+        path = self._write(tmp_path, result)
+        with pytest.raises(SystemExit, match="Incompatible benchmark version"):
+            report_benchmark(str(path))
+
+    def test_missing_per_step_exits(self, tmp_path):
+        result = _make_report_result()
+        del result["per_step"]
+        path = self._write(tmp_path, result)
+        with pytest.raises(SystemExit):
+            report_benchmark(str(path))
