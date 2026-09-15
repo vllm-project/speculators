@@ -56,7 +56,8 @@ start_server() {  # start_server <gpu> <port> [extra vllm args...]
   CUDA_VISIBLE_DEVICES=$gpu VLLM_USE_FLASHINFER_SAMPLER=0 \
     setsid vllm serve "$MODEL" \
       --served-model-name demo --port "$port" \
-      --max-model-len 10240 --max-num-seqs 1 --gpu-memory-utilization 0.85 \
+      --max-model-len 10240 --max-num-batched-tokens 10240 \
+      --no-enable-chunked-prefill --max-num-seqs 1 --gpu-memory-utilization 0.85 \
       --attention-backend flash_attn --generation-config vllm \
       --no-enable-prefix-caching --trust-remote-code --seed 0 \
       "$@" > "$LOGDIR/$port.log" 2>&1 &

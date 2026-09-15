@@ -112,7 +112,9 @@ class Side:
         Counting streamed chunks instead would undercount: vLLM merges several
         steps into one chunk whenever the HTTP layer lags behind the engine.
         """
-        return int(self.counted("vllm:iteration_tokens_total_count"))
+        # The launcher guarantees one unchunked prefill pass, excluded here.
+        total_steps = int(self.counted("vllm:iteration_tokens_total_count"))
+        return max(0, total_steps - 1)
 
     @property
     def tokens_per_step(self):
