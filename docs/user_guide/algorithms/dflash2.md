@@ -27,11 +27,11 @@ Inference starts with the anchor token and then conditions each position on the 
 The public DFlash2 implementation specifies inference but does not publish its training objective. The current Speculators implementation is therefore an experimental split objective:
 
 1. The configured DFlash-family compound loss trains the unary logits.
-2. A separate hard cross-entropy term trains the selector over the unary top-K candidates while teacher-forcing the previous sequence token. If the target is outside that set, training replaces the weakest unary candidate with the target so the K-way loss remains defined. Validation loss uses the same replacement; serving and strict validation candidate/path metrics do not.
+2. A separate hard cross-entropy term trains the selector over the unary top-K candidates while teacher-forcing the previous sequence token. If the target is outside that set, training replaces the weakest unary candidate with the target so the K-way loss remains defined. Validation loss uses the same replacement; serving, reference-prefix agreement, and candidate recall use the original candidates.
 
 `--selector-loss-alpha` controls the second term. Both terms use the configured fixed exponential or D-PACE position weighting. The selector is never trained against a full-vocabulary corrected distribution, matching the candidate set it can rerank at serving time.
 
-Validation reports clearly separated unary candidate recall and target mass, teacher-forced selector accuracy, and an actual greedy self-conditioned path. The path begins at the verified anchor and feeds each selected token to the next edge score. Its per-position accuracy is conditioned on the earlier path being correct. The accepted-length metrics include the verified anchor and report both the realized selector path and the oracle unary-top-K path.
+Training and validation report unary candidate recall and target mass, teacher-forced selector accuracy, oracle unary-top-K accepted length, and the [shared prefix agreement](../training_metrics.md), alongside unary and selector losses. Reference-prefix agreement uses teacher-conditioned selector predictions over the original unary top-K candidates. It does not measure the greedy serving path. Existing accuracy and accepted-length metrics are also retained.
 
 DFlash2 currently requires the full verifier vocabulary. Pruned draft vocabularies are rejected because current serving implementations select candidates before any draft-to-target vocabulary mapping.
 

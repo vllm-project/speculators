@@ -447,6 +447,16 @@ def test_selector_loss_alpha_zero_preserves_unary_objective():
     torch.testing.assert_close(actual, expected)
     torch.testing.assert_close(metrics["unary_loss_sum"], expected.detach())
     assert metrics["selector_loss_sum"] > 0
+    # Candidate diagnostics retain their teacher-target definitions, even when
+    # the reference metric uses the original, uninjected candidate set.
+    assert metrics["unary_candidate_recall_at_2_sum"] == 2
+    assert metrics["unary_candidate_recall_at_2_total"] == 3
+    assert metrics["teacher_forced_selector_acc_sum"] == 2
+    assert metrics["teacher_forced_selector_acc_total"] == 2
+    assert metrics["unary_candidate_target_mass_at_2_sum"] > 2.99
+    assert metrics["unary_candidate_target_mass_at_2_total"] == 3
+    assert metrics["unary_top_2_oracle_accepted_length_sum"] == 2
+    assert metrics["unary_top_2_oracle_accepted_length_total"] == 1
     # One selected draft token plus the verifier's bonus token.
     assert metrics["eal_sum"].item() == 2.0
     assert metrics["eal_total"].item() == 1.0
@@ -569,3 +579,65 @@ def test_tiny_gpu_forward_backward_reaches_all_new_parameters():
         assert parameter.grad is not None, f"missing gradient for {name}"
         assert torch.isfinite(parameter.grad).all(), f"non-finite gradient for {name}"
         assert torch.count_nonzero(parameter.grad), f"zero gradient for {name}"
+
+
+def test_reference_prefix_uses_original_candidates(monkeypatch):
+    model = DFlash2DraftModel(_tiny_config(sample_from_anchor=True))
+    # Teacher ID 4 replaces the weakest candidate, ID 3, during training.
+    # The selector would choose ID 3 from the original set at inference.
+    logits = torch.zeros(1, 4, 64)
+    logits[..., :4] = torch.tensor([4.0, 3.0, 2.0, 1.0])
+    targets = torch.zeros_like(logits)
+    targets[..., 4] = 10
+    monkeypatch.setattr(
+        model,
+        "_backbone_forward",
+        lambda *a, **k: (
+            torch.ones(1, 4, 16),
+            logits,
+            targets,
+            torch.ones(1, 4),
+            torch.arange(4),
+        ),
+    )
+    monkeypatch.setattr(
+        model.candidate_selector,
+        "score_candidates",
+        lambda u, h, p, ids: u.gather(-1, ids) + 20 * (ids == 3),
+    )
+    inputs = torch.full((1, 8), 3, dtype=torch.long)
+    _, _, metrics = model(
+        hidden_states=torch.zeros(1, 8, 32),
+        input_ids=inputs,
+        verifier_last_hidden_states=torch.zeros(1, 8, 16),
+        loss_mask=torch.ones_like(inputs),
+        document_ids=torch.zeros_like(inputs),
+        loss_config=resolve_loss_config("kl_div", "eager"),
+        tv_loss_fn=resolve_loss_config("tv", "eager")["tv"][0],
+        max_anchors=1,
+    )
+    assert all(
+        metrics[f"reference_acc_at_pos_{i}_{kind}"] == 1
+        for i in range(4)
+        for kind in ("sum", "total")
+    )
+
+
+def test_reference_candidate_scoring_preserves_training_logits_and_gradients():
+    selector, logits, hidden, predecessors, targets, _, _ = _selector_objective_inputs()
+    hidden.requires_grad_()
+    candidates = logits.topk(selector.top_k, dim=-1).indices
+    training, _, _ = selector_training_candidates(candidates, targets)
+    original = selector.score_candidates(logits, hidden, predecessors, training)
+    expanded = selector.score_candidates(
+        logits,
+        hidden,
+        predecessors,
+        torch.cat([training, candidates[..., -1:]], dim=-1),
+    )[..., :-1]
+    torch.testing.assert_close(expanded, original)
+    parameters = (logits, hidden, *selector.parameters())
+    before = torch.autograd.grad(original.square().sum(), parameters)
+    after = torch.autograd.grad(expanded.square().sum(), parameters)
+    for expected, actual in zip(before, after, strict=True):
+        torch.testing.assert_close(actual, expected)

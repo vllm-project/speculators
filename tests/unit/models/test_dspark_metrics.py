@@ -234,3 +234,17 @@ class TestComputeMetrics:
             assert key in metrics
         # all metric values must be tensors (so dist.reduce works in the trainer)
         assert all(torch.is_tensor(v) for v in metrics.values())
+
+
+def test_confidence_predicted_mean_retains_masked_count():
+    logits = torch.zeros(1, 4, 8)
+    _, metrics = compute_metrics(
+        logits,
+        logits,
+        torch.tensor([[0.0, 0.0, 20.0, 20.0]]),
+        torch.tensor([[0.0, 1.0, 0.0, 1.0]]),
+        2,
+        loss_config=_DEFAULT_LOSS,
+    )
+    torch.testing.assert_close(metrics["confidence_pred_mean_sum"], torch.tensor(1.5))
+    assert metrics["confidence_pred_mean_total"] == 2
