@@ -48,6 +48,9 @@ SPEC_GPU=${GPUS#*,}   SPEC_PORT=8901
 #   --no-enable-prefix-caching  no request gets a head start from an earlier one
 #   --generation-config vllm    ignore the model's own sampling defaults
 #   --attention-backend, VLLM_USE_FLASHINFER_SAMPLER  same kernels on both sides
+LOGDIR=$(mktemp -d)
+trap 'kill -- -$PLAIN_PID -$SPEC_PID 2>/dev/null; rm -rf "$LOGDIR"' EXIT
+
 start_server() {  # start_server <gpu> <port> [extra vllm args...]
   local gpu=$1 port=$2; shift 2
   CUDA_VISIBLE_DEVICES=$gpu VLLM_USE_FLASHINFER_SAMPLER=0 \
@@ -56,7 +59,20 @@ start_server() {  # start_server <gpu> <port> [extra vllm args...]
       --max-model-len 10240 --max-num-seqs 1 --gpu-memory-utilization 0.85 \
       --attention-backend flash_attn --generation-config vllm \
       --no-enable-prefix-caching --trust-remote-code --seed 0 \
-      "$@" > /dev/null 2>&1 &
+      "$@" > "$LOGDIR/$port.log" 2>&1 &
+}
+
+server_status() {
+  local log=$LOGDIR/$1.log
+  # last recognisable phase from the log, most specific match wins
+  if grep -qi 'error\|exception\|traceback' "$log" 2>/dev/null; then echo "ERROR"
+  elif grep -qi 'downloading'               "$log" 2>/dev/null; then echo "downloading model"
+  elif grep -qi 'loading model\|loading weights\|Loading model weights' "$log" 2>/dev/null; then echo "loading weights"
+  elif grep -qi 'compil'                    "$log" 2>/dev/null; then echo "compiling"
+  elif grep -qi 'warming up\|profiling'     "$log" 2>/dev/null; then echo "warming up"
+  elif grep -qi 'started server\|Uvicorn'   "$log" 2>/dev/null; then echo "starting HTTP"
+  else echo "initialising"
+  fi
 }
 
 # Fixed ports, so refuse to start if anything already answers on them: the health
@@ -73,14 +89,28 @@ start_server "$SPEC_GPU" "$SPEC_PORT" --speculative-config \
   "{\"method\": \"$METHOD\", \"model\": \"$DRAFT\", \"num_speculative_tokens\": $K}"
 SPEC_PID=$!
 
-# setsid gave each server its own process group, so this takes its children too.
-trap 'kill -- -$PLAIN_PID -$SPEC_PID 2>/dev/null' EXIT
+# setsid gave each server its own process group; the trap above takes their children too.
+wait_for_server() {
+  local port=$1 pid=$2 prev_status=
+  echo "  waiting for port $port ..."
+  while ! curl -sf "http://127.0.0.1:$port/health" > /dev/null 2>&1; do
+    if ! kill -0 "$pid" 2>/dev/null; then
+      echo "  server on port $port died. last 20 lines of log:" >&2
+      tail -20 "$LOGDIR/$port.log" >&2
+      exit 1
+    fi
+    status=$(server_status "$port")
+    if [[ $status != "$prev_status" ]]; then
+      echo "  port $port: $status"
+      prev_status=$status
+    fi
+    sleep 2
+  done
+  echo "  port $port: ready"
+}
 
-for port in $PLAIN_PORT $SPEC_PORT; do
-  echo -n "  waiting for port $port "
-  until curl -sf "http://127.0.0.1:$port/health" > /dev/null; do echo -n .; sleep 2; done
-  echo " ready"
-done
+wait_for_server "$PLAIN_PORT" "$PLAIN_PID"
+wait_for_server "$SPEC_PORT"  "$SPEC_PID"
 
 python demo_race.py --max-tokens "$MAX_TOKENS" \
   --left-url  "http://127.0.0.1:$PLAIN_PORT" --left-name  "WITHOUT spec-dec" \
