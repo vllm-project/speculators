@@ -4,6 +4,7 @@ import pytest
 import torch
 from torch.nn.attention.flex_attention import BlockMask, create_mask
 
+from speculators.models.attention import create_float_mask
 from speculators.models.eagle3.attention import (
     create_combined_mask_mod,
     extend_dense_mask_for_draft_tokens,
@@ -150,3 +151,47 @@ def test_extend_dense_mask_matches_block_mask():
         assert torch.equal(new_block.bool(), expected_diag), (
             f"New block at step {step} is not diagonal"
         )
+
+
+def test_extend_dense_float_mask_keeps_additive_semantics():
+    """The eager/SDPA path extends the additive float mask from
+    create_float_mask (0 = attend, -inf = blocked): appended draft-KV columns
+    must be 0 on the diagonal and -inf everywhere else, not a 1/0 block that
+    lets every query attend all previous-step draft tokens."""
+    total_seq_len = 8
+    document_ids = torch.zeros(total_seq_len, dtype=torch.long)
+    document_ids[total_seq_len // 2 :] = 1  # two packed documents
+    mask_mod = create_combined_mask_mod(document_ids, total_seq_len)
+
+    float_mask = create_float_mask(
+        mask_mod,
+        B=None,
+        H=None,
+        Q_LEN=total_seq_len,
+        KV_LEN=total_seq_len,
+        device="cpu",
+        dtype=torch.float32,
+    )
+    original = float_mask.clone()
+
+    for step in range(3):
+        float_mask = extend_dense_mask_for_draft_tokens(float_mask, total_seq_len)
+        assert float_mask.shape == (1, 1, total_seq_len, total_seq_len * (step + 2))
+        assert torch.equal(float_mask[..., :total_seq_len], original)
+
+        new_block = float_mask[0, 0, :, -total_seq_len:]
+        diag = torch.eye(total_seq_len, dtype=torch.bool)
+        assert torch.all(new_block[diag] == 0.0), "diagonal must stay attended (0)"
+        assert torch.all(torch.isneginf(new_block[~diag])), (
+            "off-diagonal draft-KV columns must be blocked (-inf)"
+        )
+
+
+def test_extend_dense_integral_mask_keeps_one_zero_diagonal():
+    """Integral (non-bool, non-float) masks keep the 1/0 diagonal block."""
+    total_seq_len = 4
+    mask = torch.ones(1, 1, total_seq_len, total_seq_len, dtype=torch.long)
+    extended = extend_dense_mask_for_draft_tokens(mask, total_seq_len)
+    new_block = extended[0, 0, :, -total_seq_len:]
+    assert new_block.dtype == torch.long
+    assert torch.equal(new_block, torch.eye(total_seq_len, dtype=torch.long))
