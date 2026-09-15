@@ -1,27 +1,45 @@
 """Race one prompt against two vLLM servers side by side.
 
 Left  = the target model on its own.  Right = the same model + a speculator.
-Both decode greedily (temperature 0), the two panels must fill with identical 
+Both decode greedily (temperature 0), the two panels must fill with identical
 text, and the right one must finish first.
 
 Started by demo_side_by_side.sh, which serves both engines. Stdlib only.
 """
-import argparse, json, re, shutil, sys, textwrap, threading, time, urllib.request
+
+import argparse
+import json
+import re
+import shutil
+import sys
+import textwrap
+import threading
+import time
+import urllib.request
 
 BOLD, DIM, RESET = "\033[1m", "\033[2m", "\033[0m"
-CYAN, YELLOW, GREEN, RED, GREY = ("\033[36m", "\033[33m", "\033[32m",
-                                  "\033[31m", "\033[90m")
+CYAN, YELLOW, GREEN, RED, GREY = (
+    "\033[36m",
+    "\033[33m",
+    "\033[32m",
+    "\033[31m",
+    "\033[90m",
+)
 HOME, CLEAR, CLEAR_LINE = "\033[H", "\033[2J", "\033[K"
 HIDE_CURSOR, SHOW_CURSOR = "\033[?25l", "\033[?25h"
 
-LEGEND = ("time = request sent to last token  ·  tok/s = speed after the first token  ·  "
-          "ttft = time to first token  ·  steps = forward passes of the target model  ·  "
-          "tok/step = tokens per forward pass, 1.00 without speculation")
+LEGEND = (
+    "time = request sent to last token  ·  tok/s = speed after the first token  ·  "
+    "ttft = time to first token  ·  steps = forward passes of the target model  ·  "
+    "tok/step = tokens per forward pass, 1.00 without speculation"
+)
 
 # Two rounds before the demo starts, so the first prompt someone types is not the
 # one paying for lazy initialisation. Different lengths warm different prefills.
-WARMUP = [("Say hello.", 32),
-          ("Explain how a B-tree index works, with a short example.", 256)]
+WARMUP = [
+    ("Say hello.", 32),
+    ("Explain how a B-tree index works, with a short example.", 256),
+]
 
 
 def read_idle_counters(url):
@@ -63,7 +81,7 @@ class Side:
         self.first_token = None
         self.finished = None
         self.error = None
-        self.before = self.after = {}      # /metrics, snapshotted around the race
+        self.before = self.after = {}  # /metrics, snapshotted around the race
 
     @property
     def seconds(self):
@@ -110,8 +128,10 @@ class Side:
         drafted = self.counted("vllm:spec_decode_num_draft_tokens_total")
         accepted = self.counted("vllm:spec_decode_num_accepted_tokens_total")
         by_position = [
-            self.counted(f"vllm:spec_decode_num_accepted_tokens_per_pos_total[{i}]") / drafts
-            for i in range(int(drafted / drafts))]
+            self.counted(f"vllm:spec_decode_num_accepted_tokens_per_pos_total[{i}]")
+            / drafts
+            for i in range(int(drafted / drafts))
+        ]
         return 1 + accepted / drafts, accepted / drafted, by_position
 
 
@@ -125,15 +145,18 @@ def stream(side, prompt, max_tokens):
     request = urllib.request.Request(
         f"{side.url}/v1/chat/completions",
         headers={"Content-Type": "application/json"},
-        data=json.dumps({
-            "model": "demo",
-            "messages": [{"role": "user", "content": prompt}],
-            "max_tokens": max_tokens,
-            "temperature": 0,
-            "stream": True,
-            "logprobs": True,
-            "chat_template_kwargs": {"enable_thinking": False},
-        }).encode())
+        data=json.dumps(
+            {
+                "model": "demo",
+                "messages": [{"role": "user", "content": prompt}],
+                "max_tokens": max_tokens,
+                "temperature": 0,
+                "stream": True,
+                "logprobs": True,
+                "chat_template_kwargs": {"enable_thinking": False},
+            }
+        ).encode(),
+    )
     try:
         with urllib.request.urlopen(request) as response:
             for line in response:
@@ -151,6 +174,7 @@ def stream(side, prompt, max_tokens):
 
 
 # ---- drawing ----------------------------------------------------------------
+
 
 def visible(text):
     """Width on screen: colour codes take no columns."""
@@ -194,14 +218,16 @@ def stats(side):
         return f"{DIM}{label:<8}{RESET}{BOLD}{value:>7}{RESET}"
 
     ttft = f"{side.ttft * 1000:.0f}ms" if side.ttft else "-"
-    steps = side.steps or "-"                  # the counters only land once it is over
+    steps = side.steps or "-"  # the counters only land once it is over
     per_step = f"{side.tokens_per_step:.2f}" if side.steps else "-"
-    return [f"{cell('time', f'{side.seconds:.2f}s')}   "
-            f"{cell('tok/s', f'{side.tokens_per_second:.1f}')}   "
-            f"{cell('ttft', ttft)}",
-            f"{cell('tokens', side.tokens)}   "
-            f"{cell('steps', steps)}   "
-            f"{cell('tok/step', per_step)}"]
+    return [
+        f"{cell('time', f'{side.seconds:.2f}s')}   "
+        f"{cell('tok/s', f'{side.tokens_per_second:.1f}')}   "
+        f"{cell('ttft', ttft)}",
+        f"{cell('tokens', side.tokens)}   "
+        f"{cell('steps', steps)}   "
+        f"{cell('tok/step', per_step)}",
+    ]
 
 
 def verdict(left, right, done):
@@ -226,9 +252,12 @@ def drafting_note(right):
     if not right.drafting:
         return f"{YELLOW}no speculation ran -- the right-hand engine drafted nothing{RESET}"
     per_step, used, by_position = right.drafting
-    return (f"{YELLOW}drafter: {per_step:.2f} tokens accepted per step, "
-            f"{100 * used:.0f}% of drafted tokens used, accepted by position: "
-            + " ".join(f"{100 * share:.0f}%" for share in by_position) + RESET)
+    return (
+        f"{YELLOW}drafter: {per_step:.2f} tokens accepted per step, "
+        f"{100 * used:.0f}% of drafted tokens used, accepted by position: "
+        + " ".join(f"{100 * share:.0f}%" for share in by_position)
+        + RESET
+    )
 
 
 def draw(sides, prompt, max_tokens, done):
@@ -240,12 +269,16 @@ def draw(sides, prompt, max_tokens, done):
     def both(a, b):
         return f"{fit(a, half)} {GREY}│{RESET} {fit(b, half)}"
 
-    top = [f"{BOLD}PROMPT:{RESET} {' '.join(prompt.split())[:columns - 8]}",
-           rule,
-           both(middle(title(left), half), middle(title(right), half)),
-           both(" " + bar(left, half - 1, max_tokens),
-                " " + bar(right, half - 1, max_tokens)),
-           rule]
+    top = [
+        f"{BOLD}PROMPT:{RESET} {' '.join(prompt.split())[: columns - 8]}",
+        rule,
+        both(middle(title(left), half), middle(title(right), half)),
+        both(
+            " " + bar(left, half - 1, max_tokens),
+            " " + bar(right, half - 1, max_tokens),
+        ),
+        rule,
+    ]
 
     bottom = [rule]
     bottom += [both(" " + a, " " + b) for a, b in zip(stats(left), stats(right))]
@@ -257,27 +290,33 @@ def draw(sides, prompt, max_tokens, done):
 
     height = rows - len(top) - len(bottom)
     answers = [column(side.text, half - 1) for side in sides]
-    scroll = max(0, max(len(a) for a in answers) - height)      # follow the longer side
-    middle_rows = [both(*[" " + (a[i] if i < len(a) else "") for a in answers])
-                   for i in range(scroll, scroll + height)]
+    scroll = max(0, max(len(a) for a in answers) - height)  # follow the longer side
+    middle_rows = [
+        both(*[" " + (a[i] if i < len(a) else "") for a in answers])
+        for i in range(scroll, scroll + height)
+    ]
 
     # Exactly `rows` lines and no trailing newline, so the screen never scrolls.
-    sys.stdout.write(HOME + (CLEAR_LINE + "\n").join(top + middle_rows + bottom)
-                     + CLEAR_LINE)
+    sys.stdout.write(
+        HOME + (CLEAR_LINE + "\n").join(top + middle_rows + bottom) + CLEAR_LINE
+    )
     sys.stdout.flush()
 
 
 # ---- running ----------------------------------------------------------------
 
+
 def run_race(prompt, servers, max_tokens, show=True):
     """Both requests in flight at once, counters pinned either side of them."""
-    sides = [Side(name, url, color)
-             for (name, url), color in zip(servers, (CYAN, YELLOW))]
+    sides = [
+        Side(name, url, color) for (name, url), color in zip(servers, (CYAN, YELLOW))
+    ]
     for side in sides:
         side.before = read_idle_counters(side.url)
-    threads = [threading.Thread(target=stream, args=(side, prompt, max_tokens),
-                                daemon=True)
-               for side in sides]
+    threads = [
+        threading.Thread(target=stream, args=(side, prompt, max_tokens), daemon=True)
+        for side in sides
+    ]
     for thread in threads:
         thread.start()
     while any(thread.is_alive() for thread in threads):
@@ -309,18 +348,24 @@ def warm_up(servers):
     if left.text == right.text:
         print(f"{GREEN}both engines agree token-for-token{RESET}")
     else:
-        print(f"{RED}{BOLD}the two engines do NOT agree.{RESET} They compiled "
-              f"differently; re-run with VLLM_DISABLE_COMPILE_CACHE=1 set, until "
-              f"they do, then drop it so the good build stays cached.")
+        print(
+            f"{RED}{BOLD}the two engines do NOT agree.{RESET} They compiled "
+            f"differently; re-run with VLLM_DISABLE_COMPILE_CACHE=1 set, until "
+            f"they do, then drop it so the good build stays cached."
+        )
 
 
 def summarise(races):
     print(f"\n{BOLD}SUMMARY{RESET}")
     for prompt, left, right in races:
-        print(f"  {GREEN}same{RESET}" if left.text == right.text else f"  {RED}DIFF{RESET}",
-              f"{left.seconds / right.seconds:5.2f}x wall-clock  "
-              f"{left.tokens_per_second:6.1f} -> {right.tokens_per_second:6.1f} tok/s  "
-              f"{right.tokens_per_step:4.2f} tok/step   {' '.join(prompt.split())[:40]}")
+        print(
+            f"  {GREEN}same{RESET}"
+            if left.text == right.text
+            else f"  {RED}DIFF{RESET}",
+            f"{left.seconds / right.seconds:5.2f}x wall-clock  "
+            f"{left.tokens_per_second:6.1f} -> {right.tokens_per_second:6.1f} tok/s  "
+            f"{right.tokens_per_step:4.2f} tok/step   {' '.join(prompt.split())[:40]}",
+        )
 
 
 def main():
@@ -334,8 +379,10 @@ def main():
     servers = [(args.left_name, args.left_url), (args.right_name, args.right_url)]
 
     warm_up(servers)
-    print(f"\n{BOLD}Type a prompt to race it on both engines.{RESET} "
-          f"{DIM}Empty line quits.{RESET}")
+    print(
+        f"\n{BOLD}Type a prompt to race it on both engines.{RESET} "
+        f"{DIM}Empty line quits.{RESET}"
+    )
     races = []
     try:
         while True:
