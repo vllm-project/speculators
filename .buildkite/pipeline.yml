@@ -15,7 +15,7 @@ steps:
 
       if [[ "$${BUILDKITE_SOURCE}" == "schedule" ]]; then
         echo "--- Uploading nightly tests pipeline"
-        buildkite-agent pipeline upload .buildkite/nightly/nightly-$${RUNNER}.yml
+        buildkite-agent pipeline upload .buildkite/nightly/nightly.yml
       else
         echo "--- Uploading development tests pipeline"
         buildkite-agent pipeline upload .buildkite/development/gpu-tests-$${RUNNER}.yml
