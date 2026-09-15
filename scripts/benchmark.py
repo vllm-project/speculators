@@ -12,23 +12,24 @@ Subcommands:
     run        Run a training benchmark
     compare    Compare two benchmark result files
     report     Generate an interactive HTML report from results
+    comment    Render results as markdown for a GitHub PR comment
 
 Examples:
     # Synthetic benchmark (no dataset / vLLM needed)
-    python scripts/benchmark.py run --synthetic \
+    python scripts/benchmark.py run --synthetic \\
         -- --verifier-name-or-path Qwen/Qwen3-8B --total-seq-len 4096
 
     # Real data benchmark
-    python scripts/benchmark.py run \
-        -- --verifier-name-or-path Qwen/Qwen3-8B --data-path ./output \
+    python scripts/benchmark.py run \\
+        -- --verifier-name-or-path Qwen/Qwen3-8B --data-path ./output \\
         --on-missing skip
 
     # Multi-GPU
-    torchrun --standalone --nproc_per_node 2 scripts/benchmark.py run \
+    torchrun --standalone --nproc_per_node 2 scripts/benchmark.py run \\
         --synthetic -- --verifier-name-or-path Qwen/Qwen3-8B
 
     # With torch.profiler trace (outputs Chrome trace to profile_traces/)
-    python scripts/benchmark.py run --synthetic --profile \
+    python scripts/benchmark.py run --synthetic --profile \\
         -- --verifier-name-or-path Qwen/Qwen3-8B --total-seq-len 4096
 
     # Compare two runs
@@ -36,6 +37,11 @@ Examples:
 
     # Generate interactive HTML report
     python scripts/benchmark.py report benchmark_20260818.json
+
+    # Post a before/after summary on a PR (run both on the same machine first)
+    python scripts/benchmark.py comment after.json --baseline before.json \\
+        --output comment.md
+    gh pr comment 1234 --body-file comment.md
 """
 
 from __future__ import annotations
@@ -45,6 +51,9 @@ import importlib.metadata
 import json
 import logging
 import math
+import os
+import re
+import shlex
 import socket
 import statistics
 import subprocess
@@ -128,6 +137,40 @@ def _wrap_kernel_name(name: str, width: int = 60) -> str:
     return "<br>".join(
         html_escape(name[i : i + width]) for i in range(0, len(name), width)
     )
+
+
+def _invocation() -> str:
+    """The current command line, in the form someone reproducing it would type.
+
+    The script path is made repo-relative: an absolute one leaks the layout of
+    whichever machine happened to run the benchmark and is not what a reader
+    would paste back into their own checkout.
+
+    Under torchrun, ``sys.argv`` is the worker's -- the launcher and its process
+    count are in the environment, not the argv -- so a bare ``python ...`` here
+    would claim a single-process run reproduces a distributed one. The launcher
+    is put back from the variables torchelastic sets. Multi-node runs also need
+    a rendezvous the environment cannot supply from one worker, so those are
+    marked for the reader rather than guessed at.
+    """
+    argv0 = sys.argv[0]
+    try:
+        argv0 = str(Path(argv0).resolve().relative_to(Path.cwd()))
+    except ValueError:
+        argv0 = Path(argv0).name
+
+    local_world_size = int(os.environ.get("LOCAL_WORLD_SIZE", "0"))
+    if "TORCHELASTIC_RUN_ID" not in os.environ or local_world_size < 1:
+        return shlex.join(["python", argv0, *sys.argv[1:]])
+
+    nnodes = int(os.environ.get("GROUP_WORLD_SIZE", "1"))
+    launcher = ["torchrun"]
+    if nnodes > 1:
+        launcher += [f"--nnodes={nnodes}", "--rdzv-endpoint=<host:port>"]
+    else:
+        launcher.append("--standalone")
+    launcher.append(f"--nproc-per-node={local_world_size}")
+    return shlex.join([*launcher, argv0, *sys.argv[1:]])
 
 
 # ---------------------------------------------------------------------------
@@ -216,6 +259,11 @@ def collect_provenance() -> dict:
 
     return {
         "git_sha": git_sha,
+        # The invocation is the one piece of provenance a reader cannot
+        # reconstruct from the config dump, because the train args after '--'
+        # are forwarded verbatim. Mirrors train_command.txt, which records argv
+        # for the same reason.
+        "command": _invocation(),
         "timestamp": datetime.now(UTC).isoformat(),
         "hostname": socket.gethostname(),
         "python_version": sys.version.split()[0],
@@ -778,6 +826,25 @@ def _print_summary(results: dict) -> None:
 # ---------------------------------------------------------------------------
 
 
+def _load_result(path: str) -> dict:
+    """Read a result file, refusing one this script would misread.
+
+    The schema moves between versions -- which timing marks exist, how memory
+    is shaped -- and a reader that guesses at an older one prints numbers that
+    look right and are not.
+    """
+    with open(path) as f:
+        results = json.load(f)
+    version = results.get("benchmark_version")
+    if version != BENCHMARK_VERSION:
+        raise SystemExit(
+            f"Incompatible benchmark version: {path} reports {version}, this "
+            f"script reads {BENCHMARK_VERSION}. Re-run the benchmark with this "
+            "version of the script to report on it."
+        )
+    return results
+
+
 def _nested_get(d: dict, key_path: str):
     """Traverse a dotted key path into a nested dict."""
     for part in key_path.split("."):
@@ -821,6 +888,11 @@ def _welch_test(per_step_a, per_step_b, key):
     if len(a) < min_samples or len(b) < min_samples:
         return None
     t_stat, p_value = sp_stats.ttest_ind(a, b, equal_var=False)
+    # Two runs that each reported one constant value leave the test undefined
+    # and scipy says so with a nan. Report it as no test rather than let the
+    # callers print "p=nan" as though it were a result.
+    if not math.isfinite(p_value):
+        return None
     # Cohen's d (pooled)
     na, nb = len(a), len(b)
     va = statistics.variance(a)
@@ -841,6 +913,33 @@ def _fmt_welch(per_step_a, per_step_b, key):
     return f" {p_fmt:>10} {d_val:>+10.3f}"
 
 
+# Config differences that make a before/after number mean something other than
+# what it looks like. Two runs that disagree on any of these are measuring
+# different work, so the delta between them is not a speedup.
+_COMPARABILITY_CHECKS = (
+    ("config.speculator_type", "Speculator type"),
+    ("config.hidden_size", "Hidden size"),
+    ("config.total_seq_len", "Sequence length"),
+    ("config.num_gpus_used", "GPU count"),
+    ("config.fsdp_shard", "FSDP shard"),
+    ("config.optimizer", "Optimizer"),
+    ("config.hidden_states_dtype", "Dtype"),
+)
+
+
+def _comparability_warnings(baseline, candidate) -> list[tuple[str, str, str]]:
+    """(label, baseline value, candidate value) for each disagreement."""
+    found = [
+        (label, _nested_get(baseline, key_path), _nested_get(candidate, key_path))
+        for key_path, label in _COMPARABILITY_CHECKS
+        if _nested_get(baseline, key_path) != _nested_get(candidate, key_path)
+    ]
+    gpu_a, gpu_b = _get_gpu_name(baseline), _get_gpu_name(candidate)
+    if gpu_a != gpu_b:
+        found.append(("GPU", gpu_a, gpu_b))
+    return found
+
+
 def compare_benchmarks(baseline_path: str, candidate_path: str) -> None:
     """Load two result files and print a comparison table."""
     with open(baseline_path) as f:
@@ -858,31 +957,11 @@ def compare_benchmarks(baseline_path: str, candidate_path: str) -> None:
         )
 
     # --- Comparability warnings ---
-    comparability_checks = [
-        ("config.speculator_type", "Speculator type"),
-        ("config.hidden_size", "Hidden size"),
-        ("config.total_seq_len", "Sequence length"),
-        ("config.num_gpus_used", "GPU count"),
-        ("config.fsdp_shard", "FSDP shard"),
-        ("config.optimizer", "Optimizer"),
-        ("config.hidden_states_dtype", "Dtype"),
-    ]
-    warnings_found = False
-    for key_path, label in comparability_checks:
-        val_a = _nested_get(baseline, key_path)
-        val_b = _nested_get(candidate, key_path)
-        if val_a != val_b:
-            if not warnings_found:
-                print("COMPARABILITY WARNINGS:")
-                warnings_found = True
+    warnings_found = _comparability_warnings(baseline, candidate)
+    if warnings_found:
+        print("COMPARABILITY WARNINGS:")
+        for label, val_a, val_b in warnings_found:
             print(f"  {label}: {val_a} vs {val_b}")
-
-    gpu_a = _get_gpu_name(baseline)
-    gpu_b = _get_gpu_name(candidate)
-    if gpu_a != gpu_b:
-        if not warnings_found:
-            print("COMPARABILITY WARNINGS:")
-        print(f"  GPU: {gpu_a} vs {gpu_b}")
 
     # --- Header ---
     sha_a = baseline.get("provenance", {}).get("git_sha", "unknown")[:12]
@@ -1481,6 +1560,411 @@ def _kernel_name_cell(name: str) -> str:
     )
 
 
+# ---------------------------------------------------------------------------
+# GitHub PR comment
+# ---------------------------------------------------------------------------
+
+# A CI job finds its own previous comment by this marker and edits it in place,
+# rather than stacking a new comment on every push.
+COMMENT_MARKER_ID = "speculators-benchmark"
+# Kernel rows in the comment. Fewer than the HTML report: a PR comment is read
+# in a scroll, and GitHub hard-truncates very long ones.
+COMMENT_KERNEL_N = 8
+
+
+def _marker_label(label: str) -> str:
+    """The label reduced to what is safe inside an HTML comment and a grep.
+
+    A label is free text from whoever set up the job, and ``-->`` in it would
+    close the marker early -- leaving the rest of it as visible text and the
+    comment unfindable on the next run.
+    """
+    return re.sub(r"[^A-Za-z0-9._]+", "-", label).strip("-") or "unlabeled"
+
+
+def _comment_marker(label: str | None = None) -> str:
+    """The hidden marker a job greps for to find the comment it should update."""
+    suffix = f":{_marker_label(label)}" if label else ""
+    return f"<!-- {COMMENT_MARKER_ID}{suffix} -->"
+
+
+def _md_code(value) -> str:
+    """A value as a code span, where markdown renders it as literal text.
+
+    This is what keeps the paths, hostnames and model names out of the result
+    file from being read as markup. A backtick in the value would close the
+    span early and let the rest back out, so it is the one character that
+    cannot be carried through as written.
+    """
+    text = str(value).replace("`", "'")
+    return f"`{text}`"
+
+
+# Changes smaller than this are reported without a win/loss marker. A green
+# tick on a 0.5% move reads as a result when it is run-to-run noise.
+MD_NEUTRAL_PCT = 1.0
+
+
+def _md_delta(before: float, after: float, *, lower_is_better=True) -> str:
+    """Signed percentage change, marked when it is big enough to mean anything."""
+    if not before:
+        return "n/a"
+    pct = (after - before) / before * 100
+    if abs(pct) < MD_NEUTRAL_PCT:
+        return f"{pct:+.1f}%"
+    improved = (pct < 0) if lower_is_better else (pct > 0)
+    return f"{'✅' if improved else '🔴'} **{pct:+.1f}%**"
+
+
+def _md_significance(per_step_a, per_step_b, key: str) -> str:
+    """Welch p-value and Cohen's d as a compact cell."""
+    result = _welch_test(per_step_a, per_step_b, key)
+    if not result:
+        return "—"
+    _, p_val, d_val = result
+    p_txt = "p<0.001" if p_val < 0.001 else f"p={p_val:.3f}"  # noqa: PLR2004
+    return f"{p_txt}, d={d_val:+.1f}"
+
+
+def _comment_timing_table(base: dict, cand: dict | None) -> list[str]:
+    """Timing table: before/after with significance, or a single-run summary.
+
+    The rows are whatever the run reported rather than a list kept here, so a
+    timing mark added to the trainer reaches the comment without this having to
+    learn its name.
+    """
+    if cand is None:
+        lines = [
+            "| Metric | Mean | 95% CI | Std |",
+            "|---|--:|:-:|--:|",
+        ]
+        for key, stats in base["timing"].items():
+            ci = f"[{stats['ci95_lower']:.2f}, {stats['ci95_upper']:.2f}]"
+            lines.append(
+                f"| `{key}` | {stats['mean']:.2f} | {ci} | {stats['std']:.2f} |"
+            )
+        return lines
+
+    per_a = base.get("per_step", [])
+    per_b = cand.get("per_step", [])
+    lines = [
+        "| Metric | Before | After | Change | Significance |",
+        "|---|--:|--:|--:|:-:|",
+    ]
+    for key, sa in base["timing"].items():
+        sb = cand["timing"].get(key)
+        if not sb:
+            continue
+        # Throughput is the one metric where up is the win.
+        lower_better = key != "tokens_per_s"
+        lines.append(
+            f"| `{key}` | {sa['mean']:,.1f} | {sb['mean']:,.1f} |"
+            f" {_md_delta(sa['mean'], sb['mean'], lower_is_better=lower_better)} |"
+            f" {_md_significance(per_a, per_b, key)} |"
+        )
+    return lines
+
+
+# Appended to every kernel table: the reason these numbers can be trusted even
+# though the wall-clock timings from the same run cannot.
+_KERNEL_CAVEAT = (
+    "Device-side durations, so the synchronisation `--profile` adds does not "
+    "distort them."
+)
+
+
+def _comment_kernel_lines(base: dict, cand: dict | None) -> list[str]:
+    """Kernel section: a before/after diff table, or a single-run table and pie.
+
+    A diff needs the numbers side by side, and a pie of one of the two sides
+    would only invite reading the wrong one. With a single run there is no such
+    ambiguity and the mix is the whole point, so the pie comes back.
+    """
+    rows = _kernel_diff_rows(base, cand) if cand else []
+    if rows:
+        total_a = base["kernels"].get("total_device_ms_per_step", 0)
+        total_b = cand["kernels"].get("total_device_ms_per_step", 0)
+        return [
+            "",
+            "### GPU kernel time (ms/step, self time)",
+            "",
+            "| Kernel | Before | After | Change |",
+            "|---|--:|--:|--:|",
+            *[
+                f"| `{_short_kernel_name(name, 44)}` | {a:.2f} | {b:.2f} |"
+                f" {_md_delta(a, b)} |"
+                for name, a, b in rows[:COMMENT_KERNEL_N]
+            ],
+            (
+                f"| **Total device time** | **{total_a:.2f}** | **{total_b:.2f}** |"
+                f" {_md_delta(total_a, total_b)} |"
+            ),
+            "",
+            f"<sub>Ranked by absolute change. {_KERNEL_CAVEAT}</sub>",
+        ]
+
+    # No baseline to diff against: show where the time goes in the one run.
+    kernels = base.get("kernels") if cand is None else None
+    if not kernels or not kernels.get("kernels"):
+        return []
+    total = kernels.get("total_device_ms_per_step", 0)
+    return [
+        "",
+        f"### GPU kernel time — {total:.1f} ms/step total",
+        "",
+        "| Kernel | ms/step | % GPU | calls/step |",
+        "|---|--:|--:|--:|",
+        *[
+            f"| `{_short_kernel_name(k['name'], 44)}` | {k['ms_per_step']:.2f} |"
+            f" {(k['ms_per_step'] / total * 100 if total else 0):.1f}% |"
+            f" {k['calls_per_step']:.1f} |"
+            for k in kernels["kernels"][:COMMENT_KERNEL_N]
+        ],
+        "",
+        f"<sub>{_KERNEL_CAVEAT}</sub>",
+        "",
+        *_mermaid_pie(kernels),
+    ]
+
+
+def _mermaid_pie(kernels: dict) -> list[str]:
+    """Kernel mix as a mermaid pie, the chart dialect GitHub renders natively.
+
+    Capped at ``COMMENT_KERNEL_N`` slices on top of the percentage floor: after
+    a large win the surviving kernels bunch up just over the threshold, and a
+    dozen near-equal wedges say nothing.
+    """
+    total = kernels.get("total_device_ms_per_step", 0) or 1.0
+    slices: list[tuple[str, float]] = []
+    tail_ms = 0.0
+    tail_n = 0
+    for k in kernels["kernels"]:
+        over_floor = k["ms_per_step"] / total * 100 >= KERNEL_PIE_MIN_PCT
+        if over_floor and len(slices) < COMMENT_KERNEL_N:
+            # Mermaid delimits labels with double quotes and offers no escape.
+            slices.append(
+                (_short_kernel_name(k["name"], 40).replace('"', "'"), k["ms_per_step"])
+            )
+        else:
+            tail_ms += k["ms_per_step"]
+            tail_n += 1
+    if tail_n:
+        slices.append((f"Other ({tail_n} kernels)", tail_ms))
+
+    # Mermaid sums same-named wedges just as plotly does, and elision can
+    # collide two cuBLAS kernels onto one label.
+    labels = _unique_labels([label for label, _ in slices])
+    return [
+        "```mermaid",
+        "pie showData",
+        f"    title Device time per kernel — {total:.1f} ms/step",
+        *[
+            f'    "{label}" : {ms:.2f}'
+            for label, (_, ms) in zip(labels, slices, strict=True)
+        ],
+        "```",
+    ]
+
+
+def _comment_provenance(base: dict, cand: dict | None) -> list[str]:
+    """Collapsed provenance: the commands, the environment, the config."""
+    prov = (cand or base).get("provenance", {})
+    cfg = (cand or base).get("config", {})
+
+    commands = []
+    for label, result in (("Before", base), ("After", cand)):
+        cmd = (result or {}).get("provenance", {}).get("command")
+        if cmd:
+            prefix = f"# {label}\n" if cand else ""
+            commands.append(f"{prefix}{cmd}")
+    cmd_block = ["**Command**", "", "```bash", *commands, "```", ""] if commands else []
+
+    env = [
+        ("commit", _md_code(prov.get("git_sha", "unknown")[:12])),
+        (
+            "GPU",
+            _md_code(f"{cfg.get('num_gpus_used', 1)} x {_get_gpu_name(cand or base)}"),
+        ),
+        ("torch", _md_code(prov.get("pytorch_version", "?"))),
+        ("CUDA", _md_code(prov.get("cuda_version", "?"))),
+        ("transformers", _md_code(prov.get("transformers_version", "?"))),
+        ("speculators", _md_code(prov.get("speculators_version", "?"))),
+        ("host", _md_code(prov.get("hostname", "?"))),
+        (
+            "run at",
+            _md_code(prov.get("timestamp", "?")[:19].replace("T", " ") + " UTC"),
+        ),
+    ]
+    if cand:
+        sha_a = base.get("provenance", {}).get("git_sha", "unknown")[:12]
+        sha_b = prov.get("git_sha", "unknown")[:12]
+        if sha_a != sha_b:
+            env[0] = ("commit", f"{_md_code(sha_a)} → {_md_code(sha_b)}")
+
+    cfg_keys = (
+        "speculator_type",
+        "verifier_name_or_path",
+        "total_seq_len",
+        "hidden_size",
+        "optimizer",
+        "lr",
+        "hidden_states_dtype",
+        "synthetic_data",
+        "fsdp_shard",
+        "warmup_steps",
+        "measured_steps",
+        "seed",
+    )
+    return [
+        "",
+        "<details>",
+        "<summary>Provenance</summary>",
+        "",
+        *cmd_block,
+        "**Environment**",
+        "",
+        "| | |",
+        "|---|---|",
+        *[f"| {k} | {v} |" for k, v in env],
+        "",
+        "**Config**",
+        "",
+        "| | |",
+        "|---|---|",
+        *[f"| {k} | {_md_code(cfg[k])} |" for k in cfg_keys if k in cfg],
+        "",
+        "</details>",
+    ]
+
+
+def _peak_allocated_mb(result: dict) -> tuple[float, str]:
+    """Peak allocated memory and the scope that one number covers.
+
+    torch reports a peak per rank; the one a comment should carry is the worst
+    of them, since that is the rank that decides whether the run fits. Which
+    rank it came from is said out loud rather than left to be assumed run-wide.
+    """
+    per_rank = result["memory"]["per_rank"]
+    peak = max(r["peak_allocated_mb"] for r in per_rank)
+    scope = "rank 0" if len(per_rank) == 1 else f"max over {len(per_rank)} ranks"
+    return peak, scope
+
+
+def build_comment(base: dict, cand: dict | None, label: str | None = None) -> str:
+    """Render benchmark results as markdown for a GitHub PR comment.
+
+    GitHub strips scripts, so the interactive report cannot be embedded; this
+    emits the same findings in what a comment does render -- tables and a
+    collapsed provenance block.
+
+    ``label`` names the variant. Config and commit are identical whenever the
+    thing being measured is an uncommitted patch, so without it two comments on
+    the same PR are indistinguishable. It also scopes the marker, giving each
+    variant its own comment to update instead of one they fight over.
+    """
+    cfg = (cand or base).get("config", {})
+    # Heading text comes from the result file and GitHub renders inline HTML in
+    # a comment, so it is escaped rather than trusted the way the structural
+    # markup below is.
+    title = " · ".join(
+        html_escape(str(part))
+        for part in (
+            (
+                f"{cfg.get('speculator_type', '?')} / "
+                f"{cfg.get('verifier_name_or_path', '?')}"
+            ),
+            f"seq_len {cfg.get('total_seq_len', '?')}",
+            f"{cfg.get('num_gpus_used', 1)}x {_get_gpu_name(cand or base)}",
+        )
+    )
+    named = f" — {html_escape(label)}" if label else ""
+    lines = [
+        _comment_marker(label),
+        f"## Training benchmark{named}: {title}",
+        "",
+    ]
+
+    # Before the headline, because the headline is the part that misleads: a
+    # run against half the sequence length is "2x faster" and looks like a win.
+    mismatches = _comparability_warnings(base, cand) if cand else []
+    if mismatches:
+        lines += [
+            "> [!WARNING]",
+            "> These runs measure different work, so the deltas below are not",
+            "> a speedup:",
+            *[f"> - {label_}: `{a}` vs `{b}`" for label_, a, b in mismatches],
+            "",
+        ]
+
+    if cand:
+        before = base["timing"]["step_ms"]["mean"]
+        after = cand["timing"]["step_ms"]["mean"]
+        tps_a = base["timing"]["tokens_per_s"]["mean"]
+        tps_b = cand["timing"]["tokens_per_s"]["mean"]
+        ratio = before / after if after else 0.0
+        faster = ratio >= 1
+        factor = ratio if faster else (1 / ratio if ratio else 0)
+        lines.append(
+            f"### {'⚡' if faster else '⚠️'} "
+            f"{factor:.2f}× {'faster' if faster else 'slower'} — "
+            f"{before:,.1f} → {after:,.1f} ms/step, "
+            f"{tps_a:,.0f} → {tps_b:,.0f} tok/s"
+        )
+    else:
+        step = base["timing"]["step_ms"]["mean"]
+        tps = base["timing"]["tokens_per_s"]["mean"]
+        lines.append(f"### {step:,.1f} ms/step · {tps:,.0f} tok/s")
+    lines.append("")
+
+    lines += _comment_timing_table(base, cand)
+
+    mem_a, scope = _peak_allocated_mb(base)
+    if cand:
+        mem_b, scope = _peak_allocated_mb(cand)
+        lines += [
+            "",
+            (
+                f"Peak allocated ({scope}): {mem_a:,.0f} → {mem_b:,.0f} MB "
+                f"({_md_delta(mem_a, mem_b)})"
+            ),
+        ]
+    else:
+        lines += ["", f"Peak allocated ({scope}): {mem_a:,.0f} MB"]
+
+    lines += _comment_kernel_lines(base, cand)
+    lines += _comment_provenance(base, cand)
+    # The comment is itself an artifact, and a reader who wants to regenerate
+    # or re-post it should not have to guess which invocation produced it.
+    lines += ["", f"<sub>Generated by {_md_code(_invocation())}</sub>"]
+    return "\n".join(lines) + "\n"
+
+
+def comment_benchmark(
+    result_path: str,
+    baseline_path: str | None,
+    output_path: str | None,
+    label: str | None = None,
+) -> None:
+    """Write (or print) the PR-comment markdown for one or two result files."""
+    cand_or_base = _load_result(result_path)
+    base = cand_or_base
+    cand = None
+    if baseline_path:
+        base = _load_result(baseline_path)
+        cand = cand_or_base
+
+    text = build_comment(base, cand, label)
+    if output_path:
+        Path(output_path).write_text(text)
+        print(f"Comment markdown written to {output_path}", file=sys.stderr)
+        print(
+            f"Post it with:  gh pr comment <N> --body-file {output_path}",
+            file=sys.stderr,
+        )
+    else:
+        print(text)
+
+
 def _section_html(title: str, sub: str, fig, height: int, *, with_js=False) -> str:
     """One report section: heading, a line of key data, then its chart.
 
@@ -1577,16 +2061,7 @@ def report_benchmark(result_path: str, output_path: str | None = None) -> None:
         print("plotly is required: pip install plotly", file=sys.stderr)
         sys.exit(1)
 
-    with open(result_path) as f:
-        results = json.load(f)
-
-    version = results.get("benchmark_version")
-    if version != BENCHMARK_VERSION:
-        raise SystemExit(
-            f"Incompatible benchmark version: the file reports {version}, this "
-            f"script reads {BENCHMARK_VERSION}. Re-run the benchmark with this "
-            "version of the script to report on it."
-        )
+    results = _load_result(result_path)
 
     per_step = results.get("per_step")
     if not per_step:
@@ -1787,6 +2262,34 @@ def build_parser():
         help="Output HTML path. Default: <result>_report.html.",
     )
 
+    # --- comment ---
+    comment_parser = subparsers.add_parser(
+        "comment", help="Render results as markdown for a GitHub PR comment"
+    )
+    comment_parser.add_argument("result", help="Path to benchmark result JSON.")
+    comment_parser.add_argument(
+        "--baseline",
+        type=str,
+        default=None,
+        help="Baseline result JSON. Given, the comment becomes a before/after.",
+    )
+    comment_parser.add_argument(
+        "--output",
+        type=str,
+        default=None,
+        help="Write markdown here instead of stdout.",
+    )
+    comment_parser.add_argument(
+        "--label",
+        type=str,
+        default=None,
+        help=(
+            "Name for this variant, shown in the heading. Needed to tell apart "
+            "several comments on one PR, whose config and commit are otherwise "
+            "identical; also scopes the marker so each gets its own comment."
+        ),
+    )
+
     return parser
 
 
@@ -1811,6 +2314,15 @@ def main():
 
     if bench_args.command == "report":
         report_benchmark(bench_args.result, bench_args.output)
+        return
+
+    if bench_args.command == "comment":
+        comment_benchmark(
+            bench_args.result,
+            bench_args.baseline,
+            bench_args.output,
+            bench_args.label,
+        )
         return
 
     # --- run command ---
