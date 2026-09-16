@@ -6,6 +6,8 @@ import os
 import shlex
 import sys
 import warnings
+from importlib.metadata import PackageNotFoundError
+from importlib.metadata import version as package_version
 from pathlib import Path
 
 from _provenance import (
@@ -17,6 +19,7 @@ from _provenance import (
 from _provenance import (
     git_sha as _git_sha,
 )
+from packaging.version import InvalidVersion, Version
 
 try:
     from hs_connectors import HiddenStatesBackend
@@ -68,6 +71,7 @@ WORKERS_PER_API_SERVER = 4
 CPUS_PER_API_SERVER = 4
 MAX_PREPROCESSING_WORKERS = 128
 EFFECTIVE_CPUS_PER_PREPROCESSING_WORKER = 4
+VLLM_SCALE_OUT_VERSION_BOUNDARY = (0, 29, 1)
 
 # The vLLM API-server processes each create their own native thread pools.
 # Keep those pools bounded by default; explicit environment settings still
@@ -118,19 +122,9 @@ def render_throughput_defaults(cpus: int | None = None) -> tuple[int, int]:
 def _vllm_supports_scale_out_flag() -> bool:
     """Return whether the installed vLLM accepts ``--enable-scale-out``."""
     try:
-        from dataclasses import fields  # noqa: PLC0415
-
-        from vllm.entrypoints.launchers.cli_args import (  # noqa: PLC0415
-            SharedRuntimeArgs,
-        )
-    except ImportError:
-        return False
-
-    try:
-        return any(
-            field.name == "enable_scale_out" for field in fields(SharedRuntimeArgs)
-        )
-    except TypeError:
+        vllm_version = package_version("vllm")
+        return Version(vllm_version).release > VLLM_SCALE_OUT_VERSION_BOUNDARY
+    except (InvalidVersion, PackageNotFoundError):
         return False
 
 

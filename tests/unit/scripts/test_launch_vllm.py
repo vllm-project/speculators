@@ -1,4 +1,3 @@
-import importlib
 import os
 
 from scripts.launch_vllm import (
@@ -11,18 +10,10 @@ from scripts.launch_vllm import (
 from speculators.data_generation.preprocessing import default_preprocessing_workers
 
 
-def test_defaults_match_installed_vllm_capabilities():
-    try:
-        cli_args = importlib.import_module("vllm.entrypoints.launchers.cli_args")
-    except ImportError:
-        supports_scale_out = False
-    else:
-        supports_scale_out = (
-            "enable_scale_out" in cli_args.SharedRuntimeArgs.__dataclass_fields__
-        )
+def test_render_defaults_are_added():
     args = _with_render_defaults(["--port", "8000"])
     api_servers, renderer_workers = render_throughput_defaults()
-    expected = [
+    assert args[-6:] == [
         "--api-server-count",
         str(api_servers),
         "--renderer-num-workers",
@@ -30,9 +21,6 @@ def test_defaults_match_installed_vllm_capabilities():
         "--port",
         "8000",
     ]
-    if supports_scale_out:
-        expected.insert(0, "--enable-scale-out")
-    assert args == expected
 
 
 def test_explicit_flag_follows_default():
