@@ -1,6 +1,5 @@
 import json
 from pathlib import Path
-from typing import Any
 
 import torch
 from huggingface_hub import hf_hub_download
@@ -13,6 +12,11 @@ _WEIGHT_ALIASES: dict[str, list[str]] = {
     "lm_head.weight": ["output.weight", "llm.unembed.weight"],
     "model.norm.weight": ["llm.norm.weight", "norm.weight"],
 }
+
+_WEIGHT_SCALE_SUFFIXES: tuple[tuple[str, bool], ...] = (
+    ("_scale", False),
+    ("_scale_inv", True),
+)
 
 
 def _resolve_key(name: str, weight_map: dict[str, str]) -> str | None:
@@ -27,6 +31,97 @@ def _resolve_key(name: str, weight_map: dict[str, str]) -> str | None:
         if matches:
             return min(matches, key=len)
     return None
+
+
+def _resolve_weight_scale_key(
+    weight_key: str, weight_map: dict[str, str]
+) -> tuple[str, bool] | None:
+    """Return a companion quantization-scale key and whether it is inverse.
+
+    Compressed safetensors checkpoints commonly store a quantized tensor such as
+    ``lm_head.weight`` alongside either ``lm_head.weight_scale`` or
+    ``lm_head.weight_scale_inv``.  The scale can live in a different shard from
+    the weight, so resolution must happen against the complete weight map.
+    """
+    for suffix, inverse in _WEIGHT_SCALE_SUFFIXES:
+        scale_key = f"{weight_key}{suffix}"
+        if scale_key in weight_map:
+            return scale_key, inverse
+    return None
+
+
+def _dequantize_with_scale(
+    weight: torch.Tensor,
+    scale: torch.Tensor,
+    *,
+    inverse_scale: bool,
+    tensor_name: str,
+) -> torch.Tensor:
+    """Apply a broadcastable per-tensor or per-output-channel weight scale.
+
+    Block-quantized and packed layouts require format-specific unpacking.  They
+    are rejected explicitly so callers never mistake raw quantized values for
+    usable model weights.
+    """
+    if scale.ndim == 1 and weight.ndim > 1 and scale.shape[0] == weight.shape[0]:
+        scale = scale.reshape(scale.shape[0], *([1] * (weight.ndim - 1)))
+
+    try:
+        broadcast_shape = torch.broadcast_shapes(weight.shape, scale.shape)
+    except RuntimeError as exc:
+        raise ValueError(
+            f"Unsupported quantization scale shape for '{tensor_name}': "
+            f"weight shape {tuple(weight.shape)}, scale shape {tuple(scale.shape)}."
+        ) from exc
+
+    if broadcast_shape != weight.shape:
+        raise ValueError(
+            f"Unsupported quantization scale shape for '{tensor_name}': "
+            f"weight shape {tuple(weight.shape)}, scale shape {tuple(scale.shape)} "
+            f"broadcast to {tuple(broadcast_shape)}."
+        )
+
+    # Scale tensors are normally BF16 or FP32.  Preserve that dtype to avoid
+    # materializing a multi-gigabyte FP32 LM head when the destination is BF16.
+    output_dtype = scale.dtype if scale.is_floating_point() else torch.float32
+    dequantized = weight.to(dtype=output_dtype)
+    scale = scale.to(dtype=output_dtype)
+    if inverse_scale:
+        return dequantized / scale
+    return dequantized * scale
+
+
+def _apply_companion_weight_scales(
+    tensors: dict[str, torch.Tensor],
+    name_to_key: dict[str, str],
+    weight_map: dict[str, str],
+    model_path: str,
+) -> None:
+    """Apply any companion scales, including scales stored in other shards."""
+    scale_shard_to_names: dict[str, list[tuple[str, str, bool]]] = {}
+    for name, key in name_to_key.items():
+        resolved_scale = _resolve_weight_scale_key(key, weight_map)
+        if resolved_scale is None:
+            continue
+        scale_key, inverse_scale = resolved_scale
+        scale_shard_to_names.setdefault(weight_map[scale_key], []).append(
+            (name, scale_key, inverse_scale)
+        )
+
+    for shard_file, scale_entries in scale_shard_to_names.items():
+        shard_path = _resolve_file(model_path, shard_file)
+        with safe_open(shard_path, framework="pt", device="cpu") as f:
+            for name, scale_key, inverse_scale in scale_entries:
+                key = name_to_key[name]
+                tensors[name] = _dequantize_with_scale(
+                    tensors[name],
+                    f.get_tensor(scale_key),
+                    inverse_scale=inverse_scale,
+                    tensor_name=key,
+                )
+                logger.info(
+                    "Dequantized '{}' using companion scale '{}'.", key, scale_key
+                )
 
 
 def is_config_only_dir(path: str | Path) -> bool:
@@ -130,12 +225,14 @@ def load_model_layers(
         raise ValueError("None of the requested tensor names were found in the index.")
 
     # fetch each required shard and extract only the requested tensors
-    out: dict[str, Any] = {}
+    out: dict[str, torch.Tensor] = {}
     for shard_file, name_key_pairs in shard_to_names.items():
         shard_path = _resolve_file(model_path, shard_file)
         with safe_open(shard_path, framework="pt", device="cpu") as f:
             for name, key in name_key_pairs:
                 out[name] = f.get_tensor(key)
+
+    _apply_companion_weight_scales(out, name_to_key, weight_map, model_path)
     return out
 
 

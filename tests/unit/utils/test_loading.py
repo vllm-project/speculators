@@ -2,8 +2,11 @@
 Unit tests for the loading module in the Speculators library.
 """
 
+import json
+
 import pytest
 import torch
+from safetensors.torch import save_file
 from transformers import AutoModelForCausalLM
 
 from speculators.utils.loading import (
@@ -243,3 +246,51 @@ def test_load_model_layers_matches_full_model():
         assert torch.equal(util_tensor, model_tensor), (
             f"Tensor values don't match for {layer_name}"
         )
+
+
+@pytest.mark.smoke
+def test_load_model_layers_dequantizes_scaled_weight_across_shards(tmp_path):
+    """A quantized LM head must be returned with its companion scale applied."""
+    raw_weight = torch.tensor(
+        [[100.0, -50.0, 25.0], [20.0, -10.0, 5.0]],
+        dtype=torch.float8_e4m3fn,
+    )
+    weight_scale = torch.tensor([[0.01], [0.02]], dtype=torch.bfloat16)
+
+    weight_shard = "model-00001-of-00002.safetensors"
+    scale_shard = "model-00002-of-00002.safetensors"
+    save_file({"lm_head.weight": raw_weight}, tmp_path / weight_shard)
+    save_file({"lm_head.weight_scale": weight_scale}, tmp_path / scale_shard)
+    (tmp_path / "model.safetensors.index.json").write_text(
+        json.dumps(
+            {
+                "weight_map": {
+                    "lm_head.weight": weight_shard,
+                    "lm_head.weight_scale": scale_shard,
+                }
+            }
+        )
+    )
+
+    result = load_model_layers(["lm_head.weight"], str(tmp_path))
+
+    expected = raw_weight.to(torch.bfloat16) * weight_scale
+    assert result["lm_head.weight"].dtype == torch.bfloat16
+    assert torch.equal(result["lm_head.weight"], expected)
+
+
+@pytest.mark.smoke
+def test_load_model_layers_rejects_unsupported_scale_layout(tmp_path):
+    """Never silently return raw values for an unsupported quantized layout."""
+    raw_weight = torch.ones((4, 4), dtype=torch.float8_e4m3fn)
+    block_scale = torch.ones((2, 2), dtype=torch.bfloat16)
+    save_file(
+        {
+            "lm_head.weight": raw_weight,
+            "lm_head.weight_scale": block_scale,
+        },
+        tmp_path / "model.safetensors",
+    )
+
+    with pytest.raises(ValueError, match="Unsupported quantization scale shape"):
+        load_model_layers(["lm_head.weight"], str(tmp_path))
