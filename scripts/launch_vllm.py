@@ -19,7 +19,6 @@ from _provenance import (
 from _provenance import (
     git_sha as _git_sha,
 )
-from packaging.version import InvalidVersion, Version
 
 try:
     from hs_connectors import HiddenStatesBackend
@@ -121,6 +120,8 @@ def render_throughput_defaults(cpus: int | None = None) -> tuple[int, int]:
 
 def _vllm_supports_scale_out_flag() -> bool:
     """Return whether the installed vLLM accepts ``--enable-scale-out``."""
+    from packaging.version import InvalidVersion, Version  # noqa: PLC0415
+
     try:
         vllm_version = package_version("vllm")
         return Version(vllm_version).release > VLLM_SCALE_OUT_VERSION_BOUNDARY
