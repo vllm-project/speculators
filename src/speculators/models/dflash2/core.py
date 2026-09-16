@@ -144,6 +144,7 @@ class DFlash2DraftModel(DFlashDraftModel):
         selector_loss_alpha: float = 1.0,
         per_position_loss_weight: str = "fixed-exp-decay",
         dpace_alpha: float = 0.5,
+        loss_step: torch.Tensor | None = None,
         **kwargs,
     ) -> tuple[None, torch.Tensor, dict[str, Any]]:
         hidden, unary_logits, targets, aligned_loss_mask, block_indices = (
@@ -191,5 +192,6 @@ class DFlash2DraftModel(DFlashDraftModel):
             selector_loss_alpha=selector_loss_alpha,
             per_position_loss_weight=per_position_loss_weight,
             dpace_alpha=dpace_alpha,
+            loss_step=loss_step,
         )
         return None, loss, metrics

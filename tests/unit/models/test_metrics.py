@@ -7,6 +7,9 @@ import torch
 
 from speculators import losses
 from speculators.losses import (
+    LinearWeightSchedule,
+    LossConfig,
+    compound_loss,
     dflash_loss_decay,
     exp_loss_decay,
     loss_function,
@@ -100,6 +103,67 @@ class TestLossFunction:
         elementwise = kl_div_loss(logits, targets)
         expected = (elementwise * loss_mask).sum() / (loss_mask.sum() + 1e-5)
         assert torch.isclose(result, expected)
+
+
+class TestScheduledLossWeights:
+    def test_resolve_direct_schedule_mapping(self):
+        config = resolve_loss_config(
+            '{"ce": 0.1, "tv": {"type": "linear", "start": 0.9, '
+            '"end": 0.2, "start_step": 10, "end_step": 20}}',
+            "eager",
+        )
+
+        assert config["ce"][1] == 0.1
+        assert config["tv"][1] == LinearWeightSchedule(
+            start=0.9, end=0.2, start_step=10, end_step=20
+        )
+
+    def test_schedule_is_clamped_and_applied_by_compound_loss(self):
+        def unit_loss(logits: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
+            return torch.ones(logits.shape[:2], device=logits.device)
+
+        config: LossConfig = {
+            "tv": (
+                unit_loss,
+                LinearWeightSchedule(start=0.9, end=0.1, start_step=2, end_step=6),
+            )
+        }
+        logits = torch.zeros(1, 4, 2)
+        targets = torch.zeros_like(logits)
+        loss_mask = torch.ones(1, 4)
+        pos_idx = torch.zeros(1, 4, dtype=torch.long)
+
+        losses_at_steps = [
+            compound_loss(
+                logits,
+                targets,
+                loss_mask,
+                pos_idx,
+                loss_config=config,
+                loss_step=torch.tensor(step),
+            )[0]
+            for step in (0, 4, 8)
+        ]
+
+        assert [loss.item() for loss in losses_at_steps] == pytest.approx(
+            [0.9, 0.5, 0.1], abs=3e-6
+        )
+
+    def test_scheduled_weight_requires_step(self):
+        config: LossConfig = {
+            "tv": (
+                tv_loss,
+                LinearWeightSchedule(start=1.0, end=0.0, start_step=0, end_step=1),
+            )
+        }
+        with pytest.raises(ValueError, match="no loss_step"):
+            compound_loss(
+                torch.zeros(1, 2, 3),
+                torch.zeros(1, 2, 3),
+                torch.ones(1, 2),
+                torch.zeros(1, 2, dtype=torch.long),
+                loss_config=config,
+            )
 
 
 class TestKLDivLoss:
