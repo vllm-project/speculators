@@ -6,8 +6,6 @@ import os
 import shlex
 import sys
 import warnings
-from importlib.metadata import PackageNotFoundError
-from importlib.metadata import version as package_version
 from pathlib import Path
 
 from _provenance import (
@@ -120,13 +118,14 @@ def render_throughput_defaults(cpus: int | None = None) -> tuple[int, int]:
 
 def _vllm_supports_scale_out_flag() -> bool:
     """Return whether the installed vLLM accepts ``--enable-scale-out``."""
-    from packaging.version import InvalidVersion, Version  # noqa: PLC0415
-
     try:
-        vllm_version = package_version("vllm")
-        return Version(vllm_version).release > VLLM_SCALE_OUT_VERSION_BOUNDARY
-    except (InvalidVersion, PackageNotFoundError):
+        from vllm import __version_tuple__  # noqa: PLC0415
+
+        release = tuple(int(part) for part in __version_tuple__[:3])
+    except (ImportError, AttributeError, TypeError, ValueError):
         return False
+
+    return release > VLLM_SCALE_OUT_VERSION_BOUNDARY
 
 
 def _with_render_defaults(vllm_args: list[str]) -> list[str]:
