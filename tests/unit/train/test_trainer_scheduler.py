@@ -47,7 +47,8 @@ def test_scheduled_loss_step_uses_restored_global_step():
     assert trainer.loss_step is not None
     assert trainer.loss_step.item() == 7
     assert train_kwargs["loss_step"] is trainer.loss_step
-    assert val_kwargs["loss_step"] is trainer.loss_step
+    assert val_kwargs["loss_config"]["tv"][1] == 0.0
+    assert "loss_step" not in val_kwargs
 
 
 def test_scheduler_steps_default_to_one_percent_of_training_steps():
