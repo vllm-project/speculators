@@ -1,6 +1,5 @@
+import importlib
 import os
-import subprocess
-import sys
 
 from scripts.launch_vllm import (
     DEFAULT_RENDERER_NUM_WORKERS,
@@ -12,21 +11,15 @@ from scripts.launch_vllm import (
 from speculators.data_generation.preprocessing import default_preprocessing_workers
 
 
-def test_defaults_match_installed_vllm_cli():
-    result = subprocess.run(
-        [
-            sys.executable,
-            "-m",
-            "vllm.entrypoints.cli.main",
-            "serve",
-            "--help",
-        ],
-        check=True,
-        capture_output=True,
-        text=True,
-        timeout=60,
-    )
-    supports_scale_out = "--enable-scale-out" in (result.stdout + result.stderr)
+def test_defaults_match_installed_vllm_capabilities():
+    try:
+        cli_args = importlib.import_module("vllm.entrypoints.launchers.cli_args")
+    except ImportError:
+        supports_scale_out = False
+    else:
+        supports_scale_out = (
+            "enable_scale_out" in cli_args.SharedRuntimeArgs.__dataclass_fields__
+        )
     args = _with_render_defaults(["--port", "8000"])
     api_servers, renderer_workers = render_throughput_defaults()
     expected = [
