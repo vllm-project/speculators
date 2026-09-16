@@ -262,7 +262,6 @@ select = [
 "src/speculators/convert/**/*.py" = [
     "BLE001", # allow catching Exception for conversion errors
 ]
-
 "src/speculators/data_generation/**/*.py" = [
     "S106", # false positives for chat template tokens
     "S324", # MD5 is used for cache keys, not security
@@ -284,7 +283,12 @@ select = [
 ]
 
 "examples/**/*.py" = [
-    "INP001", # allow implicit namespace packages in examples
+    "INP001",   # allow implicit namespace packages in examples
+    "T201",     # print() is the UI in demos
+    "BLE001",   # broad except is fine for demo error display
+    "S310",     # URL schemes are user-provided server addresses
+    "PLR2004",  # magic numbers are fine in demos
+    "B905",     # zip(strict=) not needed in demos
 ]
 
 "hs_connectors/**/*.py" = [

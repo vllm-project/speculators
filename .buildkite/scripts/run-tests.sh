@@ -38,7 +38,11 @@ export HF_HOME=/model-cache
 uv pip install .[dev]
 
 if [ -n "${TRANSFORMERS_VERSION:-}" ] && [ "${TRANSFORMERS_VERSION}" != "latest" ]; then
-  uv pip install "transformers${TRANSFORMERS_VERSION}"
+  if [ "${TRANSFORMERS_VERSION}" = "main" ]; then
+    uv pip install --reinstall "transformers @ git+https://github.com/huggingface/transformers.git@main"
+  else
+    uv pip install --reinstall "transformers${TRANSFORMERS_VERSION}"
+  fi
 fi
 
 if [ "${TEST_TYPE}" = "smoke" ]; then
