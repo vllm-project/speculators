@@ -5,7 +5,7 @@ import argparse
 import pytest
 
 from speculators import losses
-from speculators.losses import eager
+from speculators.losses import LinearWeightSchedule, eager
 from speculators.models.dflash.core import DFlashDraftModel
 from speculators.models.dspark.core import DSparkDraftModel
 from speculators.models.eagle3.core import Eagle3DraftModel
@@ -65,6 +65,23 @@ def test_dflash_compound_loss(monkeypatch):
     assert train_kw["loss_config"]["tv"][1] == 0.9
     assert "ce" in val_kw["loss_config"]
     assert "tv" in val_kw["loss_config"]
+
+
+def test_dflash_scheduled_loss_weight(monkeypatch):
+    args = _parse(
+        monkeypatch,
+        [
+            "--loss-fn",
+            '{"ce": 0.1, "tv": {"type": "linear", "start": 0.9, '
+            '"end": 0.1, "start_step": 0, "end_step": 100}}',
+        ],
+    )
+    train_kw, val_kw = DFlashDraftModel.get_trainer_kwargs(**vars(args))
+
+    assert train_kw["loss_config"]["tv"][1] == LinearWeightSchedule(
+        start=0.9, end=0.1, start_step=0, end_step=100
+    )
+    assert val_kw["loss_config"]["tv"][1] == train_kw["loss_config"]["tv"][1]
 
 
 def test_eagle3_default_uses_kl(monkeypatch):

@@ -20,6 +20,7 @@ from transformers import (
     get_linear_schedule_with_warmup,
 )
 
+from speculators.losses import has_scheduled_weights
 from speculators.model import SpeculatorModel
 from speculators.train.checkpointer import (
     BaseCheckpointer,
@@ -225,6 +226,7 @@ class Trainer:
 
         self.setup_trainer()
         self.setup_model()
+        self._setup_loss_step()
         self.setup_optimizer()
 
     def _training_state_path(self, epoch: int) -> Path:
@@ -424,6 +426,25 @@ class Trainer:
         if self.resume_from_checkpoint and self.checkpointer.previous_epoch != -1:
             self.checkpointer.load_scheduler_state_dict(self.schedulers)
 
+    def _setup_loss_step(self) -> None:
+        """Create the shared optimizer-step tensor for scheduled loss weights."""
+        call_kwargs = (self.config.train_call_kwargs, self.config.val_call_kwargs)
+        if not any(
+            has_scheduled_weights(kwargs.get("loss_config"))
+            for kwargs in call_kwargs
+            if kwargs is not None
+        ):
+            self.loss_step: torch.Tensor | None = None
+            return
+
+        device = next(self.model.parameters()).device
+        self.loss_step = torch.full(
+            (), self.global_step, device=device, dtype=torch.float32
+        )
+        for kwargs in call_kwargs:
+            if kwargs is not None:
+                kwargs["loss_step"] = self.loss_step
+
     def _optimizers_zero_grad(self):
         for opt in self.optimizers:
             opt.zero_grad()
@@ -518,6 +539,8 @@ class Trainer:
                 else v
                 for k, v in batch.items()
             }
+            if self.loss_step is not None:
+                self.loss_step.fill_(self.global_step)
 
             with torch.autocast(
                 self.device_type, dtype=self.config.hidden_states_dtype
