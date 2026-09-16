@@ -41,6 +41,20 @@ root_logger = logging.getLogger("speculators")
 metric_logger = logging.getLogger("speculators.metrics")
 
 
+def _all_reduce_metrics(metrics: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
+    """Sum *metrics* across ranks with a single collective.
+
+    Used by both the training and validation metric reductions. Values are
+    returned as float tensors in the same key order.
+    """
+    if not metrics:
+        return {}
+    keys = list(metrics)
+    stacked = torch.stack([metrics[k].float().reshape(()) for k in keys])
+    dist.all_reduce(stacked, op=dist.ReduceOp.SUM)
+    return dict(zip(keys, stacked, strict=True))
+
+
 class _StepTimer:
     # Each mark()/now() forces an accelerator.synchronize to capture true GPU time.
     # This serialises the CUDA pipeline, so profiled steps are slower; keep
@@ -540,8 +554,7 @@ class Trainer:
                 num_tokens = int((gpu_batch["document_ids"] != -1).sum().item())
                 profile = timer.profile(num_tokens)
                 if self.is_distributed:
-                    for v in metrics.values():
-                        dist.reduce(v, dst=0, op=dist.ReduceOp.SUM)
+                    metrics = _all_reduce_metrics(metrics)
 
                 metrics = {k: v.item() for k, v in metrics.items()}
                 world_size = dist.get_world_size() if self.is_distributed else 1
@@ -624,10 +637,9 @@ class Trainer:
 
         val_metrics: dict[str, float] = {}
         if accumulated:
-            stacked = torch.stack(list(accumulated.values()))
             if self.is_distributed:
-                dist.all_reduce(stacked, op=dist.ReduceOp.SUM)
-            val_metrics = dict(zip(accumulated, stacked.tolist(), strict=True))
+                accumulated = _all_reduce_metrics(accumulated)
+            val_metrics = {k: v.item() for k, v in accumulated.items()}
 
         world_size = dist.get_world_size() if self.is_distributed else 1
         val_metrics = {k: v / num_batches for k, v in val_metrics.items()}
