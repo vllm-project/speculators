@@ -12,6 +12,7 @@ from speculators.losses import (
     compound_loss,
     dflash_loss_decay,
     exp_loss_decay,
+    freeze_loss_config,
     loss_function,
     resolve_loss_config,
 )
@@ -164,6 +165,20 @@ class TestScheduledLossWeights:
                 torch.zeros(1, 2, dtype=torch.long),
                 loss_config=config,
             )
+
+    def test_freeze_uses_terminal_values_without_mutating_config(self):
+        config: LossConfig = {
+            "tv": (
+                tv_loss,
+                LinearWeightSchedule(start=1.0, end=0.25, start_step=0, end_step=10),
+            )
+        }
+
+        frozen = freeze_loss_config(config)
+
+        assert frozen is not None
+        assert frozen["tv"][1] == 0.25
+        assert isinstance(config["tv"][1], LinearWeightSchedule)
 
 
 class TestKLDivLoss:

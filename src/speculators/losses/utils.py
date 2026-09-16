@@ -116,6 +116,23 @@ def has_scheduled_weights(loss_config: LossConfig | None) -> bool:
     )
 
 
+def freeze_loss_config(loss_config: LossConfig | None) -> LossConfig | None:
+    """Replace scheduled weights with their terminal values.
+
+    This is used for validation so the metric used for checkpoint selection is
+    invariant across optimizer steps while training schedules evolve.
+    """
+    if loss_config is None:
+        return None
+    return {
+        name: (
+            loss_fn,
+            weight.end if isinstance(weight, LinearWeightSchedule) else weight,
+        )
+        for name, (loss_fn, weight) in loss_config.items()
+    }
+
+
 def dflash_loss_decay(
     pos_idx: torch.Tensor, gamma: float, sample_from_anchor: bool = False, **_kwargs
 ):
