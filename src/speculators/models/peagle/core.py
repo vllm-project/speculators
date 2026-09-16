@@ -61,6 +61,7 @@ class PEagleDraftModel(Eagle3DraftModel):
         loss_mask: torch.Tensor | None = None,
         verifier_last_hidden_states: torch.Tensor | None = None,
         loss_config: LossConfig | None = None,
+        loss_step: torch.Tensor | None = None,
         max_anchors: int | None = None,
         num_depths: int = 8,
         down_sample_ratio: float = 0.7,
@@ -202,6 +203,7 @@ class PEagleDraftModel(Eagle3DraftModel):
             depth=depth,
             num_depths=num_depths,
             loss_config=loss_config,
+            loss_step=loss_step,
         )
 
         return None, loss, metrics

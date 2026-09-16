@@ -1,12 +1,16 @@
 from pathlib import Path
+from typing import cast
 
 import pytest
 import torch
 from transformers import get_linear_schedule_with_warmup
 
+from speculators.losses import resolve_loss_config
+from speculators.model import SpeculatorModel
 from speculators.train.checkpointer import SingleGPUCheckpointer
 from speculators.train.config import TrainConfig
 from speculators.train.trainer import (
+    Trainer,
     TrainerConfig,
     _resolve_scheduler_steps,
 )
@@ -19,6 +23,31 @@ def make_config(**overrides) -> TrainerConfig:
         save_path="checkpoint",
         **overrides,
     )
+
+
+def test_scheduled_loss_step_uses_restored_global_step():
+    train_kwargs = {
+        "loss_config": resolve_loss_config(
+            '{"tv": {"type": "linear", "start": 1.0, "end": 0.0, '
+            '"start_step": 0, "end_step": 10}}',
+            "eager",
+        )
+    }
+    val_kwargs = {"loss_config": train_kwargs["loss_config"]}
+    trainer = Trainer.__new__(Trainer)
+    trainer.config = make_config(
+        train_call_kwargs=train_kwargs,
+        val_call_kwargs=val_kwargs,
+    )
+    trainer.model = cast("SpeculatorModel", torch.nn.Linear(2, 2))
+    trainer.global_step = 7
+
+    trainer._setup_loss_step()
+
+    assert trainer.loss_step is not None
+    assert trainer.loss_step.item() == 7
+    assert train_kwargs["loss_step"] is trainer.loss_step
+    assert val_kwargs["loss_step"] is trainer.loss_step
 
 
 def test_scheduler_steps_default_to_one_percent_of_training_steps():

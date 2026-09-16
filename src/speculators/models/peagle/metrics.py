@@ -22,6 +22,7 @@ def compute_metrics(
     depth: torch.Tensor,
     num_depths: int,
     loss_config: LossConfig | None = None,
+    loss_step: torch.Tensor | None = None,
 ) -> tuple[torch.Tensor, dict[str, Any]]:
     """Compute loss and accuracy metrics for P-EAGLE predictions.
 
@@ -48,7 +49,12 @@ def compute_metrics(
     sampled_loss_mask = loss_mask[:, orig_positions]  # [1, total_sampled]
 
     loss, term_losses = compound_loss(
-        logits, targets, sampled_loss_mask, depth.unsqueeze(0), loss_config=loss_config
+        logits,
+        targets,
+        sampled_loss_mask,
+        depth.unsqueeze(0),
+        loss_config=loss_config,
+        loss_step=loss_step,
     )
 
     with torch.no_grad():

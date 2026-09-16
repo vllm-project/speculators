@@ -67,6 +67,7 @@ def compute_metrics(
     per_position_loss_weight: str = "fixed-exp-decay",
     dpace_alpha: float = 0.5,
     sample_from_anchor: bool = True,
+    loss_step: torch.Tensor | None = None,
 ) -> tuple[torch.Tensor, dict]:
     """Compute the DSpark loss and a metrics dict (``*_sum``/``*_total`` pairs)."""
 
@@ -87,7 +88,13 @@ def compute_metrics(
         )
 
     loss, term_losses = compound_loss(
-        logits, targets, loss_mask, pos_idx, loss_config=loss_config, decay_fn=decay_fn
+        logits,
+        targets,
+        loss_mask,
+        pos_idx,
+        loss_config=loss_config,
+        decay_fn=decay_fn,
+        loss_step=loss_step,
     )
 
     # Analytical per-position acceptance rate = distributional overlap
