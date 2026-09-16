@@ -130,7 +130,7 @@ torchrun --standalone --nproc_per_node=4 -m speculators.train \
 
 - **`--deterministic-cuda`** (flag) Enable deterministic CUDA operations. May impact performance.
 
-- **`--loss-fn`** (str, default: `"ce"` for dflash, `"kl_div"` otherwise) Loss function specification. Pass a name for a single loss (`kl_div`, `rkl`, `jsd`, `ce`, `tv`, `nla`, `lk_hybrid`) or a JSON dict for a weighted combination. Values may be raw weights or linear schedules, e.g. `'{"ce": 0.1, "tv": {"type": "linear", "start": 0.9, "end": 0.1, "start_step": 0, "end_step": 10000}}'`. Required to be `ce` when `--per-position-loss-weight dpace` is used.
+- **`--loss-fn`** (str, default: `"ce"` for dflash, `"kl_div"` otherwise) Loss function specification. Pass a name for a single loss (`kl_div`, `rkl`, `jsd`, `ce`, `tv`, `nla`, `lk_hybrid`) or a JSON dict for a weighted combination. Values may be raw weights or linear schedules, e.g. `'{"ce": 0.1, "tv": {"type": "linear", "start": 0.9, "end": 0.1, "start_step": 0, "end_step": 10000}}'`. Training follows schedules; validation and best-checkpoint selection use terminal schedule values. Required to be `ce` when `--per-position-loss-weight dpace` is used.
 
 ### Optimizer Arguments
 

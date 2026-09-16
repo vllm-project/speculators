@@ -45,6 +45,8 @@ speculators train ... --loss-fn \
   '{"ce": 0.1, "tv": {"type": "linear", "start": 0.9, "end": 0.1, "start_step": 0, "end_step": 10000}}'
 ```
 
+Training uses the schedule, but validation and best-checkpoint selection always use each scheduled term's terminal (`end`) value. This keeps validation loss comparable as training progresses without requiring a separate validation loss specification.
+
 ## References
 
 - Lin, "Divergence measures based on the Shannon entropy" (1991) -- Jensen-Shannon divergence
