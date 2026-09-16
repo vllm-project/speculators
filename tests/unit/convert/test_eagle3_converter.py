@@ -392,3 +392,18 @@ class TestSaveConvertedCheckpointKeyValidation:
             )
 
         assert list(tmp_path.glob("*.safetensors")) == []
+
+    @pytest.mark.regression
+    def test_remapping_collision_raises_instead_of_saving(self, tmp_path, seed):
+        """Both midlayer.* and layers.0.* aliases must raise, not overwrite."""
+        config, source_weights = _build_tiny_setup()
+        source_weights["layers.0.mlp.up_proj.weight"] = torch.zeros_like(
+            source_weights["midlayer.mlp.up_proj.weight"]
+        )
+
+        with pytest.raises(ValueError, match="Duplicate weight key"):
+            Eagle3Converter()._save_converted_checkpoint(
+                config, source_weights, tmp_path, True, True
+            )
+
+        assert list(tmp_path.glob("*.safetensors")) == []

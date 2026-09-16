@@ -201,14 +201,24 @@ class Eagle3Converter:
         )
 
         # Remap midlayer.* to layers.0.*
-        remapped_weights = {}
+        remapped_weights: dict[str, torch.Tensor] = {}
+        key_sources: dict[str, str] = {}
         for key, value in weights.items():
             if key.startswith("midlayer."):
                 new_key = key.replace("midlayer.", "layers.0.")
-                remapped_weights[new_key] = value
-                logger.debug(f"Remapped weight key: {key} -> {new_key}")
             else:
-                remapped_weights[key] = value
+                new_key = key
+            if new_key in remapped_weights:
+                raise ValueError(
+                    "Duplicate weight key after remapping: "
+                    f"{key_sources[new_key]!r} and {key!r} both map to "
+                    f"{new_key!r}, so one tensor would silently overwrite "
+                    "the other."
+                )
+            remapped_weights[new_key] = value
+            key_sources[new_key] = key
+            if new_key != key:
+                logger.debug(f"Remapped weight key: {key} -> {new_key}")
 
         missing_keys, unexpected_keys = model.load_state_dict(
             remapped_weights, strict=False
