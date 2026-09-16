@@ -214,11 +214,18 @@ class Eagle3Converter:
             remapped_weights, strict=False
         )  # type: ignore[attr-defined]
 
-        if missing_keys:
-            logger.warning(f"Missing keys in checkpoint: {missing_keys}")
-
         if unexpected_keys:
-            logger.warning(f"Unexpected keys in checkpoint: {unexpected_keys}")
+            raise ValueError(
+                "Unexpected keys in checkpoint -- the structure does not "
+                "match Eagle3Speculator, so these weights would be dropped. "
+                f"Unexpected keys: {unexpected_keys}"
+            )
+        if missing_keys:
+            raise ValueError(
+                "Missing keys in checkpoint -- the converted model would "
+                "keep randomly initialized weights for them. "
+                f"Missing keys: {missing_keys}"
+            )
 
         weights_dtype = getattr(config.transformer_layer_config, "torch_dtype", None)
         # .to() wont convert d2t/t2d buffers as they are not fp tensors
