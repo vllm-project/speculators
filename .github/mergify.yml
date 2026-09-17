@@ -81,7 +81,7 @@ pull_request_rules:
   - name: add dco-failed label
     conditions:
       - label != stale
-      - check-failure = dco
+      - check-failure = @dco/DCO
       - -label = dco-failed
       - -closed
     actions:
@@ -104,7 +104,7 @@ pull_request_rules:
   - name: remove dco-failed label
     conditions:
       - label != stale
-      - "check-success = dco"
+      - check-success = @dco/DCO
       - -closed
     actions:
       label:
