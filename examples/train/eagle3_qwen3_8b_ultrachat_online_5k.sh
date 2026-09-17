@@ -89,7 +89,6 @@ CUDA_VISIBLE_DEVICES="$TRAIN_GPUS" torchrun \
     --epochs "$EPOCHS" \
     --lr "$LR" \
     --total-seq-len "$SEQ_LENGTH" \
-    --on-missing generate \
-    --on-generate delete
+    --on-missing generate
 
 echo "Done. Checkpoints saved to $OUTPUT_DIR/checkpoints/"
