@@ -105,13 +105,19 @@ def ensure_accelerator_context() -> None:
         # work, so this is not fatal).
         return
 
-    device = 0
+    device: int | None = None
     acc = getattr(torch, "accelerator", None)
     if acc is not None and getattr(acc, "is_available", lambda: False)():
         with contextlib.suppress(Exception):
             device = acc.current_device_index()
+    if device is None and hasattr(module, "current_device"):
+        with contextlib.suppress(Exception):
+            device = module.current_device()
 
-    if hasattr(module, "set_device"):
+    # Only pin the device when it is actually known. Defaulting to 0 would
+    # hijack a worker's selected device and desynchronize the connector's
+    # copy stream / ready event from the KV cache.
+    if device is not None and hasattr(module, "set_device"):
         with contextlib.suppress(Exception):
             module.set_device(device)
 
