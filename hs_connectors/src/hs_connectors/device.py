@@ -1,85 +1,32 @@
 """Accelerator/device utilities shared by the hidden-states connectors.
 
 Mooncake's transfer engine ships CUDA and Ascend builds, but the connector and
-store code should not hardcode either. Resolve the active accelerator (CUDA,
-XPU, NPU, MUSA, MTIA, ...) via ``torch.accelerator`` when available, falling
-back to probing the known ``torch.*`` device modules.
+store code should not hardcode either. The active accelerator is resolved
+through ``torch.accelerator`` (torch>=2.6), which reports the device type
+(CUDA, XPU, NPU, MUSA, MTIA, ...), and ``torch.get_device_module``, which maps
+it to the ``torch`` module exposing the CUDA-like stream API.
 """
 
 from __future__ import annotations
 
 import contextlib
 import os
-from functools import lru_cache
 from typing import Any
 
 import torch
 
-# Device modules that expose a CUDA-like stream API. Order matters only for the
-# fallback probe; ``torch.accelerator`` is authoritative when it is available.
-_DEVICE_MODULES = ("cuda", "xpu", "npu", "musa", "mtia")
-_STREAM_ATTRS = ("Stream", "Event", "stream")
 
+def accelerator_module() -> Any:
+    """Return the ``torch`` module backing the active accelerator.
 
-def _is_usable(module: Any, *, need_stream: bool) -> bool:
-    if module is None:
-        return False
-    try:
-        if not module.is_available():
-            return False
-    except Exception:  # noqa: BLE001 - probing untrusted accelerator modules
-        return False
-    if need_stream:
-        return all(hasattr(module, attr) for attr in _STREAM_ATTRS)
-    return True
-
-
-def _module_for_type(name: str) -> Any:
-    module = getattr(torch, name, None)
-    if module is None and name == "npu":
-        try:
-            import torch_npu  # noqa: F401, PLC0415
-        except Exception:  # noqa: BLE001 - optional accelerator package
-            return None
-        module = getattr(torch, "npu", None)
-    return module
-
-
-def _device_type(module: Any) -> str | None:
-    for name in _DEVICE_MODULES:
-        if module is getattr(torch, name, None):
-            return name
-    return None
-
-
-@lru_cache(maxsize=2)
-def accelerator_module(*, need_stream: bool = True) -> Any:
-    """Return the active accelerator module.
-
-    Prefers ``torch.accelerator`` (torch>=2.6) to detect the active device type
-    and probes the known ``torch.*`` device modules otherwise. With
-    ``need_stream=True`` the module must expose ``Stream``/``Event``/``stream``
-    (Apple MPS does not, so it is only usable for context setup).
+    ``torch.accelerator`` identifies the active device type and
+    ``torch.get_device_module`` resolves the module exposing the CUDA-like
+    stream API (``Stream``/``Event``/``stream``).
     """
-    acc = getattr(torch, "accelerator", None)
-    if acc is not None and getattr(acc, "is_available", lambda: False)():
-        try:
-            name: str | None = acc.current_accelerator().type
-        except Exception:  # noqa: BLE001 - fall back to the module probe
-            name = None
-        if name:
-            module = _module_for_type(str(name))
-            if _is_usable(module, need_stream=need_stream):
-                return module
-
-    for name in _DEVICE_MODULES:
-        module = _module_for_type(name)
-        if _is_usable(module, need_stream=need_stream):
-            return module
-
-    raise RuntimeError(
-        "No usable accelerator found (looked for CUDA/XPU/NPU/MUSA/MTIA)."
-    )
+    accelerator = torch.accelerator.current_accelerator()
+    if accelerator is None:
+        raise RuntimeError("No accelerator is available.")
+    return torch.get_device_module(accelerator)
 
 
 _initialized_pid: int | None = None
@@ -98,33 +45,20 @@ def ensure_accelerator_context() -> None:
     if _initialized_pid == pid:
         return
 
-    try:
-        module = accelerator_module(need_stream=False)
-    except RuntimeError:
+    accelerator = torch.accelerator.current_accelerator()
+    if accelerator is None or not torch.accelerator.is_available():
         # CPU-only process: nothing to initialize (a plain TCP store may still
         # work, so this is not fatal).
         return
 
-    device: int | None = None
-    acc = getattr(torch, "accelerator", None)
-    if acc is not None and getattr(acc, "is_available", lambda: False)():
-        with contextlib.suppress(Exception):
-            device = acc.current_device_index()
-    if device is None and hasattr(module, "current_device"):
-        with contextlib.suppress(Exception):
-            device = module.current_device()
-
-    # Only pin the device when it is actually known. Defaulting to 0 would
-    # hijack a worker's selected device and desynchronize the connector's
+    # Re-pin the device inherited across ``fork``. Don't default to 0: that
+    # would hijack a worker's selected device and desynchronize the connector's
     # copy stream / ready event from the KV cache.
-    if device is not None and hasattr(module, "set_device"):
-        with contextlib.suppress(Exception):
-            module.set_device(device)
+    with contextlib.suppress(Exception):
+        torch.accelerator.set_device_index(torch.accelerator.current_device_index())
 
     # Touching a device tensor is what actually creates the context.
-    dev_type = _device_type(module)
-    if dev_type is not None:
-        with contextlib.suppress(Exception):
-            torch.zeros(1, device=dev_type)
+    with contextlib.suppress(Exception):
+        torch.zeros(1, device=accelerator)
 
     _initialized_pid = pid
