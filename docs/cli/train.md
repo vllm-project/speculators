@@ -64,7 +64,7 @@ torchrun --standalone --nproc_per_node=4 -m speculators.train \
 
 - **`--data-path`** (str, default: `"./data"`) Path to the processed training data directory.
 
-- **`--on-missing`** (choice: `generate`|`skip`|`warn`|`raise`, default: `generate`) Behavior when cached hidden states are missing:
+- **`--on-missing`** (choice: `generate`|`skip`|`warn`|`raise`, default: `generate`) Behavior when cached hidden states are missing. Online training is `generate`; offline training is `raise`:
 
   - `generate`: Generate hidden states on-demand using vLLM endpoint
   - `skip`: Skip the sample silently, pads to fill batch.
