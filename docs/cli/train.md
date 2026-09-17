@@ -267,7 +267,6 @@ speculators train \
   --data-path ./training_data \
   --vllm-endpoint http://localhost:8000/v1 \
   --on-missing generate \
-  --on-generate delete \
   --save-path ./checkpoints \
   --draft-vocab-size 32000 \
   --epochs 10 \

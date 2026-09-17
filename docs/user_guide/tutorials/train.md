@@ -301,8 +301,7 @@ CUDA_VISIBLE_DEVICES=2,3 torchrun --standalone --nproc_per_node 2 \
   --epochs 5 \
   --total-seq-len 8192 \
   --vllm-endpoint http://localhost:8000/v1 \
-  --on-missing generate \
-  --on-generate delete
+  --on-missing generate
 ```
 
 ///
@@ -326,8 +325,7 @@ CUDA_VISIBLE_DEVICES=2,3 torchrun --standalone --nproc_per_node 2 \
   --scheduler-type cosine \
   --lr 6e-4 \
   --vllm-endpoint http://localhost:8000/v1 \
-  --on-missing generate \
-  --on-generate delete
+  --on-missing generate
 ```
 
 ///
@@ -348,8 +346,7 @@ CUDA_VISIBLE_DEVICES=2,3 torchrun --standalone --nproc_per_node 2 \
   --num-layers 5 \
   --lr 3e-4 \
   --vllm-endpoint http://localhost:8000/v1 \
-  --on-missing generate \
-  --on-generate delete
+  --on-missing generate
 ```
 
 ///
@@ -369,8 +366,7 @@ CUDA_VISIBLE_DEVICES=2,3 torchrun --standalone --nproc_per_node 2 \
   --num-layers 5 \
   --lr 3e-4 \
   --vllm-endpoint http://localhost:8000/v1 \
-  --on-missing generate \
-  --on-generate delete
+  --on-missing generate
 ```
 
 ///
@@ -392,8 +388,7 @@ CUDA_VISIBLE_DEVICES=2,3 torchrun --standalone --nproc_per_node 2 \
   --lr 3e-4 \
   --loss-fn '{"ce": 0.1, "tv": 0.9}' \
   --vllm-endpoint http://localhost:8000/v1 \
-  --on-missing generate \
-  --on-generate delete
+  --on-missing generate
 ```
 
 ///
@@ -412,8 +407,7 @@ CUDA_VISIBLE_DEVICES=2,3 torchrun --standalone --nproc_per_node 2 \
   --speculator-type mtp \
   --target-layer-ids 32 \
   --vllm-endpoint http://localhost:8000/v1 \
-  --on-missing generate \
-  --on-generate delete
+  --on-missing generate
 ```
 
 Then stitch the finetuned MTP weights back into the verifier checkpoint. This produces a self-contained checkpoint deployable on vLLM with native MTP speculative decoding:
@@ -431,7 +425,6 @@ speculators stitch-mtp \
 
 - `--vllm-endpoint` - vLLM server URL (localhost endpoint where vLLM is served)
 - `--on-missing generate` - Generate hidden states on-the-fly
-- `--on-generate delete` - Delete generated hidden states after use (saves disk space)
 
 ////
 

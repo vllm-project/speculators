@@ -535,7 +535,6 @@ RECIPES: dict[str, dict] = {
         "num_layers": 5,
         "target_layer_ids": [2, 18, 33],
         "on_missing": "generate",
-        "on_generate": "delete",
     },
     "dflash_qwen3_8b_ultrachat_online_5k_bestpractices.sh": {
         "verifier_name_or_path": "Qwen/Qwen3-8B",
@@ -556,7 +555,6 @@ RECIPES: dict[str, dict] = {
         "loss_fn": "ce",
         "target_layer_ids": [2, 18, 33],
         "on_missing": "generate",
-        "on_generate": "delete",
     },
     "dflash2_qwen3_8b_ultrachat_online_5k.sh": {
         "verifier_name_or_path": "Qwen/Qwen3-8B",
@@ -572,7 +570,6 @@ RECIPES: dict[str, dict] = {
         "num_layers": 5,
         "target_layer_ids": [2, 18, 33],
         "on_missing": "generate",
-        "on_generate": "delete",
     },
     "dspark_qwen3_0_6b_sharegpt_online.sh": {
         "verifier_name_or_path": "Qwen/Qwen3-0.6B",
@@ -595,7 +592,6 @@ RECIPES: dict[str, dict] = {
         "loss_fn": '{"ce": 0.1, "tv": 0.9}',
         "confidence_head_alpha": 1.0,
         "on_missing": "generate",
-        "on_generate": "delete",
     },
     "eagle3_llama3_8b_ultrachat_offline_5k.sh": {
         "verifier_name_or_path": "meta-llama/Llama-3.1-8B-Instruct",
@@ -618,7 +614,6 @@ RECIPES: dict[str, dict] = {
         "lr": 1e-4,
         "total_seq_len": 8192,
         "on_missing": "generate",
-        "on_generate": "delete",
     },
     "mtp_qwen3_5_9b_gsm8k_online.sh": {
         "verifier_name_or_path": "Qwen/Qwen3.5-9B",
@@ -633,7 +628,6 @@ RECIPES: dict[str, dict] = {
         "lr": 1e-4,
         "total_seq_len": 8192,
         "on_missing": "generate",
-        "on_generate": "delete",
     },
     "peagle_qwen3_8b_ultrachat_online_5k.sh": {
         "verifier_name_or_path": "Qwen/Qwen3-8B",
@@ -654,7 +648,6 @@ RECIPES: dict[str, dict] = {
         "norm_before_residual": False,
         "scheduler_type": "cosine",
         "on_missing": "generate",
-        "on_generate": "delete",
     },
 }
 
