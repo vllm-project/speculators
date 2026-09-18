@@ -201,24 +201,41 @@ class Eagle3Converter:
         )
 
         # Remap midlayer.* to layers.0.*
-        remapped_weights = {}
+        remapped_weights: dict[str, torch.Tensor] = {}
+        key_sources: dict[str, str] = {}
         for key, value in weights.items():
             if key.startswith("midlayer."):
                 new_key = key.replace("midlayer.", "layers.0.")
-                remapped_weights[new_key] = value
-                logger.debug(f"Remapped weight key: {key} -> {new_key}")
             else:
-                remapped_weights[key] = value
+                new_key = key
+            if new_key in remapped_weights:
+                raise ValueError(
+                    "Duplicate weight key after remapping: "
+                    f"{key_sources[new_key]!r} and {key!r} both map to "
+                    f"{new_key!r}, so one tensor would silently overwrite "
+                    "the other."
+                )
+            remapped_weights[new_key] = value
+            key_sources[new_key] = key
+            if new_key != key:
+                logger.debug(f"Remapped weight key: {key} -> {new_key}")
 
         missing_keys, unexpected_keys = model.load_state_dict(
             remapped_weights, strict=False
         )  # type: ignore[attr-defined]
 
-        if missing_keys:
-            logger.warning(f"Missing keys in checkpoint: {missing_keys}")
-
         if unexpected_keys:
-            logger.warning(f"Unexpected keys in checkpoint: {unexpected_keys}")
+            raise ValueError(
+                "Unexpected keys in checkpoint -- the structure does not "
+                "match Eagle3Speculator, so these weights would be dropped. "
+                f"Unexpected keys: {unexpected_keys}"
+            )
+        if missing_keys:
+            raise ValueError(
+                "Missing keys in checkpoint -- the converted model would "
+                "keep randomly initialized weights for them. "
+                f"Missing keys: {missing_keys}"
+            )
 
         weights_dtype = getattr(config.transformer_layer_config, "torch_dtype", None)
         # .to() wont convert d2t/t2d buffers as they are not fp tensors
