@@ -234,3 +234,103 @@ class TestComputeMetrics:
             assert key in metrics
         # all metric values must be tensors (so dist.reduce works in the trainer)
         assert all(torch.is_tensor(v) for v in metrics.values())
+
+    def test_chunked_loss_matches_non_chunked(self):
+        """anchor_chunk_size>0 produces the same loss as the full computation."""
+        torch.manual_seed(42)
+        logits = torch.randn(1, 8, 32, requires_grad=True)
+        targets = torch.randn(1, 8, 32)
+        loss_mask = torch.ones(1, 8, dtype=torch.float32)
+
+        loss_full, metrics_full = compute_metrics(
+            logits, targets, None, loss_mask, 2, loss_config=_DEFAULT_LOSS,
+        )
+        loss_chunked, metrics_chunked = compute_metrics(
+            logits, targets, None, loss_mask, 2, loss_config=_DEFAULT_LOSS,
+            anchor_chunk_size=2,
+        )
+        assert torch.allclose(loss_full, loss_chunked, atol=1e-4)
+        for key in metrics_full:
+            assert key in metrics_chunked, f"missing key {key} in chunked metrics"
+            assert torch.allclose(
+                metrics_full[key], metrics_chunked[key], atol=1e-4
+            ), f"mismatch for {key}"
+
+    def test_chunked_accept_rate_matches_non_chunked(self):
+        """Chunked accept_rate equals the full tv_loss_fn computation."""
+        torch.manual_seed(7)
+        logits = torch.randn(1, 12, 64) * 3
+        targets = torch.randn(1, 12, 64) * 3
+        loss_mask = torch.ones(1, 12, dtype=torch.float32)
+
+        _, metrics_full = compute_metrics(
+            logits, targets, None, loss_mask, 3, loss_config=_DEFAULT_LOSS,
+        )
+        _, metrics_chunked = compute_metrics(
+            logits, targets, None, loss_mask, 3, loss_config=_DEFAULT_LOSS,
+            anchor_chunk_size=2,
+        )
+        assert torch.allclose(
+            metrics_full["accept_rate_sum"], metrics_chunked["accept_rate_sum"],
+            atol=1e-5,
+        )
+        assert torch.allclose(
+            metrics_full["accept_len_sum"], metrics_chunked["accept_len_sum"],
+            atol=1e-4,
+        )
+
+    def test_chunked_with_confidence_head_matches(self):
+        """Chunked computation with confidence head matches non-chunked."""
+        torch.manual_seed(99)
+        logits = torch.randn(1, 8, 32, requires_grad=True)
+        targets = torch.randn(1, 8, 32)
+        confidence_logits = torch.randn(1, 8, requires_grad=True)
+        loss_mask = torch.tensor([[1, 0, 1, 0, 1, 1, 0, 1]], dtype=torch.float32)
+
+        loss_full, metrics_full = compute_metrics(
+            logits, targets, confidence_logits, loss_mask, 2,
+            loss_config=_DEFAULT_LOSS,
+        )
+        loss_chunked, metrics_chunked = compute_metrics(
+            logits, targets, confidence_logits, loss_mask, 2,
+            loss_config=_DEFAULT_LOSS, anchor_chunk_size=1,
+        )
+        assert torch.allclose(loss_full, loss_chunked, atol=1e-4)
+        for key in metrics_full:
+            assert key in metrics_chunked
+            assert torch.allclose(
+                metrics_full[key], metrics_chunked[key], atol=1e-4
+            ), f"mismatch for {key}"
+
+    def test_chunk_size_zero_equals_default(self):
+        """anchor_chunk_size=0 (explicit) matches the default (no arg)."""
+        torch.manual_seed(13)
+        logits = torch.randn(1, 6, 16)
+        targets = torch.randn(1, 6, 16)
+        loss_mask = torch.ones(1, 6, dtype=torch.float32)
+
+        loss_default, metrics_default = compute_metrics(
+            logits, targets, None, loss_mask, 2, loss_config=_DEFAULT_LOSS,
+        )
+        loss_zero, metrics_zero = compute_metrics(
+            logits, targets, None, loss_mask, 2, loss_config=_DEFAULT_LOSS,
+            anchor_chunk_size=0,
+        )
+        assert torch.equal(loss_default, loss_zero)
+        for key in metrics_default:
+            assert torch.equal(metrics_default[key], metrics_zero[key])
+
+    def test_chunked_backward_graph_preserved(self):
+        """Chunked loss keeps the backward graph and produces gradients."""
+        torch.manual_seed(55)
+        logits = torch.randn(1, 8, 32, requires_grad=True)
+        targets = torch.randn(1, 8, 32)
+        loss_mask = torch.ones(1, 8, dtype=torch.float32)
+
+        loss, _ = compute_metrics(
+            logits, targets, None, loss_mask, 2, loss_config=_DEFAULT_LOSS,
+            anchor_chunk_size=1,
+        )
+        loss.backward()
+        assert logits.grad is not None
+        assert torch.count_nonzero(logits.grad) > 0
