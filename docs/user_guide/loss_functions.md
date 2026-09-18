@@ -32,11 +32,20 @@ All losses use the selected implementation; there is no automatic fallback.
 
 ## Weighted Combinations
 
-Pass a JSON dict to train on a weighted sum of several losses. Weights are used as provided and are not normalized. Each term is also logged separately as `{name}_loss`, before its weight is applied.
+Pass a JSON dict to train on a weighted sum of several losses. A term can map to a raw numeric weight or to a schedule. Weights are used as provided and are not normalized. Each term is also logged separately as `{name}_loss`, before its weight is applied.
 
 ```bash
 speculators train ... --loss-fn '{"ce": 0.1, "tv": 0.9}'
 ```
+
+Scheduled weights are evaluated at the optimizer step. The weight stays at `start` through `start_step`, changes linearly until `end_step`, and stays at `end` afterward:
+
+```bash
+speculators train ... --loss-fn \
+  '{"ce": 0.1, "tv": {"type": "linear", "start": 0.9, "end": 0.1, "start_step": 0, "end_step": 10000}}'
+```
+
+Training uses the schedule, but validation and best-checkpoint selection always use each scheduled term's terminal (`end`) value. This keeps validation loss comparable as training progresses without requiring a separate validation loss specification.
 
 ## References
 
