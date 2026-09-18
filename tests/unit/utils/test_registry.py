@@ -4,6 +4,7 @@ Unit tests for the registry module in the Speculators library.
 
 import pytest
 
+import speculators.utils as utils_module
 from speculators.utils.registry import ClassRegistryMixin
 
 # ===== ClassRegistryMixin Tests =====
@@ -204,3 +205,18 @@ def test_auto_discovery_registry_initialization():
     assert TestAutoRegistry.registry_populated is False
     assert TestAutoRegistry.auto_package == "test_package.modules"
     assert TestAutoRegistry.registry_auto_discovery is True
+
+
+@pytest.mark.smoke
+def test_utils_wildcard_import_has_no_dead_names():
+    """Every name in speculators.utils.__all__ must actually exist on the module.
+
+    Regression test for a stale __all__ entry (e.g. a removed class) causing
+    `from speculators.utils import *` to raise AttributeError.
+    """
+
+    for name in utils_module.__all__:
+        assert hasattr(utils_module, name), (
+            f"'{name}' is listed in speculators.utils.__all__ but is not an "
+            "actual attribute of the module (stale export)."
+        )

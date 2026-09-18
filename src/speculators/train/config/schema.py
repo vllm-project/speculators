@@ -818,7 +818,7 @@ class TrainConfig(BaseSettings):
         """The impure CLI boundary: parse argv, layer, validate.
 
         Turns any configuration error into a clean ``SystemExit(2)``. This is what
-        ``scripts/train.py`` calls.
+        ``speculators.train.cli`` calls.
         """
         from speculators.train.config import resolution  # noqa: PLC0415
 
