@@ -1,9 +1,7 @@
 """Client for vLLM's ``/v1/chat/completions/render`` endpoint.
 
-Only ``token_ids`` are requested: the loss mask is derived from the boundary
-between two renders, not the server's ``assistant_tokens_mask`` (which needs
-``{% generation %}`` tags). Renders come from the vLLM instance the pipeline
-already runs, so one tokenizer feeds the mask, hidden states, and serving.
+Returns ``token_ids`` only. The loss mask is derived from the boundary between
+two renders, using the vLLM instance the pipeline already runs.
 """
 
 import logging

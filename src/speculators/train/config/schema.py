@@ -416,6 +416,12 @@ class TrainerArgs(_Group):
         "parameters are fully replicated (DDP-like). Enable when the model does not "
         "fit in a single GPU's memory.",
     )
+    gradient_checkpointing: bool = Field(
+        default=False,
+        description="Enable gradient checkpointing on decoder layers to save "
+        "activation memory at the cost of ~30-50 percent slower backward. "
+        "Recommended for 32K+ sequence lengths or large max_anchors.",
+    )
     max_steps: int | None = Field(
         default=None,
         ge=1,
