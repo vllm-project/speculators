@@ -25,6 +25,7 @@ Adapted from https://github.com/imoneoi/multipack_sampler.
 """
 
 # Standard
+import logging
 import warnings
 from heapq import heapreplace
 from typing import NamedTuple
@@ -34,6 +35,8 @@ import numpy as np
 # Third Party
 from numpy.typing import ArrayLike, NDArray
 from torch.utils.data import Sampler
+
+logger = logging.getLogger(__name__)
 
 
 ## Multipack Distributed Batch Sampler
@@ -251,6 +254,15 @@ class MultipackDistributedBatchSamplerV2(Sampler):
         batches = [indices[batch] for batch in batches]
         if self.max_batches is not None:
             batches = batches[: self.max_batches]
+
+        # DFlash-family training compiles one anchor shape per distinct document
+        # count, so surface the epoch's counts up front.
+        if self.rank == 0 and batches:
+            counts = sorted({len(batch) for batch in batches})
+            logger.info(
+                f"Epoch {epoch}: {len(batches)} packed batches holding "
+                f"{counts[0]}-{counts[-1]} samples each ({len(counts)} distinct counts)"
+            )
 
         # Cache result
         self._cached_generated_batches = (epoch, batches)

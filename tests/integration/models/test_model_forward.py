@@ -268,6 +268,25 @@ class TestDFlashParams:
         assert loss.isfinite()
         loss.backward()
 
+    def test_no_recompile_across_loss_masks(self):
+        """A fixed document count must be one compiled shape regardless of how
+        many positions are supervised: the forward is compiled with static
+        shapes, so any data-dependent shape would recompile every step."""
+        torch.compiler.reset()
+        model = make_dflash_model()
+        stats = torch._dynamo.utils.counters["stats"]
+        for step in range(6):
+            torch.manual_seed(step)
+            samples = _make_samples([64, 64], loss_mask_pattern="random")
+            batch = make_batch(
+                max_len=MAX_LEN, samples=samples, hidden_size=HIDDEN_SIZE
+            )
+            graphs_before = stats["unique_graphs"]
+            _, loss, _ = model(**batch, max_anchors=8)
+            loss.backward()
+            if step > 0:
+                assert stats["unique_graphs"] == graphs_before, f"recompiled at {step}"
+
     @pytest.mark.parametrize("draft_attn_impl", ["sdpa", "eager"])
     @pytest.mark.parametrize("seq_lengths", SAMPLE_CONFIGS)
     def test_attention_backend(self, draft_attn_impl, seq_lengths):
