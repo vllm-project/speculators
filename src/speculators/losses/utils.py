@@ -237,6 +237,7 @@ def compound_loss(
     pos_idx: torch.Tensor,
     loss_config: LossConfig,
     decay_fn: Callable[..., torch.Tensor] | None = None,
+    denom_decay: bool = False,
 ) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
     """Compute a weighted sum of loss terms.
 
@@ -259,6 +260,7 @@ def compound_loss(
             pos_idx,
             loss_fn=fn,
             decay_fn=decay_fn,
+            denom_decay=denom_decay,
         )
         if multi:
             term_losses[f"{name}_loss"] = term.detach()
@@ -273,6 +275,7 @@ def loss_function(
     pos_idx: torch.Tensor,  # shape: [1, seq_len]
     loss_fn: Callable[[torch.Tensor, torch.Tensor], torch.Tensor] = kl_div_loss,
     decay_fn: Callable[..., torch.Tensor] | None = None,
+    denom_decay: bool = False,
 ):
     """Compute masked, optionally position-decayed training loss.
 
@@ -283,6 +286,8 @@ def loss_function(
         pos_idx: Position indices within each speculative block.
         loss_fn: Per-position loss function (default: kl_div_loss).
         decay_fn: Optional position-dependent decay weighting function.
+        denom_decay: Normalize by the decayed weight sum instead of the plain
+            mask sum, making the term a true weighted mean.
 
     Returns:
         Scalar mean loss across the batch.
@@ -292,13 +297,20 @@ def loss_function(
     loss_mask = loss_mask.to(elementwise_loss.dtype)
     elementwise_loss = elementwise_loss * loss_mask
 
+    decay_mult = None
     if decay_fn is not None:
         decay_mult = decay_fn(
             pos_idx.to(elementwise_loss.dtype), elementwise_loss=elementwise_loss
         )
         elementwise_loss = elementwise_loss * decay_mult
 
-    denominator = loss_mask.sum(dim=1) + _LOSS_REDUCTION_EPS
+    if denom_decay and decay_mult is not None:
+        # A decay that scales the numerator but not the denominator lowers the
+        # reported loss without changing the gradient direction; dividing by the
+        # decayed weight sum makes the term a true weighted mean.
+        denominator = (loss_mask * decay_mult).sum(dim=1) + _LOSS_REDUCTION_EPS
+    else:
+        denominator = loss_mask.sum(dim=1) + _LOSS_REDUCTION_EPS
 
     batch_loss = torch.sum(elementwise_loss, dim=1) / denominator  # shape: [1]
     return batch_loss.mean()  # shape: []
