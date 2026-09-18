@@ -135,6 +135,7 @@ def make_dflash_model(
     draft_vocab_size: int = 64,
     block_size: int = 4,
     draft_attn_impl: str | None = None,
+    sample_from_anchor: bool = False,
     device: str = "cuda:0",
     dtype: torch.dtype = torch.bfloat16,
 ) -> DFlashDraftModel:
@@ -146,6 +147,7 @@ def make_dflash_model(
         transformer_layer_config=transformer_config,
         draft_vocab_size=draft_vocab_size,
         block_size=block_size,
+        sample_from_anchor=sample_from_anchor,
         aux_hidden_state_layer_ids=[0, 1, 2],
         mask_token_id=0,
         speculators_config=SpeculatorsConfig(
