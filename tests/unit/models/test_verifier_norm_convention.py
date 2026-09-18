@@ -50,6 +50,7 @@ def _point_at_fake_verifier(
     [
         ("qwen3_5", "", True),
         ("qwen3_5", "qwen3_5_text", True),
+        ("qwen3_5_moe", "qwen3_5_moe_text", True),
         ("gemma3_text", "", True),
         ("gemma2", "", True),
         ("gemma3n", "", False),  # dropped the (1 + w) convention
@@ -60,6 +61,7 @@ def _point_at_fake_verifier(
     ids=[
         "qwen3_5",
         "qwen3_5_text_nested",
+        "qwen3_5_moe_text_nested",
         "gemma3_text",
         "gemma2",
         "gemma3n_negative",
