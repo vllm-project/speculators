@@ -5,8 +5,10 @@ import gc
 import logging
 import random
 import warnings
+from collections import Counter
 from copy import deepcopy
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 import torch
@@ -48,6 +50,10 @@ from speculators.train.vocab_mapping import (
 from speculators.utils.loading import is_config_only_dir
 
 logger = logging.getLogger(__name__)
+
+# Sentinel distinguishing "no default supplied" (attribute must exist) from a
+# real default of ``None`` in the per-layer-aware verifier attribute reader.
+_UNSET = object()
 
 DRAFT_ARCH_CONFIGS: dict[str, type] = {
     "llama": LlamaConfig,
@@ -144,6 +150,29 @@ def create_transformer_layer_config(  # noqa: C901
     if hasattr(verifier_config, "text_config"):
         verifier_config = verifier_config.text_config
 
+    # Heterogeneous configs (e.g. Gemma 4) refuse per-layer attribute reads on the
+    # global config (transformers raises AmbiguousGlobalPerLayerAttributeError, a
+    # RuntimeError). Resolve them from one representative layer -- the modal (most
+    # common) attention geometry -- driven off ``per_layer_attributes``. See the
+    # commit message for why modal. Homogeneous configs are unchanged.
+    per_layer_attrs: set[str] = set()
+    attr_source: PretrainedConfig = verifier_config
+    if getattr(verifier_config, "is_heterogeneous", False):
+        per_layer_attrs = set(verifier_config.per_layer_attributes or ())
+        layers = list(verifier_config.per_layer_config)
+
+        def _geometry(layer_cfg: PretrainedConfig) -> tuple[Any, ...]:
+            return tuple(getattr(layer_cfg, a) for a in sorted(per_layer_attrs))
+
+        modal_geometry = Counter(_geometry(lc) for lc in layers).most_common(1)[0][0]
+        attr_source = next(lc for lc in layers if _geometry(lc) == modal_geometry)
+
+    def _verifier_attr(name: str, default: Any = _UNSET) -> Any:
+        source = attr_source if name in per_layer_attrs else verifier_config
+        if default is _UNSET:
+            return getattr(source, name)
+        return getattr(source, name, default)
+
     hidden_act = (
         hidden_act
         or getattr(verifier_config, "hidden_act", None)
@@ -155,19 +184,34 @@ def create_transformer_layer_config(  # noqa: C901
             "nor 'hidden_activation'"
         )
 
-    head_dim = getattr(verifier_config, "head_dim", None)
-    num_attention_heads = verifier_config.num_attention_heads
-    num_key_value_heads = verifier_config.num_key_value_heads
+    head_dim = _verifier_attr("head_dim", None)
+    num_attention_heads = _verifier_attr("num_attention_heads")
+    num_key_value_heads = _verifier_attr("num_key_value_heads")
+    resolved_hidden_size = _verifier_attr("hidden_size")
 
     if (
         head_dim
-        and verifier_config.hidden_size % num_attention_heads != 0
-        and verifier_config.hidden_size % head_dim == 0
+        and resolved_hidden_size % num_attention_heads != 0
+        and resolved_hidden_size % head_dim == 0
     ):
-        num_attention_heads = verifier_config.hidden_size // head_dim
+        num_attention_heads = resolved_hidden_size // head_dim
         if num_attention_heads % num_key_value_heads != 0:
             num_key_value_heads = num_attention_heads
-    resolved_head_dim = head_dim or verifier_config.hidden_size // num_attention_heads
+    resolved_head_dim = head_dim or resolved_hidden_size // num_attention_heads
+
+    # nkv was resolved from a single per-layer source while num_attention_heads is
+    # global; ensure the two are GQA-consistent (homogeneous configs keep the
+    # pre-existing behavior above).
+    if (
+        "num_key_value_heads" in per_layer_attrs
+        and num_key_value_heads
+        and num_attention_heads % num_key_value_heads != 0
+    ):
+        raise ValueError(
+            "Inconsistent draft attention geometry resolved from verifier "
+            f"'{verifier_name_or_path}': num_attention_heads={num_attention_heads} "
+            f"is not divisible by num_key_value_heads={num_key_value_heads}."
+        )
 
     if full_attention_indices and (
         min(full_attention_indices) < 0 or max(full_attention_indices) >= num_layers
@@ -183,7 +227,7 @@ def create_transformer_layer_config(  # noqa: C901
 
     config = config_class(
         vocab_size=verifier_config.vocab_size,
-        hidden_size=verifier_config.hidden_size,
+        hidden_size=resolved_hidden_size,
         intermediate_size=resolve_draft_intermediate_size(verifier_config),
         num_hidden_layers=num_layers,
         num_attention_heads=num_attention_heads,
