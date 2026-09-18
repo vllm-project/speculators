@@ -8,6 +8,7 @@ from typing import Literal, TypedDict
 import torch
 from datasets import Dataset as HFDataset
 from datasets import concatenate_datasets, load_dataset
+from huggingface_hub import hf_hub_download
 from transformers import (
     AutoProcessor,
     PreTrainedTokenizerBase,
@@ -679,15 +680,44 @@ def _load_hf_dataset(spec: str) -> tuple[HFDataset, None]:
 
     raw_dataset = load_dataset(hf_id, name=subset, split=split)
 
-    if "conversations" not in raw_dataset.column_names:
+    columns = set(raw_dataset.column_names)
+    if "conversations" not in columns and not {"input_ids", "loss_mask"} <= columns:
         raise ValueError(
             f"HuggingFace dataset '{hf_id}' (split '{split}') is not in "
-            f"conversations format: expected a 'conversations' column but found "
-            f"{raw_dataset.column_names}. Pass a dataset already in conversations "
-            f"format, or add a preset to DATASET_CONFIGS with a normalize_fn."
+            "a supported format: expected a 'conversations' column or both "
+            f"'input_ids' and 'loss_mask', but found {raw_dataset.column_names}. "
+            "Pass a dataset in one of those formats, or add a preset to "
+            "DATASET_CONFIGS with a normalize_fn."
         )
 
     return raw_dataset, None
+
+
+def _load_hf_jsonl_file(spec: str) -> tuple[HFDataset, None]:
+    """Download and load one JSON/JSONL file from a Hugging Face dataset repo.
+
+    The URI form is ``hf://datasets/<org>/<repo>/<path>``. Keeping the
+    download here means the normal prepare-data path still handles source
+    normalization, pretokenized pass-through, and output caching uniformly.
+    """
+    parts = spec.removeprefix("hf://datasets/").split("/", 2)
+    if len(parts) != 3 or not all(parts):
+        raise ValueError(
+            f"Invalid Hugging Face JSONL URI '{spec}'. Expected "
+            "hf://datasets/<organization>/<dataset>/<file>.jsonl."
+        )
+    repo_id = f"{parts[0]}/{parts[1]}"
+    filename = parts[2]
+    if not filename.endswith((".json", ".jsonl")):
+        raise ValueError(
+            f"Hugging Face source '{spec}' must point to a .json or .jsonl file."
+        )
+    local_path = hf_hub_download(
+        repo_id=repo_id,
+        filename=filename,
+        repo_type="dataset",
+    )
+    return load_dataset("json", data_files=local_path, split="train"), None
 
 
 def load_raw_dataset(
@@ -696,11 +726,12 @@ def load_raw_dataset(
     """Load a raw dataset from one of several source types.
 
     Resolution order:
-        1. Local ``.json``/``.jsonl`` file.
-        2. Local directory: recursively load all ``*.json``/``*.jsonl`` files
+        1. ``hf://datasets/<org>/<repo>/<file>.jsonl`` Hugging Face JSONL URI.
+        2. Local ``.json``/``.jsonl`` file.
+        3. Local directory: recursively load all ``*.json``/``*.jsonl`` files
            as a single dataset.
-        3. Named preset from ``DATASET_CONFIGS``.
-        4. ``hf:<id>[:<subset>:<split>]`` for an arbitrary HuggingFace dataset.
+        4. Named preset from ``DATASET_CONFIGS``.
+        5. ``hf:<id>[:<subset>:<split>]`` for an arbitrary HuggingFace dataset.
 
     Args:
         train_data_path: File path, directory path, preset name, or ``hf:`` spec.
@@ -713,11 +744,15 @@ def load_raw_dataset(
         ValueError: If the source cannot be resolved or a local directory
             contains no ``.json``/``.jsonl`` files.
     """
-    # 1. Local file
+    # 1. Hugging Face dataset repository JSONL file.
+    if train_data_path.startswith("hf://datasets/"):
+        return _load_hf_jsonl_file(train_data_path)
+
+    # 2. Local file
     if train_data_path.endswith((".jsonl", ".json")):
         return load_dataset("json", data_files=train_data_path, split="train"), None
 
-    # 2. Local directory
+    # 3. Local directory
     path = Path(train_data_path)
     if path.is_dir():
         data_files = sorted(
@@ -729,7 +764,7 @@ def load_raw_dataset(
             )
         return load_dataset("json", data_files=data_files, split="train"), None
 
-    # 3. Named preset
+    # 4. Named preset
     if train_data_path in DATASET_CONFIGS:
         config = DATASET_CONFIGS[train_data_path]
         raw_dataset = load_dataset(
@@ -739,14 +774,15 @@ def load_raw_dataset(
             raw_dataset = raw_dataset.filter(config.filter_fn)
         return raw_dataset, config.normalize_fn
 
-    # 4. Arbitrary HuggingFace dataset
+    # 5. Arbitrary HuggingFace dataset
     if train_data_path.startswith("hf:"):
         return _load_hf_dataset(train_data_path)
 
     raise ValueError(
         f"Unsupported dataset: {train_data_path}. Supported: local .json/.jsonl "
-        f"file, local directory of .json/.jsonl files, hf:<id>[:<subset>:<split>], "
-        f"or a preset {list(DATASET_CONFIGS.keys())}."
+        "file, hf://datasets/<org>/<repo>/<file>.jsonl, local directory of "
+        f".json/.jsonl files, hf:<id>[:<subset>:<split>], or a preset "
+        f"{list(DATASET_CONFIGS.keys())}."
     )
 
 
