@@ -105,7 +105,9 @@ class Eagle3FirstLayerMixin:
         # Fully Connected
         residual = hidden_states
         hidden_states = self.post_attention_layernorm(hidden_states)
-        hidden_states = self.mlp(hidden_states)
+        # MoE blocks return (hidden_states, router_scores); dense ones a tensor.
+        mlp_output = self.mlp(hidden_states)
+        hidden_states = mlp_output[0] if isinstance(mlp_output, tuple) else mlp_output
         hidden_states = residual + hidden_states
         return hidden_states  # noqa: RET504
 
