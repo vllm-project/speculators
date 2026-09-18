@@ -9,7 +9,12 @@ Examples:
     python plot.py compare \\
         --source "No Spec=nospec/results.csv" \\
         --source "Eagle3=eagle3/results.csv" \\
-        --metric latency --metric itl
+        --metric latency --metric itl --title "Qwen3-8B"
+
+    python plot.py compare \\
+        --source "No Spec=nospec/results.csv" \\
+        --source "Eagle3=eagle3/results.csv" \\
+        --metric interactivity --title "Qwen3-8B"
 
     python plot.py speedup \\
         --baseline "No Spec=nospec/results.csv" \\
@@ -34,6 +39,7 @@ from perf_utils import (
     parse_source_args,
     pretty_subset,
     smooth_curve,
+    transform_interactivity,
 )
 
 COLOR_CYCLE = [
@@ -96,6 +102,15 @@ def _plot_compare_subset(
         ax.plot(x_smooth, y_smooth, color=color, linewidth=2.5, label=label, zorder=4)
 
 
+def _maybe_transform_interactivity(
+    data: dict[str, list[tuple[float, float]]],
+    metric_name: str,
+) -> dict[str, list[tuple[float, float]]]:
+    if metric_name != "interactivity":
+        return data
+    return transform_interactivity(data)
+
+
 def run_compare(args: argparse.Namespace) -> None:
     metrics = args.metric or ["latency"]
     subset_filter = set(args.subsets.split(",")) if args.subsets else None
@@ -112,6 +127,10 @@ def run_compare(args: argparse.Namespace) -> None:
     for metric_name in metrics:
         metric_cfg = METRICS[metric_name]
         all_data = _collect_all_data(sources, metric_name)
+        all_data = {
+            label: _maybe_transform_interactivity(subset_data, metric_name)
+            for label, subset_data in all_data.items()
+        }
 
         all_subsets: set[str] = set()
         for label_data in all_data.values():
@@ -139,9 +158,14 @@ def run_compare(args: argparse.Namespace) -> None:
             source_labels,
         )
 
-        ax.set_title(metric_cfg["label"], fontsize=14, fontweight="bold")
-        ax.set_xlabel("Requests per Second", fontsize=12)
-        ax.set_ylabel(metric_cfg["label"], fontsize=12)
+        title_parts = []
+        if args.title:
+            title_parts.append(args.title)
+        title_parts.extend(pretty_subset(s) for s in sorted(all_subsets))
+        title = ", ".join(title_parts) or str(metric_cfg["label"])
+        ax.set_title(title, fontsize=14, fontweight="bold")
+        ax.set_xlabel(str(metric_cfg["xlabel"]), fontsize=12)
+        ax.set_ylabel(str(metric_cfg["label"]), fontsize=12)
         ax.legend(framealpha=0.9)
         ax.grid(True, alpha=0.3)
         fig.tight_layout()
@@ -302,8 +326,8 @@ def _plot_speedup_subset(
         title_parts.append(title_prefix)
     title_parts.append(pretty_subset(subset))
     ax.set_title(", ".join(title_parts), fontsize=14, fontweight="bold")
-    ax.set_xlabel("Requests per second (RPS)", fontsize=12)
-    ax.set_ylabel(metric_cfg["label"], fontsize=12)
+    ax.set_xlabel(str(metric_cfg["xlabel"]), fontsize=12)
+    ax.set_ylabel(str(metric_cfg["label"]), fontsize=12)
     ax.legend(framealpha=0.9)
     ax.grid(True, alpha=0.3)
     fig.tight_layout()
@@ -317,7 +341,7 @@ def run_speedup(args: argparse.Namespace) -> None:
 
     for metric_name in metrics:
         metric_cfg = METRICS[metric_name]
-        increasing = metric_cfg["increasing"]
+        increasing = bool(metric_cfg["increasing"])
 
         try:
             baseline_label, baseline_data = _collect_points(args.baseline, metric_name)
@@ -325,6 +349,9 @@ def run_speedup(args: argparse.Namespace) -> None:
         except (ValueError, FileNotFoundError) as e:
             print(f"[ERROR] {e}", file=sys.stderr)
             sys.exit(1)
+
+        baseline_data = _maybe_transform_interactivity(baseline_data, metric_name)
+        target_data = _maybe_transform_interactivity(target_data, metric_name)
 
         all_subsets = set(baseline_data.keys()) & set(target_data.keys())
         if subset_filter:
@@ -354,8 +381,10 @@ def run_speedup(args: argparse.Namespace) -> None:
                 title_prefix=args.title,
             )
             if not ok:
+                x_name = metric_cfg["xlabel"]
                 print(
-                    f"[WARN] No overlapping RPS range for subset '{subset}', skipping",
+                    f"[WARN] No overlapping {x_name} range for subset '{subset}', "
+                    "skipping",
                     file=sys.stderr,
                 )
                 plt.close(fig)
@@ -379,10 +408,18 @@ def main() -> None:
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=(
             "examples:\n"
-            '  python plot.py compare --source "No Spec=nospec/results.csv" \\\n'
-            '      --source "Eagle3=eagle3/results.csv" --metric latency\n\n'
-            '  python plot.py speedup --baseline "No Spec=nospec/results.csv" \\\n'
-            '      --target "Eagle3=eagle3/results.csv" --metric latency\n'
+            "  python plot.py compare \\\n"
+            '      --source "No Spec=nospec/results.csv" \\\n'
+            '      --source "Eagle3=eagle3/results.csv" \\\n'
+            '      --metric latency --title "Qwen3-8B"\n\n'
+            "  python plot.py compare \\\n"
+            '      --source "No Spec=nospec/results.csv" \\\n'
+            '      --source "Eagle3=eagle3/results.csv" \\\n'
+            "      --metric interactivity\n\n"
+            "  python plot.py speedup \\\n"
+            '      --baseline "No Spec=nospec/results.csv" \\\n'
+            '      --target "Eagle3=eagle3/results.csv" \\\n'
+            '      --metric latency --title "Qwen3-8B"\n'
         ),
     )
     sub = parser.add_subparsers(dest="command", title="commands")
@@ -421,6 +458,12 @@ def main() -> None:
         type=str,
         default=None,
         help="Comma-separated subset filter (default: all found in data)",
+    )
+    cmp.add_argument(
+        "--title",
+        type=str,
+        default=None,
+        help="Optional title prefix for plots (e.g. model name)",
     )
     cmp.set_defaults(func=run_compare)
 
