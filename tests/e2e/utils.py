@@ -453,12 +453,7 @@ def run_training(
     if mooncake_protocol is not None:
         train_cmd += ["--mooncake-protocol", mooncake_protocol]
     if online:
-        train_cmd += [
-            "--on-missing",
-            "generate",
-            "--on-generate",
-            "delete",
-        ]
+        train_cmd += ["--on-missing", "generate"]
     else:
         train_cmd += [
             "--on-missing",

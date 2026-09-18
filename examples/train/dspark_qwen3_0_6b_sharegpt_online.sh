@@ -117,7 +117,6 @@ CUDA_VISIBLE_DEVICES="$TRAIN_GPUS" torchrun \
     --confidence-head-with-markov \
     --loss-fn "$LOSS_FN" \
     --confidence-head-alpha "$CONFIDENCE_HEAD_ALPHA" \
-    --on-missing generate \
-    --on-generate delete
+    --on-missing generate
 
 echo "Done. Checkpoints saved to $OUTPUT_DIR/checkpoints/"
