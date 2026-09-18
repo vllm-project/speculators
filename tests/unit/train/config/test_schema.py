@@ -72,6 +72,8 @@ def test_flatten_resolves_dflash2_derived_defaults():
     assert flat["selector_rank"] == 256
     assert flat["selector_top_k"] == 16
     assert flat["selector_loss_alpha"] == pytest.approx(1.0)
+    assert flat["draft_ffn_type"] == "dense"
+    assert flat["moe_experts_implementation"] == "grouped_mm"
     assert flat["sliding_window_non_causal"] is True
 
 
@@ -124,6 +126,45 @@ def test_dflash2_explicit_values_override_defaults():
     assert flat["selector_rank"] == 128
     assert flat["selector_top_k"] == 32
     assert flat["selector_loss_alpha"] == pytest.approx(0.25)
+
+
+def test_dflash2_moe_geometry_flattens_for_model_construction():
+    cfg = TrainConfig(
+        speculator_type="dflash2",
+        dflash2=DFlash2Args(
+            draft_ffn_type="moe",
+            num_experts=256,
+            num_experts_per_tok=8,
+            moe_intermediate_size=512,
+            shared_expert_intermediate_size=512,
+            moe_experts_implementation="grouped_mm",
+        ),
+    )
+
+    flat = cfg.flatten()
+    assert flat["draft_ffn_type"] == "moe"
+    assert flat["num_experts"] == 256
+    assert flat["num_experts_per_tok"] == 8
+    assert flat["moe_intermediate_size"] == 512
+    assert flat["shared_expert_intermediate_size"] == 512
+
+
+def test_dflash2_moe_geometry_fails_closed():
+    with pytest.raises(ValueError, match="cannot exceed"):
+        TrainConfig(
+            speculator_type="dflash2",
+            dflash2=DFlash2Args(
+                draft_ffn_type="moe",
+                num_experts=4,
+                num_experts_per_tok=8,
+            ),
+        )
+
+    with pytest.raises(ValueError, match="supported by dflash2"):
+        TrainConfig(
+            speculator_type="dspark",
+            dflash2=DFlash2Args(draft_ffn_type="moe"),
+        )
 
 
 def test_from_flat_inverts_flatten():
