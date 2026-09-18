@@ -343,7 +343,7 @@ class OptimizerArgs(_Group):
         description="Optimizer to use. 'muon' applies Muon to 2D weight matrices and "
         "AdamW to the remaining params (norms, biases, embeddings, lm_head).",
     )
-    lr: float = Field(default=1e-4, description="Learning rate (AdamW / base group).")
+    lr: float = Field(default=1e-3, description="Learning rate (AdamW / base group).")
     weight_decay: float = Field(
         default=0.01,
         description="Weight decay for the AdamW optimizer (and the AdamW group in muon "
@@ -352,7 +352,7 @@ class OptimizerArgs(_Group):
     muon_lr: float | None = Field(
         default=None,
         description="LR for the Muon (2D weights) group. Only used with --optimizer "
-        "muon. Defaults to 10*lr (and --lr defaults to 1e-4).",
+        "muon. Defaults to --lr (and --lr defaults to 1e-3).",
     )
     muon_momentum: float = Field(
         default=0.95, description="Momentum for the Muon group."
@@ -683,7 +683,7 @@ class TrainConfig(BaseSettings):
         """Fill defaults that derive from other fields, mirroring the tail of the
         pre-refactor ``parse_args``: unset ``draft_arch`` -> ``llama`` for eagle3 else
         ``qwen3``; unset ``norm_before_fc`` / ``norm_output`` -> ``True`` for eagle3
-        else ``False``; unset ``muon_lr`` -> ``10 * lr``; unset ``num_layers`` -> ``5``
+        else ``False``; unset ``muon_lr`` -> ``lr``; unset ``num_layers`` -> ``5``
         for dflash/dspark/dflash2 else ``1``; unset ``per_position_loss_weight`` ->
         ``dpace`` for dflash else ``fixed-exp-decay``; unset ``loss_fn`` -> ``ce`` for
         dflash else ``kl_div``; unset ``block_size`` -> ``16`` for dflash else
@@ -720,7 +720,7 @@ class TrainConfig(BaseSettings):
         if self.draft.sliding_window_non_causal is None:
             self.draft.sliding_window_non_causal = self.speculator_type == "dflash2"
         if self.optimizer.muon_lr is None:
-            self.optimizer.muon_lr = 10 * self.optimizer.lr
+            self.optimizer.muon_lr = self.optimizer.lr
         if self.draft.num_layers is None:
             self.draft.num_layers = 5 if is_dflash_family else 1
         if self.dflash.per_position_loss_weight is None:

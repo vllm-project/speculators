@@ -110,7 +110,7 @@ torchrun --standalone --nproc_per_node=4 -m speculators.train \
 
 - **`--epochs`** (int, default: `20`) Number of training epochs.
 
-- **`--lr`** (float, default: `1e-4`) Learning rate.
+- **`--lr`** (float, default: `1e-3`) Learning rate.
 
 - **`--train-data-ratio`** (float, default: `0.9`) Ratio of data to use for training, the rest of the provided data will be used for validation.
 
@@ -136,7 +136,7 @@ torchrun --standalone --nproc_per_node=4 -m speculators.train \
 
 - **`--weight-decay`** (float, default: `0.01`) Weight decay for the AdamW optimizer (and the AdamW group in muon mode).
 
-- **`--muon-lr`** (float, default: `10*lr`) Learning rate for the Muon (2D weights) group. Only used with `--optimizer muon`. Defaults to 10× the `--lr` value.
+- **`--muon-lr`** (float, default: `lr`) Learning rate for the Muon (2D weights) group. Only used with `--optimizer muon`. Defaults to the `--lr` value.
 
 - **`--muon-momentum`** (float, default: `0.95`) Momentum for the Muon optimizer. Only used with `--optimizer muon`.
 
