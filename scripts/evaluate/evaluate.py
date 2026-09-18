@@ -442,7 +442,11 @@ def main() -> None:
     parser.add_argument(
         "--gen-kwargs",
         default="",
-        help="Flat JSON with generation kwargs, e.g. '{\"temperature\":0.6}'",
+        help=(
+            "JSON with generation kwargs, e.g. '{\"temperature\":0.6}'. "
+            "Nested values are supported, e.g. "
+            '\'{"chat_template_kwargs":{"enable_thinking":false}}\'.'
+        ),
     )
     parser.add_argument(
         "--data-column-mapper",

@@ -174,16 +174,38 @@ class TestRunGuidellm:
     def test_backend_flag(self, perf_utils):
         cmd = self._capture_cmd(perf_utils)
         idx = cmd.index("--backend")
-        backend = cmd[idx + 1]
-        assert "kind=openai_http" in backend
-        assert "target=http://localhost:8000/v1" in backend
-        assert "max_tokens=4096" in backend
+        backend = json.loads(cmd[idx + 1])
+        assert backend["kind"] == "openai_http"
+        assert backend["target"] == "http://localhost:8000/v1"
+        assert backend["max_tokens"] == 4096
 
     def test_backend_gen_kwargs(self, perf_utils):
         cmd = self._capture_cmd(perf_utils, gen_kwargs={"temperature": 0.6})
         idx = cmd.index("--backend")
-        backend = cmd[idx + 1]
-        assert "extras.body.temperature=0.6" in backend
+        backend = json.loads(cmd[idx + 1])
+        assert backend["extras"]["body"]["temperature"] == 0.6
+
+    def test_backend_nested_gen_kwargs(self, perf_utils):
+        """Nested dict gen_kwargs survive as JSON (regression: flat string form
+        interpolated them via repr and broke guidellm's --backend parser)."""
+        cmd = self._capture_cmd(
+            perf_utils,
+            gen_kwargs={
+                "temperature": 1.0,
+                "chat_template_kwargs": {"enable_thinking": False},
+            },
+        )
+        idx = cmd.index("--backend")
+        backend = json.loads(cmd[idx + 1])
+        assert backend["extras"]["body"]["chat_template_kwargs"] == {
+            "enable_thinking": False
+        }
+
+    def test_backend_no_extras_without_gen_kwargs(self, perf_utils):
+        cmd = self._capture_cmd(perf_utils, gen_kwargs=None)
+        idx = cmd.index("--backend")
+        backend = json.loads(cmd[idx + 1])
+        assert "extras" not in backend
 
     def test_data_huggingface_with_subset(self, perf_utils):
         cmd = self._capture_cmd(perf_utils, subset="qa")
