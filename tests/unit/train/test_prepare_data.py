@@ -146,6 +146,35 @@ def test_pretokenized_data_does_not_require_chat_template(
     assert dataset[0]["input_ids"].tolist() == [1, 2, 3]
 
 
+def test_huggingface_jsonl_uri_downloads_dataset_file(monkeypatch: pytest.MonkeyPatch):
+    raw = HFDataset.from_dict(
+        {"input_ids": [[1, 2]], "loss_mask": [[0, 1]]}
+    )
+    calls = {}
+
+    def fake_download(**kwargs):
+        calls.update(kwargs)
+        return "/tmp/regenerated.jsonl"
+
+    def fake_load_dataset(*args, **kwargs):
+        calls["load_dataset"] = (args, kwargs)
+        return raw
+
+    monkeypatch.setattr(preprocessing_module, "hf_hub_download", fake_download)
+    monkeypatch.setattr(preprocessing_module, "load_dataset", fake_load_dataset)
+
+    loaded, normalize_fn = preprocessing_module.load_raw_dataset(
+        "hf://datasets/example-org/regenerated-responses/qwen3.jsonl"
+    )
+
+    assert loaded is raw
+    assert normalize_fn is None
+    assert calls["repo_id"] == "example-org/regenerated-responses"
+    assert calls["filename"] == "qwen3.jsonl"
+    assert calls["repo_type"] == "dataset"
+    assert calls["load_dataset"][0] == ("json",)
+
+
 def test_conversation_data_still_requires_chat_template(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ):
