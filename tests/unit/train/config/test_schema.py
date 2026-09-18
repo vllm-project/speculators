@@ -39,7 +39,8 @@ def test_flatten_resolves_eagle3_derived_defaults():
     assert flat["draft_arch"] == "llama"
     assert flat["norm_before_fc"] is True
     assert flat["norm_output"] is True
-    assert flat["muon_lr"] == pytest.approx(10 * flat["lr"])
+    assert flat["lr"] == pytest.approx(1e-3)
+    assert flat["muon_lr"] == pytest.approx(flat["lr"])
 
 
 def test_flatten_resolves_non_eagle3_derived_defaults():
