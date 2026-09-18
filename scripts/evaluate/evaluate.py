@@ -4,12 +4,31 @@
 Modes:
     throughput   Max throughput run for acceptance rates
     sweep        Full pipeline (gen-len, sweep, CSV)
+    long-context Per-request acceptance vs. context length via OpenAI's MRCR
+                 dataset. Deterministically samples a superset-monotonic set
+                 stratified across MRCR's native token bins, records every
+                 request to a Parquet table, and reports acceptance binned by
+                 context length. Requires the server started with
+                 --per-request-spec-decode-metrics detailed and the render
+                 endpoint enabled (VLLM_ENABLE_SCALE_OUT_ENDPOINTS=1).
+    agentic      Per-response acceptance replaying ThoughtWorks' agentic coding
+                 trajectories. For each recorded session, regenerates every
+                 model (assistant) response from its ground-truth prefix, so
+                 acceptance can be studied turn by turn across realistic long,
+                 multi-turn agentic contexts. Same server requirements as
+                 long-context.
 
 Examples:
     python evaluate.py --target http://localhost:8000/v1 throughput
     python evaluate.py --target http://localhost:8000/v1 sweep
     python evaluate.py --target http://localhost:8000/v1 sweep \\
         --subsets "HumanEval,qa" --gen-kwargs '{"temperature":0.6}'
+
+    python evaluate.py --target http://localhost:8000/v1 long-context \\
+        --samples-per-bin 20
+
+    python evaluate.py --target http://localhost:8000/v1 agentic \\
+        --num-sessions 50
 
     # SPEED-Bench (run prepare_speedbench.py once first to split data):
     python evaluate.py --target http://localhost:8000/v1 throughput \\
@@ -63,6 +82,14 @@ DEFAULT_SUBSETS = (
 )
 DEFAULT_MAX_CONCURRENCY = 128
 DEFAULT_MAX_REQUESTS = 200
+# long-context: samples selected per size bin (density/cost knob).
+DEFAULT_SAMPLES_PER_BIN = 20
+DEFAULT_POSITION_BIN_SIZE = 256
+# agentic: whole trajectories sampled, replays kept per session, and generation
+# budget per replayed response.
+DEFAULT_NUM_SESSIONS = 50
+DEFAULT_MAX_RESPONSES_PER_SESSION = 8
+DEFAULT_AGENTIC_MAX_NEW_TOKENS = 1024
 DEFAULT_GEN_LEN_RATE = 128
 DEFAULT_SWEEP_RATE = 10
 DEFAULT_DATA_COLUMN_MAPPER = (
@@ -78,7 +105,22 @@ _SPEEDBENCH_COLUMN_MAPPER = (
 )
 
 
-def _fetch_model_name(target: str) -> str | None:
+def _positive_int(value: str) -> int:
+    """argparse type: accept only integers >= 1.
+
+    Guards flags whose non-positive values fail late and expensively -- e.g. a
+    negative --samples-per-bin becomes a negative list slice that runs nearly the
+    whole dataset, and a non-positive --position-bin-size only blows up at the
+    reporting step, after the entire inference run.
+    """
+    parsed = int(value)
+    if parsed < 1:
+        raise argparse.ArgumentTypeError(f"must be >= 1, got {parsed}")
+    return parsed
+
+
+def _fetch_model_info(target: str) -> dict | None:
+    """Return the first ``/v1/models`` entry (has ``id`` and ``max_model_len``)."""
     base = target.rstrip("/")
     if not base.endswith("/v1"):
         base += "/v1"
@@ -88,10 +130,15 @@ def _fetch_model_name(target: str) -> str | None:
             data = json.loads(resp.read())
         models = data.get("data", [])
         if models:
-            return models[0].get("id")
+            return models[0]
     except (URLError, json.JSONDecodeError, OSError) as e:
-        logger.warning("Could not fetch model name from %s: %s", url, e)
+        logger.warning("Could not fetch model info from %s: %s", url, e)
     return None
+
+
+def _fetch_model_name(target: str) -> str | None:
+    info = _fetch_model_info(target)
+    return info.get("id") if info else None
 
 
 def _sanitize_dir_name(name: str) -> str:
@@ -281,16 +328,62 @@ def _run_subset(
     return acceptance_csv, perf_csv, max_tokens if is_sweep else None
 
 
+def _run_long_context(args: argparse.Namespace, output_dir: Path) -> None:
+    # Imported lazily so throughput/sweep runs don't pull the long-context deps
+    # (pandas, pyarrow, huggingface_hub).
+    from mrcr import run_mrcr  # noqa: PLC0415
+
+    run_mrcr(
+        target=args.target,
+        model_info=_fetch_model_info(args.target),
+        output_dir=output_dir,
+        max_concurrency=args.max_concurrency,
+        samples_per_bin=args.samples_per_bin,
+        selection_seed=args.selection_seed,
+        position_bin_size=args.position_bin_size,
+    )
+
+
+def _run_agentic(args: argparse.Namespace, output_dir: Path) -> None:
+    # Imported lazily so throughput/sweep runs don't pull the agentic deps
+    # (pandas, pyarrow, huggingface_hub).
+    from agentic import run_agentic  # noqa: PLC0415
+
+    run_agentic(
+        target=args.target,
+        model_info=_fetch_model_info(args.target),
+        output_dir=output_dir,
+        max_concurrency=args.max_concurrency,
+        num_sessions=args.num_sessions,
+        max_responses_per_session=args.max_responses_per_session,
+        min_session_tokens=args.min_session_tokens,
+        max_new_tokens=args.max_new_tokens,
+        selection_seed=args.selection_seed,
+        position_bin_size=args.position_bin_size,
+    )
+
+
 def run_benchmark(args: argparse.Namespace) -> None:
+    output_dir = Path(args.output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    save_eval_provenance(output_dir)
+
+    if args.mode == "long-context":
+        _run_long_context(args, output_dir)
+    elif args.mode == "agentic":
+        _run_agentic(args, output_dir)
+    else:
+        _run_guidellm_modes(args, output_dir)
+    logger.info("Benchmarking complete! Results: %s", output_dir)
+
+
+def _run_guidellm_modes(args: argparse.Namespace, output_dir: Path) -> None:
     check_dependencies()
     is_sweep = args.mode == "sweep"
 
     metrics_url = args.target.rstrip("/").removesuffix("/v1") + "/metrics"
-    output_dir = Path(args.output_dir)
     artifacts_dir = output_dir / "artifacts"
     artifacts_dir.mkdir(parents=True, exist_ok=True)
-
-    save_eval_provenance(output_dir)
 
     if not (output_dir / "vllm_command.txt").exists():
         logger.info(
@@ -365,8 +458,6 @@ def run_benchmark(args: argparse.Namespace) -> None:
         with (output_dir / "max_tokens.json").open("w") as f:
             json.dump(all_max_tokens, f, indent=2)
 
-    logger.info("Benchmarking complete! Results: %s", output_dir)
-
 
 def main() -> None:
     logging.basicConfig(
@@ -389,10 +480,12 @@ def main() -> None:
     )
     parser.add_argument(
         "mode",
-        choices=["throughput", "sweep"],
+        choices=["throughput", "sweep", "long-context", "agentic"],
         help=(
             "throughput: max-rate run for acceptance rates; "
-            "sweep: full benchmarking pipeline"
+            "sweep: full benchmarking pipeline; "
+            "long-context: per-request acceptance vs. context length via MRCR; "
+            "agentic: per-response acceptance replaying agentic coding trajectories"
         ),
     )
     parser.add_argument(
@@ -457,6 +550,78 @@ def main() -> None:
         help=(
             "Path to directory produced by SPEED-Bench prepare.py. "
             "Required when --dataset is a speedbench/ spec."
+        ),
+    )
+    lc_group = parser.add_argument_group("long-context mode")
+    lc_group.add_argument(
+        "--samples-per-bin",
+        type=_positive_int,
+        default=DEFAULT_SAMPLES_PER_BIN,
+        help=(
+            "long-context: MRCR samples to run per token-size bin. Larger context "
+            "windows fill more bins, so a run at a bigger --max-model-len is a "
+            f"superset of a smaller one (default: {DEFAULT_SAMPLES_PER_BIN})"
+        ),
+    )
+    shared_group = parser.add_argument_group("long-context / agentic modes")
+    shared_group.add_argument(
+        "--selection-seed",
+        type=int,
+        default=0,
+        help=(
+            "long-context/agentic: seed mixed into the per-item content hash used "
+            "to rank within each bin; changing it picks a different deterministic "
+            "sample (default: 0)"
+        ),
+    )
+    shared_group.add_argument(
+        "--position-bin-size",
+        type=_positive_int,
+        default=DEFAULT_POSITION_BIN_SIZE,
+        help=(
+            "long-context/agentic: token-position bin width for the by-position "
+            f"report (default: {DEFAULT_POSITION_BIN_SIZE})"
+        ),
+    )
+    ag_group = parser.add_argument_group("agentic mode")
+    ag_group.add_argument(
+        "--num-sessions",
+        type=_positive_int,
+        default=DEFAULT_NUM_SESSIONS,
+        help=(
+            "agentic: number of whole trajectories to sample. Each trajectory "
+            "self-sweeps context length, so no per-length binning is needed "
+            f"(default: {DEFAULT_NUM_SESSIONS})"
+        ),
+    )
+    ag_group.add_argument(
+        "--min-session-tokens",
+        type=int,
+        default=0,
+        help=(
+            "agentic: only sample trajectories whose total_tokens (from the "
+            "dataset) is at least this, so the run reaches high context lengths; "
+            "0 disables the filter (default: 0)"
+        ),
+    )
+    ag_group.add_argument(
+        "--max-responses-per-session",
+        type=_positive_int,
+        default=DEFAULT_MAX_RESPONSES_PER_SESSION,
+        help=(
+            "agentic: cap on model responses replayed per session, evenly thinned "
+            "across the session so prefix-length coverage is kept (default: "
+            f"{DEFAULT_MAX_RESPONSES_PER_SESSION})"
+        ),
+    )
+    ag_group.add_argument(
+        "--max-new-tokens",
+        type=_positive_int,
+        default=DEFAULT_AGENTIC_MAX_NEW_TOKENS,
+        help=(
+            "agentic: generation budget per replayed response; the render endpoint "
+            "clips it to whatever context room is left after the prefix (default: "
+            f"{DEFAULT_AGENTIC_MAX_NEW_TOKENS})"
         ),
     )
     args = parser.parse_args()
