@@ -192,17 +192,20 @@ class TestRunGuidellm:
         assert "kind=huggingface" in data
         assert "source=RedHatAI/speculator_benchmarks" in data
         assert "load_kwargs.data_files=qa.jsonl" in data
+        assert "load_kwargs.split=train" in data
 
-    def test_data_local_file_without_subset(self, perf_utils):
+    @pytest.mark.parametrize("dataset", ["/tmp/local.jsonl", "/tmp/local.json"])
+    def test_data_local_file_without_subset(self, perf_utils, dataset):
         cmd = self._capture_cmd(
             perf_utils,
             subset=None,
-            dataset="/tmp/local.jsonl",
+            dataset=dataset,
         )
         idx = cmd.index("--data")
         data = cmd[idx + 1]
         assert "kind=json_file" in data
-        assert "path=/tmp/local.jsonl" in data
+        assert f"path={dataset}" in data
+        assert "load_kwargs.split=train" in data
 
     def test_profile_sweep(self, perf_utils):
         cmd = self._capture_cmd(perf_utils, profile="sweep", rate=10)
