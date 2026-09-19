@@ -558,25 +558,21 @@ def run_guidellm(
     max_tokens: int,
     gen_kwargs: dict | None = None,
 ) -> None:
-    # Build the backend as a JSON object rather than a flat "key=value,..."
-    # string. The flat form cannot represent nested values: a dict-valued
-    # gen_kwarg (e.g. chat_template_kwargs={"enable_thinking": false}) would be
-    # interpolated via repr() and break guidellm's parser. guidellm accepts a
-    # JSON object with a "kind" field, which handles arbitrary nesting.
-    backend_obj: dict[str, object] = {
+    # Building the backend as a JSON object to support nested gen_kwargs for guidellm. 
+    backend: dict[str, object] = {
         "kind": "openai_http",
         "target": target,
-        "max_tokens": max_tokens,
+        "max_tokens": max_tokens
     }
     if gen_kwargs:
-        backend_obj["extras"] = {"body": gen_kwargs}
-    cmd = ["guidellm", "run", "--backend", json.dumps(backend_obj)]
+        backend["extras"] = {"body": gen_kwargs}
+    cmd = ["guidellm", "run", "--backend", json.dumps(backend)]
 
     if subset is not None:
         data = f"kind=huggingface,source={dataset}"
         data += f",load_kwargs.data_files={subset}.jsonl,load_kwargs.split=train"
     else:
-        data = f"kind=json_file,path={dataset}"
+        data = f"kind=json_file,path={dataset},load_kwargs.split=train"
     cmd.extend(["--data", data])
 
     cmd.extend(["--data-column-mapper", data_column_mapper])
