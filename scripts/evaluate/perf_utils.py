@@ -567,7 +567,7 @@ def run_guidellm(
         data = f"kind=huggingface,source={dataset}"
         data += f",load_kwargs.data_files={subset}.jsonl,load_kwargs.split=train"
     else:
-        data = f"kind=json_file,path={dataset}"
+        data = f"kind=json_file,path={dataset},load_kwargs.split=train"
     cmd.extend(["--data", data])
 
     cmd.extend(["--data-column-mapper", data_column_mapper])
