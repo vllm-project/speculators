@@ -179,9 +179,9 @@ class TestRegenerateResponsesCommand:
         assert result.exit_code != 0
         assert "only apply to dataset presets" in unstyled_output(result)
 
-    def test_invalid_temperature_cycle(self):
+    def test_invalid_temperature(self):
         result = runner.invoke(
-            app, ["regenerate-responses", "--temperature-cycle", "0.6,notnum"]
+            app, ["regenerate-responses", "--temperature", "not json"]
         )
         assert result.exit_code != 0
 
