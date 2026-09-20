@@ -988,8 +988,7 @@ def regenerate_responses(  # noqa: C901
         typer.Option(
             help=(
                 "Reasoning effort distribution as a JSON dict of "
-                "level -> weight, e.g. '{\"low\": 0.2, \"high\": 0.5, \"max\": 0.3}', "
-                "or a single level like 'high'"
+                "level to weight, e.g. '{\"low\": 0.2, \"high\": 0.2, \"max\": 0.6}'"
             ),
         ),
     ] = None,
@@ -998,8 +997,7 @@ def regenerate_responses(  # noqa: C901
         typer.Option(
             help=(
                 "Temperature distribution as a JSON dict of "
-                "value -> weight, e.g. '{\"0.6\": 0.3, \"0.8\": 0.7}', "
-                "or a single value like '0.6'"
+                "value to weight, e.g. '{\"0.6\": 0.3, \"1.0\": 0.7}'"
             ),
         ),
     ] = None,
@@ -1036,6 +1034,10 @@ def regenerate_responses(  # noqa: C901
 
     parsed_reasoning_effort = json.loads(reasoning_effort) if reasoning_effort is not None else None
     parsed_temperature = json.loads(temperature) if temperature is not None else None
+
+    for name, dist in [("--reasoning-effort", parsed_reasoning_effort), ("--temperature", parsed_temperature)]:
+        if dist is not None and abs(sum(dist.values()) - 1.0) > 1e-6:
+            raise typer.BadParameter(f"{name} weights must sum to 1.0, got {sum(dist.values())}")
 
     try:
         asyncio.run(
