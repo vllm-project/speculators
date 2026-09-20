@@ -786,6 +786,7 @@ def load_and_preprocess_dataset(
     minimum_valid_tokens: int | None = None,
     allow_empty_output: bool = False,
     trust_remote_code: bool = False,
+    skip_token_freq: bool = True,
 ) -> tuple[HFDataset, ProcessorLike]:
     """Load, tokenize, and preprocess a dataset for speculator training.
 
@@ -894,11 +895,12 @@ def load_and_preprocess_dataset(
             "--allow-empty-output if an empty dataset is intentional."
         )
 
-    log.subsection("Computing token frequency distribution")
-    save_token_frequency_distribution(
-        dataset=combined_dataset,
-        output_path=token_freq_path,
-    )
+    if not skip_token_freq:
+        log.subsection("Computing token frequency distribution")
+        save_token_frequency_distribution(
+            dataset=combined_dataset,
+            output_path=token_freq_path,
+        )
 
     if len(combined_dataset) == 0:
         log.warning("No samples remain after preprocessing; skipping visualization")
