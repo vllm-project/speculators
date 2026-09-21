@@ -558,11 +558,11 @@ def run_guidellm(
     max_tokens: int,
     gen_kwargs: dict | None = None,
 ) -> None:
-    # Building the backend as a JSON object to support nested gen_kwargs for guidellm. 
+    # Building the backend as a JSON object to support nested gen_kwargs for guidellm.
     backend: dict[str, object] = {
         "kind": "openai_http",
         "target": target,
-        "max_tokens": max_tokens
+        "max_tokens": max_tokens,
     }
     if gen_kwargs:
         backend["extras"] = {"body": gen_kwargs}
