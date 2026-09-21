@@ -170,7 +170,7 @@ def prepare_data(
     skip_token_freq: Annotated[
         bool,
         typer.Option(
-            "--skip-token-freq",
+            "--skip-token-freq/--no-skip-token-freq",
             help=(
                 "Skip computing token frequency distribution if you're not using "
                 "reduced vocabulary."
