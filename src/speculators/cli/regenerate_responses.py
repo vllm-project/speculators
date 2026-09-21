@@ -541,7 +541,6 @@ def _log_summary(stats: dict[str, Any]) -> None:
         )
 
 
-
 def sanitize_filename(name: str) -> str:
     """Sanitize a string to be safe for use in filenames."""
     name = re.sub(r'[/\\:*?"<>|]', "_", name)
@@ -862,9 +861,11 @@ async def _run(  # noqa: C901
                         vals, weights=reasoning_effort_dist.values()
                     )[0]
                 if temperature_dist is not None:
-                    queue_item["temperature"] = float(rng.choices(
-                        list(temperature_dist), weights=temperature_dist.values()
-                    )[0])
+                    queue_item["temperature"] = float(
+                        rng.choices(
+                            list(temperature_dist), weights=temperature_dist.values()
+                        )[0]
+                    )
                 await queue.put(queue_item)
                 processed_count += 1
 
@@ -989,7 +990,7 @@ def regenerate_responses(
         typer.Option(
             help=(
                 "Reasoning effort distribution as a JSON dict of "
-                "level to weight, e.g. '{\"low\": 0.2, \"high\": 0.2, \"max\": 0.6}'"
+                'level to weight, e.g. \'{"low": 0.2, "high": 0.2, "max": 0.6}\''
             ),
         ),
     ] = None,
@@ -998,7 +999,7 @@ def regenerate_responses(
         typer.Option(
             help=(
                 "Temperature distribution as a JSON dict of "
-                "value to weight, e.g. '{\"0.6\": 0.3, \"1.0\": 0.7}'"
+                'value to weight, e.g. \'{"0.6": 0.3, "1.0": 0.7}\''
             ),
         ),
     ] = None,
@@ -1036,9 +1037,7 @@ def regenerate_responses(
     parsed_reasoning_effort = (
         json.loads(reasoning_effort) if reasoning_effort is not None else None
     )
-    parsed_temperature = (
-        json.loads(temperature) if temperature is not None else None
-    )
+    parsed_temperature = json.loads(temperature) if temperature is not None else None
 
     weight_tol = 1e-6
     for flag, dist in [
@@ -1047,9 +1046,7 @@ def regenerate_responses(
     ]:
         if dist is not None and abs(sum(dist.values()) - 1.0) > weight_tol:
             total = sum(dist.values())
-            raise typer.BadParameter(
-                f"{flag} weights must sum to 1.0, got {total}"
-            )
+            raise typer.BadParameter(f"{flag} weights must sum to 1.0, got {total}")
 
     try:
         asyncio.run(
