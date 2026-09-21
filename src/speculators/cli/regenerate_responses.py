@@ -858,12 +858,13 @@ async def _run(  # noqa: C901
                 if reasoning_effort_dist is not None:
                     vals = list(reasoning_effort_dist)
                     queue_item["reasoning_effort"] = rng.choices(
-                        vals, weights=reasoning_effort_dist.values()
+                        vals, weights=list(reasoning_effort_dist.values())
                     )[0]
                 if temperature_dist is not None:
                     queue_item["temperature"] = float(
                         rng.choices(
-                            list(temperature_dist), weights=temperature_dist.values()
+                            list(temperature_dist),
+                            weights=list(temperature_dist.values()),
                         )[0]
                     )
                 await queue.put(queue_item)
