@@ -185,6 +185,21 @@ class TestRegenerateResponsesCommand:
         )
         assert result.exit_code != 0
 
+    def test_reasoning_effort_weights_must_sum_to_one(self):
+        dist = '{"low": 0.2, "high": 0.3}'
+        result = runner.invoke(
+            app, ["regenerate-responses", "--reasoning-effort", dist]
+        )
+        assert result.exit_code != 0
+        assert "must sum to 1.0" in unstyled_output(result)
+
+    def test_temperature_weights_must_sum_to_one(self):
+        result = runner.invoke(
+            app, ["regenerate-responses", "--temperature", '{"0.6": 0.8, "0.8": 0.8}']
+        )
+        assert result.exit_code != 0
+        assert "must sum to 1.0" in unstyled_output(result)
+
 
 class TestTrainCommand:
     def test_help(self):

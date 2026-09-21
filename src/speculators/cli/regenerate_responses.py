@@ -857,8 +857,9 @@ async def _run(  # noqa: C901
                     "tool_results": tool_results,
                 }
                 if reasoning_effort_dist is not None:
+                    vals = list(reasoning_effort_dist)
                     queue_item["reasoning_effort"] = rng.choices(
-                        list(reasoning_effort_dist), weights=reasoning_effort_dist.values()
+                        vals, weights=reasoning_effort_dist.values()
                     )[0]
                 if temperature_dist is not None:
                     queue_item["temperature"] = float(rng.choices(
@@ -895,7 +896,7 @@ def _validate_dataset(value: str) -> str:
     return str(dataset_path)
 
 
-def regenerate_responses(  # noqa: C901
+def regenerate_responses(
     endpoint: Annotated[
         str,
         typer.Option(
@@ -1032,12 +1033,23 @@ def regenerate_responses(  # noqa: C901
         if not isinstance(parsed_sampling_params, dict):
             raise typer.BadParameter("--sampling-params must be a JSON object")
 
-    parsed_reasoning_effort = json.loads(reasoning_effort) if reasoning_effort is not None else None
-    parsed_temperature = json.loads(temperature) if temperature is not None else None
+    parsed_reasoning_effort = (
+        json.loads(reasoning_effort) if reasoning_effort is not None else None
+    )
+    parsed_temperature = (
+        json.loads(temperature) if temperature is not None else None
+    )
 
-    for name, dist in [("--reasoning-effort", parsed_reasoning_effort), ("--temperature", parsed_temperature)]:
-        if dist is not None and abs(sum(dist.values()) - 1.0) > 1e-6:
-            raise typer.BadParameter(f"{name} weights must sum to 1.0, got {sum(dist.values())}")
+    weight_tol = 1e-6
+    for flag, dist in [
+        ("--reasoning-effort", parsed_reasoning_effort),
+        ("--temperature", parsed_temperature),
+    ]:
+        if dist is not None and abs(sum(dist.values()) - 1.0) > weight_tol:
+            total = sum(dist.values())
+            raise typer.BadParameter(
+                f"{flag} weights must sum to 1.0, got {total}"
+            )
 
     try:
         asyncio.run(
