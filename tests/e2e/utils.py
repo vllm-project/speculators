@@ -334,6 +334,7 @@ def run_prepare_data(
     seq_length: int = 512,
     timeout: float | None = None,
     render_endpoint: str | None = None,
+    skip_token_freq: bool = True,
 ):
     """Tokenize data using prepare_data.py."""
     cmd = [
@@ -352,6 +353,8 @@ def run_prepare_data(
     ]
     if render_endpoint is not None:
         cmd += ["--render-endpoint", render_endpoint]
+    if not skip_token_freq:
+        cmd += ["--no-skip-token-freq"]
     logger.info("Preparing data: {}", " ".join(cmd))
     result = subprocess.run(  # noqa: S603
         cmd, check=False, timeout=timeout
