@@ -702,8 +702,8 @@ async def _run(  # noqa: C901
     resume: bool,
     language_filter: str | None,
     max_retries: int,
-    reasoning_effort_cycle: list[str] | None,
-    temperature_cycle: list[float] | None,
+    reasoning_effort_dist: dict[str, float] | None,
+    temperature_dist: dict[str, float] | None,
     seed: int | None,
 ) -> None:
     """Main async function to process dataset through vLLM endpoints."""
@@ -714,17 +714,11 @@ async def _run(  # noqa: C901
         model = await detect_model(endpoint)
 
     typer.echo(f"Using model: {model}")
-    if reasoning_effort_cycle:
-        typer.echo(
-            "Reasoning effort (random per conversation): "
-            f"{', '.join(reasoning_effort_cycle)}"
-        )
-    if temperature_cycle:
-        typer.echo(
-            "Temperature (random per conversation): "
-            f"{', '.join(str(t) for t in temperature_cycle)}"
-        )
-    if reasoning_effort_cycle or temperature_cycle:
+    if reasoning_effort_dist:
+        typer.echo(f"Reasoning effort distribution: {reasoning_effort_dist}")
+    if temperature_dist:
+        typer.echo(f"Temperature distribution: {temperature_dist}")
+    if reasoning_effort_dist or temperature_dist:
         typer.echo(f"Sampling seed: {seed}")
 
     # Decoder for the review-only `text` twin; see build_detokenizer.
@@ -861,15 +855,18 @@ async def _run(  # noqa: C901
                     "tools": tools,
                     "tool_results": tool_results,
                 }
-                # Independently pick a reasoning effort and temperature at
-                # random so that, across conversations, we sample a mix of
-                # (effort, temperature) combinations rather than always pairing
-                # effort[i] with temperature[i]. Seeded via --seed for
-                # reproducibility.
-                if reasoning_effort_cycle is not None:
-                    queue_item["reasoning_effort"] = rng.choice(reasoning_effort_cycle)
-                if temperature_cycle is not None:
-                    queue_item["temperature"] = rng.choice(temperature_cycle)
+                if reasoning_effort_dist is not None:
+                    vals = list(reasoning_effort_dist)
+                    queue_item["reasoning_effort"] = rng.choices(
+                        vals, weights=list(reasoning_effort_dist.values())
+                    )[0]
+                if temperature_dist is not None:
+                    queue_item["temperature"] = float(
+                        rng.choices(
+                            list(temperature_dist),
+                            weights=list(temperature_dist.values()),
+                        )[0]
+                    )
                 await queue.put(queue_item)
                 processed_count += 1
 
@@ -901,7 +898,7 @@ def _validate_dataset(value: str) -> str:
     return str(dataset_path)
 
 
-def regenerate_responses(  # noqa: C901
+def regenerate_responses(
     endpoint: Annotated[
         str,
         typer.Option(
@@ -989,21 +986,21 @@ def regenerate_responses(  # noqa: C901
             ),
         ),
     ] = DEFAULT_MAX_RETRIES,
-    reasoning_effort_cycle: Annotated[
+    reasoning_effort: Annotated[
         str | None,
         typer.Option(
             help=(
-                "Comma-separated reasoning effort levels to cycle through "
-                "per conversation, e.g. 'low,high,max'"
+                "Reasoning effort distribution as a JSON dict of "
+                'level to weight, e.g. \'{"low": 0.2, "high": 0.2, "max": 0.6}\''
             ),
         ),
     ] = None,
-    temperature_cycle: Annotated[
+    temperature: Annotated[
         str | None,
         typer.Option(
             help=(
-                "Comma-separated temperature values to cycle through "
-                "per conversation, e.g. '0.6,0.8,1.0'"
+                "Temperature distribution as a JSON dict of "
+                'value to weight, e.g. \'{"0.6": 0.3, "1.0": 0.7}\''
             ),
         ),
     ] = None,
@@ -1038,26 +1035,19 @@ def regenerate_responses(  # noqa: C901
         if not isinstance(parsed_sampling_params, dict):
             raise typer.BadParameter("--sampling-params must be a JSON object")
 
-    parsed_reasoning_effort_cycle: list[str] | None = None
-    if reasoning_effort_cycle is not None:
-        parsed_reasoning_effort_cycle = [
-            level.strip() for level in reasoning_effort_cycle.split(",")
-        ]
-        if not parsed_reasoning_effort_cycle:
-            raise typer.BadParameter("--reasoning-effort-cycle must not be empty")
+    parsed_reasoning_effort = (
+        json.loads(reasoning_effort) if reasoning_effort is not None else None
+    )
+    parsed_temperature = json.loads(temperature) if temperature is not None else None
 
-    parsed_temperature_cycle: list[float] | None = None
-    if temperature_cycle is not None:
-        try:
-            parsed_temperature_cycle = [
-                float(t.strip()) for t in temperature_cycle.split(",")
-            ]
-        except ValueError as e:
-            raise typer.BadParameter(
-                "--temperature-cycle values must be numbers"
-            ) from e
-        if not parsed_temperature_cycle:
-            raise typer.BadParameter("--temperature-cycle must not be empty")
+    weight_tol = 1e-6
+    for flag, dist in [
+        ("--reasoning-effort", parsed_reasoning_effort),
+        ("--temperature", parsed_temperature),
+    ]:
+        if dist is not None and abs(sum(dist.values()) - 1.0) > weight_tol:
+            total = sum(dist.values())
+            raise typer.BadParameter(f"{flag} weights must sum to 1.0, got {total}")
 
     try:
         asyncio.run(
@@ -1075,8 +1065,8 @@ def regenerate_responses(  # noqa: C901
                 resume=resume,
                 language_filter=language_filter,
                 max_retries=max_retries,
-                reasoning_effort_cycle=parsed_reasoning_effort_cycle,
-                temperature_cycle=parsed_temperature_cycle,
+                reasoning_effort_dist=parsed_reasoning_effort,
+                temperature_dist=parsed_temperature,
                 seed=seed,
             )
         )
