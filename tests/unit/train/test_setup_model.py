@@ -859,6 +859,9 @@ def test_from_training_args_loads_vocab_mappings(vocab_mappings):
             norm_before_residual=False,
             ttt_steps=1,
             verifier_name_or_path="nm-testing/tinysmokellama-3.2",
+            # The 6-layer verifier makes the default [2, n // 2, n - 3]
+            # collapse to [2, 3, 3], which id validation now rejects.
+            target_layer_ids=[1, 3, 5],
         )
 
     assert model.t2d is not None, "t2d is None after from_training_args"

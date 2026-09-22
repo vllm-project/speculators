@@ -1,22 +1,56 @@
 import logging
 from pathlib import Path
 
+import torch
+
 logger = logging.getLogger(__name__)
 
 
 def check_hidden_states(data: dict, tokens: list[int]):
+    required = {"token_ids", "hidden_states"}
+    missing = required - data.keys()
+    if missing:
+        raise ValueError(f"Hidden-state payload is missing keys: {missing}")
+
     t_ids = data["token_ids"].tolist()
     if t_ids != tokens:
         raise ValueError(f"Token ids don't match expected token ids {tokens}")
 
     hs = data["hidden_states"]
-    if hs.isnan().any():
-        raise ValueError("Hidden states contain NaN values")
+    if not isinstance(hs, torch.Tensor):
+        raise ValueError(f"Hidden states must be a tensor, got {type(hs).__name__}")
     if len(tokens) != hs.shape[0]:
         raise ValueError(
             f"Sequence length of hidden states {hs.shape[0]}"
             f" doesn't match num tokens {len(tokens)}"
         )
+
+    nan_count = 0
+    inf_count = 0
+    affected_layers: set[int] = set()
+    rows_per_chunk = 256
+    for start in range(0, hs.shape[0], rows_per_chunk):
+        # Process hidden states in chunks to avoid OOMs
+        chunk = hs[start : start + rows_per_chunk]
+        finite = torch.isfinite(chunk)
+        if finite.all():
+            continue
+        nan_count += int(torch.isnan(chunk).sum().item())
+        inf_count += int(torch.isinf(chunk).sum().item())
+        if hs.ndim >= 3:  # noqa: PLR2004
+            bad_layers = (~finite).flatten(start_dim=2).any(dim=(0, 2))
+            affected_layers.update(
+                bad_layers.nonzero(as_tuple=False).flatten().tolist()
+            )
+
+    if nan_count or inf_count:
+        details = (
+            f"shape={tuple(hs.shape)}, dtype={hs.dtype}, "
+            f"nan_count={nan_count}, inf_count={inf_count}"
+        )
+        if affected_layers:
+            details += f", affected layer slots={sorted(affected_layers)}"
+        raise ValueError(f"Hidden states contain non-finite values ({details})")
 
 
 def get_existing_hidden_state_indices(output_path: Path) -> list[int]:

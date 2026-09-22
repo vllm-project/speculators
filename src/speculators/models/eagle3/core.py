@@ -6,6 +6,7 @@ from torch.nn.attention.flex_attention import create_block_mask, create_mask
 from transformers import AutoConfig, DynamicCache, PretrainedConfig
 
 from speculators.config import SpeculatorsConfig, VerifierConfig
+from speculators.losses import LossConfig, resolve_loss_config
 from speculators.model import DraftVocabMixin, SpeculatorModel
 from speculators.models.attention import create_float_mask
 from speculators.models.eagle3 import Eagle3SpeculatorConfig
@@ -16,8 +17,11 @@ from speculators.models.eagle3.attention import (
 )
 from speculators.models.eagle3.metrics import compute_metrics
 from speculators.models.eagle3.model_definitions import model_classes
-from speculators.models.metrics import LossConfig, resolve_loss_config
-from speculators.models.utils import conditional_torch_compile, resolve_target_layer_ids
+from speculators.models.utils import (
+    conditional_torch_compile,
+    flatten_rope_parameters,
+    resolve_target_layer_ids,
+)
 from speculators.proposals.greedy import GreedyTokenProposalConfig
 
 
@@ -102,7 +106,8 @@ class Eagle3DraftModel(DraftVocabMixin, SpeculatorModel):
 
         # ROTARY EMBEDDINGS
         # Create a modified config for the rotary embedding to use 2x the hidden size
-        modified_tl_config = copy.copy(config.transformer_layer_config)
+        modified_tl_config = flatten_rope_parameters(config.transformer_layer_config)
+        modified_tl_config = copy.copy(modified_tl_config)
         modified_tl_config.hidden_size *= 2
         self.rotary_emb = self._model_definitions.rotary_emb_class(modified_tl_config)
 
@@ -384,7 +389,9 @@ class Eagle3DraftModel(DraftVocabMixin, SpeculatorModel):
         """
         # Resolve target layer IDs if not provided
         target_layer_ids = resolve_target_layer_ids(
-            kwargs.get("target_layer_ids"), kwargs["verifier_name_or_path"]
+            kwargs.get("target_layer_ids"),
+            kwargs["verifier_name_or_path"],
+            trust_remote_code=kwargs.get("trust_remote_code", False),
         )
 
         verifier_config._attn_implementation = kwargs.get(  # noqa: SLF001
@@ -428,7 +435,9 @@ class Eagle3DraftModel(DraftVocabMixin, SpeculatorModel):
         Returns:
             Tuple of (train_call_kwargs, val_call_kwargs)
         """
-        loss_config = resolve_loss_config(kwargs["loss_fn"])
+        loss_config = resolve_loss_config(
+            kwargs["loss_fn"], kwargs.get("loss_implementation", "fused")
+        )
         train_kwargs = {
             "ttt_steps": kwargs["ttt_steps"],
             "ttt_step_loss_decay": kwargs["ttt_step_loss_decay"],

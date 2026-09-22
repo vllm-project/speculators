@@ -4,20 +4,20 @@ nav:
           - user_guide/index.md
           - Getting Started: user_guide/getting_started.md
           - Features: user_guide/features.md
+          - Loss Functions: user_guide/loss_functions.md
           - Algorithms:
                 - user_guide/algorithms/index.md
                 - Eagle3: user_guide/algorithms/eagle3.md
                 - Dflash: user_guide/algorithms/dflash.md
+                - DFlash2: user_guide/algorithms/dflash2.md
+                - DSpark: user_guide/algorithms/dspark.md
                 - P-Eagle: user_guide/algorithms/peagle.md
                 - MTP: user_guide/algorithms/mtp.md
                 - Decision Guide: user_guide/algorithms/decision_guide.md
           - Tutorials:
                 - user_guide/tutorials/index.md
-                - Train Eagle3 Model Online: user_guide/tutorials/train_eagle3_online.md
-                - Train Eagle3 Model Offline: user_guide/tutorials/train_eagle3_offline.md
-                - Train Dflash Model Online: user_guide/tutorials/train_dflash_online.md
-                - Train P-Eagle Model Offline: user_guide/tutorials/train_peagle_offline.md
-                - Train MTP Model Online: user_guide/tutorials/train_mtp_online.md
+                - Train a Speculator: user_guide/tutorials/train.md
+                - Multi-Node Training: user_guide/tutorials/multi_node_training.md
                 - Response Regeneration: user_guide/tutorials/response_regeneration.md
                 - Evaluating Model Performance: user_guide/tutorials/evaluating_performance.md
                 - Serve in vLLM: user_guide/tutorials/serve_vllm.md
@@ -33,8 +33,8 @@ nav:
           - reference/speculators
     - CLI Reference:
           - cli/index.md
-          - prepare_data.py: cli/prepare_data.md
-          - data_generation_offline.py: cli/data_generation_offline.md
+          - prepare-data: cli/prepare_data.md
+          - generate-offline-data: cli/data_generation_offline.md
           - launch_vllm.py: cli/launch_vllm.md
           - train.py: cli/train.md
           - response_regeneration: cli/response_regeneration.md

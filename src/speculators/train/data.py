@@ -1,9 +1,6 @@
-import json
-import math
-import os
-import random
+import logging
 import warnings
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from os import PathLike
 from pathlib import Path
 from typing import Any, Literal, cast
@@ -22,39 +19,15 @@ from speculators.data_generation.vllm_client import (
     generate_hidden_states,
 )
 from speculators.train.noise_transforms import TransformTensors
+from speculators.train.recovery import (
+    RECOVERY_METADATA_KEY,
+    GenerationRecoveryGuard,
+    RecoveryMetadata,
+    SampleUnavailable,
+)
 
 BatchType = dict[str, Any]
-
-
-def list_files(path):
-    datapath = []
-    for root, _directories, files in os.walk(path):
-        for file in files:
-            if not file.endswith("pt"):
-                continue
-            file_path = Path(root) / file
-            datapath.append(file_path)
-
-    return datapath
-
-
-def split_files(datapath: str, ratio: float = 0.9, seed: int = 0):
-    """Given a datapath, split the files into a training and validation set
-    ratio is the proportion of files to put in the training set
-    1 - ratio is the proportion of files to put in the validation set
-    """
-    random.seed(seed)
-    file_list = list_files(datapath)
-    random.shuffle(file_list)
-    num_files = len(file_list)
-    num_train_files = int(num_files * ratio)
-    train_files = file_list[:num_train_files]
-    val_files = file_list[num_train_files:]
-    return train_files, val_files
-
-
-# Data standardization functions
-StandardizeFnSig = Callable[[dict[str, Any]], dict[str, Any]]
+logger = logging.getLogger("speculators")
 
 
 def create_empty_sample(
@@ -80,27 +53,6 @@ def create_empty_sample(
         "loss_mask": torch.empty(0, dtype=torch.bool),
         "lengths": torch.tensor([0], dtype=torch.long),
         "position_ids": torch.arange(0, dtype=torch.long),
-    }
-
-
-def standardize_data_v1(data: dict[str, Any]) -> dict[str, Any]:
-    # v1 data format:
-    # {
-    #  "input_ids": [seq_len],
-    #  "loss_mask": [seq_len],
-    #  "hidden_states": [
-    #    [seq_len, hidden_size],
-    #    [seq_len, hidden_size],
-    #    [seq_len, hidden_size],
-    #    ...
-    #  ],
-    # }
-
-    return {
-        "hidden_states": torch.cat(data["hidden_states"][:-1], dim=-1),
-        "input_ids": data["input_ids"],
-        "verifier_last_hidden_states": data["hidden_states"][-1],
-        "loss_mask": data["loss_mask"],
     }
 
 
@@ -159,13 +111,13 @@ class BaseDataset(Dataset):
     def _compute_approx_lengths(self):
         raise NotImplementedError
 
-    def _get_raw_data(self, index):
+    def _get_raw_data(self, index: int) -> BatchType | SampleUnavailable:
         raise NotImplementedError
 
-    def __getitem__(self, index) -> BatchType | None:
+    def __getitem__(self, index) -> BatchType | SampleUnavailable:
         data = self._get_raw_data(index)
 
-        if data is None:
+        if isinstance(data, SampleUnavailable):
             return data
 
         # data structure: {
@@ -208,27 +160,35 @@ class ArrowDataset(BaseDataset):
         vllm_endpoint: str = "http://localhost:8000/v1",
         on_missing: Literal["generate", "skip", "warn", "raise"] = "generate",
         on_generate: Literal["cache", "delete"] = "delete",
-        split_ratio: float = 1.0,
+        train_ratio: float = 1.0,
+        split: Literal["train", "val"] = "train",
         transform: TransformTensors | None = None,
         hidden_states_dtype=torch.bfloat16,
         model: str | None = None,
         request_timeout: float | None = DEFAULT_REQUEST_TIMEOUT,
         max_retries: int = DEFAULT_MAX_RETRIES,
+        generation_validation_retries: int = 2,
+        max_consecutive_generation_failures: int = 20,
     ):
         self.data = load_from_disk(datapath)
-        self.start_file_idx = 0
-        if split_ratio == 1.0:
-            pass
-        elif 1.0 > split_ratio > 0:
-            self.start_file_idx = 0
-            split_idx = int(len(self.data) * split_ratio)
-            self.data = self.data.select(range(split_idx))
-        elif -1.0 < split_ratio < 0:
-            split_idx = int(len(self.data) * (1.0 + split_ratio))
-            self.start_file_idx = split_idx
-            self.data = self.data.select(range(split_idx, len(self.data)))
-        else:
-            raise ValueError("split_ratio must be in range (-1.0, 1.0] excluding 0.0.")
+        if not 0.0 < train_ratio <= 1.0:
+            raise ValueError(f"train_ratio must be in (0.0, 1.0], got {train_ratio}")
+        if split == "val" and train_ratio == 1.0:
+            raise ValueError("train_ratio=1.0 leaves no validation split")
+
+        # Both splits derive their boundary from this one expression,
+        # so they are exactly complementary.
+        split_idx = int(len(self.data) * train_ratio)
+        start, stop = (
+            (0, split_idx) if split == "train" else (split_idx, len(self.data))
+        )
+        if start >= stop:
+            raise ValueError(
+                f"{split} split is empty (dataset has {len(self.data)} rows, "
+                f"train_ratio={train_ratio} gives split_idx={split_idx})"
+            )
+        self.start_file_idx = start
+        self.data = self.data.select(range(start, stop))
 
         self.transfer = transfer or FileTransfer(Path(datapath) / "hidden_states")
         self.vllm_endpoint = vllm_endpoint
@@ -238,6 +198,10 @@ class ArrowDataset(BaseDataset):
         self.model = model
         self.request_timeout = request_timeout
         self.max_retries = max_retries
+        self.generation_recovery = GenerationRecoveryGuard(
+            retries=generation_validation_retries,
+            max_consecutive_failures=max_consecutive_generation_failures,
+        )
 
         # Delay super init so that `_compute_approx_lengths` has required data
         super().__init__(max_len, transform, hidden_states_dtype)
@@ -246,10 +210,10 @@ class ArrowDataset(BaseDataset):
         return index + self.start_file_idx
 
     def _setup_client(self):
-        self.client = openai.OpenAI(
+        client = openai.OpenAI(
             base_url=self.vllm_endpoint, api_key="EMPTY", max_retries=0
         )
-        list_models = self.client.models.list()
+        list_models = client.models.list()
         model_id = list_models.data[0].id
         if self.model and self.model != model_id:
             raise ValueError(
@@ -259,6 +223,9 @@ class ArrowDataset(BaseDataset):
             )
         self.model = model_id
         self.transfer.setup()
+        # Do not retain a half-initialized client if model discovery or Mooncake
+        # setup failed; the outer full-round-trip retry should redo initialization.
+        self.client = client
 
     def __len__(self):
         return len(self.data)
@@ -267,14 +234,16 @@ class ArrowDataset(BaseDataset):
         """Get lengths of the dataset samples."""
         return list(self.data.with_format(None)["seq_len"])
 
-    def _maybe_generate_hs(self, index: int) -> dict[str, torch.Tensor] | None:
-        if not self.client:
-            self._setup_client()
-
-        dataset_item = self.data[index]
-        client_item = build_client_item(dataset_item)
-
+    def _generate_hidden_states_once(
+        self,
+        index: int,
+        dataset_item: dict,
+        client_item: ClientItem,
+    ) -> dict[str, torch.Tensor]:
+        handle: str | None = None
         try:
+            if not self.client:
+                self._setup_client()
             handle = generate_hidden_states(
                 self.client,  # type:ignore[arg-type]
                 self.model,  # type:ignore[arg-type]
@@ -287,47 +256,70 @@ class ArrowDataset(BaseDataset):
             if loaded_hs is None:
                 raise ValueError(f"Failed to load hidden states for handle {handle}")
 
+            # Covers token/shape mismatches and non-finite values. The Mooncake
+            # transfer performs manifest/checksum validation first.
             check_hidden_states(loaded_hs, dataset_item["input_ids"].tolist())
 
             file_idx = self._map_to_file_idx(index)
-            match self.on_generate:
-                case "cache":
-                    self.transfer.cache(handle, file_idx)
-                case "delete":
+            if self.on_generate == "cache":
+                self.transfer.cache(handle, file_idx)
+            else:
+                try:
                     self.transfer.delete(handle)
-        except Exception as e:
-            if isinstance(e, ValueError) and "NaN" in str(e):
-                raise
-            warnings.warn(
-                f"Failed to load/cache hidden states for sample {index}: {e}",
-                stacklevel=1,
-            )
-            return None
+                except Exception as cleanup_error:  # noqa: BLE001
+                    logger.warning(
+                        "Loaded a valid hidden-state sample but failed to delete "
+                        "handle %s: %s",
+                        handle,
+                        cleanup_error,
+                    )
+            return loaded_hs
+        except Exception:
+            if handle is not None:
+                try:
+                    self.transfer.delete(handle)
+                except Exception as cleanup_error:  # noqa: BLE001
+                    logger.warning(
+                        "Failed to clean generated hidden-state handle %s: %s",
+                        handle,
+                        cleanup_error,
+                    )
+            raise
 
-        return loaded_hs
-
-    def _get_raw_data(self, index):
+    def _get_raw_data(self, index: int) -> BatchType | SampleUnavailable:
         file_idx = self._map_to_file_idx(index)
-        loaded_hs = self.transfer.get_cached(file_idx)
+        cached_hs = self.transfer.get_cached(file_idx)
+        if cached_hs is None:
+            if self.on_missing == "generate":
+                dataset_item = self.data[index]
+                client_item = build_client_item(dataset_item)
+                loaded_hs = self.generation_recovery.run(
+                    lambda: self._generate_hidden_states_once(
+                        index,
+                        dataset_item,
+                        client_item,
+                    ),
+                    description=(
+                        f"Hidden-state round trip failed for dataset index {index}, "
+                        f"file index {file_idx}"
+                    ),
+                )
+            elif self.on_missing == "skip":
+                return SampleUnavailable()
+            elif self.on_missing == "warn":
+                warnings.warn(
+                    f"Failed to load hidden states for sample {index}. Skipping...",
+                    stacklevel=1,
+                )
+                return SampleUnavailable(
+                    reason=f"Hidden states unavailable for sample {index}"
+                )
+            else:
+                raise RuntimeError(f"Failed to load hidden states for sample {index}.")
+        else:
+            loaded_hs = cached_hs
 
-        if loaded_hs is None:
-            match self.on_missing:
-                case "generate":
-                    loaded_hs = self._maybe_generate_hs(index)
-                case "skip":
-                    return None
-                case "warn":
-                    warnings.warn(
-                        f"Failed to load hidden states for sample {index}. Skipping...",
-                        stacklevel=1,
-                    )
-                    return None
-                case "raise":
-                    raise RuntimeError(
-                        f"Failed to load hidden states for sample {index}."
-                    )
-
-        if loaded_hs is None:
+        if isinstance(loaded_hs, SampleUnavailable):
             return loaded_hs
 
         # loaded_hs structure: {
@@ -341,7 +333,9 @@ class ArrowDataset(BaseDataset):
                 f"match input ids {self.data[index]['input_ids']}",
                 stacklevel=1,
             )
-            return None
+            return SampleUnavailable(
+                reason=f"Cached token ids do not match sample {index}"
+            )
 
         return {
             "hidden_states": loaded_hs["hidden_states"][:, :-1].flatten(
@@ -355,113 +349,51 @@ class ArrowDataset(BaseDataset):
         }
 
 
-class SampleFileDataset(BaseDataset):
+class CollateFn:
+    """Picklable collate function for use with ``multiprocessing_context='spawn'``."""
+
     def __init__(
         self,
         max_len: int,
-        datapath: str | None = None,
-        file_list: list[str] | None = None,
-        transform: TransformTensors | None = None,
-        hidden_states_dtype: torch.dtype = torch.bfloat16,
+        hidden_size: int,
+        num_target_layers: int = 3,
+        dtype: torch.dtype = torch.bfloat16,
+        preprocess: Callable[[BatchType], BatchType] | None = None,
     ):
-        """Initialize the SampleFileDataset.
-        Args:
-            max_len: The maximum length of the sequence.
-            datapath: The path to the data directory. All `.pt` files in this directory
-            or its subdirectories will be loaded and used as training data. MUTUALLY
-            EXCLUSIVE with `file_list`.
-            file_list: The list of explict file paths to load data from. These files
-            must be in the format produced by the Speculators generation scripts.
-            MUTUALLY EXCLUSIVE with `datapath`.
-            transform: The transform to apply to the data.
-            hidden_states_dtype: The dtype of the hidden states.
-            standardize_fn: The function to standardize the data.
+        self.max_len = max_len
+        self.hidden_size = hidden_size
+        self.num_target_layers = num_target_layers
+        self.dtype = dtype
+        self.preprocess = preprocess
 
-            Note: datapath or file_list must be provided, but not both.
+    def _clean_batch(
+        self, batch: Sequence[BatchType | SampleUnavailable | None]
+    ) -> tuple[list[BatchType], list[SampleUnavailable], int]:
+        """Preprocess valid samples and collect unavailable and dropped samples."""
+        preprocess = self.preprocess
+        unavailable = []
+        num_dropped = 0
+        new_batch = []
+        for item in batch:
+            if item is None:
+                num_dropped += 1
+                continue
+            if isinstance(item, SampleUnavailable):
+                unavailable.append(item)
+                num_dropped += 1
+                continue
 
-        """
+            new_batch.append(preprocess(item) if preprocess else item)
 
-        if datapath is not None and file_list is not None:
-            raise ValueError(
-                "Either `datapath` or `file_list` must be provided, but "
-                "not both. Use `datapath` to auto-discover files, or "
-                "`file_list` to use a list of explicit file paths."
-            )
+        return new_batch, unavailable, num_dropped
 
-        if datapath is not None:
-            file_list = list_files(datapath)
+    def __call__(
+        self, batch: Sequence[BatchType | SampleUnavailable | None]
+    ) -> BatchType:
+        max_len = self.max_len
+        dtype = self.dtype
 
-        if file_list is None:
-            raise ValueError(
-                "Either `datapath` or `file_list` must be provided, but "
-                "not both. Use `datapath` to auto-discover files, or "
-                "`file_list` to use a list of explicit file paths."
-            )
-
-        self.data: list[str] = file_list
-
-        # Delay super init so that `_compute_approx_lengths` has required data
-        super().__init__(max_len, transform, hidden_states_dtype)
-
-    def __len__(self):
-        return len(self.data)
-
-    def _compute_approx_lengths(self) -> list[int]:
-        """Get lengths of the dataset samples.
-
-        First tries to load exact lengths from sample_lengths.json if available.
-        Falls back to approximation based on file sizes.
-        """
-        # Look for the sample_lengths.json file
-        sample_lengths_path = Path(self.data[0]).parent / "sample_lengths.json"
-        if sample_lengths_path.exists():
-            try:
-                with sample_lengths_path.open() as f:
-                    sample_lengths = json.load(f)
-                # Extract file index from filename (e.g., data_42.pt -> 42)
-                lengths = []
-                for fname in self.data:
-                    file_stem = Path(fname).stem
-                    file_idx = file_stem.split("_")[-1]
-                    lengths.append(sample_lengths[file_idx])
-                return lengths
-            except (KeyError, ValueError):
-                pass
-
-        # Fallback: approximate lengths from file sizes
-        item_0 = self.__getitem__(0)
-        if item_0 is None:
-            raise ValueError(
-                "Failed to load first element of datasets for length approximation"
-            )
-        lengths_0 = item_0["lengths"]
-        # this is a single sample so there is only one length
-        lengths_0 = lengths_0[0].item()
-        size_0 = Path(self.data[0]).stat().st_size
-
-        return [
-            math.ceil(Path(fname).stat().st_size / size_0 * lengths_0)
-            for fname in self.data
-        ]
-
-    def _get_raw_data(self, index):
-        return standardize_data_v1(
-            torch.load(
-                self.data[index], mmap=True, weights_only=True, map_location="cpu"
-            )
-        )
-
-
-def create_collate_fn(
-    max_len: int,
-    hidden_size: int,
-    num_target_layers: int = 3,
-    dtype: torch.dtype = torch.bfloat16,
-    preprocess: Callable[[BatchType], BatchType] | None = None,
-):
-    def collate_fn(batch: list[BatchType | None]) -> BatchType:
-        # Apply per-sample preprocessing and filter failed samples
-        batch = [preprocess(b) if preprocess else b for b in batch if b is not None]
+        batch, unavailable, num_dropped = self._clean_batch(batch)
 
         if not batch:
             # Create empty sample which then gets padded to full
@@ -469,12 +401,17 @@ def create_collate_fn(
             # Match the configured `dtype` so the placeholder doesn't crash
             # downstream layers loaded at a different precision (e.g. bf16
             # weights vs fp32 default placeholders).
-            empty = create_empty_sample(hidden_size, num_target_layers, dtype=dtype)
-            if preprocess:
-                empty = preprocess(empty)
+            empty = create_empty_sample(
+                self.hidden_size, self.num_target_layers, dtype=dtype
+            )
+            if self.preprocess:
+                empty = self.preprocess(empty)
             batch = [empty]
+            locally_empty = True
+        else:
+            locally_empty = False
 
-        collated_data = {}
+        collated_data: BatchType = {}
         for key in batch[0]:  # type: ignore[union-attr]
             if key == "lengths":
                 collated_data[key] = torch.cat([b[key] for b in batch], dim=0)  # type: ignore[index]
@@ -523,6 +460,12 @@ def create_collate_fn(
         # shape: [1, max_len]
         collated_data["document_ids"] = document_ids
 
-        return collated_data
+        collated_data["error_records"] = num_dropped
+        metadata = RecoveryMetadata.from_unavailable(
+            unavailable,
+            locally_empty=locally_empty,
+        )
+        if metadata.failure_count or metadata.locally_empty:
+            collated_data[RECOVERY_METADATA_KEY] = metadata
 
-    return collate_fn
+        return collated_data

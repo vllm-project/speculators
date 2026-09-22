@@ -41,11 +41,16 @@ class _Bin(NamedTuple):
     """Helper named tuple for `lpt_packed_batch`"""
 
     fill: int  # sum of items in _Bin
-    rank: int  # global rank _Bin is associated with
+    slot: int  # heap slot id (0..num_replicas-1)
 
 
 def _lpt_packed_batch(
-    lengths: np.ndarray, max_len: int, num_replicas: int, start_index: int, rank: int
+    lengths: np.ndarray,
+    max_len: int,
+    num_replicas: int,
+    start_index: int,
+    rank: int,
+    rotation: int,
 ) -> None | list:
     """
     Check if lengths can be distributed into `num_replicas` machines with at most
@@ -54,15 +59,22 @@ def _lpt_packed_batch(
     Uses the LPT (Longest processing time first scheduling) algorithm
     Time: O(|lengths| log |lengths| + |lengths| log replicas)
 
+    Bins are packed to a token budget, which leaves sample counts skewed: with every
+    bin empty the heap tie-breaks on slot id, so slot 0 always takes the largest sample
+    and the highest slot absorbs the small ones. `rotation` re-maps slots to ranks so
+    that role cycles across batches.
+
     Returns:
     `None` if unable to find a valid packing. Otherwise, return the batch indices that
     correspond to `rank`.
     """
 
-    # Greedily assign lengths (in decreasing order) to the least full rank until they
+    # Greedily assign lengths (in decreasing order) to the least full slot until they
     # are all assigned or we run out of space.
     local_batch = []
     heap = [_Bin(0, i) for i in range(num_replicas)]
+
+    target_slot = (rank - rotation) % num_replicas
 
     # sort in descending order
     indices = np.argsort(lengths)[::-1]
@@ -73,11 +85,11 @@ def _lpt_packed_batch(
             # Size doesn't fit in least full batch (or any others), report failure.
             return None
 
-        if heap[0].rank == rank:
+        if heap[0].slot == target_slot:
             # minimum bucket corresponds to this rank -> add idx to local batch
             local_batch.append(start_index + idx)
 
-        _ = heapreplace(heap, _Bin(new_fill, heap[0].rank))
+        _ = heapreplace(heap, _Bin(new_fill, heap[0].slot))
 
     return local_batch
 
@@ -104,7 +116,7 @@ def _assign_to_packed_batches(
 
     lengths_so_far = 0
     ind = 0
-    result = []
+    result: list = []
     lengths_cumsum = np.cumsum(lengths)
 
     # binary search for max integer x such that the next x elements in shuffled lengths
@@ -122,11 +134,14 @@ def _assign_to_packed_batches(
             lengths_cumsum[ind:], lengths_so_far + max_len * replicas, "right"
         )
 
+        # Cycle the slot->rank mapping so no rank is permanently the many-samples one.
+        rotation = len(result)
+
         batch = None
         while right - left > 1 and right > replicas:
             mid = (left + right) // 2
             batch = _lpt_packed_batch(
-                lengths[ind : ind + mid], max_len, replicas, ind, rank
+                lengths[ind : ind + mid], max_len, replicas, ind, rank, rotation
             )
             if batch is None:
                 right = mid
@@ -135,7 +150,7 @@ def _assign_to_packed_batches(
 
         if batch is None:
             batch = _lpt_packed_batch(
-                lengths[ind : ind + left], max_len, replicas, ind, rank
+                lengths[ind : ind + left], max_len, replicas, ind, rank, rotation
             )
 
         ind += left
@@ -156,6 +171,7 @@ class MultipackDistributedBatchSamplerV2(Sampler):
         rank: int,
         truncate_long_samples: bool = True,
         seed: int = 0,
+        max_batches: int | None = None,
     ):
         """Efficient distributed packing sampler for linear attention style models
 
@@ -167,12 +183,16 @@ class MultipackDistributedBatchSamplerV2(Sampler):
             truncate_long_samples (bool, optional): Whether to truncate long samples
             (True) or drop them (False). Default is True.
             seed (int, optional): Seed for RNG, must be the same on all ranks. Default 0
+            max_batches (int, optional): Limit batches exposed per epoch. Used by
+                bounded benchmarks to prevent workers from prefetching beyond the
+                measured run.
         """
         self.num_replicas = num_replicas
         self.rank = rank
         self.seed = seed
         self.epoch = 0
         self.batch_max_length = batch_max_length
+        self.max_batches = max_batches
         self.lengths = np.array(lengths)
 
         self.valid_indices = np.nonzero(self.lengths <= self.batch_max_length)[0]
@@ -229,6 +249,8 @@ class MultipackDistributedBatchSamplerV2(Sampler):
         # Translate them so that they are instead relative to the overall unshuffled
         # self.lengths array.
         batches = [indices[batch] for batch in batches]
+        if self.max_batches is not None:
+            batches = batches[: self.max_batches]
 
         # Cache result
         self._cached_generated_batches = (epoch, batches)

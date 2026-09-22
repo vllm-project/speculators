@@ -4,13 +4,13 @@ from functools import partial
 
 import torch
 
-from speculators.models.metrics import (
+from speculators.losses import (
     LossConfig,
     compound_loss,
-    compute_accuracy_single_step,
     exp_loss_decay,
     kl_div_loss,
 )
+from speculators.models.metrics import compute_accuracy_single_step
 
 
 def align_for_step(

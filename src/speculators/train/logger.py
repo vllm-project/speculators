@@ -260,6 +260,9 @@ class FormatDictFilter(logging.Filter):
 
 
 ### Handlers
+TB_SUPPORTED_TYPES = (int, float, str, bool, torch.Tensor, type(None))
+
+
 class TensorBoardHandler(logging.Handler):
     """Logger that writes metrics to TensorBoard.
 
@@ -313,6 +316,25 @@ class TensorBoardHandler(logging.Handler):
         Path.mkdir(self.tboard_init_kwargs["log_dir"], parents=True, exist_ok=True)
         return SummaryWriter(**self.tboard_init_kwargs)
 
+    @staticmethod
+    def _scalarise(d: dict) -> dict:
+        """Convert non-scalar values to JSON strings for TensorBoard compatibility.
+
+        TensorBoard's add_hparams only accepts int, float, str, bool, and torch.Tensor.
+        This method converts lists and dicts to JSON strings so all backends can
+        receive the full config.
+
+        Args:
+            d: Dictionary potentially containing non-scalar values
+
+        Returns:
+            Dictionary with all non-scalar values converted to JSON strings
+        """
+        return {
+            k: (v if isinstance(v, TB_SUPPORTED_TYPES) else json.dumps(v))
+            for k, v in d.items()
+        }
+
     def emit(self, record: logging.LogRecord):
         """Emit a log record to TensorBoard.
 
@@ -339,8 +361,10 @@ class TensorBoardHandler(logging.Handler):
         flat_dict = _flatten_dict(record.msg)
         step = getattr(record, "step", None)
         if getattr(record, "hparams", None):
+            # Convert non-scalar values to JSON strings for TensorBoard compatibility
+            scalarised_dict = self._scalarise(flat_dict)
             self._tboard_writer.add_hparams(
-                flat_dict, {}, run_name=".", global_step=step
+                scalarised_dict, {}, run_name=".", global_step=step
             )
             return
 
@@ -703,3 +727,12 @@ def setup_metric_logger(loggers, run_name, output_dir):
         },
     }
     dictConfig(logging_config)
+
+
+def log_run_config(cfg) -> None:
+    resolved_config = cfg.model_dump(mode="json")
+    if cfg.backend_args:
+        resolved_config["hidden_states_backend_args"] = dict(cfg.backend_args)
+    logging.getLogger("speculators.metrics").info(
+        resolved_config, extra={"hparams": True}
+    )

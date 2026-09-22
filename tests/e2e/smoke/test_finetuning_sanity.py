@@ -42,12 +42,13 @@ def test_finetuning_weight_sanity(tmp_path: Path):
     # at least MIN_CHANGED tensors must have rel_l1 > REL_L1_MIN
     # to ensure weights actually changed.
     LR = "1e-5"
+    MUON_LR = "1e-4"
     REL_L1_MAX = 0.05
     REL_L1_MIN = 1e-4
     MIN_CHANGED = 3
     EPS = 1e-12
     PRETRAINED = "RedHatAI/Llama-3.1-8B-Instruct-speculator.eagle3"
-    DATASET = "nm-testing/sharegpt_llama3_8b_hidden_states"
+    DATASET = "inference-optimization/speculators-ci-datasets"
 
     # Get initial state dict
     model = Eagle3DraftModel.from_pretrained(PRETRAINED)
@@ -59,7 +60,16 @@ def test_finetuning_weight_sanity(tmp_path: Path):
 
     # Run short training with low LR for single epoch
     logger.info("Downloading dataset %s", DATASET)
-    data_dir = snapshot_download(repo_id=DATASET, repo_type="dataset")
+    data_dir = (
+        Path(
+            snapshot_download(
+                repo_id=DATASET,
+                repo_type="dataset",
+                allow_patterns=["llama3_8b_hidden_states/*"],
+            )
+        )
+        / "llama3_8b_hidden_states"
+    )
     logger.info("Dataset at %s", data_dir)
     logger.info(
         "Running training (1 epoch, lr=%s, save_path=%s)", LR, tmp_path / "ckpt"
@@ -73,7 +83,9 @@ def test_finetuning_weight_sanity(tmp_path: Path):
             "--verifier-name-or-path",
             "meta-llama/Llama-3.1-8B-Instruct",
             "--data-path",
-            data_dir,
+            str(data_dir),
+            "--hidden-states-path",
+            str(data_dir / "hidden_states"),
             "--save-path",
             str(tmp_path / "ckpt"),
             "--log-dir",
@@ -82,11 +94,14 @@ def test_finetuning_weight_sanity(tmp_path: Path):
             "2",
             "--lr",
             LR,
+            "--muon-lr",
+            MUON_LR,
             "--total-seq-len",
             "2048",
             "--num-workers",
             "2",
-            "--legacy-data",
+            "--on-missing",
+            "raise",
         ],
         capture_output=True,
         text=True,

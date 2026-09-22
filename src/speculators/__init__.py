@@ -27,12 +27,35 @@ from .config import (
     reload_schemas,
 )
 from .model import SpeculatorModel
-from .models import Eagle3DraftModel, Eagle3SpeculatorConfig
+from .models import (
+    DFlash2DraftModel,
+    DFlash2SpeculatorConfig,
+    DFlashDraftModel,
+    DFlashSpeculatorConfig,
+    DSparkDraftModel,
+    DSparkSpeculatorConfig,
+    Eagle3DraftModel,
+    Eagle3SpeculatorConfig,
+    MTPDraftModel,
+    MTPSpeculatorConfig,
+    PEagleDraftModel,
+    PEagleSpeculatorConfig,
+)
 from .proposals import TokenProposalConfig
 
 __all__ = [
+    "DFlash2DraftModel",
+    "DFlash2SpeculatorConfig",
+    "DFlashDraftModel",
+    "DFlashSpeculatorConfig",
+    "DSparkDraftModel",
+    "DSparkSpeculatorConfig",
     "Eagle3DraftModel",
     "Eagle3SpeculatorConfig",
+    "MTPDraftModel",
+    "MTPSpeculatorConfig",
+    "PEagleDraftModel",
+    "PEagleSpeculatorConfig",
     "SpeculatorModel",
     "SpeculatorModelConfig",
     "SpeculatorsConfig",
