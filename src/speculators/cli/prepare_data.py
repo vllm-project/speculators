@@ -167,6 +167,16 @@ def prepare_data(
             ),
         ),
     ] = False,
+    skip_token_freq: Annotated[
+        bool,
+        typer.Option(
+            "--skip-token-freq/--no-skip-token-freq",
+            help=(
+                "Skip token frequency distribution compute if you're not using "
+                "reduced vocabulary."
+            ),
+        ),
+    ] = True,
 ) -> None:
     """Preprocess a dataset for speculator training.
 
@@ -225,6 +235,7 @@ def prepare_data(
         minimum_valid_tokens=minimum_valid_tokens,
         allow_empty_output=allow_empty_output,
         trust_remote_code=trust_remote_code,
+        skip_token_freq=skip_token_freq,
     )
 
     log.info("Done preparing data")
