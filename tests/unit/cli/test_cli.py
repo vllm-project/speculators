@@ -5,7 +5,9 @@ from typer.testing import CliRunner
 
 from speculators.cli import app
 
-runner = CliRunner()
+# Rich uses COLUMNS when rendering help, so keep assertions independent of the
+# terminal width provided by the environment running the tests.
+runner = CliRunner(env={"COLUMNS": "200"})
 
 
 def unstyled_output(result):
