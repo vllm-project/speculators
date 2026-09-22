@@ -9,7 +9,11 @@ from loguru import logger
 from safetensors import safe_open
 
 _WEIGHT_ALIASES: dict[str, list[str]] = {
-    "embed_tokens.weight": ["tok_embeddings.weight", "llm.embed.weight"],
+    "embed_tokens.weight": [
+        "tok_embeddings.weight",
+        "llm.embed.weight",
+        "backbone.embeddings.weight",  # HF Mamba-backbone (NemotronH, Mamba, ...)
+    ],
     "lm_head.weight": ["output.weight", "llm.unembed.weight"],
     "model.norm.weight": ["llm.norm.weight", "norm.weight"],
 }
