@@ -18,6 +18,10 @@ Examples:
     python evaluate.py --target http://localhost:8000/v1 throughput \\
         --dataset speedbench/qualitative/coding \\
         --speedbench-data-dir ./speedbench_data
+
+    # MRCR long-context (first run renders and caches data in ./mrcr_data):
+    python evaluate.py --target http://localhost:8000/v1 throughput \\
+        --dataset openai/mrcr --mrcr-needles 2 --mrcr-buckets 1,2
 """
 
 from __future__ import annotations
@@ -45,6 +49,14 @@ from perf_utils import (
     parse_sweep_results,
     print_acceptance_report,
     run_guidellm,
+)
+
+from mrcr import (
+    BUCKETS,
+    MRCR_DATASET,
+    parse_buckets,
+    parse_needles,
+    prepare_mrcr,
 )
 
 from speculators.provenance import (
@@ -308,7 +320,35 @@ def run_benchmark(args: argparse.Namespace) -> None:
     dataset_spec = args.dataset
     run_items: list[tuple[str, dict]] = []
 
-    if dataset_spec.startswith("speedbench/"):
+    if dataset_spec == MRCR_DATASET:
+        if args.mrcr_max_samples is not None and args.mrcr_max_samples < 1:
+            logger.error("--mrcr-max-samples must be at least 1")
+            sys.exit(1)
+        pairs = prepare_mrcr(
+            target=args.target,
+            needles=args.mrcr_needles,
+            buckets=args.mrcr_buckets,
+            data_dir=args.mrcr_data_dir,
+            artifacts_dir=artifacts_dir,
+            max_samples=args.mrcr_max_samples,
+        )
+        if not pairs:
+            logger.error("No MRCR buckets could run on this server")
+            sys.exit(1)
+        for label, bucket_path in pairs:
+            run_items.append(
+                (
+                    label,
+                    {
+                        "target": args.target,
+                        "dataset": str(bucket_path),
+                        "data_column_mapper": args.data_column_mapper,
+                        "max_concurrency": args.max_concurrency,
+                        "request_format": "/v1/completions",
+                    },
+                )
+            )
+    elif dataset_spec.startswith("speedbench/"):
         if not getattr(args, "speedbench_data_dir", None):
             logger.error(
                 "--speedbench-data-dir is required for speedbench/ datasets.\n"
@@ -462,6 +502,37 @@ def main() -> None:
             "Path to directory produced by SPEED-Bench prepare.py. "
             "Required when --dataset is a speedbench/ spec."
         ),
+    )
+    parser.add_argument(
+        "--mrcr-needles",
+        type=parse_needles,
+        default=[2, 4, 8],
+        help="MRCR needle counts: comma list of 2, 4, 8 (default: 2,4,8)",
+    )
+    parser.add_argument(
+        "--mrcr-buckets",
+        type=parse_buckets,
+        default=list(BUCKETS),
+        help=(
+            "MRCR context-length buckets as a comma list of numbers or"
+            " labels, e.g. 1,4,8 or 4096-8192,32769-65536,524289-1048576"
+            " (default: all buckets): "
+            + ", ".join(
+                f"{i}={label}" for i, (label, _, _) in enumerate(BUCKETS, 1)
+            )
+        ),
+    )
+    parser.add_argument(
+        "--mrcr-data-dir",
+        type=Path,
+        default=Path("mrcr_data"),
+        help="Cache directory for rendered MRCR data (default: ./mrcr_data)",
+    )
+    parser.add_argument(
+        "--mrcr-max-samples",
+        type=int,
+        default=None,
+        help="Maximum samples per MRCR bucket (default: no limit)",
     )
     args = parser.parse_args()
 
