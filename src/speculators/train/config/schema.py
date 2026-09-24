@@ -272,9 +272,9 @@ class GenerationArgs(_Group):
     )
     on_generate: Literal["delete"] = Field(
         default="delete",
-        description="Behaviour after generating a hidden state (only if "
-        "--on-missing=generate). Generated hidden states are always discarded once "
-        "loaded. Retained for backwards compatibility with existing command lines.",
+        description="Deprecated, no effect. Generated hidden states are always "
+        "discarded once loaded. Retained for backwards compatibility with existing "
+        "command lines and will be removed in a future release.",
     )
     request_timeout: float = Field(
         default=DEFAULT_REQUEST_TIMEOUT,

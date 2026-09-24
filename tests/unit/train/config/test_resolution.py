@@ -327,6 +327,30 @@ def test_dflash2_exclusive_block_warns_for_other_dflash_family_member():
         )
 
 
+def test_on_generate_flag_warns_deprecated():
+    with pytest.warns(FutureWarning, match="--on-generate is deprecated"):
+        TrainConfig.from_sources(
+            cli={"verifier_name_or_path": "m", "on_generate": "delete"},
+            argv=["train.py"],
+        )
+
+
+def test_on_generate_yaml_warns_deprecated(tmp_path):
+    config_path = _write(tmp_path, "train:\n  generation:\n    on_generate: delete\n")
+    with pytest.warns(FutureWarning, match="--on-generate is deprecated"):
+        TrainConfig.from_sources(
+            cli={"verifier_name_or_path": "m"},
+            config_path=config_path,
+            argv=["train.py"],
+        )
+
+
+def test_default_on_generate_does_not_warn():
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        TrainConfig.from_sources(cli={"verifier_name_or_path": "m"}, argv=["train.py"])
+
+
 def test_default_algorithm_block_does_not_warn():
     # An untouched (all-default) mismatched group is not "set", so it stays silent.
     with warnings.catch_warnings():
