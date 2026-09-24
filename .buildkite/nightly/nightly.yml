@@ -142,3 +142,252 @@ steps:
           adjustments:
             - with: {python: "3.10", transformers: "main"}
               skip: true
+
+  - group: ":rocket: Nightly E2E Tests (H100)"
+    steps:
+      - label: ":python: E2E Tests py{{matrix.python}} / transformers {{matrix.transformers}} / vllm {{matrix.vllm}}"
+        agents:
+          queue: RedHat-H100-WDC
+
+        retry:
+          automatic:
+            - exit_status: -1
+              limit: 3
+            - exit_status: 255
+              limit: 3
+            - signal_reason: agent_stop
+              limit: 3
+
+        plugins:
+          - kubernetes:
+              podSpec:
+                serviceAccountName: buildkite-anyuid
+                securityContext:
+                  fsGroup: 0
+                  runAsUser: 0
+                  runAsGroup: 0
+                nodeSelector:
+                  vllm.ci/gpu-pool: upstream-ci-h100
+
+                containers:
+                  - name: tests
+                    image: buildkite/agent:3-ubuntu
+                    command:
+                      - chmod +x .buildkite/scripts/run-tests.sh
+                      - .buildkite/scripts/run-tests.sh e2e
+
+                    resources:
+                      limits:
+                        nvidia.com/gpu: 1
+
+                    volumeMounts:
+                      - name: ci-cache
+                        mountPath: /model-cache
+                        readOnly: false
+                      - name: devshm
+                        mountPath: /dev/shm
+
+                    env:
+                      - name: PYTHON_VERSION
+                        value: "{{matrix.python}}"
+                      - name: TRANSFORMERS_VERSION
+                        value: "{{matrix.transformers}}"
+                      - name: VLLM_VERSION
+                        value: "{{matrix.vllm}}"
+                      - name: CADENCE
+                        value: "nightly"
+                      - name: HF_TOKEN
+                        valueFrom:
+                          secretKeyRef:
+                            name: hf-token-secret
+                            key: token
+
+                volumes:
+                  - name: ci-cache
+                    hostPath:
+                      path: /var/mnt/ci-cache
+                      type: DirectoryOrCreate
+                  - name: devshm
+                    emptyDir:
+                      medium: Memory
+
+        matrix:
+          setup:
+            python: ["3.10", "3.11", "3.12", "3.13"]
+            transformers: ["latest", "main"]
+            vllm: ["latest", "nightly"]
+          adjustments:
+            - with: {python: "3.10", transformers: "main", vllm: "latest"}
+              skip: true
+            - with: {python: "3.10", transformers: "main", vllm: "nightly"}
+              skip: true
+            - with: {python: "3.10", transformers: "latest", vllm: "nightly"}
+              skip: true
+            - with: {python: "3.11", transformers: "main", vllm: "latest"}
+              skip: true
+            - with: {python: "3.11", transformers: "main", vllm: "nightly"}
+              skip: true
+            - with: {python: "3.11", transformers: "latest", vllm: "nightly"}
+              skip: true
+            - with: {python: "3.12", transformers: "main", vllm: "latest"}
+              skip: true
+            - with: {python: "3.12", transformers: "main", vllm: "nightly"}
+              skip: true
+            - with: {python: "3.12", transformers: "latest", vllm: "latest"}
+              skip: true
+            - with: {python: "3.13", transformers: "latest", vllm: "nightly"}
+              skip: true
+            - with: {python: "3.13", transformers: "main", vllm: "nightly"}
+              skip: true
+
+  - group: ":rotating_light: Nightly Regression Tests (H100)"
+    steps:
+      - label: ":python: Regression Tests py{{matrix.python}} / vllm {{matrix.vllm}}"
+        agents:
+          queue: RedHat-H100-WDC
+
+        retry:
+          automatic:
+            - exit_status: -1
+              limit: 3
+            - exit_status: 255
+              limit: 3
+            - signal_reason: agent_stop
+              limit: 3
+
+        plugins:
+          - kubernetes:
+              podSpec:
+                serviceAccountName: buildkite-anyuid
+                securityContext:
+                  fsGroup: 0
+                  runAsUser: 0
+                  runAsGroup: 0
+                nodeSelector:
+                  vllm.ci/gpu-pool: upstream-ci-h100
+
+                containers:
+                  - name: tests
+                    image: buildkite/agent:3-ubuntu
+                    command:
+                      - chmod +x .buildkite/scripts/run-tests.sh
+                      - .buildkite/scripts/run-tests.sh regression
+
+                    resources:
+                      limits:
+                        nvidia.com/gpu: 1
+
+                    volumeMounts:
+                      - name: ci-cache
+                        mountPath: /model-cache
+                        readOnly: false
+                      - name: devshm
+                        mountPath: /dev/shm
+
+                    env:
+                      - name: PYTHON_VERSION
+                        value: "{{matrix.python}}"
+                      - name: VLLM_VERSION
+                        value: "{{matrix.vllm}}"
+                      - name: CADENCE
+                        value: "nightly"
+                      - name: HF_TOKEN
+                        valueFrom:
+                          secretKeyRef:
+                            name: hf-token-secret
+                            key: token
+
+                volumes:
+                  - name: ci-cache
+                    hostPath:
+                      path: /var/mnt/ci-cache
+                      type: DirectoryOrCreate
+                  - name: devshm
+                    emptyDir:
+                      medium: Memory
+
+        matrix:
+          setup:
+            python: ["3.10", "3.11", "3.12", "3.13"]
+            vllm: ["latest", "nightly"]
+          adjustments:
+            - with: {python: "3.10", vllm: "nightly"}
+              skip: true
+            - with: {python: "3.11", vllm: "nightly"}
+              skip: true
+            - with: {python: "3.12", vllm: "latest"}
+              skip: true
+            - with: {python: "3.13", vllm: "nightly"}
+              skip: true
+
+  - group: ":link: Nightly Multi-GPU Tests (H100)"
+    steps:
+      - label: ":python: Multi-GPU Tests py{{matrix.python}} / transformers {{matrix.transformers}}"
+        agents:
+          queue: RedHat-H100-WDC
+
+        retry:
+          automatic:
+            - exit_status: -1
+              limit: 3
+            - exit_status: 255
+              limit: 3
+            - signal_reason: agent_stop
+              limit: 3
+
+        plugins:
+          - kubernetes:
+              podSpec:
+                serviceAccountName: buildkite-anyuid
+                securityContext:
+                  fsGroup: 0
+                  runAsUser: 0
+                  runAsGroup: 0
+                nodeSelector:
+                  vllm.ci/gpu-pool: upstream-ci-h100
+
+                containers:
+                  - name: tests
+                    image: buildkite/agent:3-ubuntu
+                    command:
+                      - chmod +x .buildkite/scripts/run-tests.sh
+                      - .buildkite/scripts/run-tests.sh multi-gpu
+
+                    resources:
+                      limits:
+                        nvidia.com/gpu: 2
+
+                    volumeMounts:
+                      - name: ci-cache
+                        mountPath: /model-cache
+                        readOnly: false
+                      - name: devshm
+                        mountPath: /dev/shm
+
+                    env:
+                      - name: PYTHON_VERSION
+                        value: "{{matrix.python}}"
+                      - name: TRANSFORMERS_VERSION
+                        value: "{{matrix.transformers}}"
+                      - name: HF_TOKEN
+                        valueFrom:
+                          secretKeyRef:
+                            name: hf-token-secret
+                            key: token
+
+                volumes:
+                  - name: ci-cache
+                    hostPath:
+                      path: /var/mnt/ci-cache
+                      type: DirectoryOrCreate
+                  - name: devshm
+                    emptyDir:
+                      medium: Memory
+
+        matrix:
+          setup:
+            python: ["3.10", "3.13"]
+            transformers: ["latest", "main"]
+          adjustments:
+            - with: {python: "3.10", transformers: "main"}
+              skip: true
