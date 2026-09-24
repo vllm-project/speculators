@@ -31,6 +31,7 @@ from vllm.logger import init_logger
 from vllm.v1.attention.backend import AttentionMetadata
 from vllm.v1.core.sched.output import SchedulerOutput
 
+from hs_connectors.device import accelerator_module
 from hs_connectors.mooncake_store import (
     MooncakeHiddenStatesStore,
     MooncakeStoreConfig,
@@ -153,9 +154,10 @@ class MooncakeHiddenStatesConnector(KVConnectorBase_V1, SupportsHMA):
         self._kv_cache: torch.Tensor | None = None
         self._is_tp_rank_zero: bool = True
         self._store_ready: bool = False
-        # Dedicated CUDA stream for DtoH copies so they don't block
+        # Dedicated accelerator stream for DtoH copies so they don't block
         # the default stream (model forward).
-        self._copy_stream: torch.cuda.Stream | None = None
+        self._copy_stream: Any | None = None
+        self._device_module: Any | None = None
         self._num_writer_threads = mooncake_cfg.num_writer_threads
         self._executor: ThreadPoolExecutor | None = None
         self._req_futures: dict[str, Future] = {}
@@ -197,7 +199,13 @@ class MooncakeHiddenStatesConnector(KVConnectorBase_V1, SupportsHMA):
             f"Expected 1 CacheOnlyAttentionLayer, got {len(cache_layers)}"
         )
         self._kv_cache = kv_caches[cache_layers[0]]
-        self._copy_stream = torch.cuda.Stream()
+        self._copy_stream = self._device().Stream()
+
+    def _device(self) -> Any:
+        """Resolve (once) the accelerator module providing streams/events."""
+        if self._device_module is None:
+            self._device_module = accelerator_module()
+        return self._device_module
 
     def _get_executor(self) -> ThreadPoolExecutor:
         if self._executor is None:
@@ -212,9 +220,7 @@ class MooncakeHiddenStatesConnector(KVConnectorBase_V1, SupportsHMA):
             self._store.setup()
             self._store_ready = True
 
-    def _write_sample(
-        self, pending: PendingSave, ready_event: torch.cuda.Event
-    ) -> None:
+    def _write_sample(self, pending: PendingSave, ready_event: Any) -> None:
         assert self._kv_cache is not None
         assert self._copy_stream is not None
 
@@ -235,7 +241,7 @@ class MooncakeHiddenStatesConnector(KVConnectorBase_V1, SupportsHMA):
         num_tokens = pending.token_ids.shape[0]
 
         try:
-            with torch.cuda.stream(copy_stream):
+            with self._device().stream(copy_stream):
                 slot_mapping = slot_mapping.to(self._kv_cache.device, non_blocking=True)
                 hidden_states = extract_from_kv_cache(
                     self._kv_cache,
@@ -243,10 +249,14 @@ class MooncakeHiddenStatesConnector(KVConnectorBase_V1, SupportsHMA):
                     num_tokens,
                 )
                 assert_finite("hidden_states", hidden_states)
-                # Async DtoH copy into pinned host memory.
-                pinned_hs = torch.empty_like(
-                    hidden_states, device="cpu", pin_memory=True
-                )
+                # Async DtoH copy into pinned host memory. Some accelerators do
+                # not support pinned host memory; fall back to a plain CPU copy.
+                try:
+                    pinned_hs = torch.empty_like(
+                        hidden_states, device="cpu", pin_memory=True
+                    )
+                except Exception:  # noqa: BLE001 - accelerator-specific
+                    pinned_hs = torch.empty_like(hidden_states, device="cpu")
                 pinned_hs.copy_(hidden_states, non_blocking=True)
 
             # Wait for the DtoH copy to complete before handing data to the store.
@@ -282,7 +292,7 @@ class MooncakeHiddenStatesConnector(KVConnectorBase_V1, SupportsHMA):
                     # Record an event on the current (default) stream so
                     # the worker thread can wait for the forward pass to
                     # finish writing to the KV cache before reading it.
-                    ready_event = torch.cuda.Event()
+                    ready_event = self._device().Event()
                     ready_event.record()
                     self._req_futures[pending.req_id] = self._get_executor().submit(
                         self._write_sample, pending, ready_event

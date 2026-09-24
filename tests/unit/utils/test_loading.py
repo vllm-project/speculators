@@ -139,6 +139,38 @@ def test_resolve_key_prefers_shortest_suffix():
 
 
 @pytest.mark.smoke
+def test_resolve_key_mamba_backbone_embedding():
+    """NemotronH, Mamba/Mamba2/FalconMamba use ``backbone.embeddings.weight``."""
+    wm = {
+        "backbone.embeddings.weight": "shard-0.safetensors",
+        "lm_head.weight": "shard-1.safetensors",
+    }
+    assert _resolve_key("embed_tokens.weight", wm) == "backbone.embeddings.weight"
+
+
+@pytest.mark.smoke
+def test_resolve_key_standard_embed_unaffected_by_mamba_alias():
+    """Standard ``model.embed_tokens.weight`` still hits the primary candidate,
+    ahead of the new Mamba alias (llama/qwen/gemma, Bamba/Jamba/Zamba2 unchanged)."""
+    wm = {
+        "model.embed_tokens.weight": "shard-0.safetensors",
+        "backbone.embeddings.weight": "shard-1.safetensors",
+    }
+    assert _resolve_key("embed_tokens.weight", wm) == "model.embed_tokens.weight"
+
+
+@pytest.mark.smoke
+def test_resolve_key_backbone_alias_is_boundary_safe():
+    """Aliases are specific, so unrelated ``*_embeddings.weight`` tensors
+    (``position_embeddings.weight``, ``word_embeddings.weight``) don't resolve."""
+    wm = {
+        "position_embeddings.weight": "shard-0.safetensors",
+        "encoder.word_embeddings.weight": "shard-1.safetensors",
+    }
+    assert _resolve_key("embed_tokens.weight", wm) is None
+
+
+@pytest.mark.smoke
 def test_resolve_key_llm_aliases():
     """Inkling-style keys with llm. prefix resolve correctly."""
     wm = {

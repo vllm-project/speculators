@@ -52,25 +52,46 @@ class GracefulShutdownHandler:
         self._original_sigterm: Any = None
         self._timeout = timeout
         self._owner_pid: int | None = None
+        self._installed = False
 
     def install(self):
-        """Register signal handlers for SIGINT and SIGTERM."""
+        """Register signal handlers for SIGINT and SIGTERM.
+
+        Idempotent: a second call while already installed would capture this
+        handler as the "original" and restore() would then reinstall it.
+        """
+        if self._installed:
+            return
         self._owner_pid = os.getpid()
         self._original_sigint = signal.getsignal(signal.SIGINT)
         self._original_sigterm = signal.getsignal(signal.SIGTERM)
         signal.signal(signal.SIGINT, self._handler)
         signal.signal(signal.SIGTERM, self._handler)
+        self._installed = True
 
     def restore(self):
-        """Restore original signal handlers.
+        """Restore the handlers that were active before install().
 
         Called before the checkpoint save attempt so that a deliberate
-        second Ctrl+C during the save causes immediate exit.
+        second Ctrl+C during the save causes immediate exit, and again from
+        the decorator's finally block so the handlers never outlive the call.
+
+        Idempotent, which is what makes calling it from both places safe: the
+        second call must not undo a handler installed in between, such as one
+        set up by maybe_save_checkpoint().
         """
-        if self._original_sigint is not None:
-            signal.signal(signal.SIGINT, self._original_sigint)
-        if self._original_sigterm is not None:
-            signal.signal(signal.SIGTERM, self._original_sigterm)
+        if not self._installed:
+            return
+        # getsignal() returns None when the previous handler was not set from
+        # Python. There is nothing to put back in that case, and leaving this
+        # handler installed is the bug being fixed, so fall back to the default.
+        sigint = self._original_sigint
+        sigterm = self._original_sigterm
+        signal.signal(signal.SIGINT, sigint if sigint is not None else signal.SIG_DFL)
+        signal.signal(
+            signal.SIGTERM, sigterm if sigterm is not None else signal.SIG_DFL
+        )
+        self._installed = False
 
     def _handler(self, signum, frame):  # noqa: ARG002
         # Only handle in the process that installed the handler.
@@ -145,6 +166,13 @@ def with_graceful_shutdown(
                     logger.exception("Failed to save interrupt checkpoint")
                 finally:
                     timer.cancel()
+            finally:
+                # The except branch above restores before the save, but a normal
+                # return or an unrelated exception never reached it, so this
+                # call's handlers stayed installed after it finished. In a
+                # longer-lived process a later interrupt then entered a handler
+                # belonging to a training run that had already ended.
+                handler.restore()
 
         return wrapper
 
