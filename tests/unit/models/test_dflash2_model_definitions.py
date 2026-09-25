@@ -19,6 +19,7 @@ from speculators.models.dflash2.metrics import (
 from speculators.models.dflash2.model_definitions import (
     CandidateSelector,
     GroupedDynamicCausalConv,
+    Qwen35DFlashMoeBlock,
     grouped_dynamic_conv,
 )
 from speculators.models.dspark.metrics import compute_metrics as compute_unary_metrics
@@ -302,6 +303,103 @@ def test_config_round_trip_preserves_dflash2_contract(tmp_path):
     assert loaded.conv_group_size == config.conv_group_size
     assert loaded.selector_rank == config.selector_rank
     assert loaded.selector_top_k == config.selector_top_k
+
+
+def test_config_round_trip_preserves_moe_contract(tmp_path):
+    config = _tiny_config(
+        speculators_config=SpeculatorsConfig(
+            algorithm="dflash2",
+            proposal_methods=[GreedyTokenProposalConfig(speculative_tokens=3)],
+            default_proposal_method="greedy",
+            verifier=VerifierConfig(
+                name_or_path="Qwen/Qwen3-4B",
+                architectures=["Qwen3ForCausalLM"],
+            ),
+        ),
+        draft_ffn_type="moe",
+        num_experts=16,
+        num_experts_per_tok=2,
+        moe_intermediate_size=12,
+        shared_expert_intermediate_size=10,
+        moe_experts_implementation="grouped_mm",
+    )
+
+    config.save_pretrained(tmp_path)
+    loaded = SpeculatorModelConfig.from_pretrained(tmp_path)
+
+    assert isinstance(loaded, DFlash2SpeculatorConfig)
+    assert loaded.draft_ffn_type == "moe"
+    assert loaded.num_experts == 16
+    assert loaded.num_experts_per_tok == 2
+    assert loaded.moe_intermediate_size == 12
+    assert loaded.shared_expert_intermediate_size == 10
+    assert loaded.moe_experts_implementation == "grouped_mm"
+
+
+def test_moe_ffn_uses_fused_checkpoint_layout_without_mutating_attention_config():
+    config = _tiny_config(
+        draft_ffn_type="moe",
+        num_experts=16,
+        num_experts_per_tok=2,
+        moe_intermediate_size=12,
+        shared_expert_intermediate_size=10,
+    )
+    transformer_config = config.transformer_layer_config
+
+    model = DFlash2DraftModel(config)
+    mlp = model.layers[0].mlp
+
+    assert isinstance(mlp, Qwen35DFlashMoeBlock)
+    assert mlp.experts.config._experts_implementation == "grouped_mm"
+    assert not hasattr(transformer_config, "num_experts")
+    assert not hasattr(transformer_config, "num_experts_per_tok")
+    assert not hasattr(transformer_config, "moe_intermediate_size")
+    assert torch.count_nonzero(mlp.gate.weight)
+
+    state_keys = set(model.state_dict())
+    assert "layers.0.mlp.gate.weight" in state_keys
+    assert "layers.0.mlp.experts.gate_up_proj" in state_keys
+    assert "layers.0.mlp.experts.down_proj" in state_keys
+
+
+def test_dense_ffn_remains_the_default():
+    model = DFlash2DraftModel(_tiny_config())
+
+    assert not isinstance(model.layers[0].mlp, Qwen35DFlashMoeBlock)
+    assert not any(".mlp.experts." in name for name, _ in model.named_parameters())
+
+
+def test_moe_ffn_reference_forward_backward():
+    torch.manual_seed(0)
+    config = _tiny_config().transformer_layer_config
+    mlp = Qwen35DFlashMoeBlock(
+        config,
+        num_experts=4,
+        num_experts_per_tok=2,
+        moe_intermediate_size=8,
+        shared_expert_intermediate_size=8,
+        experts_implementation="reference",
+    )
+    mlp.reset_parameters(config.initializer_range)
+    hidden_states = torch.randn(2, 3, config.hidden_size, requires_grad=True)
+
+    output = mlp(hidden_states)
+
+    assert output.shape == hidden_states.shape
+    assert torch.isfinite(output).all()
+    output.square().mean().backward()
+    for name, parameter in mlp.named_parameters():
+        assert parameter.grad is not None, f"missing gradient for {name}"
+        assert torch.isfinite(parameter.grad).all(), f"non-finite gradient for {name}"
+
+
+def test_moe_config_rejects_more_selected_than_routed_experts():
+    with pytest.raises(ValueError, match="cannot exceed"):
+        _tiny_config(
+            draft_ffn_type="moe",
+            num_experts=4,
+            num_experts_per_tok=8,
+        )
 
 
 def test_model_rejects_pruned_draft_vocabulary():
