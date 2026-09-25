@@ -171,6 +171,39 @@ def test_resolve_key_backbone_alias_is_boundary_safe():
 
 
 @pytest.mark.smoke
+def test_resolve_key_mamba_backbone_final_norm():
+    """Mamba-backbone final norm ``backbone.norm_f.weight`` resolves."""
+    wm = {
+        "backbone.embeddings.weight": "shard-0.safetensors",
+        "backbone.norm_f.weight": "shard-1.safetensors",
+        "lm_head.weight": "shard-1.safetensors",
+    }
+    assert _resolve_key("model.norm.weight", wm) == "backbone.norm_f.weight"
+
+
+@pytest.mark.smoke
+def test_resolve_key_final_norm_not_confused_with_per_layer_norm():
+    """Final norm must not resolve to a per-layer ``backbone.layers.N.norm.weight``
+    (which also ends in ``norm.weight``); the specific alias is tried first."""
+    wm = {
+        "backbone.layers.0.norm.weight": "shard-0.safetensors",
+        "backbone.layers.1.norm.weight": "shard-0.safetensors",
+        "backbone.norm_f.weight": "shard-1.safetensors",
+    }
+    assert _resolve_key("model.norm.weight", wm) == "backbone.norm_f.weight"
+
+
+@pytest.mark.smoke
+def test_resolve_key_standard_final_norm_unaffected_by_mamba_alias():
+    """Standard ``model.norm.weight`` still hits the primary candidate (unchanged)."""
+    wm = {
+        "model.norm.weight": "shard-0.safetensors",
+        "backbone.norm_f.weight": "shard-1.safetensors",
+    }
+    assert _resolve_key("model.norm.weight", wm) == "model.norm.weight"
+
+
+@pytest.mark.smoke
 def test_resolve_key_llm_aliases():
     """Inkling-style keys with llm. prefix resolve correctly."""
     wm = {
