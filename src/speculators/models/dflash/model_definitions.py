@@ -156,10 +156,12 @@ class Qwen3DFlashAttention(nn.Module):
 
 
 class Qwen3DFlashDecoderLayer(GradientCheckpointingLayer):
+    attention_class: type[nn.Module] = Qwen3DFlashAttention
+
     def __init__(self, config: Qwen3Config, layer_idx: int):
         super().__init__()
         self.hidden_size = config.hidden_size
-        self.self_attn = Qwen3DFlashAttention(config=config, layer_idx=layer_idx)
+        self.self_attn = self.attention_class(config=config, layer_idx=layer_idx)
         self.mlp = Qwen3MLP(config)
         self.input_layernorm = Qwen3RMSNorm(config.hidden_size, eps=config.rms_norm_eps)  # type: ignore[arg-type]
         self.post_attention_layernorm = Qwen3RMSNorm(
