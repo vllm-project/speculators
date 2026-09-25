@@ -8,3 +8,9 @@ matplotlib
 numpy
 scikit-learn
 scipy
+
+# long-context mode: MRCR dataset loading + recorded request table. Requests go
+# straight to the target server's HTTP API, so no separate eval harness is needed.
+pandas
+pyarrow
+huggingface_hub
