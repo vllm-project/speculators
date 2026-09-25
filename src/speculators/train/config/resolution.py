@@ -381,6 +381,22 @@ def _warn_mismatched_algorithm_blocks(cfg: TrainConfig, provided: set[str]) -> N
             )
 
 
+def _warn_deprecated(provided: set[str]) -> None:
+    """Warn when a deprecated option is set explicitly (by flag or yaml).
+
+    ``--on-generate`` only accepts its default ``delete`` since hybrid training was
+    removed, so it is a no-op kept so existing command lines still parse.
+    """
+    if "on_generate" in provided:
+        warnings.warn(
+            "--on-generate is deprecated and has no effect: generated hidden states "
+            "are always deleted after loading. Remove it from your command line or "
+            "config; it will be removed in a future release.",
+            FutureWarning,
+            stacklevel=2,
+        )
+
+
 def build_from_sources(
     cls: type[TrainConfig],
     *,
@@ -439,6 +455,7 @@ def build_from_sources(
 
     provided = {dest for dest, layer in cfg._provenance.items() if layer != "default"}
     _warn_mismatched_algorithm_blocks(cfg, provided)
+    _warn_deprecated(provided)
     _validate_draft_init(cfg, provided)
     _validate_required(cfg)
     return cfg
