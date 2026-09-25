@@ -628,3 +628,94 @@ def test_create_layer_config_infers_moe_intermediate_size():
         config = _create_layer_config_for(verifier)
 
     assert config.intermediate_size == 3 * 32
+
+
+# ---------------------------------------------------------------------------
+# Heterogeneous per-layer verifier configs (e.g. Gemma 4)
+# ---------------------------------------------------------------------------
+
+
+_HETERO_PER_LAYER = frozenset({"head_dim", "num_key_value_heads"})
+
+
+class _FakeHeterogeneousConfig:
+    """Stand-in for a transformers heterogeneous config (e.g. Gemma4TextConfig).
+
+    Reading a per-layer attribute (head_dim / num_key_value_heads) off the global
+    config raises a RuntimeError, exactly like transformers'
+    AmbiguousGlobalPerLayerAttributeError (which is NOT an AttributeError, so it is
+    not swallowed by ``getattr(cfg, name, default)``). Per-layer values live in
+    ``per_layer_config``; other attributes are global.
+    """
+
+    def __init__(self, per_layer_config: list[SimpleNamespace], **globals_):
+        """Store global attrs plus a list of per-layer configs."""
+        base = {
+            "vocab_size": 128,
+            "hidden_size": 32,
+            "intermediate_size": 128,
+            "num_attention_heads": 4,
+            "hidden_act": "silu",
+            "max_position_embeddings": 128,
+            "initializer_range": 0.02,
+            "rms_norm_eps": 1e-6,
+            "is_heterogeneous": True,
+            "per_layer_attributes": set(_HETERO_PER_LAYER),
+            "per_layer_config": per_layer_config,
+        }
+        base.update(globals_)
+        object.__setattr__(self, "_d", base)
+
+    def __getattribute__(self, name):
+        """Raise for per-layer attrs (mimicking transformers), else read global."""
+        if name in _HETERO_PER_LAYER:
+            raise RuntimeError(
+                f"'{name}' is a per-layer attribute and may vary across layers "
+                "(simulated AmbiguousGlobalPerLayerAttributeError)."
+            )
+        d = object.__getattribute__(self, "__dict__").get("_d", {})
+        if name in d:
+            return d[name]
+        return object.__getattribute__(self, name)
+
+
+def _hetero_verifier(layers: list[tuple[int, int]], **globals_):
+    """Build a fake heterogeneous verifier from (head_dim, num_kv_heads) layers."""
+    per_layer = [
+        SimpleNamespace(head_dim=hd, num_key_value_heads=nkv) for hd, nkv in layers
+    ]
+    return _FakeHeterogeneousConfig(per_layer, **globals_)
+
+
+def test_hetero_verifier_resolves_from_modal_layer():
+    """A heterogeneous verifier must not crash: per-layer attrs are resolved from
+    the modal (most common) layer, not the ambiguous global config, and not the
+    atypical minority layer."""
+    # modal geometry is (head_dim=8, nkv=2), 3 of 4 layers; minority is (16, 1).
+    verifier = _hetero_verifier([(8, 2), (8, 2), (8, 2), (16, 1)])
+
+    config = _create_layer_config_for(verifier)
+
+    assert config.head_dim == 8
+    assert config.num_key_value_heads == 2
+    assert config.num_attention_heads == 4  # global, unambiguous
+    assert config.hidden_size == 32  # global (homogeneous), the real constraint
+
+
+def test_hetero_verifier_does_not_read_global_per_layer_attr():
+    """Sanity-check the fixture: reading the per-layer attr off the global config
+    raises (so the test above genuinely exercises the per-layer resolution)."""
+    verifier = _hetero_verifier([(8, 2)])
+    with pytest.raises(RuntimeError):
+        _ = verifier.head_dim
+    with pytest.raises(RuntimeError):
+        _ = verifier.num_key_value_heads
+
+
+def test_hetero_verifier_rejects_inconsistent_geometry():
+    """If the resolved (global num_attention_heads, per-layer num_key_value_heads)
+    trio is not divisible, fail loudly rather than build a malformed draft."""
+    # global num_attention_heads=4, modal nkv=3 -> 4 % 3 != 0
+    verifier = _hetero_verifier([(8, 3), (8, 3)])
+    with pytest.raises(ValueError, match="Inconsistent draft attention geometry"):
+        _create_layer_config_for(verifier)
