@@ -120,6 +120,15 @@ def create_transformer_layer_config(  # noqa: C901
     mrope_full_head_hack: bool = True,
     trust_remote_code: bool = False,
 ) -> PretrainedConfig:
+    """Build the draft decoder ``transformer_layer_config`` from shaping flags.
+
+    Used on the default draft-construction path (when neither ``--draft-config``
+    nor ``--from-pretrained`` is given). Attention defaults (``head_dim``,
+    ``num_key_value_heads``, ``hidden_size``) are seeded from the verifier. For
+    heterogeneous verifiers, global values are used as a reasonable automatic
+    default when Transformers reports an ambiguous per-layer attribute; users
+    can provide ``--draft-config`` for explicit values.
+    """
     if draft_arch not in DRAFT_ARCH_CONFIGS:
         raise ValueError(
             f"Unknown draft architecture: {draft_arch}. "
@@ -144,6 +153,20 @@ def create_transformer_layer_config(  # noqa: C901
     if hasattr(verifier_config, "text_config"):
         verifier_config = verifier_config.text_config
 
+    if getattr(verifier_config, "is_heterogeneous", False) and hasattr(
+        verifier_config, "allow_global_per_layer_attribute_access"
+    ):
+        verifier_config.allow_global_per_layer_attribute_access = True
+        warnings.warn(
+            f"Verifier '{verifier_name_or_path}' has heterogeneous per-layer "
+            "configuration; automatically using global verifier values to "
+            "infer the homogeneous draft config. This is a heuristic; pass "
+            "--draft-config with an explicit decoder config to control these "
+            "values.",
+            UserWarning,
+            stacklevel=2,
+        )
+
     hidden_act = (
         hidden_act
         or getattr(verifier_config, "hidden_act", None)
@@ -158,16 +181,25 @@ def create_transformer_layer_config(  # noqa: C901
     head_dim = getattr(verifier_config, "head_dim", None)
     num_attention_heads = verifier_config.num_attention_heads
     num_key_value_heads = verifier_config.num_key_value_heads
+    resolved_hidden_size = verifier_config.hidden_size
 
     if (
         head_dim
-        and verifier_config.hidden_size % num_attention_heads != 0
-        and verifier_config.hidden_size % head_dim == 0
+        and resolved_hidden_size % num_attention_heads != 0
+        and resolved_hidden_size % head_dim == 0
     ):
-        num_attention_heads = verifier_config.hidden_size // head_dim
+        num_attention_heads = resolved_hidden_size // head_dim
         if num_attention_heads % num_key_value_heads != 0:
             num_key_value_heads = num_attention_heads
-    resolved_head_dim = head_dim or verifier_config.hidden_size // num_attention_heads
+    resolved_head_dim = head_dim or resolved_hidden_size // num_attention_heads
+
+    # Ensure global fallback values are GQA-consistent.
+    if num_key_value_heads and num_attention_heads % num_key_value_heads != 0:
+        raise ValueError(
+            "Inconsistent draft attention geometry resolved from verifier "
+            f"'{verifier_name_or_path}': num_attention_heads={num_attention_heads} "
+            f"is not divisible by num_key_value_heads={num_key_value_heads}."
+        )
 
     if full_attention_indices and (
         min(full_attention_indices) < 0 or max(full_attention_indices) >= num_layers
@@ -183,7 +215,7 @@ def create_transformer_layer_config(  # noqa: C901
 
     config = config_class(
         vocab_size=verifier_config.vocab_size,
-        hidden_size=verifier_config.hidden_size,
+        hidden_size=resolved_hidden_size,
         intermediate_size=resolve_draft_intermediate_size(verifier_config),
         num_hidden_layers=num_layers,
         num_attention_heads=num_attention_heads,
