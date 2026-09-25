@@ -189,6 +189,33 @@ class Eagle3DraftModel(DraftVocabMixin, SpeculatorModel):
                 f" match draft hidden size {self.hidden_size}."
             )
 
+    def _compute_training_targets(
+        self,
+        hidden_states: torch.Tensor,
+        loss_mask: torch.Tensor | None,
+        ttt_steps: int,
+    ) -> torch.Tensor:
+        """Project rows needed by either loss or the evolving accuracy history."""
+        if loss_mask is None:
+            return self.verifier_lm_head(self.verifier_norm(hidden_states))
+
+        # prev_correct starts at loss_mask and follows draft starts. At depth t,
+        # start r compares with teacher row r+t even if that row has no loss.
+        supervised = loss_mask.to(torch.bool)
+        needed = supervised.clone()
+        for step in range(1, min(ttt_steps, hidden_states.shape[1])):
+            needed[:, step:] |= supervised[:, :-step]
+        indices = needed.any(dim=0).nonzero(as_tuple=True)[0]
+        if indices.numel() == hidden_states.shape[1]:
+            return self.verifier_lm_head(self.verifier_norm(hidden_states))
+
+        selected = hidden_states.index_select(1, indices)
+        projected = self.verifier_lm_head(self.verifier_norm(selected))
+        targets = projected.new_zeros(
+            hidden_states.shape[0], hidden_states.shape[1], projected.shape[-1]
+        )
+        return targets.index_copy_(1, indices, projected)
+
     @conditional_torch_compile
     def forward(  # noqa: C901
         self,
@@ -248,8 +275,8 @@ class Eagle3DraftModel(DraftVocabMixin, SpeculatorModel):
         return_loss = verifier_last_hidden_states is not None
         if return_loss:
             with torch.no_grad():
-                targets = self.verifier_lm_head(
-                    self.verifier_norm(verifier_last_hidden_states)
+                targets = self._compute_training_targets(
+                    verifier_last_hidden_states, loss_mask, ttt_steps
                 )
                 # shape: [1, total_seq_len, draft_vocab_size]
             loss = torch.tensor(0.0, device=device)
