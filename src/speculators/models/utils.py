@@ -16,7 +16,9 @@ logger = logging.getLogger(__name__)
 # extraction) — gemma3n and gemma4 dropped this convention, so prefix
 # matching would over-include. Qwen3.5 is in here because transformers'
 # Qwen3_5RMSNorm computes `output * (1.0 + weight)` and vLLM's is an alias
-# of GemmaRMSNorm.
+# of GemmaRMSNorm. The MoE variant (Qwen3.5-35B-A3B, Qwen3.6-35B-A3B, ...)
+# reports `qwen3_5_moe` / `qwen3_5_moe_text`, and its Qwen3_5MoeRMSNorm
+# applies the same `1 + w` gain.
 GEMMA_STYLE_FINAL_NORM_MODEL_TYPES = frozenset(
     (
         "gemma",
@@ -24,6 +26,8 @@ GEMMA_STYLE_FINAL_NORM_MODEL_TYPES = frozenset(
         "gemma3",
         "gemma3_text",
         "qwen3_5",
+        "qwen3_5_moe",
+        "qwen3_5_moe_text",
         "qwen3_5_text",
         "recurrent_gemma",
     )
