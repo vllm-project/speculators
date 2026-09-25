@@ -249,23 +249,12 @@ class MooncakeHiddenStatesConnector(KVConnectorBase_V1, SupportsHMA):
                     num_tokens,
                 )
                 assert_finite("hidden_states", hidden_states)
-                # Async DtoH copy into pinned host memory. Some accelerators do
-                # not support pinned host memory; fall back to a plain CPU copy.
-                try:
-                    pinned_hs = torch.empty_like(
-                        hidden_states, device="cpu", pin_memory=True
-                    )
-                except Exception:  # noqa: BLE001 - accelerator-specific
-                    pinned_hs = torch.empty_like(hidden_states, device="cpu")
-                pinned_hs.copy_(hidden_states, non_blocking=True)
-
-            # Wait for the DtoH copy to complete before handing data to the store.
-            copy_stream.synchronize()
-
-            self._store.put_sample(
-                pending.mooncake_key,
-                {"hidden_states": pinned_hs, "token_ids": pending.token_ids},
-            )
+                # The DtoH copy into the store's registered staging buffer runs
+                # on the copy stream and completes before the put.
+                self._store.put_sample(
+                    pending.mooncake_key,
+                    {"hidden_states": hidden_states, "token_ids": pending.token_ids},
+                )
         except Exception as exc:
             try:
                 # Store error marker instead of the sample, so consumer can re-request
