@@ -195,6 +195,7 @@ class MooncakeHiddenStatesStore:
         if buffer is not None and buffer.numel() >= nbytes:
             return buffer
         if buffer is not None:
+            del self._staging[slot]
             result = store.unregister_buffer(buffer.data_ptr())
             if result != 0:
                 logger.warning("Mooncake unregister_buffer returned %s", result)

@@ -239,3 +239,19 @@ def test_wait_backs_off_from_one_millisecond(store, monkeypatch):
     store._wait_for("req-late", timeout=10.0, poll_interval=0.004)
 
     assert sleeps == [0.001, 0.002, 0.004, 0.004]
+
+
+def test_failed_growth_does_not_keep_unregistered_buffer(store, monkeypatch):
+    monkeypatch.setattr(mooncake_store, "_STAGING_GRANULE", 4096)
+    store.put_sample("small", {"hidden_states": torch.zeros(16)})
+    register = store._store.register_buffer
+    monkeypatch.setattr(store._store, "register_buffer", lambda _ptr, _size: -1)
+
+    with pytest.raises(RuntimeError, match="register_buffer"):
+        store.put_sample("large", {"hidden_states": torch.zeros(4096)})
+
+    monkeypatch.setattr(store._store, "register_buffer", register)
+    store.put_sample("small-again", {"hidden_states": torch.zeros(16)})
+    assert torch.equal(
+        store.get_sample("small-again", timeout=1.0)["hidden_states"], torch.zeros(16)
+    )
