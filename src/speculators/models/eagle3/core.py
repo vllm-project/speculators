@@ -202,6 +202,7 @@ class Eagle3DraftModel(DraftVocabMixin, SpeculatorModel):
         ttt_steps: int = 3,
         ttt_step_loss_decay: float = 1.0,
         loss_config: LossConfig | None = None,
+        loss_step: torch.Tensor | None = None,
         **kwargs,
     ):
         device = hidden_states.device
@@ -315,6 +316,7 @@ class Eagle3DraftModel(DraftVocabMixin, SpeculatorModel):
                     ttt_step,
                     ttt_step_loss_decay,
                     loss_config=loss_config,
+                    loss_step=loss_step,
                 )
                 loss += s_loss
                 metrics.update(s_metrics)

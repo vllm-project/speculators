@@ -2,6 +2,9 @@
 
 import json
 from collections.abc import Callable
+from dataclasses import dataclass
+from math import isfinite
+from typing import Any
 
 import torch
 
@@ -9,9 +12,125 @@ from speculators.losses import eager
 
 _LOSS_REDUCTION_EPS = 1e-5
 
+
+@dataclass(frozen=True)
+class LinearWeightSchedule:
+    """Linearly interpolate a loss-term weight over optimizer steps."""
+
+    start: float
+    end: float
+    start_step: int
+    end_step: int
+
+    def __post_init__(self) -> None:
+        if not isfinite(self.start) or not isfinite(self.end):
+            raise ValueError("Loss weight schedule values must be finite.")
+        if self.start_step < 0 or self.end_step <= self.start_step:
+            raise ValueError(
+                "Loss weight schedule requires 0 <= start_step < end_step."
+            )
+
+    def value(self, step: torch.Tensor) -> torch.Tensor:
+        """Return the scheduled weight for a scalar optimizer-step tensor."""
+        step = step.to(dtype=torch.float32)
+        progress = ((step - self.start_step) / (self.end_step - self.start_step)).clamp(
+            0.0, 1.0
+        )
+        return self.start + progress * (self.end - self.start)
+
+
+LossWeight = float | LinearWeightSchedule
 LossConfig = dict[
-    str, tuple[Callable[[torch.Tensor, torch.Tensor], torch.Tensor], float]
+    str, tuple[Callable[[torch.Tensor, torch.Tensor], torch.Tensor], LossWeight]
 ]
+
+
+def _parse_linear_weight_schedule(name: str, value: dict) -> LinearWeightSchedule:
+    """Parse a linear loss-term weight schedule."""
+    required = {"start", "end", "start_step", "end_step"}
+    missing = required - value.keys()
+    if missing:
+        raise ValueError(
+            f"Linear loss weight schedule for '{name}' is missing: {sorted(missing)}"
+        )
+    unexpected = set(value) - (required | {"type"})
+    if unexpected:
+        raise ValueError(
+            f"Unknown fields in loss weight schedule for '{name}': {sorted(unexpected)}"
+        )
+
+    start_step = value["start_step"]
+    end_step = value["end_step"]
+    if (
+        isinstance(start_step, bool)
+        or not isinstance(start_step, int)
+        or isinstance(end_step, bool)
+        or not isinstance(end_step, int)
+    ):
+        raise ValueError(
+            f"Linear loss weight schedule steps for '{name}' must be integers."
+        )
+    if isinstance(value["start"], bool) or isinstance(value["end"], bool):
+        raise ValueError(
+            f"Linear loss weight schedule values for '{name}' must be numbers."
+        )
+    try:
+        start = float(value["start"])
+        end = float(value["end"])
+    except (TypeError, ValueError) as error:
+        raise ValueError(
+            f"Linear loss weight schedule values for '{name}' must be numbers."
+        ) from error
+    return LinearWeightSchedule(start, end, start_step, end_step)
+
+
+def _parse_loss_weight(name: str, value: Any) -> LossWeight:
+    """Parse one scalar or scheduled loss-term weight."""
+    if isinstance(value, bool):
+        raise ValueError(f"Loss weight for '{name}' must be a number or schedule.")
+    if isinstance(value, (int, float)):
+        if not isfinite(float(value)):
+            raise ValueError(f"Loss weight for '{name}' must be finite.")
+        return float(value)
+    if not isinstance(value, dict):
+        raise ValueError(
+            f"Loss weight for '{name}' must be a number or schedule, "
+            f"got {type(value).__name__}"
+        )
+
+    if value.get("type") != "linear":
+        raise ValueError(
+            f"Unknown loss weight schedule for '{name}'. Supported type: 'linear'."
+        )
+    return _parse_linear_weight_schedule(name, value)
+
+
+def has_scheduled_weights(loss_config: LossConfig | None) -> bool:
+    """Return whether a resolved loss config contains a step-dependent weight."""
+    return bool(
+        loss_config
+        and any(
+            isinstance(weight, LinearWeightSchedule)
+            for _, weight in loss_config.values()
+        )
+    )
+
+
+def freeze_loss_config(loss_config: LossConfig | None) -> LossConfig | None:
+    """Replace scheduled weights with their terminal values.
+
+    This is used for validation so the metric used for checkpoint selection is
+    invariant across optimizer steps while training schedules evolve.
+    """
+    if loss_config is None:
+        return None
+    return {
+        name: (
+            loss_fn,
+            weight.end if isinstance(weight, LinearWeightSchedule) else weight,
+        )
+        for name, (loss_fn, weight) in loss_config.items()
+    }
 
 
 def dflash_loss_decay(
@@ -220,12 +339,7 @@ def resolve_loss_config(spec: str, implementation: str = "fused") -> LossConfig:
                 f"Unknown loss function '{name}' in loss config. "
                 f"Choose from: {sorted(loss_fn_map)}"
             )
-        if not isinstance(weight, (int, float)):
-            raise ValueError(
-                f"Loss weight for '{name}' must be a number, "
-                f"got {type(weight).__name__}"
-            )
-        config[name] = (loss_fn_map[name], float(weight))
+        config[name] = (loss_fn_map[name], _parse_loss_weight(name, weight))
 
     return config
 
@@ -237,10 +351,12 @@ def compound_loss(
     pos_idx: torch.Tensor,
     loss_config: LossConfig,
     decay_fn: Callable[..., torch.Tensor] | None = None,
+    loss_step: torch.Tensor | None = None,
 ) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
     """Compute a weighted sum of loss terms.
 
-    Each entry in *loss_config* maps a name to ``(loss_fn, weight)``; the
+    Each entry in *loss_config* maps a name to ``(loss_fn, weight)`` where
+    *weight* is either a scalar or a step-dependent schedule; the
     result is ``sum(weight * loss_function(logits, targets, ..., loss_fn))``
     over all entries.
 
@@ -262,7 +378,17 @@ def compound_loss(
         )
         if multi:
             term_losses[f"{name}_loss"] = term.detach()
-        total = total + weight * term
+        weight_value: torch.Tensor | float
+        if isinstance(weight, LinearWeightSchedule):
+            if loss_step is None:
+                raise ValueError(
+                    f"Loss term '{name}' has a scheduled weight but no loss_step "
+                    "was provided."
+                )
+            weight_value = weight.value(loss_step)
+        else:
+            weight_value = weight
+        total = total + weight_value * term
     return total, term_losses
 
 

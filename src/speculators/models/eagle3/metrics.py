@@ -56,6 +56,7 @@ def compute_metrics(
     ttt_step: int,
     ttt_step_loss_decay: float,
     loss_config: LossConfig | None = None,
+    loss_step: torch.Tensor | None = None,
 ) -> tuple[torch.Tensor, dict]:
     """Compute metrics for a given ttt_step.
 
@@ -95,6 +96,7 @@ def compute_metrics(
         pos_idx,
         loss_config=loss_config,
         decay_fn=partial(exp_loss_decay, gamma=ttt_step_loss_decay),
+        loss_step=loss_step,
     )
 
     pred_ids = torch.argmax(s_logits, dim=-1)

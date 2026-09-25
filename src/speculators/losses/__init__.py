@@ -1,12 +1,16 @@
 """Training loss implementations and shared utilities."""
 
 from speculators.losses.utils import (
+    LinearWeightSchedule,
     LossConfig,
+    LossWeight,
     ce_loss,
     compound_loss,
     dflash_loss_decay,
     dpace_loss_decay,
     exp_loss_decay,
+    freeze_loss_config,
+    has_scheduled_weights,
     js_div_loss,
     kl_div_loss,
     lk_hybrid_loss,
@@ -18,12 +22,16 @@ from speculators.losses.utils import (
 )
 
 __all__ = [
+    "LinearWeightSchedule",
     "LossConfig",
+    "LossWeight",
     "ce_loss",
     "compound_loss",
     "dflash_loss_decay",
     "dpace_loss_decay",
     "exp_loss_decay",
+    "freeze_loss_config",
+    "has_scheduled_weights",
     "js_div_loss",
     "kl_div_loss",
     "lk_hybrid_loss",
