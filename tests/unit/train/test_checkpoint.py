@@ -28,6 +28,7 @@ def _make_minimal_trainer(tmp_path: Path, checkpoint_freq: int, save_best: bool)
     trainer.is_distributed = False
     trainer.rank = 0
     trainer.local_rank = 0
+    trainer.device_type = "cpu"
     trainer.resume_from_checkpoint = False
     trainer.train_loader = cast("DataLoader[Any]", [])
     trainer.val_loader = cast("DataLoader[Any]", [])
