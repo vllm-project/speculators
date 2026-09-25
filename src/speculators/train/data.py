@@ -257,7 +257,7 @@ class ArrowDataset(BaseDataset):
                 raise ValueError(f"Failed to load hidden states for handle {handle}")
 
             # Covers token/shape mismatches and non-finite values. The Mooncake
-            # transfer performs manifest/checksum validation first.
+            # transfer performs manifest validation first.
             check_hidden_states(loaded_hs, dataset_item["input_ids"].tolist())
 
             file_idx = self._map_to_file_idx(index)

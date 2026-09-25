@@ -6,6 +6,8 @@ The point is to prove the seam: a tensor dict written by the producer is read
 back byte-identical by the consumer.
 """
 
+import ctypes
+
 import pytest
 import torch
 
@@ -20,37 +22,57 @@ from hs_connectors.mooncake_store import (
     assert_finite,
 )
 
+from hs_connectors import mooncake_store
+
 
 class _FakeMooncakeStore:
-    """In-memory stand-in for MooncakeDistributedStore."""
+    """In-memory stand-in for MooncakeDistributedStore's pointer-based API."""
 
     def __init__(self):
-        self._bytes: dict[str, bytes] = {}
-        self._tensors: dict[str, torch.Tensor] = {}
+        self.objects: dict[str, bytes] = {}
+        self.registered: dict[int, int] = {}
+
+    def register_buffer(self, ptr: int, size: int) -> int:
+        self.registered[ptr] = size
+        return 0
+
+    def unregister_buffer(self, ptr: int) -> int:
+        return 0 if self.registered.pop(ptr, None) is not None else -1
+
+    def _check_registered(self, ptr: int, size: int) -> None:
+        assert any(
+            base <= ptr and ptr + size <= base + length
+            for base, length in self.registered.items()
+        ), "transfer from unregistered memory"
 
     def put(self, key: str, value: bytes) -> int:
-        self._bytes[key] = bytes(value)
+        if key in self.objects:
+            return -705
+        self.objects[key] = bytes(value)
         return 0
 
-    def get(self, key: str) -> bytes:
-        return self._bytes.get(key, b"")
+    def put_from(self, key: str, ptr: int, size: int) -> int:
+        self._check_registered(ptr, size)
+        return self.put(key, ctypes.string_at(ptr, size))
 
-    def put_tensor(self, key: str, tensor: torch.Tensor) -> int:
-        self._tensors[key] = tensor.clone()
-        return 0
+    def is_exist(self, key: str) -> int:
+        return int(key in self.objects)
 
-    def get_tensor(self, key: str) -> torch.Tensor | None:
-        t = self._tensors.get(key)
-        return t.clone() if t is not None else None
+    def get_size(self, key: str) -> int:
+        return len(self.objects[key]) if key in self.objects else -704
 
-    def batch_remove(self, keys: list[str], force: bool = False) -> list[int]:
-        results = []
-        for key in keys:
-            removed = key in self._bytes or key in self._tensors
-            self._bytes.pop(key, None)
-            self._tensors.pop(key, None)
-            results.append(0 if removed else -1)
-        return results
+    def get_into(self, key: str, ptr: int, size: int) -> int:
+        self._check_registered(ptr, size)
+        data = self.objects.get(key)
+        if data is None:
+            return -704
+        if len(data) > size:
+            return -600
+        ctypes.memmove(ptr, data, len(data))
+        return len(data)
+
+    def remove(self, key: str, force: bool = False) -> int:
+        return 0 if self.objects.pop(key, None) is not None else -704
 
 
 @pytest.fixture
@@ -77,51 +99,89 @@ def test_put_get_roundtrip_preserves_shape_and_dtype(store):
     assert torch.equal(out["token_ids"], token_ids)
 
 
-def test_meta_written_last_gates_visibility(store):
-    # get_sample keys off the meta blob, which put_sample writes last. Simulate
-    # a half-written sample (tensors present, meta absent) -> consumer waits.
-    store._store._tensors["req-2:hidden_states"] = torch.zeros(1)
+def test_missing_sample_times_out(store):
     with pytest.raises(TimeoutError):
         store.get_sample("req-2", timeout=0.2, poll_interval=0.02)
 
 
-def test_delete_sample_removes_all_keys(store):
+def test_delete_sample_removes_object(store):
     hs = torch.randn(4, 2, 8, dtype=torch.bfloat16)
     tids = torch.arange(4, dtype=torch.int64)
     store.put_sample("req-del", {"hidden_states": hs, "token_ids": tids})
 
     store.delete_sample("req-del")
 
-    assert store._store.get("req-del:meta") == b""
-    assert store._store.get_tensor("req-del:hidden_states") is None
-    assert store._store.get_tensor("req-del:token_ids") is None
+    assert store._store.objects == {}
 
 
 def test_delete_sample_noop_when_missing(store):
     store.delete_sample("nonexistent-key")
 
 
-def test_get_sample_raises_on_unavailable_tensor(store):
-    hs = torch.randn(4, 2, 8, dtype=torch.bfloat16)
-    tids = torch.arange(4, dtype=torch.int64)
-    store.put_sample("req-evict", {"hidden_states": hs, "token_ids": tids})
+def test_delete_sample_raises_on_negative_status(store, monkeypatch):
+    monkeypatch.setattr(store._store, "remove", lambda _key, force: -800)
 
-    # Simulate eviction: meta key survives but tensor data is gone
-    del store._store._tensors["req-evict:hidden_states"]
+    with pytest.raises(RuntimeError, match="status=-800"):
+        store.delete_sample("req-remove-fail")
+
+
+def test_get_sample_raises_on_evicted_sample(store, monkeypatch):
+    store.put_sample("req-evict", {"hidden_states": torch.zeros(4, 2, 8)})
+    monkeypatch.setattr(store._store, "get_size", lambda _key: -704)
 
     with pytest.raises(MooncakeIntegrityError, match="unavailable"):
         store.get_sample("req-evict", timeout=1.0)
 
 
-def test_get_sample_rejects_checksum_corruption(store):
-    hs = torch.randn(4, 2, 8, dtype=torch.bfloat16)
-    tids = torch.arange(4, dtype=torch.int64)
-    store.put_sample("req-corrupt", {"hidden_states": hs, "token_ids": tids})
+def test_get_sample_raises_on_short_read(store, monkeypatch):
+    store.put_sample("req-short", {"hidden_states": torch.zeros(4, 2, 8)})
+    monkeypatch.setattr(store._store, "get_into", lambda _key, _ptr, _size: 16)
 
-    store._store._tensors["req-corrupt:hidden_states"][0, 0, 0] += 1
+    with pytest.raises(MooncakeIntegrityError, match="returned 16"):
+        store.get_sample("req-short", timeout=1.0)
 
-    with pytest.raises(MooncakeIntegrityError, match="checksum mismatch"):
-        store.get_sample("req-corrupt", timeout=1.0)
+
+def test_get_sample_raises_on_is_exist_error(store, monkeypatch):
+    monkeypatch.setattr(store._store, "is_exist", lambda _key: -1)
+
+    with pytest.raises(RuntimeError, match="status=-1"):
+        store.get_sample("req-exist-fail", timeout=1.0)
+
+
+def test_get_sample_rejects_out_of_bounds_manifest(store):
+    trailer = mooncake_store._encode_trailer(
+        {
+            "version": mooncake_store._MANIFEST_VERSION,
+            "status": "ok",
+            "tensors": {
+                "hidden_states": {
+                    "shape": [1024],
+                    "dtype": "torch.float32",
+                    "offset": 0,
+                    "nbytes": 4096,
+                }
+            },
+        }
+    )
+    store._store.objects["req-oob"] = trailer
+
+    with pytest.raises(MooncakeIntegrityError, match="out of bounds"):
+        store.get_sample("req-oob", timeout=1.0)
+
+
+def test_staging_buffer_is_reused_and_grows(store, monkeypatch):
+    monkeypatch.setattr(mooncake_store, "_STAGING_GRANULE", 4096)
+    store.put_sample("small-1", {"hidden_states": torch.zeros(16)})
+    first = dict(store._store.registered)
+    store.put_sample("small-2", {"hidden_states": torch.zeros(16)})
+    assert store._store.registered == first
+
+    store.put_sample("large", {"hidden_states": torch.zeros(4096)})
+    assert len(store._store.registered) == 1
+    assert next(iter(store._store.registered.values())) >= 4096 * 4
+    assert torch.equal(
+        store.get_sample("large", timeout=1.0)["hidden_states"], torch.zeros(4096)
+    )
 
 
 @pytest.mark.parametrize("bad_value", [torch.nan, torch.inf, -torch.inf])
@@ -148,11 +208,8 @@ def test_error_manifest_fails_consumer_immediately(store):
         store.get_sample("req-error", timeout=1.0)
 
 
-def test_negative_put_status_does_not_publish_manifest(store, monkeypatch):
-    def fail_put_tensor(_key, _tensor):
-        return -800
-
-    monkeypatch.setattr(store._store, "put_tensor", fail_put_tensor)
+def test_negative_put_status_does_not_publish_sample(store, monkeypatch):
+    monkeypatch.setattr(store._store, "put_from", lambda _key, _ptr, _size: -800)
 
     with pytest.raises(RuntimeError, match="status=-800"):
         store.put_sample(
@@ -163,4 +220,22 @@ def test_negative_put_status_does_not_publish_manifest(store, monkeypatch):
             },
         )
 
-    assert store._store.get("req-put-fail:meta") == b""
+    assert store._store.is_exist("req-put-fail") == 0
+
+
+def test_register_failure_raises(store, monkeypatch):
+    monkeypatch.setattr(store._store, "register_buffer", lambda _ptr, _size: -1)
+
+    with pytest.raises(RuntimeError, match="register_buffer"):
+        store.put_sample("req-reg-fail", {"hidden_states": torch.zeros(4)})
+
+
+def test_wait_backs_off_from_one_millisecond(store, monkeypatch):
+    sleeps: list[float] = []
+    calls = iter([0, 0, 0, 0, 1])
+    monkeypatch.setattr(store._store, "is_exist", lambda _key: next(calls))
+    monkeypatch.setattr(mooncake_store.time, "sleep", sleeps.append)
+
+    store._wait_for("req-late", timeout=10.0, poll_interval=0.004)
+
+    assert sleeps == [0.001, 0.002, 0.004, 0.004]

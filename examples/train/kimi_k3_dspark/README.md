@@ -70,4 +70,4 @@ Logs and checkpoints land in `runs/kimi_k3_dspark/<run-name>/`.
 
 ## Integrity and failure handling
 
-Every Mooncake sample carries a versioned shape/dtype/CRC32 manifest. The producer rejects non-finite tensors before publication; the consumer verifies checksum and finiteness before training. Invalid round trips are regenerated twice, independently of the HTTP retry budget. An exhausted sample is dropped; if that leaves a rank with no valid samples it runs a locally empty zero-loss batch and still participates in DDP. Twenty consecutive failed round trips in one worker trip a synchronized circuit breaker.
+Every Mooncake sample carries a versioned shape/dtype manifest. The producer rejects non-finite tensors before publication; the consumer verifies shape, dtype, and finiteness before training. Invalid round trips are regenerated twice, independently of the HTTP retry budget. An exhausted sample is dropped; if that leaves a rank with no valid samples it runs a locally empty zero-loss batch and still participates in DDP. Twenty consecutive failed round trips in one worker trip a synchronized circuit breaker.
