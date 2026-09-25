@@ -250,6 +250,7 @@ class CandidateSelector(nn.Module):
         hidden_size: int,
         rank: int,
         top_k: int,
+        enable_confidence_head: bool = False,
         initializer_range: float = 0.02,
     ) -> None:
         super().__init__()
@@ -261,9 +262,15 @@ class CandidateSelector(nn.Module):
         self.predecessor_codebook = nn.Parameter(torch.empty(vocab_size, rank))
         self.successor_codebook = nn.Parameter(torch.empty(vocab_size, rank))
         self.hidden_projection = nn.Linear(hidden_size, rank, bias=False)
+        self.confidence_head: nn.Linear | None = None
+        if enable_confidence_head:
+            self.confidence_head = nn.Linear(rank, 1)
         nn.init.normal_(self.predecessor_codebook, std=initializer_range)
         nn.init.normal_(self.successor_codebook, std=initializer_range)
         nn.init.normal_(self.hidden_projection.weight, std=initializer_range)
+        if self.confidence_head is not None:
+            nn.init.normal_(self.confidence_head.weight, std=initializer_range)
+            nn.init.zeros_(self.confidence_head.bias)
 
     def context(
         self, hidden_states: torch.Tensor, predecessor_ids: torch.Tensor
@@ -283,6 +290,16 @@ class CandidateSelector(nn.Module):
         context = self.context(hidden_states, predecessor_ids)
         successors = self.successor_codebook[candidate_ids.long()]
         return (context.unsqueeze(-2) * successors).sum(dim=-1)
+
+    def confidence_logits(
+        self, hidden_states: torch.Tensor, predecessor_ids: torch.Tensor
+    ) -> torch.Tensor:
+        """Predict acceptance logits for predecessor-conditioned rows."""
+        if self.confidence_head is None:
+            raise RuntimeError("DFlash2 confidence head is disabled")
+        return self.confidence_head(
+            self.context(hidden_states, predecessor_ids)
+        ).squeeze(-1)
 
     def score_candidates(
         self,
