@@ -2,16 +2,11 @@
 # Online DSpark Training Script
 #
 # Runs the full online DSpark training pipeline using the unified `speculators`
-# CLI end-to-end: vLLM server launch, data preparation, and training (with
-# hidden states generated on-the-fly from the live server). DSpark extends
+# CLI end-to-end: response regeneration, data preparation, and training (with
+# hidden states generated on-the-fly from a live vLLM server). DSpark extends
 # DFlash with a Markov head (intra-block token dependency) and a confidence
 # head (per-position acceptance prediction); the pipeline is the DFlash one
 # plus a few DSpark-specific flags.
-#
-# For natural-language datasets (sharegpt/ultrachat), `prepare-data` derives
-# loss masks from vLLM's render boundaries, so it needs a live server via
-# `--render-endpoint`. The vLLM server is therefore launched FIRST; the same
-# server also streams hidden states during training.
 #
 # Usage: Copy this script, modify the configuration variables below, then run:
 #   bash examples/train/dspark_qwen3_0_6b_sharegpt_online.sh
@@ -29,7 +24,7 @@ set -euo pipefail
 
 # ============ Configuration ============
 MODEL="Qwen/Qwen3-0.6B"
-# Generate this JSONL first; see docs/user_guide/tutorials/response_regeneration.md.
+# Output JSONL from response regeneration (Step 0).
 DATASET="./sharegpt_Qwen3-0.6B.jsonl"
 OUTPUT_DIR="./output/dspark_qwen3_0_6b_sharegpt"
 VLLM_PORT=8000
@@ -57,6 +52,13 @@ VLLM_GPUS="0"
 TRAIN_GPUS="1"
 NUM_TRAIN_GPUS=1
 # =======================================
+
+# Step 0: Regenerate target responses; the helper starts and stops its server
+bash scripts/response_regeneration/run_all.sh \
+    --model "$MODEL" --dataset sharegpt \
+    --gpus "$VLLM_GPUS" --port "$VLLM_PORT" \
+    --limit "$MAX_SAMPLES" --max-tokens "$SEQ_LENGTH" \
+    --outfile "$DATASET" --resume
 
 # Step 1: Launch vLLM server in the background
 # The same server serves both prepare-data's render endpoint (Step 2) and the

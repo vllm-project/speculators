@@ -1,7 +1,7 @@
 #!/bin/bash
 # Offline Eagle3 Training Script
 #
-# Runs the full offline training pipeline: data preparation, vLLM server launch,
+# Runs the full offline training pipeline: response regeneration, data preparation,
 # hidden states generation, and training (with pre-generated hidden states).
 #
 # Usage: Copy this script, modify the configuration variables below, then run:
@@ -38,7 +38,7 @@ set -euo pipefail
 
 # ============ Configuration ============
 MODEL="meta-llama/Llama-3.1-8B-Instruct"
-# Generate this JSONL first; see docs/user_guide/tutorials/response_regeneration.md.
+# Output JSONL from response regeneration (Step 0).
 DATASET="./ultrachat_Llama-3.1-8B-Instruct.jsonl"
 OUTPUT_DIR="./output"
 HIDDEN_STATES_DIR="$OUTPUT_DIR/hidden_states"
@@ -54,6 +54,13 @@ CONCURRENCY=32                    # Parallel requests to vLLM during data genera
 GPUS="0,1"
 NUM_GPUS=2
 # =======================================
+
+# Step 0: Regenerate target responses; the helper starts and stops its server
+bash scripts/response_regeneration/run_all.sh \
+    --model "$MODEL" --dataset ultrachat \
+    --gpus "$GPUS" --dp-size "$NUM_GPUS" --port "$VLLM_PORT" \
+    --limit "$MAX_SAMPLES" --max-tokens "$SEQ_LENGTH" \
+    --outfile "$DATASET" --resume
 
 # Step 1: Launch vLLM server in the background
 # The same server serves two purposes: its render endpoint tokenizes the
