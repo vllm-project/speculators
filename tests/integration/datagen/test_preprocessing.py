@@ -304,13 +304,14 @@ def _conv_row(prompt: str) -> dict:
 
 @pytest.mark.sanity
 def test_load_raw_dataset_local_file(tmp_path):
-    """A local .jsonl file loads without preset normalization."""
+    """A local .jsonl file loads with no normalize_fn."""
     data_file = tmp_path / "data.jsonl"
     _write_jsonl(data_file, [_conv_row("a"), _conv_row("b")])
 
-    dataset = load_raw_dataset(str(data_file))
+    dataset, normalize_fn = load_raw_dataset(str(data_file))
 
     assert len(dataset) == 2
+    assert normalize_fn is None
 
 
 @pytest.mark.sanity
@@ -323,9 +324,10 @@ def test_load_raw_dataset_local_directory(tmp_path):
     nested.mkdir()
     _write_jsonl(nested / "shard3.json", [_conv_row("d")])
 
-    dataset = load_raw_dataset(str(tmp_path))
+    dataset, normalize_fn = load_raw_dataset(str(tmp_path))
 
     assert len(dataset) == 4
+    assert normalize_fn is None
 
 
 @pytest.mark.sanity
@@ -352,7 +354,7 @@ def test_load_raw_dataset_rejects_named_preset(preset):
 
 @pytest.mark.sanity
 def test_load_raw_dataset_unsupported_source_raises():
-    """An unknown source that is not a file/dir/hf: spec raises."""
+    """An unknown source that is not a file/dir/preset/hf: spec raises."""
     with pytest.raises(ValueError, match="Unsupported dataset"):
         load_raw_dataset("not_a_real_preset")
 
@@ -370,12 +372,13 @@ def test_load_hf_dataset_spec_parsing(spec, expected_id, expected_name, expected
     """hf: specs parse into (id, subset, split) and call load_dataset."""
     sentinel = HFDataset.from_list([_conv_row("x")])
     with patch(f"{PREFIX}.load_dataset", return_value=sentinel) as mock_load:
-        dataset = load_raw_dataset(spec)
+        dataset, normalize_fn = load_raw_dataset(spec)
 
     mock_load.assert_called_once_with(
         expected_id, name=expected_name, split=expected_split
     )
     assert dataset is sentinel
+    assert normalize_fn is None
 
 
 # A small public dataset already in conversations format, used to exercise the
@@ -392,10 +395,11 @@ def test_load_raw_dataset_hf_real_download():
     conversations guard are covered deterministically by the mocked tests above.
     """
     try:
-        dataset = load_raw_dataset(f"hf:{HF_CONV_DATASET}")
+        dataset, normalize_fn = load_raw_dataset(f"hf:{HF_CONV_DATASET}")
     except Exception as exc:  # noqa: BLE001
         pytest.skip(f"Could not fetch {HF_CONV_DATASET}: {exc}")
 
+    assert normalize_fn is None
     assert "conversations" in dataset.column_names
     assert len(dataset) > 0
 

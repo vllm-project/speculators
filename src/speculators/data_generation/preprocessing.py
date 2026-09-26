@@ -639,7 +639,7 @@ def build_speculator_training_dataset(
     return dataset
 
 
-def _load_hf_dataset(spec: str) -> HFDataset:
+def _load_hf_dataset(spec: str) -> tuple[HFDataset, None]:
     """Load an arbitrary HuggingFace dataset from an ``hf:`` spec.
 
     Args:
@@ -648,7 +648,8 @@ def _load_hf_dataset(spec: str) -> HFDataset:
             without a subset; both can be given as ``hf:<id>:<subset>:<split>``.
 
     Returns:
-        Dataset in conversations or speculator format.
+        Tuple of (raw_dataset, None). No normalize_fn is applied: the dataset
+        must already be in conversations format.
 
     Raises:
         ValueError: If the spec is malformed or the loaded dataset has no
@@ -684,13 +685,13 @@ def _load_hf_dataset(spec: str) -> HFDataset:
             "a supported format: expected a conversations format with a "
             "'conversations' column or a pre-tokenized format with both "
             f"'input_ids' and 'loss_mask', but found {raw_dataset.column_names}. "
-            "Convert the data to one of those formats before running prepare-data."
+            "Pass a dataset in one of those formats."
         )
 
-    return raw_dataset
+    return raw_dataset, None
 
 
-def _load_hf_jsonl_file(spec: str) -> HFDataset:
+def _load_hf_jsonl_file(spec: str) -> tuple[HFDataset, None]:
     """Download and load one JSON/JSONL file from a Hugging Face dataset repo.
 
     The URI form is ``hf://datasets/<org>/<repo>/<path>``. Keeping the
@@ -718,11 +719,13 @@ def _load_hf_jsonl_file(spec: str) -> HFDataset:
         filename=filename,
         repo_type="dataset",
     )
-    return load_dataset("json", data_files=local_path, split="train")
+    return load_dataset("json", data_files=local_path, split="train"), None
 
 
-def load_raw_dataset(train_data_path: str) -> HFDataset:
-    """Load user-provided on-policy conversations or speculator-format rows.
+def load_raw_dataset(
+    train_data_path: str,
+) -> tuple[HFDataset, None]:
+    """Load a raw dataset from one of several source types.
 
     Resolution order:
         1. ``hf://datasets/<org>/<repo>/<file>.jsonl`` Hugging Face JSONL URI.
@@ -732,11 +735,10 @@ def load_raw_dataset(train_data_path: str) -> HFDataset:
         4. ``hf:<id>[:<subset>:<split>]`` for an arbitrary HuggingFace dataset.
 
     Args:
-        train_data_path: File path, directory path, or HuggingFace dataset spec.
+        train_data_path: File path, directory path, or ``hf:`` spec.
 
     Returns:
-        Dataset whose responses must already have been produced by the target
-        model. Raw source presets belong to response regeneration.
+        Tuple of (raw_dataset, None).
 
     Raises:
         ValueError: If the source cannot be resolved or a local directory
@@ -748,7 +750,7 @@ def load_raw_dataset(train_data_path: str) -> HFDataset:
 
     # 2. Local file
     if train_data_path.endswith((".jsonl", ".json")):
-        return load_dataset("json", data_files=train_data_path, split="train")
+        return load_dataset("json", data_files=train_data_path, split="train"), None
 
     # 3. Local directory
     path = Path(train_data_path)
@@ -760,7 +762,7 @@ def load_raw_dataset(train_data_path: str) -> HFDataset:
             raise ValueError(
                 f"No .json/.jsonl files found in directory: {train_data_path}"
             )
-        return load_dataset("json", data_files=data_files, split="train")
+        return load_dataset("json", data_files=data_files, split="train"), None
 
     # 4. Arbitrary HuggingFace dataset
     if train_data_path.startswith("hf:"):
@@ -770,8 +772,8 @@ def load_raw_dataset(train_data_path: str) -> HFDataset:
         f"Unsupported dataset: {train_data_path}. Supported: local .json/.jsonl "
         "file, hf://datasets/<org>/<repo>/<file>.jsonl, local directory of "
         ".json/.jsonl files, or hf:<id>[:<subset>:<split>]. "
-        "Raw dataset presets must first go through `speculators regenerate-responses`; "
-        "pass the generated JSONL to prepare-data."
+        "Use `speculators regenerate-responses` for raw presets, "
+        "then pass its generated JSONL to prepare-data."
     )
 
 
@@ -823,7 +825,7 @@ def load_and_preprocess_dataset(
 
     Args:
         target_model_path: HuggingFace model ID or local path
-        train_data_paths: Paths or HuggingFace specs for on-policy training data
+        train_data_path: Dataset name or path to JSON/JSONL file
         seq_length: Maximum sequence length
         build_dataset_num_proc: Number of processes for dataset building
         seed: Random seed for shuffling
@@ -863,7 +865,7 @@ def load_and_preprocess_dataset(
     processed_datasets = []
     for train_data_path in train_data_paths:
         log.subsection(f"Processing {train_data_path}")
-        raw_dataset = load_raw_dataset(train_data_path)
+        raw_dataset, _ = load_raw_dataset(train_data_path)
         raw_dataset = raw_dataset.shuffle(seed=seed)
 
         if max_samples is not None and len(raw_dataset) > 3 * max_samples:

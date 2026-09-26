@@ -86,7 +86,7 @@ def prepare_data(
     ],
     data: Annotated[
         list[str],
-        typer.Option("--data", help="On-policy data path or hf: spec (repeatable)"),
+        typer.Option("--data", help="Path to training data (repeatable)"),
     ],
     output: Annotated[
         str,

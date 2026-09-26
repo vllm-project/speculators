@@ -17,6 +17,23 @@
 # is learning something. This is a good sanity check when creating a drafter for a new
 # target model.
 
+# Reference timings/results below used the original, unregenerated UltraChat data.
+# Timing (on 2x NVIDIA H100 80GB GPUs, DP=2)
+# Data Preprocessing: 16 seconds
+# vLLM Server Startup: 60 seconds (1 min)
+# Hidden States Generation: 143 seconds (2 mins 23 secs)
+# Training (5 epochs): 327 seconds (5 mins 27 secs)
+# Total: 572 seconds (9 mins 32 secs)
+
+# Results on MT-Bench (80 prompts, up to 2048 output tokens):
+# acceptance rate: 16.32%
+# acceptance length: 1.49
+# per-position acceptance:
+#   position 0: 36.29%
+#   position 1: 10.31%
+#   position 2: 2.35%
+# output throughput: ~196 tok/s
+
 set -euo pipefail
 
 # ============ Configuration ============
@@ -39,9 +56,11 @@ NUM_GPUS=2
 # =======================================
 
 # Step 1: Launch vLLM server in the background
+# The same server serves two purposes: its render endpoint tokenizes the
+# natural-language dataset in Step 2, and it produces the verifier hidden
+# states extracted in Step 3.
 echo "=== Step 1: Launching vLLM server ==="
 CUDA_VISIBLE_DEVICES="$GPUS" python scripts/launch_vllm.py "$MODEL" \
-    --provenance-dir "$OUTPUT_DIR/checkpoints" \
     -- --data-parallel-size 2 --port "$VLLM_PORT" --gpu-memory-utilization 0.85 &
 VLLM_PID=$!
 
@@ -52,10 +71,12 @@ done
 echo "vLLM server ready."
 
 # Step 2: Prepare data
+# Pretokenized JSONL skips rendering; conversation-only JSONL uses the live server.
 echo "=== Step 2: Preparing data ==="
 speculators prepare-data \
     --model "$MODEL" \
     --data "$DATASET" \
+    --render-endpoint "http://localhost:${VLLM_PORT}" \
     --max-samples "$MAX_SAMPLES" \
     --output "$OUTPUT_DIR" \
     --seq-length "$SEQ_LENGTH"

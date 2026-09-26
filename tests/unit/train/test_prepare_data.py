@@ -60,7 +60,7 @@ def _patch_empty_pipeline(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         preprocessing_module,
         "load_raw_dataset",
-        lambda _path: HFDataset.from_dict({"conversations": []}),
+        lambda _path: (HFDataset.from_dict({"conversations": []}), None),
     )
     monkeypatch.setattr(
         preprocessing_module, "build_speculator_training_dataset", lambda *a, **k: empty
@@ -77,7 +77,7 @@ def test_load_and_preprocess_raises_on_empty_output(
     with pytest.raises(ValueError, match="No samples remain"):
         load_and_preprocess_dataset(
             "target-model",
-            ["conversations.jsonl"],
+            ["sharegpt"],
             seq_length=8,
             token_freq_path=tmp_path / "token_freq.pt",
         )
@@ -89,7 +89,7 @@ def test_load_and_preprocess_allows_empty_output_with_flag(
     _patch_empty_pipeline(monkeypatch)
     dataset, processor = load_and_preprocess_dataset(
         "target-model",
-        ["conversations.jsonl"],
+        ["sharegpt"],
         seq_length=8,
         token_freq_path=tmp_path / "token_freq.pt",
         allow_empty_output=True,
@@ -113,7 +113,9 @@ def test_pretokenized_data_does_not_require_chat_template(
         "load_processor",
         lambda *a, **k: _NoChatTemplateProcessor(),
     )
-    monkeypatch.setattr(preprocessing_module, "load_raw_dataset", lambda _path: raw)
+    monkeypatch.setattr(
+        preprocessing_module, "load_raw_dataset", lambda _path: (raw, None)
+    )
     processed = HFDataset.from_dict(
         {
             "input_ids": [[1, 2, 3]],
@@ -159,11 +161,12 @@ def test_huggingface_jsonl_uri_downloads_dataset_file(monkeypatch: pytest.Monkey
     monkeypatch.setattr(preprocessing_module, "hf_hub_download", fake_download)
     monkeypatch.setattr(preprocessing_module, "load_dataset", fake_load_dataset)
 
-    loaded = preprocessing_module.load_raw_dataset(
+    loaded, normalize_fn = preprocessing_module.load_raw_dataset(
         "hf://datasets/example-org/regenerated-responses/qwen3.jsonl"
     )
 
     assert loaded is raw
+    assert normalize_fn is None
     assert calls["repo_id"] == "example-org/regenerated-responses"
     assert calls["filename"] == "qwen3.jsonl"
     assert calls["repo_type"] == "dataset"
@@ -190,7 +193,9 @@ def test_conversation_data_still_requires_chat_template(
         "load_processor",
         lambda *a, **k: _NoChatTemplateProcessor(),
     )
-    monkeypatch.setattr(preprocessing_module, "load_raw_dataset", lambda _path: raw)
+    monkeypatch.setattr(
+        preprocessing_module, "load_raw_dataset", lambda _path: (raw, None)
+    )
 
     with pytest.raises(ValueError, match="does not support chat templates"):
         load_and_preprocess_dataset(
@@ -222,7 +227,9 @@ def test_render_endpoint_bypasses_chat_template_requirement(
         "load_processor",
         lambda *a, **k: _NoChatTemplateProcessor(),
     )
-    monkeypatch.setattr(preprocessing_module, "load_raw_dataset", lambda _path: raw)
+    monkeypatch.setattr(
+        preprocessing_module, "load_raw_dataset", lambda _path: (raw, None)
+    )
     processed = HFDataset.from_dict(
         {
             "input_ids": [[1, 2, 3]],

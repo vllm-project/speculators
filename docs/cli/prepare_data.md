@@ -30,8 +30,6 @@ speculators prepare-data \
 
 `--render-endpoint` is not needed when every input row already contains `input_ids` and `loss_mask`.
 
-Raw dataset presets such as `sharegpt` and `gsm8k` must go through [response regeneration](response_regeneration.md) first. Pass the generated JSONL to `prepare-data`. For explicit files and Hugging Face sources, the caller is responsible for ensuring that responses came from the target model.
-
 ## Arguments
 
 ### Model Arguments

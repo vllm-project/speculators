@@ -8,6 +8,11 @@
 # head (per-position acceptance prediction); the pipeline is the DFlash one
 # plus a few DSpark-specific flags.
 #
+# For natural-language datasets (sharegpt/ultrachat), `prepare-data` derives
+# loss masks from vLLM's render boundaries, so it needs a live server via
+# `--render-endpoint`. The vLLM server is therefore launched FIRST; the same
+# server also streams hidden states during training.
+#
 # Usage: Copy this script, modify the configuration variables below, then run:
 #   bash examples/train/dspark_qwen3_0_6b_sharegpt_online.sh
 #
@@ -54,9 +59,11 @@ NUM_TRAIN_GPUS=1
 # =======================================
 
 # Step 1: Launch vLLM server in the background
+# The same server serves both prepare-data's render endpoint (Step 2) and the
+# hidden-state stream during training (Step 3), so it must expose the target
+# layers via --target-layer-ids.
 echo "=== Step 1: Launching vLLM server ==="
 CUDA_VISIBLE_DEVICES="$VLLM_GPUS" python scripts/launch_vllm.py "$MODEL" \
-    --provenance-dir "$OUTPUT_DIR/checkpoints" \
     --target-layer-ids $TARGET_LAYER_IDS \
     -- --port "$VLLM_PORT" &
 VLLM_PID=$!
@@ -76,13 +83,15 @@ done
 echo "vLLM server ready."
 
 # Step 2: Prepare data
+# Pretokenized JSONL skips rendering; conversation-only JSONL uses the live server.
 echo "=== Step 2: Preparing data ==="
 speculators prepare-data \
     --model "$MODEL" \
     --data "$DATASET" \
     --output "$OUTPUT_DIR" \
     --max-samples "$MAX_SAMPLES" \
-    --seq-length "$SEQ_LENGTH"
+    --seq-length "$SEQ_LENGTH" \
+    --render-endpoint "http://localhost:${VLLM_PORT}"
 
 # Step 3: Train DSpark against the live vLLM server
 echo "=== Step 3: Training ==="
