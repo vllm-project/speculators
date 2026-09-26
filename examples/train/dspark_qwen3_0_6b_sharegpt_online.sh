@@ -8,9 +8,6 @@
 # head (per-position acceptance prediction); the pipeline is the DFlash one
 # plus a few DSpark-specific flags.
 #
-# Raw prompts are regenerated with the target model first. `prepare-data` then
-# uses the returned token IDs and loss masks without rendering them again.
-#
 # Usage: Copy this script, modify the configuration variables below, then run:
 #   bash examples/train/dspark_qwen3_0_6b_sharegpt_online.sh
 #
@@ -27,9 +24,9 @@ set -euo pipefail
 
 # ============ Configuration ============
 MODEL="Qwen/Qwen3-0.6B"
-DATASET="sharegpt"                # Regeneration preset or local prompt JSONL
+# Generate this JSONL first; see docs/user_guide/tutorials/response_regeneration.md.
+DATASET="./sharegpt_Qwen3-0.6B.jsonl"
 OUTPUT_DIR="./output/dspark_qwen3_0_6b_sharegpt"
-TARGET_RESPONSES="$OUTPUT_DIR.responses.jsonl"
 VLLM_PORT=8000
 MAX_SAMPLES=5000
 SEQ_LENGTH=4096
@@ -56,14 +53,7 @@ TRAIN_GPUS="1"
 NUM_TRAIN_GPUS=1
 # =======================================
 
-# Step 0: Generate target responses, then stop the generation server
-bash scripts/response_regeneration/run_all.sh \
-    --model "$MODEL" --dataset "$DATASET" \
-    --gpus "$VLLM_GPUS" --port "$VLLM_PORT" \
-    --limit "$MAX_SAMPLES" --max-tokens "$SEQ_LENGTH" \
-    --outfile "$TARGET_RESPONSES" --resume
-
-# Step 1: Launch vLLM for hidden-state extraction during training
+# Step 1: Launch vLLM server in the background
 echo "=== Step 1: Launching vLLM server ==="
 CUDA_VISIBLE_DEVICES="$VLLM_GPUS" python scripts/launch_vllm.py "$MODEL" \
     --provenance-dir "$OUTPUT_DIR/checkpoints" \
@@ -86,11 +76,10 @@ done
 echo "vLLM server ready."
 
 # Step 2: Prepare data
-# Regeneration records the exact target tokens and generation boundaries.
 echo "=== Step 2: Preparing data ==="
 speculators prepare-data \
     --model "$MODEL" \
-    --data "$TARGET_RESPONSES" \
+    --data "$DATASET" \
     --output "$OUTPUT_DIR" \
     --max-samples "$MAX_SAMPLES" \
     --seq-length "$SEQ_LENGTH"

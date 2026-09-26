@@ -1,8 +1,8 @@
 #!/bin/bash
 # Offline Eagle3 Training Script
 #
-# Runs the full offline training pipeline: target response regeneration, data
-# preparation, hidden states generation, and training.
+# Runs the full offline training pipeline: data preparation, vLLM server launch,
+# hidden states generation, and training (with pre-generated hidden states).
 #
 # Usage: Copy this script, modify the configuration variables below, then run:
 #   bash examples/train/eagle3_llama3_8b_ultrachat_offline_5k.sh
@@ -21,9 +21,9 @@ set -euo pipefail
 
 # ============ Configuration ============
 MODEL="meta-llama/Llama-3.1-8B-Instruct"
-DATASET="ultrachat"                # Regeneration preset or local prompt JSONL
+# Generate this JSONL first; see docs/user_guide/tutorials/response_regeneration.md.
+DATASET="./ultrachat_Llama-3.1-8B-Instruct.jsonl"
 OUTPUT_DIR="./output"
-TARGET_RESPONSES="$OUTPUT_DIR.responses.jsonl"
 HIDDEN_STATES_DIR="$OUTPUT_DIR/hidden_states"
 VLLM_PORT=8000
 MAX_SAMPLES=5000
@@ -38,14 +38,7 @@ GPUS="0,1"
 NUM_GPUS=2
 # =======================================
 
-# Step 0: Generate target responses, then stop the generation server
-bash scripts/response_regeneration/run_all.sh \
-    --model "$MODEL" --dataset "$DATASET" \
-    --gpus "$GPUS" --dp-size "$NUM_GPUS" --port "$VLLM_PORT" \
-    --limit "$MAX_SAMPLES" --max-tokens "$SEQ_LENGTH" \
-    --outfile "$TARGET_RESPONSES" --resume
-
-# Step 1: Launch vLLM for hidden-state extraction
+# Step 1: Launch vLLM server in the background
 echo "=== Step 1: Launching vLLM server ==="
 CUDA_VISIBLE_DEVICES="$GPUS" python scripts/launch_vllm.py "$MODEL" \
     --provenance-dir "$OUTPUT_DIR/checkpoints" \
@@ -59,11 +52,10 @@ done
 echo "vLLM server ready."
 
 # Step 2: Prepare data
-# Regeneration records the exact target tokens and generation boundaries.
 echo "=== Step 2: Preparing data ==="
 speculators prepare-data \
     --model "$MODEL" \
-    --data "$TARGET_RESPONSES" \
+    --data "$DATASET" \
     --max-samples "$MAX_SAMPLES" \
     --output "$OUTPUT_DIR" \
     --seq-length "$SEQ_LENGTH"

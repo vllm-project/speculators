@@ -86,10 +86,7 @@ def prepare_data(
     ],
     data: Annotated[
         list[str],
-        typer.Option(
-            "--data",
-            help="On-policy JSON/JSONL path or HuggingFace dataset spec (repeatable)",
-        ),
+        typer.Option("--data", help="On-policy data path or hf: spec (repeatable)"),
     ],
     output: Annotated[
         str,

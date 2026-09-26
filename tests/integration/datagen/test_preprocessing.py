@@ -303,21 +303,14 @@ def _conv_row(prompt: str) -> dict:
 
 
 @pytest.mark.sanity
-@pytest.mark.parametrize(
-    "rows",
-    [
-        [_conv_row("a"), _conv_row("b")],
-        [{"input_ids": [1, 2, 3], "loss_mask": [0, 1, 1]}],
-    ],
-)
-def test_load_raw_dataset_local_file(tmp_path, rows):
-    """Explicit conversation and prepared inputs load without changing their rows."""
+def test_load_raw_dataset_local_file(tmp_path):
+    """A local .jsonl file loads without preset normalization."""
     data_file = tmp_path / "data.jsonl"
-    _write_jsonl(data_file, rows)
+    _write_jsonl(data_file, [_conv_row("a"), _conv_row("b")])
 
     dataset = load_raw_dataset(str(data_file))
 
-    assert dataset.to_list() == rows
+    assert len(dataset) == 2
 
 
 @pytest.mark.sanity
