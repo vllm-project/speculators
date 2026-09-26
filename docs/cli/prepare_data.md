@@ -30,6 +30,23 @@ speculators prepare-data \
 
 `--render-endpoint` is not needed when every input row already contains `input_ids` and `loss_mask`.
 
+Raw dataset presets such as `sharegpt`, `ultrachat`, and `gsm8k` are accepted by `regenerate-responses`, not by `prepare-data`. Generate responses with the target model first, then prepare the resulting JSONL:
+
+```bash
+speculators regenerate-responses \
+  --dataset gsm8k \
+  --model meta-llama/Llama-3.1-8B-Instruct \
+  --endpoint http://localhost:8000/v1/chat/completions \
+  --outfile ./target_responses.jsonl
+
+speculators prepare-data \
+  --model meta-llama/Llama-3.1-8B-Instruct \
+  --data ./target_responses.jsonl \
+  --output ./training_data
+```
+
+For files and explicit Hugging Face sources, the caller remains responsible for ensuring that assistant responses came from the target model.
+
 ## Arguments
 
 ### Model Arguments
@@ -42,7 +59,7 @@ speculators prepare-data \
 
 ### Data Arguments
 
-- **`--data`** (str, required, repeatable) On-policy target-model data. Use a local JSON/JSONL file or directory, or an `hf:` dataset spec. Use multiple times to combine datasets.
+- **`--data`** (str, required, repeatable) On-policy target-model data. Use a local JSON/JSONL file or directory, an `hf:` dataset spec, or an `hf://datasets/<org>/<repo>/<file>.jsonl` URI. Use multiple times to combine datasets. Raw dataset presets require response regeneration first.
 
   Example: `--data ./target_responses.jsonl --data hf:my-org/more-target-responses`
 

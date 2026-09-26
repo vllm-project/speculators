@@ -8,10 +8,8 @@
 # head (per-position acceptance prediction); the pipeline is the DFlash one
 # plus a few DSpark-specific flags.
 #
-# For natural-language datasets (sharegpt/ultrachat), `prepare-data` derives
-# loss masks from vLLM's render boundaries, so it needs a live server via
-# `--render-endpoint`. The vLLM server is therefore launched FIRST; the same
-# server also streams hidden states during training.
+# Raw prompts are regenerated with the target model first. `prepare-data` then
+# uses the returned token IDs and loss masks without rendering them again.
 #
 # Usage: Copy this script, modify the configuration variables below, then run:
 #   bash examples/train/dspark_qwen3_0_6b_sharegpt_online.sh
@@ -29,8 +27,9 @@ set -euo pipefail
 
 # ============ Configuration ============
 MODEL="Qwen/Qwen3-0.6B"
-DATASET="sharegpt"                # sharegpt, ultrachat, or path to custom data
+DATASET="sharegpt"                # Regeneration preset or local prompt JSONL
 OUTPUT_DIR="./output/dspark_qwen3_0_6b_sharegpt"
+TARGET_RESPONSES="$OUTPUT_DIR.responses.jsonl"
 VLLM_PORT=8000
 MAX_SAMPLES=5000
 SEQ_LENGTH=4096
@@ -57,12 +56,17 @@ TRAIN_GPUS="1"
 NUM_TRAIN_GPUS=1
 # =======================================
 
-# Step 1: Launch vLLM server in the background
-# The same server serves both prepare-data's render endpoint (Step 2) and the
-# hidden-state stream during training (Step 3), so it must expose the target
-# layers via --target-layer-ids.
+# Step 0: Generate target responses, then stop the generation server
+bash scripts/response_regeneration/run_all.sh \
+    --model "$MODEL" --dataset "$DATASET" \
+    --gpus "$VLLM_GPUS" --port "$VLLM_PORT" \
+    --limit "$MAX_SAMPLES" --max-tokens "$SEQ_LENGTH" \
+    --outfile "$TARGET_RESPONSES" --resume
+
+# Step 1: Launch vLLM for hidden-state extraction during training
 echo "=== Step 1: Launching vLLM server ==="
 CUDA_VISIBLE_DEVICES="$VLLM_GPUS" python scripts/launch_vllm.py "$MODEL" \
+    --provenance-dir "$OUTPUT_DIR/checkpoints" \
     --target-layer-ids $TARGET_LAYER_IDS \
     -- --port "$VLLM_PORT" &
 VLLM_PID=$!
@@ -82,16 +86,14 @@ done
 echo "vLLM server ready."
 
 # Step 2: Prepare data
-# sharegpt is a natural-language dataset, so prepare-data needs the live server
-# to render conversations and derive loss masks (--render-endpoint).
+# Regeneration records the exact target tokens and generation boundaries.
 echo "=== Step 2: Preparing data ==="
 speculators prepare-data \
     --model "$MODEL" \
-    --data "$DATASET" \
+    --data "$TARGET_RESPONSES" \
     --output "$OUTPUT_DIR" \
     --max-samples "$MAX_SAMPLES" \
-    --seq-length "$SEQ_LENGTH" \
-    --render-endpoint "http://localhost:${VLLM_PORT}"
+    --seq-length "$SEQ_LENGTH"
 
 # Step 3: Train DSpark against the live vLLM server
 echo "=== Step 3: Training ==="

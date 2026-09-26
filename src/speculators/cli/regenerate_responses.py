@@ -28,8 +28,7 @@ from speculators.data_generation.vllm_client import (
 
 logger = logging.getLogger(__name__)
 
-# On-policy regeneration has no multimodal support yet; off-policy `prepare-data`
-# does, so these presets are gated here rather than dropped from the registry.
+# Multimodal target responses must come from an external generation workflow.
 MULTIMODAL_DATASETS = {"sharegpt4v_coco"}
 REGEN_DATASETS = [name for name in DATASET_CONFIGS if name not in MULTIMODAL_DATASETS]
 
@@ -883,7 +882,8 @@ def _validate_dataset(value: str) -> str:
     if value in MULTIMODAL_DATASETS:
         raise typer.BadParameter(
             f"{value!r} is multimodal; on-policy regeneration does not support "
-            "images yet. Use it off-policy with `prepare-data`."
+            "images yet. Generate target responses with a multimodal-capable "
+            "workflow, then pass those conversations to `prepare-data`."
         )
     if value in REGEN_DATASETS:
         return value

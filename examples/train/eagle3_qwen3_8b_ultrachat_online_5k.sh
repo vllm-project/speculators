@@ -29,7 +29,7 @@ set -euo pipefail
 
 # ============ Configuration ============
 MODEL="Qwen/Qwen3-8B"
-DATASET="hf:inference-optimization/speculators-ci-datasets:tutorial_regen"  # on-policy regenerated Qwen3-8B data (pretokenized); or a preset/path to custom data
+DATASET="hf:inference-optimization/speculators-ci-datasets:tutorial_regen"  # on-policy regenerated Qwen3-8B data (pretokenized); or a path to on-policy custom data
 OUTPUT_DIR="./output"
 VLLM_PORT=8000
 DRAFT_VOCAB_SIZE=32000
