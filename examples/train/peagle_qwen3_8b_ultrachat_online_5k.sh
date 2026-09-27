@@ -103,7 +103,6 @@ CUDA_VISIBLE_DEVICES="$TRAIN_GPUS" torchrun \
     --down-sample-ratio-min "$DOWN_SAMPLE_RATIO_MIN" \
     --no-norm-before-residual \
     --scheduler-type cosine \
-    --on-missing generate \
-    --on-generate delete
+    --on-missing generate
 
 echo "Done. Checkpoints saved to $OUTPUT_DIR/checkpoints/"
