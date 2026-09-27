@@ -10,20 +10,18 @@ from speculators.losses import (
     exp_loss_decay,
     kl_div_loss,
 )
-from speculators.models.metrics import compute_accuracy_single_step
 
 
 def align_for_step(
     logits: torch.Tensor,  # shape: [1, total_seq_len, draft_vocab_size]
     targets: torch.Tensor,  # shape: [1, total_seq_len, draft_vocab_size]
     loss_mask: torch.Tensor | None,  # shape: [1, total_seq_len]
-    prev_correct: torch.Tensor | None,  # shape: [1, total_seq_len]
     ttt_step: int,
 ):
-    """Align logits, targets, loss_mask, and prev_correct for a given ttt_step.
+    """Align logits, targets, and loss_mask for a given ttt_step.
 
     There are no target values for the last ttt_step tokens, so we mask them out
-    before computing the loss/accuracy. Likewise, there are no logits for the first
+    before computing the loss. Likewise, there are no logits for the first
     ttt_step tokens, so we mask them out.
     This is equivalent to shifting the target values by ttt_step + 1 to the left
     which puts them in the correct position for the generated tokens.
@@ -41,18 +39,13 @@ def align_for_step(
     if loss_mask is not None:
         loss_mask = loss_mask[:, ttt_step:]
         # shape: [1, total_seq_len - ttt_step]
-    if prev_correct is not None:
-        # Align with draft starts
-        prev_correct = prev_correct[:, :-ttt_step] if ttt_step > 0 else prev_correct
-        # shape: [1, total_seq_len - ttt_step]
-    return logits, targets, loss_mask, prev_correct
+    return logits, targets, loss_mask
 
 
 def compute_metrics(
     logits: torch.Tensor,
     targets: torch.Tensor,
     loss_mask: torch.Tensor | None,
-    prev_correct: torch.Tensor | None,
     ttt_step: int,
     ttt_step_loss_decay: float,
     loss_config: LossConfig | None = None,
@@ -63,21 +56,17 @@ def compute_metrics(
         logits: The logits for the current ttt_step.
         targets: The targets for the current ttt_step.
         loss_mask: The loss mask for the current ttt_step.
-        prev_correct: The previous correct predictions for the current ttt_step.
         ttt_step: The current ttt_step.
         ttt_step_loss_decay: The loss decay for the current ttt_step.
         loss_config: Mapping of ``{name: (loss_fn, weight)}``.
-
-    Effects:
-        Modifies prev_correct in place.
 
     Returns:
         Loss value and metrics dictionary.
     """
     if loss_config is None:
         loss_config = {"kl_div": (kl_div_loss, 1.0)}
-    s_logits, s_targets, s_loss_mask, s_prev_correct = align_for_step(
-        logits, targets, loss_mask, prev_correct, ttt_step
+    s_logits, s_targets, s_loss_mask = align_for_step(
+        logits, targets, loss_mask, ttt_step
     )
 
     seq_len = s_logits.shape[1]
@@ -97,13 +86,6 @@ def compute_metrics(
         decay_fn=partial(exp_loss_decay, gamma=ttt_step_loss_decay),
     )
 
-    pred_ids = torch.argmax(s_logits, dim=-1)
-    target_ids = torch.argmax(s_targets, dim=-1)
-
-    full_correct, full_total, cond_correct, cond_total = compute_accuracy_single_step(
-        pred_ids, target_ids, s_loss_mask, s_prev_correct
-    )
-
     ones = torch.tensor(1.0, device=s_loss.device)
     s_metrics = {}
     s_metrics[f"loss_{ttt_step}_sum"] = s_loss.detach().clone()
@@ -111,9 +93,4 @@ def compute_metrics(
     for term_name, term_val in term_losses.items():
         s_metrics[f"{term_name}_{ttt_step}_sum"] = term_val
         s_metrics[f"{term_name}_{ttt_step}_total"] = ones.clone()
-    s_metrics[f"full_acc_{ttt_step}_sum"] = full_correct
-    s_metrics[f"full_acc_{ttt_step}_total"] = full_total
-    s_metrics[f"cond_acc_{ttt_step}_sum"] = cond_correct
-    s_metrics[f"cond_acc_{ttt_step}_total"] = cond_total
-
     return s_loss, s_metrics

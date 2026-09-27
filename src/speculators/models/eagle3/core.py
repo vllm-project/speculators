@@ -17,6 +17,7 @@ from speculators.models.eagle3.attention import (
 )
 from speculators.models.eagle3.metrics import compute_metrics
 from speculators.models.eagle3.model_definitions import model_classes
+from speculators.models.metrics import compute_reference_prefix_metrics
 from speculators.models.utils import (
     conditional_torch_compile,
     flatten_rope_parameters,
@@ -254,15 +255,6 @@ class Eagle3DraftModel(DraftVocabMixin, SpeculatorModel):
                 # shape: [1, total_seq_len, draft_vocab_size]
             loss = torch.tensor(0.0, device=device)
 
-            # prev_correct is a boolean tensor that is True for tokens that have been
-            # correctly predicted on all previous ttt_steps.
-            # Initialized to True if the token is included in the loss_mask
-            # or if there is no loss_mask
-            prev_correct = (
-                loss_mask.clone()
-                if loss_mask is not None
-                else torch.ones(1, total_seq_len, device=device, dtype=torch.bool)
-            )
             metrics = {}
 
         draft_tokens = []
@@ -311,7 +303,6 @@ class Eagle3DraftModel(DraftVocabMixin, SpeculatorModel):
                     logits,
                     targets,
                     loss_mask,
-                    prev_correct,
                     ttt_step,
                     ttt_step_loss_decay,
                     loss_config=loss_config,
@@ -358,6 +349,17 @@ class Eagle3DraftModel(DraftVocabMixin, SpeculatorModel):
             # shape: [1, total_seq_len]
 
         if return_loss:
+            if draft_tokens:
+                metrics.update(
+                    compute_reference_prefix_metrics(
+                        torch.stack(draft_tokens, dim=-1),
+                        original_input_ids,
+                        torch.arange(total_seq_len, device=device) + 1,
+                        loss_mask,
+                        document_ids,
+                        d2t=self.d2t,
+                    )
+                )
             metrics["loss_sum"] = loss.detach().clone()
             metrics["loss_total"] = torch.tensor(1.0, device=device)
             return draft_tokens, loss, metrics

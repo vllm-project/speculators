@@ -15,6 +15,7 @@ from speculators.models.dflash.core import DFlashDraftModel
 from speculators.models.dspark.config import DSparkSpeculatorConfig
 from speculators.models.dspark.metrics import compute_metrics
 from speculators.models.dspark.model_definitions import ConfidenceHead, MarkovHead
+from speculators.models.metrics import compute_block_reference_metrics
 from speculators.models.utils import conditional_torch_compile
 
 _DEFAULT_LOSS_CONFIG: LossConfig = {"kl_div": (kl_div_loss, 1.0)}
@@ -195,6 +196,7 @@ class DSparkDraftModel(DFlashDraftModel):
                 1, mask_tokens_size
             )
 
+        pred_ids = logits.detach().argmax(dim=-1)
         loss, metrics = compute_metrics(
             logits,
             targets,
@@ -208,5 +210,18 @@ class DSparkDraftModel(DFlashDraftModel):
             per_position_loss_weight=per_position_loss_weight,
             dpace_alpha=dpace_alpha,
             sample_from_anchor=self.config.sample_from_anchor,
+        )
+        metrics.update(
+            compute_block_reference_metrics(
+                pred_ids,
+                input_ids,
+                anchored_block_indices,
+                aligned_loss_mask,
+                loss_mask,
+                document_ids,
+                self.block_size,
+                self.config.sample_from_anchor,
+                self.d2t,
+            )
         )
         return None, loss, metrics
