@@ -48,6 +48,10 @@ def _limit_worker_threads() -> None:
 def _worker_init_fn(worker_id: int) -> None:  # noqa: ARG001
     torch.set_num_threads(1)
 
+    local_rank = int(os.environ.get("LOCAL_RANK", "0"))
+    if torch.accelerator.is_available():
+        torch.accelerator.set_device_index(local_rank)
+
 
 def _setup_dataloader(
     dataset: BaseDataset,
