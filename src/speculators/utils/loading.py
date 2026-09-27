@@ -15,7 +15,13 @@ _WEIGHT_ALIASES: dict[str, list[str]] = {
         "backbone.embeddings.weight",  # HF Mamba-backbone (NemotronH, Mamba, ...)
     ],
     "lm_head.weight": ["output.weight", "llm.unembed.weight"],
-    "model.norm.weight": ["llm.norm.weight", "norm.weight"],
+    "model.norm.weight": [
+        "llm.norm.weight",
+        # HF Mamba-backbone final norm (NemotronH, Mamba, ...); before bare
+        # norm.weight so it beats per-layer backbone.layers.N.norm.weight.
+        "backbone.norm_f.weight",
+        "norm.weight",
+    ],
 }
 
 
