@@ -25,12 +25,19 @@ DFlash2 architecture adapted from:
 https://github.com/z-lab/dflash/blob/07ebd93db9f472af339b644bb70221ad8428328a/dflash/model.py
 """
 
+from copy import copy
+
 import torch
 from torch import nn
 from transformers.cache_utils import Cache
 from transformers.models.qwen3.modeling_qwen3 import (
     FlashAttentionKwargs,
     Qwen3Config,
+)
+from transformers.models.qwen3_5_moe.modeling_qwen3_5_moe import (
+    Qwen3_5MoeExperts,
+    Qwen3_5MoeMLP,
+    Qwen3_5MoeTopKRouter,
 )
 from typing_extensions import Unpack
 
@@ -40,8 +47,82 @@ __all__ = [
     "CandidateSelector",
     "GroupedDynamicCausalConv",
     "Qwen3DFlash2DecoderLayer",
+    "Qwen35DFlashMoeBlock",
     "grouped_dynamic_conv",
 ]
+
+
+class Qwen35DFlashMoeBlock(nn.Module):
+    """Qwen3.5-compatible routed and shared experts for a DFlash2 layer.
+
+    Only the feed-forward is replaced; the attention, the local convolutions
+    and the draft-block geometry are the dense DFlash2 ones. Weight names match
+    the Qwen3.5 MoE contract so a verifier layer warm-starts tensor for tensor.
+    """
+
+    def __init__(
+        self,
+        config: Qwen3Config,
+        *,
+        num_experts: int,
+        num_experts_per_tok: int,
+        moe_intermediate_size: int,
+        shared_expert_intermediate_size: int,
+        experts_implementation: str = "grouped_mm",
+    ) -> None:
+        super().__init__()
+        # Copy rather than annotate the shared attention config: it is
+        # serialized as transformer_layer_config, and MoE architecture fields
+        # have their one source of truth in DFlash2SpeculatorConfig.
+        moe_config = copy(config)
+        moe_config.num_experts = num_experts
+        moe_config.num_experts_per_tok = num_experts_per_tok
+        moe_config.moe_intermediate_size = moe_intermediate_size
+        moe_config._experts_implementation = (  # noqa: SLF001
+            None if experts_implementation == "reference" else experts_implementation
+        )
+        self.gate = Qwen3_5MoeTopKRouter(moe_config)
+        self.experts = Qwen3_5MoeExperts(moe_config)
+        self.shared_expert = Qwen3_5MoeMLP(
+            moe_config, intermediate_size=shared_expert_intermediate_size
+        )
+        self.shared_expert_gate = nn.Linear(moe_config.hidden_size, 1, bias=False)
+
+    def reset_parameters(self, initializer_range: float) -> None:
+        """Initialize the raw expert tensors and never leave the router at zero.
+
+        ``Qwen3_5MoeTopKRouter`` allocates its weight with ``torch.zeros`` and
+        relies on ``Qwen3_5MoePreTrainedModel._init_weights`` to replace it.
+        A DFlash2 draft is not on that class's MRO, so without this every token
+        would see identical router logits at step 0 and collapse onto one fixed
+        expert subset.
+        """
+        nn.init.normal_(self.gate.weight, mean=0.0, std=initializer_range)
+        nn.init.normal_(self.experts.gate_up_proj, mean=0.0, std=initializer_range)
+        nn.init.normal_(self.experts.down_proj, mean=0.0, std=initializer_range)
+        for projection in (
+            self.shared_expert.gate_proj,
+            self.shared_expert.up_proj,
+            self.shared_expert.down_proj,
+            self.shared_expert_gate,
+        ):
+            nn.init.normal_(projection.weight, mean=0.0, std=initializer_range)
+
+    def _route(
+        self, flat_hidden: torch.Tensor
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+        router_logits, routing_weights, selected_experts = self.gate(flat_hidden)
+        routed = self.experts(flat_hidden, selected_experts, routing_weights)
+        shared_gate = torch.sigmoid(self.shared_expert_gate(flat_hidden))
+        shared = shared_gate * self.shared_expert(flat_hidden)
+        return routed + shared, router_logits, selected_experts, shared_gate
+
+    def forward(self, hidden_states: torch.Tensor) -> torch.Tensor:
+        original_shape = hidden_states.shape
+        output, _logits, _selected, _gate = self._route(
+            hidden_states.reshape(-1, original_shape[-1])
+        )
+        return output.reshape(original_shape)
 
 
 def grouped_dynamic_conv(
@@ -183,8 +264,24 @@ class Qwen3DFlash2DecoderLayer(Qwen3DFlashDecoderLayer):
         block_size: int,
         conv_kernel_size: int,
         conv_group_size: int,
+        draft_ffn_type: str = "dense",
+        num_experts: int = 256,
+        num_experts_per_tok: int = 8,
+        moe_intermediate_size: int = 512,
+        shared_expert_intermediate_size: int = 512,
+        moe_experts_implementation: str = "grouped_mm",
     ) -> None:
         super().__init__(config=config, layer_idx=layer_idx)
+        self.block_size = block_size
+        if draft_ffn_type == "moe":
+            self.mlp = Qwen35DFlashMoeBlock(
+                config,
+                num_experts=num_experts,
+                num_experts_per_tok=num_experts_per_tok,
+                moe_intermediate_size=moe_intermediate_size,
+                shared_expert_intermediate_size=shared_expert_intermediate_size,
+                experts_implementation=moe_experts_implementation,
+            )
         conv_kwargs = {
             "block_size": block_size,
             "kernel_size": conv_kernel_size,
@@ -199,6 +296,11 @@ class Qwen3DFlash2DecoderLayer(Qwen3DFlashDecoderLayer):
         """Restore the DFlash-equivalent identity initialization."""
         self.attention_conv.reset_parameters()
         self.mlp_conv.reset_parameters()
+
+    def reset_moe_parameters(self, initializer_range: float) -> None:
+        """Initialize MoE tensors; a no-op for a dense draft layer."""
+        if isinstance(self.mlp, Qwen35DFlashMoeBlock):
+            self.mlp.reset_parameters(initializer_range)
 
     def forward(
         self,
