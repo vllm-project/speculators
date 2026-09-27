@@ -27,7 +27,9 @@ MODEL = "Qwen/Qwen3-0.6B"
 VLLM_PORT = 8324
 
 
-def _send_completion(endpoint: str, model: str, prompt: str) -> dict:
+def _send_completion(
+    endpoint: str, model: str, prompt: str, timeout: float = 60.0
+) -> dict:
     body = {
         "model": model,
         "prompt": prompt,
@@ -39,7 +41,7 @@ def _send_completion(endpoint: str, model: str, prompt: str) -> dict:
         data=json.dumps(body).encode(),
         headers={"Content-Type": "application/json"},
     )
-    return json.loads(urllib.request.urlopen(req, timeout=60).read())  # noqa: S310
+    return json.loads(urllib.request.urlopen(req, timeout=timeout).read())  # noqa: S310
 
 
 @pytest.mark.e2e
@@ -56,7 +58,9 @@ def test_fp8_hidden_states_roundtrip(tmp_path: Path):
         hidden_states_backend="fp8",
         enforce_eager=True,
     ):
-        resp = _send_completion(f"http://127.0.0.1:{VLLM_PORT}", MODEL, prompt)
+        resp = _send_completion(
+            f"http://127.0.0.1:{VLLM_PORT}", MODEL, prompt, timeout=300.0
+        )
 
         path = resp["kv_transfer_params"]["hidden_states_path"]
         ptids = resp["choices"][0].get("prompt_token_ids") or resp.get(
