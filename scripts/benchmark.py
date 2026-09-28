@@ -326,6 +326,7 @@ def _build_train_loader(
         preprocess=preprocess,
         train_data_ratio=train_args.train_data_ratio,
         max_train_batches=total_steps,
+        seed=train_args.seed,
     )
     return train_loader, False
 
