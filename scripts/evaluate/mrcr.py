@@ -179,11 +179,14 @@ def prepare_mrcr(
     data_dir: Path,
     artifacts_dir: Path,
     max_samples: int | None = None,
+    gen_budget: int = 4096,
 ) -> list[tuple[str, Path]]:
     """Return ``(label, jsonl_path)`` pairs for each selected needle x bucket.
 
     Buckets with no rows (for example, buckets above the model context
-    window) are reported and skipped.
+    window) are reported and skipped.  *gen_budget* is the room reserved
+    for generated tokens when filtering rows against the model context
+    window; it should match the ``max_tokens`` the run will request.
     """
     model, max_model_len = _model_info(target)
     cache_dir = Path(data_dir) / model.replace("/", "_")
@@ -206,7 +209,7 @@ def prepare_mrcr(
                 for label, low, high in buckets:
                     if not low < tokens <= high:
                         continue
-                    if max_model_len and tokens > max_model_len:
+                    if max_model_len and tokens + gen_budget > max_model_len:
                         break
                     if max_samples is not None and counts[label] >= max_samples:
                         break

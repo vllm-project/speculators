@@ -337,6 +337,7 @@ def run_benchmark(args: argparse.Namespace) -> None:
             data_dir=args.mrcr_data_dir,
             artifacts_dir=artifacts_dir,
             max_samples=args.mrcr_max_samples,
+            gen_budget=parse_gen_kwargs(args.gen_kwargs).get("max_tokens", 4096),
         )
         if not pairs:
             logger.error("No MRCR buckets could run on this server")
