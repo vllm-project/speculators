@@ -36,6 +36,13 @@ from pathlib import Path
 from urllib.error import URLError
 from urllib.request import urlopen
 
+from mrcr import (
+    BUCKETS,
+    MRCR_DATASET,
+    parse_buckets,
+    parse_needles,
+    prepare_mrcr,
+)
 from perf_utils import (
     BASE_CSV_COLUMNS,
     CsvWriter,
@@ -49,14 +56,6 @@ from perf_utils import (
     parse_sweep_results,
     print_acceptance_report,
     run_guidellm,
-)
-
-from mrcr import (
-    BUCKETS,
-    MRCR_DATASET,
-    parse_buckets,
-    parse_needles,
-    prepare_mrcr,
 )
 
 from speculators.provenance import (
@@ -215,6 +214,13 @@ def _run_subset(
     safe = subset.replace("/", "_").replace(" ", "_")
     max_tokens = 4096
 
+    # Dataset-provided request-body defaults (MRCR sets add_special_tokens)
+    # merged under user-supplied --gen-kwargs.
+    gen_kwargs = {
+        **guidellm_common.pop("gen_kwargs", {}),
+        **parse_gen_kwargs(args.gen_kwargs),
+    }
+
     # For local JSONL files (SPEED-Bench) the dataset path IS the file —
     # no --data-args needed.  For HF datasets subset name doubles as the filter.
     guidellm_subset = None if Path(guidellm_common["dataset"]).exists() else subset
@@ -231,7 +237,7 @@ def _run_subset(
             max_requests=None,
             output_path=gen_len_output,
             max_tokens=4096,
-            gen_kwargs=parse_gen_kwargs(args.gen_kwargs),
+            gen_kwargs=gen_kwargs,
         )
         mapping = parse_gen_len_results(
             [gen_len_output],
@@ -252,7 +258,7 @@ def _run_subset(
         max_requests=args.max_requests,
         output_path=run_output,
         max_tokens=max_tokens,
-        gen_kwargs=parse_gen_kwargs(args.gen_kwargs),
+        gen_kwargs=gen_kwargs,
     )
     current = _require_metrics(metrics_url)
 
@@ -345,6 +351,10 @@ def run_benchmark(args: argparse.Namespace) -> None:
                         "data_column_mapper": args.data_column_mapper,
                         "max_concurrency": args.max_concurrency,
                         "request_format": "/v1/completions",
+                        # Prevents a repeated BOS on models whose tokenizer
+                        # adds one (e.g. Llama); a no-op on models that
+                        # don't (e.g. Qwen).
+                        "gen_kwargs": {"add_special_tokens": False},
                     },
                 )
             )
@@ -517,9 +527,7 @@ def main() -> None:
             "MRCR context-length buckets as a comma list of numbers or"
             " labels, e.g. 1,4,8 or 4096-8192,32769-65536,524289-1048576"
             " (default: all buckets): "
-            + ", ".join(
-                f"{i}={label}" for i, (label, _, _) in enumerate(BUCKETS, 1)
-            )
+            + ", ".join(f"{i}={label}" for i, (label, _, _) in enumerate(BUCKETS, 1))
         ),
     )
     parser.add_argument(
