@@ -1,11 +1,15 @@
 """Unit tests: the CLI convert algorithm choices match the backend."""
 
+import importlib
+
 from typer.testing import CliRunner
 
-import speculators.cli.convert as cli_convert
 from speculators.cli import app
 from speculators.convert import SUPPORTED_ALGORITHMS
 
+# speculators.cli re-exports the ``convert`` command function, which shadows the
+# submodule of the same name on attribute access, so fetch the module directly.
+cli_convert = importlib.import_module("speculators.cli.convert")
 runner = CliRunner()
 
 
@@ -24,10 +28,9 @@ def test_cli_offers_exactly_the_backend_algorithms(monkeypatch):
 
 
 def test_cli_rejects_unsupported_eagle_v1(monkeypatch):
+    calls = []
     monkeypatch.setattr(
-        cli_convert,
-        "convert_model",
-        lambda **kwargs: (_ for _ in ()).throw(AssertionError("must not be called")),
+        cli_convert, "convert_model", lambda **kwargs: calls.append(kwargs["algorithm"])
     )
     result = runner.invoke(
         app,
@@ -35,3 +38,4 @@ def test_cli_rejects_unsupported_eagle_v1(monkeypatch):
     )
     # Rejected by the CLI parser instead of exploding inside convert_model.
     assert result.exit_code != 0
+    assert calls == []
