@@ -16,6 +16,7 @@ import json
 import logging
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor
+from functools import partial
 from pathlib import Path
 
 import pandas as pd
@@ -28,6 +29,8 @@ __all__ = ["BUCKETS", "MRCR_DATASET", "parse_buckets", "parse_needles", "prepare
 MRCR_DATASET = "openai/mrcr"
 _RENDER_WORKERS = 24
 _HTTP_TIMEOUT = 600
+# a render pass failing more than this fraction of rows fails the run outright
+_MAX_RENDER_FAILURE_RATE = 0.05
 
 # (label, low, high] over rendered prompt token counts
 BUCKETS = (
@@ -118,15 +121,8 @@ def _render_row(root: str, model: str, messages: list[dict]) -> tuple[str, int]:
     return detokenized["prompt"], tokens["count"]
 
 
-def _ensure_rendered(
-    target: str, model: str, n_needles: int, cache_dir: Path
-) -> Path:
-    """Render every row of one needle count once and cache it as JSONL."""
-    path = cache_dir / f"rendered_{n_needles}needle.jsonl"
-    if path.exists():
-        logger.info("[mrcr] using cached %s", path)
-        return path
-
+def _load_prompts(n_needles: int) -> list[str]:
+    """Return the dataset's prompt JSON strings for one needle count."""
     frames = [
         pd.read_parquet(
             hf_hub_download(
@@ -137,39 +133,138 @@ def _ensure_rendered(
         )
         for i in (0, 1)
     ]
-    prompts = pd.concat(frames, ignore_index=True)["prompt"].tolist()
-    logger.info("[mrcr] rendering %d %d-needle rows", len(prompts), n_needles)
+    return pd.concat(frames, ignore_index=True)["prompt"].tolist()
 
-    root = _root_url(target)
 
-    def render(item: tuple[int, str]) -> dict | None:
-        index, prompt_json = item
-        try:
-            prompt, count = _render_row(root, model, json.loads(prompt_json))
-        except Exception as error:  # noqa: BLE001
-            logger.warning("[mrcr] render failed for row %d: %s", index, error)
-            return None
-        return {"prompt": prompt, "rendered_tokens": count}
+def _load_cache(path: Path) -> dict[int, dict]:
+    """Return {row index: row} for the rendered rows of a partial cache."""
+    with path.open() as file:
+        return {
+            index: json.loads(line)
+            for index, line in enumerate(file)
+            if line.strip() != "null"
+        }
 
-    path.parent.mkdir(parents=True, exist_ok=True)
+
+def _render(
+    root: str, model: str, cached: dict[int, dict], item: tuple[int, str]
+) -> dict | None:
+    """Render one (index, prompt JSON) pair to a cache row, None on failure.
+
+    Rows already in *cached* are returned without hitting the server.
+    """
+    index, prompt_json = item
+    if (row := cached.get(index)) is not None:
+        return row
+    try:
+        prompt, count = _render_row(root, model, json.loads(prompt_json))
+    except Exception as error:  # noqa: BLE001
+        logger.warning("[mrcr] render failed for row %d: %s", index, error)
+        return None
+    return {"prompt": prompt, "rendered_tokens": count}
+
+
+def _render_prompts(
+    path: Path,
+    done_path: Path,
+    prompts: list[str],
+    root: str,
+    model: str,
+    cached: dict[int, dict],
+) -> Path:
+    """Render every prompt, writing a null line for each failure.
+
+    Rows already in *cached* are reused rather than re-rendered, so
+    re-running with a partial cache only renders its null rows.  Returns
+    done_path when every row rendered and path otherwise; the partial
+    cache is kept so a series of runs sees the same data.  If
+    more than _MAX_RENDER_FAILURE_RATE of the rows fail, the result is
+    discarded and RuntimeError is raised.
+    """
     tmp_path = path.with_suffix(".jsonl.tmp")
     failed = 0
     written = 0
     with ThreadPoolExecutor(max_workers=_RENDER_WORKERS) as pool, tmp_path.open(
         "w"
     ) as file:
-        for row in pool.map(render, enumerate(prompts)):
+        for row in pool.map(
+            partial(_render, root, model, cached), enumerate(prompts)
+        ):
             if row is None:
                 failed += 1
+                file.write("null\n")
                 continue
             file.write(json.dumps(row) + "\n")
             written += 1
             if written % 100 == 0:
                 logger.info("[mrcr] rendered %d/%d rows", written, len(prompts))
-    tmp_path.rename(path)
+    if failed > _MAX_RENDER_FAILURE_RATE * len(prompts):
+        tmp_path.unlink()
+        raise RuntimeError(
+            f"{failed}/{len(prompts)} rows failed to render "
+            f"(> {_MAX_RENDER_FAILURE_RATE:.0%}); nothing was cached"
+        )
     if failed:
-        logger.warning("[mrcr] %d/%d rows failed to render", failed, len(prompts))
-    return path
+        tmp_path.rename(path)
+        logger.warning(
+            "[mrcr] %d/%d rows failed to render; cached the rest in %s "
+            "(re-run with --mrcr-retry-failed to retry them)",
+            failed,
+            len(prompts),
+            path,
+        )
+        return path
+    tmp_path.rename(done_path)
+    path.unlink(missing_ok=True)
+    return done_path
+
+
+def _ensure_rendered(
+    target: str,
+    model: str,
+    n_needles: int,
+    cache_dir: Path,
+    retry_failed: bool = False,
+) -> Path:
+    """Render every row of one needle count once and cache it as JSONL.
+
+    The cache holds one line per dataset row; a row that fails to render
+    is written as null, keeping the loss visible in the data.  A fully
+    rendered cache is renamed to a .done file, which later runs reuse
+    without inspection.  A partially rendered one keeps the plain name
+    and is also reused as-is, so a series of runs always sees the same
+    data, with a warning on every use; re-running with retry_failed
+    renders only the rows the cache is missing.
+    """
+    path = cache_dir / f"rendered_{n_needles}needle.jsonl"
+    done_path = path.with_name(f"{path.stem}.done{path.suffix}")
+
+    if done_path.exists():
+        logger.info("[mrcr] using cached %s", done_path)
+        return done_path
+    cached: dict[int, dict] = {}
+    if path.exists():
+        if not retry_failed:
+            with path.open() as file:
+                failed = sum(1 for line in file if line.strip() == "null")
+            logger.warning(
+                "[mrcr] using partial cache %s: %d rows failed to render; "
+                "re-run with --mrcr-retry-failed to retry them",
+                path,
+                failed,
+            )
+            return path
+        cached = _load_cache(path)
+
+    prompts = _load_prompts(n_needles)
+    logger.info(
+        "[mrcr] rendering %d/%d %d-needle rows",
+        len(prompts) - len(cached),
+        len(prompts),
+        n_needles,
+    )
+    path.parent.mkdir(parents=True, exist_ok=True)
+    return _render_prompts(path, done_path, prompts, _root_url(target), model, cached)
 
 
 def prepare_mrcr(
@@ -180,6 +275,7 @@ def prepare_mrcr(
     artifacts_dir: Path,
     max_samples: int | None = None,
     gen_budget: int = 4096,
+    retry_failed: bool = False,
 ) -> list[tuple[str, Path]]:
     """Return ``(label, jsonl_path)`` pairs for each selected needle x bucket.
 
@@ -187,6 +283,8 @@ def prepare_mrcr(
     window) are reported and skipped.  *gen_budget* is the room reserved
     for generated tokens when filtering rows against the model context
     window; it should match the ``max_tokens`` the run will request.
+    *retry_failed* re-renders rows that failed to render on a previous
+    run instead of reusing the partial cache as-is.
     """
     model, max_model_len = _model_info(target)
     cache_dir = Path(data_dir) / model.replace("/", "_")
@@ -195,7 +293,9 @@ def prepare_mrcr(
 
     pairs: list[tuple[str, Path]] = []
     for n_needles in needles:
-        rendered = _ensure_rendered(target, model, n_needles, cache_dir)
+        rendered = _ensure_rendered(
+            target, model, n_needles, cache_dir, retry_failed=retry_failed
+        )
 
         # Stream rows to their bucket files in one pass; buckets are disjoint
         # and rows arrive in dataset order, so each file keeps the first rows
@@ -203,8 +303,8 @@ def prepare_mrcr(
         counts = {label: 0 for label, _, _ in buckets}
         open_files: dict[str, object] = {}
         with rendered.open() as file, contextlib.ExitStack() as stack:
-            for line in file:
-                row = json.loads(line)
+            # null lines are rows whose render failed; they are skipped
+            for row in filter(None, map(json.loads, file)):
                 tokens = row["rendered_tokens"]
                 for label, low, high in buckets:
                     if not low < tokens <= high:

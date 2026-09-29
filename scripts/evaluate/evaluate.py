@@ -338,6 +338,7 @@ def run_benchmark(args: argparse.Namespace) -> None:
             artifacts_dir=artifacts_dir,
             max_samples=args.mrcr_max_samples,
             gen_budget=parse_gen_kwargs(args.gen_kwargs).get("max_tokens", 4096),
+            retry_failed=args.mrcr_retry_failed,
         )
         if not pairs:
             logger.error("No MRCR buckets could run on this server")
@@ -542,6 +543,12 @@ def main() -> None:
         type=int,
         default=None,
         help="Maximum samples per MRCR bucket (default: no limit)",
+    )
+    parser.add_argument(
+        "--mrcr-retry-failed",
+        action="store_true",
+        help="Retry MRCR rows whose render previously failed (default: reuse "
+        "the partial cache as-is)",
     )
     args = parser.parse_args()
 
