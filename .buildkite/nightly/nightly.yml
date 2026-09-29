@@ -65,11 +65,8 @@ steps:
 
         matrix:
           setup:
-            python: ["3.10", "3.13"]
-            transformers: ["latest", "main"]
-          adjustments:
-            - with: {python: "3.10", transformers: "main"}
-              skip: true
+            python: ["3.13"]
+            transformers: ["latest"]
 
   - group: ":test_tube: Nightly Integration Tests (H100)"
     steps:
@@ -137,11 +134,8 @@ steps:
 
         matrix:
           setup:
-            python: ["3.10", "3.13"]
-            transformers: ["latest", "main"]
-          adjustments:
-            - with: {python: "3.10", transformers: "main"}
-              skip: true
+            python: ["3.13"]
+            transformers: ["latest"]
 
   - group: ":rocket: Nightly E2E Tests (H100)"
     steps:
@@ -213,32 +207,9 @@ steps:
 
         matrix:
           setup:
-            python: ["3.10", "3.11", "3.12", "3.13"]
-            transformers: ["latest", "main"]
-            vllm: ["latest", "nightly"]
-          adjustments:
-            - with: {python: "3.10", transformers: "main", vllm: "latest"}
-              skip: true
-            - with: {python: "3.10", transformers: "main", vllm: "nightly"}
-              skip: true
-            - with: {python: "3.10", transformers: "latest", vllm: "nightly"}
-              skip: true
-            - with: {python: "3.11", transformers: "main", vllm: "latest"}
-              skip: true
-            - with: {python: "3.11", transformers: "main", vllm: "nightly"}
-              skip: true
-            - with: {python: "3.11", transformers: "latest", vllm: "nightly"}
-              skip: true
-            - with: {python: "3.12", transformers: "main", vllm: "latest"}
-              skip: true
-            - with: {python: "3.12", transformers: "main", vllm: "nightly"}
-              skip: true
-            - with: {python: "3.12", transformers: "latest", vllm: "latest"}
-              skip: true
-            - with: {python: "3.13", transformers: "latest", vllm: "nightly"}
-              skip: true
-            - with: {python: "3.13", transformers: "main", vllm: "nightly"}
-              skip: true
+            python: ["3.13"]
+            transformers: ["latest"]
+            vllm: ["latest"]
 
   - group: ":rotating_light: Nightly Regression Tests (H100)"
     steps:
@@ -308,17 +279,8 @@ steps:
 
         matrix:
           setup:
-            python: ["3.10", "3.11", "3.12", "3.13"]
-            vllm: ["latest", "nightly"]
-          adjustments:
-            - with: {python: "3.10", vllm: "nightly"}
-              skip: true
-            - with: {python: "3.11", vllm: "nightly"}
-              skip: true
-            - with: {python: "3.12", vllm: "latest"}
-              skip: true
-            - with: {python: "3.13", vllm: "nightly"}
-              skip: true
+            python: ["3.13"]
+            vllm: ["latest"]
 
   - group: ":link: Nightly Multi-GPU Tests (H100)"
     steps:
@@ -386,8 +348,5 @@ steps:
 
         matrix:
           setup:
-            python: ["3.10", "3.13"]
-            transformers: ["latest", "main"]
-          adjustments:
-            - with: {python: "3.10", transformers: "main"}
-              skip: true
+            python: ["3.13"]
+            transformers: ["latest"]
