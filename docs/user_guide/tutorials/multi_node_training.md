@@ -126,6 +126,7 @@ These flags are available on both `launch_vllm.py` and `speculators train` (`tor
 | `--mooncake-master`             | `127.0.0.1:50051` | Mooncake master server address                                                                    |
 | `--mooncake-metadata-server`    | `P2PHANDSHAKE`    | Metadata server address, or `P2PHANDSHAKE` for peer-to-peer                                       |
 | `--mooncake-protocol`           | `tcp`             | Transport protocol: `tcp` or `rdma`                                                               |
+| `--mooncake-device`             | `""`              | Transport device(s), e.g. `mlx5_0` or `mlx5_0,mlx5_1` for RDMA. Empty lets Mooncake choose        |
 | `--mooncake-global-segment-gib` | `4.0`             | Memory registered for globally visible objects (GiB). Increase for many concurrent long sequences |
 | `--mooncake-local-buffer-gib`   | `2.0`             | Local staging buffer size (GiB)                                                                   |
 | `--mooncake-writer-threads`     | `4`               | Async writer threads on the vLLM side (`launch_vllm.py` only)                                     |
