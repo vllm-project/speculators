@@ -57,7 +57,7 @@ from speculators.train.cli import (
     set_seed,
 )
 from speculators.train.config import TrainConfig
-from speculators.train.dataloader import create_train_val_loaders
+from speculators.train.dataloader import BatchType, create_train_val_loaders
 from speculators.train.distributed import (
     get_rank,
     maybe_destroy_distributed,
@@ -117,7 +117,7 @@ class _SyntheticLoader:
         def set_epoch(self, _epoch):
             pass
 
-    def __init__(self, batch: dict[str, torch.Tensor], num_steps: int):
+    def __init__(self, batch: BatchType, num_steps: int):
         self._batch = batch
         self._num_steps = num_steps
         self.batch_sampler = self._BatchSampler()
@@ -193,7 +193,7 @@ def create_synthetic_batch(
     vocab_size: int = 32000,
     dtype: torch.dtype = torch.bfloat16,
     device: torch.device | int = 0,
-) -> dict[str, torch.Tensor]:
+) -> BatchType:
     """Create a random batch matching the post-collation training shape."""
     hs_dim = num_target_layers * hidden_size
     return {

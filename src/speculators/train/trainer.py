@@ -109,7 +109,8 @@ class _StepTimer:
         }
         if "queue" in m and has_start:
             result["queue_ms"] = (m["queue"] - m["start"]) * 1000
-            result["h2d_ms"] = (m["fetch"] - m["queue"]) * 1000
+        if "pre_h2d" in m:
+            result["h2d_ms"] = (m["fetch"] - m["pre_h2d"]) * 1000
         if "pre_clip" in m:
             result["clip_ms"] = (m["bwd"] - m["pre_clip"]) * 1000
         if self._memory:
@@ -517,6 +518,7 @@ class Trainer:
                 self.config.max_steps is not None
                 and self.global_step + 1 >= self.config.max_steps
             )
+            timer.mark("queue")
             recovery.consume(
                 batch,
                 synchronize=_should_sync_recovery(
@@ -525,7 +527,7 @@ class Trainer:
                     will_stop=will_stop,
                 ),
             )
-            timer.mark("queue")
+            timer.mark("pre_h2d")
             gpu_batch = {
                 k: v.to(self.local_rank, non_blocking=True)
                 if isinstance(v, torch.Tensor)
