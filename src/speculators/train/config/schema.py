@@ -270,11 +270,11 @@ class GenerationArgs(_Group):
         "Default 'generate' generates them on demand via the vLLM endpoint; the others "
         "skip the sample, skip with a warning, or raise.",
     )
-    on_generate: Literal["cache", "delete"] = Field(
+    on_generate: Literal["delete"] = Field(
         default="delete",
-        description="Behaviour after generating a hidden state (only if "
-        "--on-missing=generate). 'delete' discards it once loaded; 'cache' stores it "
-        "in the hidden states path, enabling hybrid online/offline training.",
+        description="Deprecated, no effect. Generated hidden states are always "
+        "discarded once loaded. Retained for backwards compatibility with existing "
+        "command lines and will be removed in a future release.",
     )
     request_timeout: float = Field(
         default=DEFAULT_REQUEST_TIMEOUT,
