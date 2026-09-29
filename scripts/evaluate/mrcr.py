@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import argparse
 import contextlib
+import hashlib
 import json
 import logging
 import urllib.request
@@ -136,6 +137,29 @@ def _load_prompts(n_needles: int) -> list[str]:
     return pd.concat(frames, ignore_index=True)["prompt"].tolist()
 
 
+# a render of these messages fingerprints the server's chat template and
+# tokenizer config, so caches cannot be reused across a config change
+_KEY_MESSAGES = [
+    {"role": "system", "content": "cache key: system"},
+    {"role": "user", "content": "cache key: user 1"},
+    {"role": "assistant", "content": "cache key: assistant 1"},
+    {"role": "user", "content": "cache key: user 2"},
+]
+
+
+def _render_key(root: str, model: str) -> str:
+    """Fingerprint the server's rendering of _KEY_MESSAGES.
+
+    The chat template is server-side launch state with no API to read
+    it, so the fingerprint is behavioral: the rendered canary prompt.
+    Cache file names embed it, so re-serving the model with a different
+    --chat-template or tokenizer config renders a new cache instead of
+    reusing stale prompts.
+    """
+    prompt, _ = _render_row(root, model, _KEY_MESSAGES)
+    return hashlib.sha256(prompt.encode()).hexdigest()[:8]
+
+
 def _load_cache(path: Path) -> dict[int, dict]:
     """Return {row index: row} for the rendered rows of a partial cache."""
     with path.open() as file:
@@ -224,6 +248,7 @@ def _ensure_rendered(
     model: str,
     n_needles: int,
     cache_dir: Path,
+    render_key: str,
     retry_failed: bool = False,
 ) -> Path:
     """Render every row of one needle count once and cache it as JSONL.
@@ -234,9 +259,12 @@ def _ensure_rendered(
     without inspection.  A partially rendered one keeps the plain name
     and is also reused as-is, so a series of runs always sees the same
     data, with a warning on every use; re-running with retry_failed
-    renders only the rows the cache is missing.
+    renders only the rows the cache is missing.  The file name embeds
+    *render_key*, a fingerprint of the server's chat template and
+    tokenizer config, so a config change renders a new cache rather
+    than reusing stale prompts.
     """
-    path = cache_dir / f"rendered_{n_needles}needle.jsonl"
+    path = cache_dir / f"rendered_{n_needles}needle.{render_key}.jsonl"
     done_path = path.with_name(f"{path.stem}.done{path.suffix}")
 
     if done_path.exists():
@@ -288,13 +316,14 @@ def prepare_mrcr(
     """
     model, max_model_len = _model_info(target)
     cache_dir = Path(data_dir) / model.replace("/", "_")
+    render_key = _render_key(_root_url(target), model)
     out_dir = Path(artifacts_dir) / "mrcr"
     out_dir.mkdir(parents=True, exist_ok=True)
 
     pairs: list[tuple[str, Path]] = []
     for n_needles in needles:
         rendered = _ensure_rendered(
-            target, model, n_needles, cache_dir, retry_failed=retry_failed
+            target, model, n_needles, cache_dir, render_key, retry_failed
         )
 
         # Stream rows to their bucket files in one pass; buckets are disjoint
