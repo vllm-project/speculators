@@ -25,6 +25,12 @@ python evaluate.py throughput --target http://localhost:8000/v1
 
 See [`examples/evaluate/`](https://github.com/vllm-project/speculators/tree/main/examples/evaluate) for end-to-end examples that launch a vLLM server and run the pipeline.
 
+## Outputs and baseline runs
+
+Both modes support a vLLM server running without speculative decoding. A successful baseline run does not require speculative counters and does not produce `acceptance.csv`. Raw GuideLLM results are saved under `artifacts/` in both modes. In `sweep` mode, the run also produces `perf_results.csv` and `max_tokens.json` for comparison with a speculative run.
+
+`perf_results.csv` contains performance metrics for each sweep load point. When speculative counters are available and drafts were generated, `acceptance.csv` contains one aggregate acceptance row per subset. In `throughput` mode this covers the throughput run; in `sweep` mode it covers the entire sweep, excluding the preceding output-length estimation run. The evaluator samples counters before and after the run, so it cannot attribute acceptance metrics to individual sweep load points. Acceptance columns are therefore omitted from `perf_results.csv`; use `acceptance.csv` for the aggregate metrics.
+
 ## Options
 
 Both `throughput` and `sweep` share the same options:
