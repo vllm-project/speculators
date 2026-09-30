@@ -223,9 +223,43 @@ class MooncakeHiddenStatesStore:
         Device tensors are copied into the pinned staging buffer on the current
         stream, so callers can pick the stream the DtoH copy runs on.
         """
-        store = self._require_store()
         tensor_spec = transfer_manifest["tensors"]
         total_bytes = transfer_manifest["metadata"]["total_aligned_bytes"]
+
+        expected_names = set(tensor_spec)
+        actual_names = set(tensors)
+        if actual_names != expected_names:
+            raise MooncakeIntegrityError(
+                "Producer tensor names do not match manifest: "
+                f"expected={sorted(expected_names)}, actual={sorted(actual_names)}"
+            )
+
+        for name, spec in tensor_spec.items():
+            tensor = tensors[name]
+            expected_shape = tuple(spec["shape"])
+            if tuple(tensor.shape) != expected_shape:
+                raise MooncakeIntegrityError(
+                    f"Producer tensor {name!r} shape {tuple(tensor.shape)} does not "
+                    f"match manifest shape {expected_shape}"
+                )
+
+            expected_dtype = _parse_dtype(
+                transfer_manifest["handle"], name, spec["dtype"]
+            )
+            if tensor.dtype != expected_dtype:
+                raise MooncakeIntegrityError(
+                    f"Producer tensor {name!r} dtype {tensor.dtype} does not "
+                    f"match manifest dtype {expected_dtype}"
+                )
+
+            actual_nbytes = tensor.numel() * tensor.element_size()
+            if actual_nbytes != spec["nbytes"]:
+                raise MooncakeIntegrityError(
+                    f"Producer tensor {name!r} has {actual_nbytes} bytes, but the "
+                    f"manifest reserves {spec['nbytes']}"
+                )
+
+        store = self._require_store()
         staging = self._staging_buffer("put", total_bytes)
 
         for name, spec in tensor_spec.items():
