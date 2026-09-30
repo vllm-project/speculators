@@ -15,11 +15,13 @@ import torch
 pytest.importorskip("hs_connectors.mooncake_store")
 
 from hs_connectors.mooncake_store import (
+    VERSION,
     MooncakeHiddenStatesStore,
     MooncakeIntegrityError,
     MooncakeStoreConfig,
     NonFiniteTensorError,
     assert_finite,
+    packed_layout,
 )
 
 from hs_connectors import mooncake_store
@@ -83,14 +85,51 @@ def store() -> MooncakeHiddenStatesStore:
     return s
 
 
+def _manifest(key: str, tensors: dict[str, torch.Tensor]) -> dict:
+    tensor_specs, total_bytes = packed_layout(
+        {
+            name: (tuple(tensor.shape), tensor.dtype)
+            for name, tensor in tensors.items()
+        }
+    )
+    return {
+        "handle": key,
+        "version": VERSION,
+        "tensors": tensor_specs,
+        "metadata": {
+            "num_tokens": (
+                int(tensors["hidden_states"].shape[0])
+                if "hidden_states" in tensors and tensors["hidden_states"].ndim
+                else 0
+            ),
+            "total_aligned_bytes": total_bytes,
+            "extract_mode": "prompt_only",
+        },
+    }
+
+
+def _put_sample(
+    store: MooncakeHiddenStatesStore,
+    key: str,
+    tensors: dict[str, torch.Tensor],
+) -> dict:
+    manifest = _manifest(key, tensors)
+    store.put_sample(manifest, tensors)
+    return manifest
+
+
 def test_put_get_roundtrip_preserves_shape_and_dtype(store):
     # Mirrors the ExampleHiddenStatesConnector payload: [seq, n_layers, hidden]
     # bf16 hidden states + int64 token ids.
     hidden_states = torch.randn(7, 4, 16, dtype=torch.bfloat16)
     token_ids = torch.arange(7, dtype=torch.int64)
 
-    store.put_sample("req-1", {"hidden_states": hidden_states, "token_ids": token_ids})
-    out = store.get_sample("req-1", timeout=1.0)
+    manifest = _put_sample(
+        store,
+        "req-1",
+        {"hidden_states": hidden_states, "token_ids": token_ids},
+    )
+    out = store.get_sample(manifest, timeout=1.0)
 
     assert out.keys() == {"hidden_states", "token_ids"}
     assert out["hidden_states"].shape == hidden_states.shape
@@ -100,14 +139,19 @@ def test_put_get_roundtrip_preserves_shape_and_dtype(store):
 
 
 def test_missing_sample_times_out(store):
+    manifest = _manifest("req-2", {"hidden_states": torch.empty(0)})
+
     with pytest.raises(TimeoutError):
-        store.get_sample("req-2", timeout=0.2, poll_interval=0.02)
+        store.get_sample(manifest, timeout=0.2, poll_interval=0.02)
 
 
 def test_delete_sample_removes_object(store):
     hs = torch.randn(4, 2, 8, dtype=torch.bfloat16)
     tids = torch.arange(4, dtype=torch.int64)
-    store.put_sample("req-del", {"hidden_states": hs, "token_ids": tids})
+    manifest = _put_sample(
+        store, "req-del", {"hidden_states": hs, "token_ids": tids}
+    )
+    store.put_error(manifest, "producer failed")
 
     store.delete_sample("req-del")
 
@@ -126,61 +170,65 @@ def test_delete_sample_raises_on_negative_status(store, monkeypatch):
 
 
 def test_get_sample_raises_on_evicted_sample(store, monkeypatch):
-    store.put_sample("req-evict", {"hidden_states": torch.zeros(4, 2, 8)})
+    manifest = _put_sample(
+        store, "req-evict", {"hidden_states": torch.zeros(4, 2, 8)}
+    )
     monkeypatch.setattr(store._store, "get_size", lambda _key: -704)
 
     with pytest.raises(MooncakeIntegrityError, match="unavailable"):
-        store.get_sample("req-evict", timeout=1.0)
+        store.get_sample(manifest, timeout=1.0)
 
 
 def test_get_sample_raises_on_short_read(store, monkeypatch):
-    store.put_sample("req-short", {"hidden_states": torch.zeros(4, 2, 8)})
+    manifest = _put_sample(
+        store, "req-short", {"hidden_states": torch.zeros(4, 2, 8)}
+    )
     monkeypatch.setattr(store._store, "get_into", lambda _key, _ptr, _size: 16)
 
     with pytest.raises(MooncakeIntegrityError, match="returned 16"):
-        store.get_sample("req-short", timeout=1.0)
+        store.get_sample(manifest, timeout=1.0)
 
 
 def test_get_sample_raises_on_is_exist_error(store, monkeypatch):
     monkeypatch.setattr(store._store, "is_exist", lambda _key: -1)
+    manifest = _manifest("req-exist-fail", {"hidden_states": torch.empty(0)})
 
     with pytest.raises(RuntimeError, match="status=-1"):
-        store.get_sample("req-exist-fail", timeout=1.0)
+        store.get_sample(manifest, timeout=1.0)
 
 
 def test_get_sample_rejects_out_of_bounds_manifest(store):
-    trailer = mooncake_store._encode_trailer(
-        {
-            "version": mooncake_store._MANIFEST_VERSION,
-            "status": "ok",
-            "tensors": {
-                "hidden_states": {
-                    "shape": [1024],
-                    "dtype": "torch.float32",
-                    "offset": 0,
-                    "nbytes": 4096,
-                }
-            },
-        }
-    )
-    store._store.objects["req-oob"] = trailer
+    manifest = {
+        "handle": "req-oob",
+        "version": VERSION,
+        "tensors": {
+            "hidden_states": {
+                "shape": [1024],
+                "dtype": "torch.float32",
+                "offset": 64,
+                "nbytes": 4096,
+            }
+        },
+        "metadata": {"total_aligned_bytes": 4096},
+    }
+    store._store.objects["req-oob"] = bytes(4096)
 
     with pytest.raises(MooncakeIntegrityError, match="out of bounds"):
-        store.get_sample("req-oob", timeout=1.0)
+        store.get_sample(manifest, timeout=1.0)
 
 
 def test_staging_buffer_is_reused_and_grows(store, monkeypatch):
     monkeypatch.setattr(mooncake_store, "_STAGING_GRANULE", 4096)
-    store.put_sample("small-1", {"hidden_states": torch.zeros(16)})
+    _put_sample(store, "small-1", {"hidden_states": torch.zeros(16)})
     first = dict(store._store.registered)
-    store.put_sample("small-2", {"hidden_states": torch.zeros(16)})
+    _put_sample(store, "small-2", {"hidden_states": torch.zeros(16)})
     assert store._store.registered == first
 
-    store.put_sample("large", {"hidden_states": torch.zeros(4096)})
+    manifest = _put_sample(store, "large", {"hidden_states": torch.zeros(4096)})
     assert len(store._store.registered) == 1
     assert next(iter(store._store.registered.values())) >= 4096 * 4
     assert torch.equal(
-        store.get_sample("large", timeout=1.0)["hidden_states"], torch.zeros(4096)
+        store.get_sample(manifest, timeout=1.0)["hidden_states"], torch.zeros(4096)
     )
 
 
@@ -202,18 +250,37 @@ def test_assert_finite_accepts_clean_and_non_float_tensors():
 
 
 def test_error_manifest_fails_consumer_immediately(store):
-    store.put_error("req-error", "producer found NaN")
+    manifest = _manifest("req-error", {"hidden_states": torch.empty(0)})
+    store.put_error(manifest, "producer found NaN")
 
     with pytest.raises(MooncakeIntegrityError, match="producer found NaN"):
-        store.get_sample("req-error", timeout=1.0)
+        store.get_sample(manifest, timeout=1.0)
+
+
+def test_error_manifest_takes_precedence_over_sample(store):
+    tensors = {"hidden_states": torch.zeros(4, 2, 8)}
+    manifest = _put_sample(store, "req-error-and-sample", tensors)
+    store.put_error(manifest, "producer failed after publishing sample")
+
+    with pytest.raises(
+        MooncakeIntegrityError, match="producer failed after publishing sample"
+    ):
+        store.get_sample(manifest, timeout=1.0)
 
 
 def test_negative_put_status_does_not_publish_sample(store, monkeypatch):
     monkeypatch.setattr(store._store, "put_from", lambda _key, _ptr, _size: -800)
+    manifest = _manifest(
+        "req-put-fail",
+        {
+            "hidden_states": torch.zeros(4, 2, 8),
+            "token_ids": torch.arange(4),
+        },
+    )
 
     with pytest.raises(RuntimeError, match="status=-800"):
         store.put_sample(
-            "req-put-fail",
+            manifest,
             {
                 "hidden_states": torch.zeros(4, 2, 8),
                 "token_ids": torch.arange(4),
@@ -225,33 +292,36 @@ def test_negative_put_status_does_not_publish_sample(store, monkeypatch):
 
 def test_register_failure_raises(store, monkeypatch):
     monkeypatch.setattr(store._store, "register_buffer", lambda _ptr, _size: -1)
+    manifest = _manifest("req-reg-fail", {"hidden_states": torch.zeros(4)})
 
     with pytest.raises(RuntimeError, match="register_buffer"):
-        store.put_sample("req-reg-fail", {"hidden_states": torch.zeros(4)})
+        store.put_sample(manifest, {"hidden_states": torch.zeros(4)})
 
 
 def test_wait_backs_off_from_one_millisecond(store, monkeypatch):
     sleeps: list[float] = []
-    calls = iter([0, 0, 0, 0, 1])
+    calls = iter([0, 0, 0, 0, 0, 0, 0, 0, 0, 1])
     monkeypatch.setattr(store._store, "is_exist", lambda _key: next(calls))
     monkeypatch.setattr(mooncake_store.time, "sleep", sleeps.append)
+    manifest = _manifest("req-late", {"hidden_states": torch.empty(0)})
 
-    store._wait_for("req-late", timeout=10.0, poll_interval=0.004)
+    store._wait_for(manifest, timeout=10.0, poll_interval=0.004)
 
     assert sleeps == [0.001, 0.002, 0.004, 0.004]
 
 
 def test_failed_growth_does_not_keep_unregistered_buffer(store, monkeypatch):
     monkeypatch.setattr(mooncake_store, "_STAGING_GRANULE", 4096)
-    store.put_sample("small", {"hidden_states": torch.zeros(16)})
+    _put_sample(store, "small", {"hidden_states": torch.zeros(16)})
     register = store._store.register_buffer
     monkeypatch.setattr(store._store, "register_buffer", lambda _ptr, _size: -1)
+    large_manifest = _manifest("large", {"hidden_states": torch.zeros(4096)})
 
     with pytest.raises(RuntimeError, match="register_buffer"):
-        store.put_sample("large", {"hidden_states": torch.zeros(4096)})
+        store.put_sample(large_manifest, {"hidden_states": torch.zeros(4096)})
 
     monkeypatch.setattr(store._store, "register_buffer", register)
-    store.put_sample("small-again", {"hidden_states": torch.zeros(16)})
+    manifest = _put_sample(store, "small-again", {"hidden_states": torch.zeros(16)})
     assert torch.equal(
-        store.get_sample("small-again", timeout=1.0)["hidden_states"], torch.zeros(16)
+        store.get_sample(manifest, timeout=1.0)["hidden_states"], torch.zeros(16)
     )

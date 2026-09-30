@@ -1,10 +1,10 @@
 """Mooncake-backed sibling of vLLM's ``ExampleHiddenStatesConnector``.
 
-Stores the same ``{"hidden_states", "token_ids"}`` payload in a Mooncake store
-keyed by request id instead of safetensors files, so the vLLM target and the
-trainer don't need a shared filesystem. Loaded out-of-tree via
-``kv_connector_module_path``; must be used with the ``extract_hidden_states``
-speculative method.
+Stores the tensor payload as packed bytes in a
+Mooncake object keyed by request id. The versioned transfer manifest is
+returned separately through vLLM, so the vLLM target and trainer don't need a
+shared filesystem. Loaded out-of-tree via ``kv_connector_module_path``; must
+be used with the ``extract_hidden_states`` speculative method.
 """
 
 from __future__ import annotations
