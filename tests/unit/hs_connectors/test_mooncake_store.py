@@ -290,6 +290,48 @@ def test_negative_put_status_does_not_publish_sample(store, monkeypatch):
     assert store._store.is_exist("req-put-fail") == 0
 
 
+def test_put_sample_rejects_shape_mismatch(store):
+    tensors = {
+        "hidden_states": torch.zeros(4, 2, 8),
+        "token_ids": torch.arange(4),
+    }
+    manifest = _manifest("req-shape-mismatch", tensors)
+    tensors["hidden_states"] = torch.zeros(4, 4, 8)
+
+    with pytest.raises(MooncakeIntegrityError, match="shape .* does not match"):
+        store.put_sample(manifest, tensors)
+
+    assert store._store.is_exist("req-shape-mismatch") == 0
+
+
+def test_put_sample_rejects_dtype_mismatch(store):
+    tensors = {
+        "hidden_states": torch.zeros(4, 2, 8, dtype=torch.bfloat16),
+        "token_ids": torch.arange(4),
+    }
+    manifest = _manifest("req-dtype-mismatch", tensors)
+    tensors["hidden_states"] = tensors["hidden_states"].float()
+
+    with pytest.raises(MooncakeIntegrityError, match="dtype .* does not match"):
+        store.put_sample(manifest, tensors)
+
+    assert store._store.is_exist("req-dtype-mismatch") == 0
+
+
+def test_put_sample_rejects_manifest_byte_mismatch(store):
+    tensors = {
+        "hidden_states": torch.zeros(4, 2, 8),
+        "token_ids": torch.arange(4),
+    }
+    manifest = _manifest("req-byte-mismatch", tensors)
+    manifest["tensors"]["hidden_states"]["nbytes"] += 1
+
+    with pytest.raises(MooncakeIntegrityError, match="bytes, but the manifest"):
+        store.put_sample(manifest, tensors)
+
+    assert store._store.is_exist("req-byte-mismatch") == 0
+
+
 def test_register_failure_raises(store, monkeypatch):
     monkeypatch.setattr(store._store, "register_buffer", lambda _ptr, _size: -1)
     manifest = _manifest("req-reg-fail", {"hidden_states": torch.zeros(4)})

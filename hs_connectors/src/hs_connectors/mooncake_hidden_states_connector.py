@@ -90,19 +90,68 @@ class MooncakeHiddenStatesConnector(KVConnectorBase_V1, SupportsHMA):
         from vllm.v1.kv_cache_interface import HiddenStateCacheSpec  # noqa: PLC0415
 
         groups = kv_cache_config.kv_cache_groups
-        group_ids = [
-            gid
-            for gid, group in enumerate(groups)
-            if isinstance(group.kv_cache_spec, HiddenStateCacheSpec)
-        ]
+        group_ids = []
+        for gid, group in enumerate(groups):
+            group_spec = group.kv_cache_spec
+            if isinstance(group_spec, HiddenStateCacheSpec):
+                group_ids.append(gid)
+                continue
+
+            # Mixed attention groups may be represented by vLLM as a
+            # UniformTypeKVCacheSpecs wrapper. Inspect the per-layer specs so
+            # the hidden-state group is not mistaken for the first verifier
+            # layer in the wrapper.
+            layer_specs = getattr(group_spec, "kv_cache_specs", None)
+            if layer_specs and any(
+                isinstance(spec, HiddenStateCacheSpec)
+                for spec in layer_specs.values()
+            ):
+                group_ids.append(gid)
         if len(group_ids) == 1:
             return group_ids[0]
         if not group_ids and len(groups) == 1:
+            # The scheduler's generated config unwraps a mixed
+            # UniformTypeKVCacheSpecs group to a representative layer, so the
+            # HiddenStateCacheSpec marker is no longer available here. With a
+            # single group there is no ambiguity about the block table.
             return 0
         raise ValueError(
             "Could not uniquely identify the extract-hidden-states KV cache "
             f"group among {len(groups)} groups; the hidden-states layer must be "
-            "isolated in its own group (MLA verifiers are unsupported)."
+            "present in exactly one group."
+        )
+
+    @staticmethod
+    def _get_hidden_state_layout(
+        vllm_config: VllmConfig,
+    ) -> tuple[int, int, torch.dtype]:
+        """Return the logical shape and dtype written by vLLM's extractor.
+
+        ``ExtractHiddenStatesProposer`` creates a buffer with shape
+        ``[tokens, num_hidden_states, hidden_size]`` before passing it to
+        ``CacheOnlyAttentionLayer``. The final scheduler KV-cache group can
+        contain a lossy representative spec for mixed attention groups, so
+        its ``num_heads``/``head_size`` fields are not a reliable description
+        of this payload.
+        """
+        speculative_config = vllm_config.speculative_config
+        if speculative_config is None or speculative_config.draft_model_config is None:
+            raise ValueError(
+                "MooncakeHiddenStatesConnector requires a draft model config"
+            )
+
+        draft_hf_config = speculative_config.draft_model_config.hf_config
+        layer_ids = getattr(draft_hf_config, "eagle_aux_hidden_state_layer_ids", None)
+        if not layer_ids:
+            raise ValueError(
+                "eagle_aux_hidden_state_layer_ids must be set for hidden-state "
+                "extraction"
+            )
+
+        return (
+            len(layer_ids),
+            vllm_config.model_config.get_hidden_size(),
+            vllm_config.model_config.dtype,
         )
 
     @staticmethod
@@ -136,9 +185,11 @@ class MooncakeHiddenStatesConnector(KVConnectorBase_V1, SupportsHMA):
         self._block_size = self._get_cache_block_size(
             vllm_config, kv_cache_config, self._hs_group_idx
         )
-        self._hidden_state_cache_spec = kv_cache_config.kv_cache_groups[
-            self._hs_group_idx
-        ].kv_cache_spec
+        (
+            self._num_hidden_states,
+            self._hidden_size,
+            self._hidden_state_dtype,
+        ) = self._get_hidden_state_layout(vllm_config)
 
         if (
             self._vllm_config.speculative_config is None
@@ -358,13 +409,11 @@ class MooncakeHiddenStatesConnector(KVConnectorBase_V1, SupportsHMA):
 
         # Produce transfer manifest
         num_tokens = token_ids.numel()
-        num_layers = self._hidden_state_cache_spec.num_heads
-        hidden_size = self._hidden_state_cache_spec.head_size
         tensor_spec, total_bytes = packed_layout(
             {
                 "hidden_states": (
-                    [num_tokens, num_layers, hidden_size],
-                    self._hidden_state_cache_spec.dtype,
+                    [num_tokens, self._num_hidden_states, self._hidden_size],
+                    self._hidden_state_dtype,
                 ),
                 "token_ids": (list(token_ids.shape), token_ids.dtype),
             }
