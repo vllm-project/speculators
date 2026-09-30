@@ -12,6 +12,6 @@ The filesystem backend enables the transfer of hidden states between vLLM and Sp
 
 ### Mooncake
 
-The Mooncake backend enables multi-node training by transferring hidden states between vLLM and Speculators across nodes over TCP or RDMA, without requiring a shared filesystem. It uses a Mooncake distributed key-value store where each sample is written under a sanitized request ID, with a metadata marker written last to signal that the sample is complete and ready for consumption. This follows a similar pattern to disaggregated prefill and decode.
+The Mooncake backend enables multi-node training by transferring hidden states between vLLM and Speculators across nodes over TCP or RDMA, without requiring a shared filesystem. It uses a Mooncake distributed key-value store where each sample is written as a single object under a sanitized request ID; the put is atomic, so the object becoming visible means the sample is complete and ready for consumption. This follows a similar pattern to disaggregated prefill and decode.
 
-When using this backend, install the Mooncake transfer engine separately (`pip install mooncake-transfer-engine`).
+When using this backend, install the Mooncake transfer engine separately (`pip install "mooncake-transfer-engine>=0.3.12"`).
