@@ -15,6 +15,7 @@ import torch
 sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "scripts"))
 
 from benchmark import (  # type: ignore[import-not-found]
+    _aggregate_timing,
     _MetricCapture,
     _SyntheticLoader,
     collect_provenance,
@@ -211,6 +212,30 @@ class TestCreateSyntheticBatch:
             "error_records",
         }
         assert set(batch.keys()) == expected_keys
+
+
+# ---------------------------------------------------------------------------
+# _aggregate_timing
+# ---------------------------------------------------------------------------
+
+
+class TestAggregateTiming:
+    def test_aggregates_numeric_keys_and_skips_memory(self):
+        profiles = [
+            {
+                "step_ms": 40.0 + i,
+                "fwd_ms": 20.0,
+                "queue_ms": 3.0,
+                "memory_mb": {"fetch": 100.0, "opt": 110.0},
+            }
+            for i in range(3)
+        ]
+        agg = _aggregate_timing(profiles)
+        assert set(agg) == {"step_ms", "fwd_ms", "queue_ms"}
+        assert agg["step_ms"]["mean"] == pytest.approx(41.0)
+        assert agg["step_ms"]["count"] == 3
+        assert "ci95_lower" in agg["fwd_ms"]
+        assert "ci95_upper" in agg["fwd_ms"]
 
 
 # ---------------------------------------------------------------------------
@@ -437,6 +462,19 @@ class TestCompareBenchmarks:
         assert "step_ms" in output
         assert "-5.00" in output or "-10.0%" in output
         assert "1000.00 -> 1200.00" in output
+
+    def test_version_mismatch_rejected(self, tmp_path):
+        baseline = _make_result()
+        candidate = _make_result()
+        candidate["benchmark_version"] = "99.9"
+
+        baseline_path = tmp_path / "baseline.json"
+        candidate_path = tmp_path / "candidate.json"
+        baseline_path.write_text(json.dumps(baseline))
+        candidate_path.write_text(json.dumps(candidate))
+
+        with pytest.raises(SystemExit, match="Incompatible benchmark versions"):
+            compare_benchmarks(str(baseline_path), str(candidate_path))
 
     def test_comparability_warning_gpu(self, tmp_path, capsys):
         baseline = _make_result(gpu_name="H100")

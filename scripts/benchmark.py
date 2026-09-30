@@ -331,14 +331,10 @@ def _build_train_loader(
 def _aggregate_timing(measured_profiles: list[dict]) -> dict:
     """Compute statistics for all timing keys across measured profiles."""
     agg = {}
-    if not measured_profiles:
-        return agg
     for key, value in measured_profiles[0].items():
         if isinstance(value, dict):
             continue
-        values = [s[key] for s in measured_profiles if key in s]
-        if values:
-            agg[key] = compute_statistics(values)
+        agg[key] = compute_statistics([s[key] for s in measured_profiles])
     return agg
 
 
@@ -501,23 +497,10 @@ def run_benchmark(bench_args, train_args) -> dict:
     return results
 
 
-def _get_ci(stats: dict, per_step: list[dict] | None, key: str) -> str:
-    """Format 95% CI, recomputing from per-step data if needed."""
-    lo = stats.get("ci95_lower")
-    hi = stats.get("ci95_upper")
-    if lo is not None and hi is not None:
-        return f"[{lo:.2f}, {hi:.2f}]"
-    if per_step:
-        recomputed = compute_statistics([s[key] for s in per_step if key in s])
-        return f"[{recomputed['ci95_lower']:.2f}, {recomputed['ci95_upper']:.2f}]"
-    return "n/a"
-
-
 def _print_summary(results: dict) -> None:
     """Print a compact summary of benchmark results to stdout."""
     timing = results["timing"]
     memory = results["memory"]
-    per_step = results.get("per_step")
 
     hdr = (
         f"{'Metric':<16} {'Mean':>10} {'Std':>10} "
@@ -525,22 +508,21 @@ def _print_summary(results: dict) -> None:
     )
     print(f"\n{hdr}")
     print("-" * len(hdr))
-    for key in timing:
-        stats = timing[key]
+    for key, stats in timing.items():
+        ci = f"[{stats['ci95_lower']:.2f}, {stats['ci95_upper']:.2f}]"
         print(
             f"{key:<16} {stats['mean']:>10.2f} "
             f"{stats['std']:>10.2f} "
-            f"{_get_ci(stats, per_step, key):>20} "
+            f"{ci:>20} "
             f"{stats['min']:>10.2f} {stats['max']:>10.2f}"
         )
 
-    aggregate = results.get("aggregate")
-    if aggregate:
-        print(
-            "\nEffective rank-0 throughput: "
-            f"{aggregate['effective_rank0_tokens_per_s']:.2f} tokens/s "
-            f"over {aggregate['measured_time_s']:.2f} s"
-        )
+    aggregate = results["aggregate"]
+    print(
+        "\nEffective rank-0 throughput: "
+        f"{aggregate['effective_rank0_tokens_per_s']:.2f} tokens/s "
+        f"over {aggregate['measured_time_s']:.2f} s"
+    )
     print(
         f"\nPeak memory: {memory['peak_allocated_mb']:.1f} MB "
         f"allocated, {memory['peak_reserved_mb']:.1f} MB reserved"
@@ -589,8 +571,8 @@ def _welch_test(per_step_a, per_step_b, key):
 
     if not per_step_a or not per_step_b:
         return None
-    a = [s[key] for s in per_step_a if key in s]
-    b = [s[key] for s in per_step_b if key in s]
+    a = [s[key] for s in per_step_a]
+    b = [s[key] for s in per_step_b]
     min_samples = 2
     if len(a) < min_samples or len(b) < min_samples:
         return None
@@ -621,6 +603,15 @@ def compare_benchmarks(baseline_path: str, candidate_path: str) -> None:
         baseline = json.load(f)
     with open(candidate_path) as f:
         candidate = json.load(f)
+
+    vb = baseline["benchmark_version"]
+    vc = candidate["benchmark_version"]
+    if vb != vc:
+        raise SystemExit(
+            f"Incompatible benchmark versions: baseline={vb}, candidate={vc}. "
+            "Results are only comparable across runs of the same version of "
+            "the benchmark script."
+        )
 
     # --- Comparability warnings ---
     comparability_checks = [
@@ -690,22 +681,13 @@ def _print_timing_comparison(baseline, candidate):
     line_w = 16 + col_w * 2 + 22 + (22 if has_stats else 0)
     print("-" * line_w)
 
-    all_timing_keys = list(
-        dict.fromkeys([*baseline.get("timing", {}), *candidate.get("timing", {})])
-    )
+    for key, ba in baseline["timing"].items():
+        ca = candidate["timing"][key]
+        delta = ca["mean"] - ba["mean"]
+        pct = (delta / ba["mean"] * 100) if ba["mean"] != 0 else 0
 
-    for key in all_timing_keys:
-        ba = baseline.get("timing", {}).get(key, {})
-        ca = candidate.get("timing", {}).get(key, {})
-        ba_mean = ba.get("mean", 0)
-        ba_std = ba.get("std", 0)
-        ca_mean = ca.get("mean", 0)
-        ca_std = ca.get("std", 0)
-        delta = ca_mean - ba_mean
-        pct = (delta / ba_mean * 100) if ba_mean != 0 else 0
-
-        ba_str = f"{ba_mean:>8.2f} +/- {ba_std:<6.2f}"
-        ca_str = f"{ca_mean:>8.2f} +/- {ca_std:<6.2f}"
+        ba_str = f"{ba['mean']:>8.2f} +/- {ba['std']:<6.2f}"
+        ca_str = f"{ca['mean']:>8.2f} +/- {ca['std']:<6.2f}"
         stat_str = _fmt_welch(per_step_a, per_step_b, key) if has_stats else ""
         print(
             f"{key:<16} {ba_str:<{col_w}} {ca_str:<{col_w}} "
@@ -726,8 +708,8 @@ def _print_memory_comparison(baseline, candidate):
     print(f"\n{'Memory':<24} {'Baseline':>12} {'Candidate':>12} {'Delta':>12}")
     print("-" * 62)
     for key in ("peak_allocated_mb", "peak_reserved_mb"):
-        ba_val = baseline.get("memory", {}).get(key, 0)
-        ca_val = candidate.get("memory", {}).get(key, 0)
+        ba_val = baseline["memory"][key]
+        ca_val = candidate["memory"][key]
         delta = ca_val - ba_val
         print(f"{key:<24} {ba_val:>9.1f} MB {ca_val:>9.1f} MB {delta:>+9.1f} MB")
 
