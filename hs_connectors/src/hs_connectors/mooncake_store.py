@@ -22,6 +22,9 @@ from hs_connectors.device import ensure_accelerator_context
 
 logger = logging.getLogger(__name__)
 
+
+VERSION = 1
+
 _TRAILER_LEN_BYTES = 8
 _TENSOR_ALIGN = 64
 _STAGING_GRANULE = 64 << 20
@@ -72,10 +75,6 @@ def _check_store_result(operation: str, key: str, result: Any) -> None:
 def _align(offset: int) -> int:
     return -(-offset // _TENSOR_ALIGN) * _TENSOR_ALIGN
 
-
-def _encode_trailer(manifest: dict[str, Any]) -> bytes:
-    body = json.dumps(manifest).encode("utf-8")
-    return body + len(body).to_bytes(_TRAILER_LEN_BYTES, "little")
 
 
 def packed_layout(
@@ -237,32 +236,73 @@ class MooncakeHiddenStatesStore:
     def put_error(self, transfer_manifest: dict[str, Any], error: str) -> None:
         """Publish a small terminal marker so consumers fail fast and can retry."""
         store = self._require_store()
-        manifest = {
-            "transfer_manifest": transfer_manifest,
+        error_dict = {
             "error": error[:4096],
         }
         error_handle = transfer_manifest["handle"] + ":error"
+
         _check_store_result(
-            "put", error_handle, store.put(error_handle, _encode_trailer(manifest))
+            "put", error_handle, store.put(error_handle, json.dumps(error_dict).encode("utf-8"))
         )
 
     def delete_sample(self, key: str) -> None:
         """Remove a sample from the store; a missing sample is not an error."""
-        result = self._require_store().remove(key, force=True)
-        if result != _OBJECT_NOT_FOUND:
-            _check_store_result("remove", key, result)
+        error_handle = key + ":error"
+
+        for k in (key, error_handle):
+            result = self._require_store().remove(k, force=True)
+            if result != _OBJECT_NOT_FOUND:
+                _check_store_result("remove", k, result)
+
 
     def get_sample(
-        self, key: str, timeout: float = 120.0, poll_interval: float = 0.05
+        self, transfer_manifest: dict[str, Any], timeout: float = 120.0, poll_interval: float = 0.05
     ) -> dict[str, torch.Tensor]:
-        store = self._require_store()
-        self._wait_for(key, timeout, poll_interval)
+#         Pseudocode callgraph:
+#
+#         get_sample()
+#             _wait_for()
+#                 blocks until is_exist(handle) or is_exist(error_handle)
+#                 if is_exist(error_handle):
+#                     _handle_error()
+#                         _read_from_store(error_handle)
+#                         raise Error
+#
+#             staging = _read_from_store(handle)
+# for tensor in transfer_manifest["tensors"]:
+#                 _extract_tensor(tensor, staging)
+#
+#             return extracted tensors
 
+        if (manifest_version := transfer_manifest.get("version", 0)) != VERSION:
+            raise MooncakeIntegrityError(
+                f"Mooncake manifest version {manifest_version} didn't match local version {VERSION}"
+                f"Transfer manifest: {transfer_manifest}\n"
+            )
+
+        self._wait_for(transfer_manifest, timeout, poll_interval)
+
+        handle = transfer_manifest["handle"]
+        tensor_specs = transfer_manifest["tensors"]
+        staging_tensor = self._read_from_store(handle, transfer_manifest["metadata"]["total_aligned_bytes"])
+
+        return {
+            name: self._extract_tensor(handle, name, staging_tensor, spec)
+            for name, spec in tensor_specs.items()
+        }
+
+    def _read_from_store(self, key, expected_payload_size: int = 0):
+        store = self._require_store()
         size = store.get_size(key)
         if not isinstance(size, int) or size < 0:
             raise MooncakeIntegrityError(
-                f"Mooncake sample unavailable for key={key} (status={size})"
+                f"Mooncake value unavailable for key={key} (status={size})"
             )
+        if expected_payload_size > 0 and size != expected_payload_size:
+            raise MooncakeIntegrityError(
+                f"Mooncake payload size {size} doesn't match expected payload size {expected_payload_size}"
+            )
+
         staging = self._staging_buffer("get", size)
         received = store.get_into(key, staging.data_ptr(), size)
         if received != size:
@@ -271,53 +311,34 @@ class MooncakeHiddenStatesStore:
                 f"expected {size} bytes"
             )
 
-        tensor_specs = self._parse_manifest(key, staging[:size])
-        return {
-            name: self._read_tensor(key, name, staging[:size], spec)
-            for name, spec in tensor_specs.items()
-        }
+        return staging[:size]
 
-    @staticmethod
-    def _parse_manifest(key: str, obj: torch.Tensor) -> dict[str, dict[str, Any]]:
-        size = obj.numel()
-        trailer_len = (
-            int.from_bytes(obj[-_TRAILER_LEN_BYTES:].numpy().tobytes(), "little")
-            if size >= _TRAILER_LEN_BYTES
-            else size
-        )
-        if trailer_len + _TRAILER_LEN_BYTES > size:
-            raise MooncakeIntegrityError(
-                f"Truncated Mooncake manifest for key={key}: "
-                f"object={size} bytes, manifest={trailer_len} bytes"
-            )
-        manifest_end = size - _TRAILER_LEN_BYTES
-        raw = obj[manifest_end - trailer_len : manifest_end].numpy().tobytes()
+    def _process_error(self, error_handle, transfer_manifest: dict[str, Any]):
+
+        obj = self._read_from_store(error_handle)
+
+        raw = obj.numpy().tobytes()
         try:
-            manifest = json.loads(raw)
+            error_dict =  json.loads(raw)
         except (UnicodeDecodeError, json.JSONDecodeError) as e:
             raise MooncakeIntegrityError(
-                f"Corrupt Mooncake manifest for key={key}: {e}"
+                f"Corrupt Mooncake json for key={error_handle}: {e}"
             ) from e
 
-        if not isinstance(manifest, dict):
+        if not isinstance(error_dict, dict):
             raise MooncakeIntegrityError(
-                f"Invalid Mooncake manifest type for key={key}: "
-                f"{type(manifest).__name__}"
+                f"Invalid Mooncake error manifest type for key={error_handle}: "
+                f"Recieved: {error_dict}\n"
+                f"Transfer manifest: {transfer_manifest}\n"
             )
-        if manifest.get("status") == "error":
-            raise MooncakeIntegrityError(
-                f"Mooncake producer rejected key={key}: "
-                f"{manifest.get('error', 'unknown producer error')}"
-            )
-        tensor_specs = manifest.get("tensors")
-        if not isinstance(tensor_specs, dict) or not tensor_specs:
-            raise MooncakeIntegrityError(
-                f"Mooncake manifest has no tensors for key={key}"
-            )
-        return tensor_specs
+        raise MooncakeIntegrityError(
+            f"Mooncake producer rejected key={error_handle}: "
+            f"{error_dict.get('error', 'unknown producer error')}\n"
+            f"Transfer manifest: {transfer_manifest}\n"
+        )
 
     @staticmethod
-    def _read_tensor(key: str, name: str, obj: torch.Tensor, spec: Any) -> torch.Tensor:
+    def _extract_tensor(key: str, name: str, obj: torch.Tensor, spec: Any) -> torch.Tensor:
         """Copy one tensor out of the staging buffer, which the next get reuses."""
         try:
             shape = tuple(int(d) for d in spec["shape"])
@@ -337,24 +358,38 @@ class MooncakeHiddenStatesStore:
             )
         return obj[offset : offset + nbytes].view(dtype).view(shape).clone()
 
-    def _wait_for(self, key: str, timeout: float, poll_interval: float) -> None:
+    def _wait_for(self, transfer_manifest: dict[str, Any], timeout: float, poll_interval: float) -> None:
         """Poll with exponential backoff capped at ``poll_interval``.
 
         vLLM answers the HTTP request before the connector's put completes, so
         the sample usually lands a few milliseconds after the consumer asks.
+
+        Return True if success, return False if foun
         """
         store = self._require_store()
-        deadline = time.monotonic() + timeout
-        delay = min(_MIN_POLL_INTERVAL, poll_interval)
-        while True:
+
+        def _check_key(key: str) -> bool:
             exists = store.is_exist(key)
             if exists == 1:
-                return
+                return True
             if exists != 0:
                 raise RuntimeError(
                     f"Mooncake is_exist failed for key={key} with status={exists}"
                 )
+            return False
+
+        handle = transfer_manifest["handle"]
+        error_handle = handle + ":error"
+
+        deadline = time.monotonic() + timeout
+        delay = min(_MIN_POLL_INTERVAL, poll_interval)
+        while True:
+            # Alternate checking for handle and error_handle
+            if _check_key(error_handle):
+                self._process_error(error_handle, transfer_manifest)
+            if _check_key(handle):
+                return
             if time.monotonic() >= deadline:
-                raise TimeoutError(f"Timed out waiting for Mooncake key: {key}")
+                raise TimeoutError(f"Timed out waiting for Mooncake key: {handle}")
             time.sleep(delay)
             delay = min(delay * 2, poll_interval)

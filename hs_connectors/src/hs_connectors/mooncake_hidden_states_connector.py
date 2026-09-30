@@ -33,6 +33,7 @@ from vllm.v1.core.sched.output import SchedulerOutput
 
 from hs_connectors.device import accelerator_module
 from hs_connectors.mooncake_store import (
+    VERSION,
     MooncakeHiddenStatesStore,
     MooncakeStoreConfig,
     assert_finite,
@@ -47,7 +48,6 @@ if TYPE_CHECKING:
 logger = init_logger(__name__)
 
 
-VERSION = 1
 
 
 def sanitize_key(key: str) -> str:
