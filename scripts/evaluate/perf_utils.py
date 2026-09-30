@@ -557,6 +557,7 @@ def run_guidellm(
     output_path: Path,
     max_tokens: int,
     gen_kwargs: dict | None = None,
+    request_format: str | None = None,
 ) -> None:
     # Building the backend as a JSON object to support nested gen_kwargs for guidellm.
     backend: dict[str, object] = {
@@ -564,6 +565,8 @@ def run_guidellm(
         "target": target,
         "max_tokens": max_tokens,
     }
+    if request_format:
+        backend["request_format"] = request_format
     if gen_kwargs:
         backend["extras"] = {"body": gen_kwargs}
     cmd = ["guidellm", "run", "--backend", json.dumps(backend)]
