@@ -69,7 +69,7 @@ if [[ "${TEST_TYPE}" =~ ^(smoke|e2e|regression|multi-gpu)$ ]]; then
 
   if [ "${TEST_TYPE}" = "e2e" ]; then
     echo "--- Installing hs_connectors dependencies"
-    uv pip install --python "${VLLM_VENV_PYTHON}" mooncake-transfer-engine-cuda13 ./hs_connectors
+    uv pip install mooncake-transfer-engine-cuda13 ./hs_connectors
   fi
 
   export VLLM_PYTHON="${VLLM_VENV_PYTHON}"
