@@ -12,6 +12,7 @@ from torch.distributed.checkpoint.state_dict import (
     StateDictOptions,
     set_model_state_dict,
 )
+from torch.distributed.fsdp import FSDPModule
 from torch.nn.parallel import DistributedDataParallel
 from torch.utils.data import DataLoader
 from tqdm import TqdmExperimentalWarning
@@ -188,11 +189,17 @@ def _resolve_scheduler_steps(
     # same horizon; otherwise the LR endpoint is never reached.
     if config.max_steps is not None:
         default_total_steps = config.max_steps
-    scheduler_total_steps = (
-        config.scheduler_total_steps
-        if config.scheduler_total_steps is not None
-        else default_total_steps
-    )
+    if config.scheduler_total_steps is not None:
+        scheduler_total_steps = config.scheduler_total_steps
+        if config.gradient_accumulation_steps > 1:
+            warnings.warn(
+                "--scheduler-total-steps is measured in optimizer steps and is not "
+                "divided by --gradient-accumulation-steps; pass the intended number "
+                "of optimizer updates.",
+                stacklevel=2,
+            )
+    else:
+        scheduler_total_steps = default_total_steps
 
     if config.scheduler_warmup_steps is not None:
         scheduler_warmup_steps = config.scheduler_warmup_steps
@@ -462,13 +469,17 @@ class Trainer:
             self.checkpointer.load_scheduler_state_dict(self.schedulers)
 
     def _maybe_no_sync(self, is_boundary: bool):
-        """Skip DDP gradient all-reduce on non-boundary accumulation micro-steps.
+        """Skip gradient synchronization on non-boundary accumulation micro-steps.
 
-        Returns ``model.no_sync()`` only for a real ``DistributedDataParallel``
-        model on a non-boundary micro-step; otherwise a no-op context. Single-GPU
-        (raw module) and FSDP2 (``fully_shard``) fall through to ``nullcontext`` and
-        remain correct because gradients accumulate additively into ``.grad``.
+        DDP uses its ``no_sync`` context. FSDP2 toggles gradient synchronization on
+        the root ``FSDPModule`` (recursing into child FSDP modules) and returns a
+        no-op context. Disabling FSDP2 synchronization retains unsharded gradients
+        until the boundary and can therefore increase peak memory. A raw single-GPU
+        module always returns a no-op context.
         """
+        if isinstance(self.model, FSDPModule):
+            self.model.set_requires_gradient_sync(is_boundary)
+            return contextlib.nullcontext()
         if isinstance(self.model, DistributedDataParallel) and not is_boundary:
             return self.model.no_sync()
         return contextlib.nullcontext()
