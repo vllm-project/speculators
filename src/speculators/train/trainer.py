@@ -60,6 +60,11 @@ class _StepTimer:
     # Each mark()/now() forces an accelerator.synchronize to capture true GPU time.
     # This serialises the CUDA pipeline, so profiled steps are slower; keep
     # log_freq > 1 in perf-sensitive runs.
+    # Caveat: with log_freq > 1, "start" falls back to an unsynchronized
+    # timestamp from the end of the previous *unlogged* step, so start-relative
+    # fields (fetch_ms, step_ms, queue_ms) also absorb any GPU backlog still
+    # draining from that step. Phase-relative fields (fwd/bwd/opt/h2d/clip_ms)
+    # are unaffected, as every mark synchronizes.
     def __init__(self, enabled: bool = False):
         self.enabled = enabled
         self._marks: dict[str, float] = {}
