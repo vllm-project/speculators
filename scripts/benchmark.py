@@ -68,21 +68,6 @@ from speculators.train.trainer import Trainer, TrainerConfig
 
 BENCHMARK_VERSION = "1.1"
 
-TIMING_KEYS = (
-    "step_ms",
-    "fwd_ms",
-    "bwd_ms",
-    "opt_ms",
-    "fetch_ms",
-    "tokens_per_s",
-)
-
-DETAIL_TIMING_KEYS = (
-    "queue_ms",
-    "h2d_ms",
-    "clip_ms",
-)
-
 # ---------------------------------------------------------------------------
 # Metric capture
 # ---------------------------------------------------------------------------
@@ -346,10 +331,11 @@ def _build_train_loader(
 def _aggregate_timing(measured_profiles: list[dict]) -> dict:
     """Compute statistics for all timing keys across measured profiles."""
     agg = {}
-    for key in TIMING_KEYS:
-        values = [s[key] for s in measured_profiles]
-        agg[key] = compute_statistics(values)
-    for key in DETAIL_TIMING_KEYS:
+    if not measured_profiles:
+        return agg
+    for key, value in measured_profiles[0].items():
+        if isinstance(value, dict):
+            continue
         values = [s[key] for s in measured_profiles if key in s]
         if values:
             agg[key] = compute_statistics(values)
@@ -539,7 +525,7 @@ def _print_summary(results: dict) -> None:
     )
     print(f"\n{hdr}")
     print("-" * len(hdr))
-    for key in TIMING_KEYS:
+    for key in timing:
         stats = timing[key]
         print(
             f"{key:<16} {stats['mean']:>10.2f} "
@@ -547,22 +533,6 @@ def _print_summary(results: dict) -> None:
             f"{_get_ci(stats, per_step, key):>20} "
             f"{stats['min']:>10.2f} {stats['max']:>10.2f}"
         )
-
-    detail_keys = [k for k in DETAIL_TIMING_KEYS if k in timing]
-    if detail_keys:
-        print(
-            f"\n{'Detail':<16} {'Mean':>10} {'Std':>10} "
-            f"{'95% CI':>20} {'Min':>10} {'Max':>10}"
-        )
-        print("-" * len(hdr))
-        for key in detail_keys:
-            stats = timing[key]
-            print(
-                f"  {key:<14} {stats['mean']:>10.2f} "
-                f"{stats['std']:>10.2f} "
-                f"{_get_ci(stats, per_step, key):>20} "
-                f"{stats['min']:>10.2f} {stats['max']:>10.2f}"
-            )
 
     aggregate = results.get("aggregate")
     if aggregate:
@@ -720,10 +690,9 @@ def _print_timing_comparison(baseline, candidate):
     line_w = 16 + col_w * 2 + 22 + (22 if has_stats else 0)
     print("-" * line_w)
 
-    all_timing_keys = list(TIMING_KEYS)
-    for key in DETAIL_TIMING_KEYS:
-        if key in baseline.get("timing", {}) or key in candidate.get("timing", {}):
-            all_timing_keys.append(key)
+    all_timing_keys = list(
+        dict.fromkeys([*baseline.get("timing", {}), *candidate.get("timing", {})])
+    )
 
     for key in all_timing_keys:
         ba = baseline.get("timing", {}).get(key, {})
@@ -735,12 +704,11 @@ def _print_timing_comparison(baseline, candidate):
         delta = ca_mean - ba_mean
         pct = (delta / ba_mean * 100) if ba_mean != 0 else 0
 
-        label = f"  {key}" if key in DETAIL_TIMING_KEYS else key
         ba_str = f"{ba_mean:>8.2f} +/- {ba_std:<6.2f}"
         ca_str = f"{ca_mean:>8.2f} +/- {ca_std:<6.2f}"
         stat_str = _fmt_welch(per_step_a, per_step_b, key) if has_stats else ""
         print(
-            f"{label:<16} {ba_str:<{col_w}} {ca_str:<{col_w}} "
+            f"{key:<16} {ba_str:<{col_w}} {ca_str:<{col_w}} "
             f"{delta:>+10.2f} {pct:>+9.1f}%{stat_str}"
         )
 

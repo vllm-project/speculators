@@ -8,8 +8,11 @@ from speculators.train.trainer import _StepTimer
 def test_disabled_timer_returns_none():
     timer = _StepTimer(enabled=False)
     timer.mark_value("start", 0.0)
+    timer.mark("queue")
+    timer.mark("pre_h2d")
     timer.mark("fetch")
     timer.mark("fwd")
+    timer.mark("pre_clip")
     timer.mark("bwd")
     timer.mark("opt")
     assert timer.now() is None
@@ -23,27 +26,36 @@ def test_enabled_timer_returns_profile(mock_sync):
     with patch(
         "speculators.train.trainer.time.perf_counter",
         side_effect=[
+            0.05,
+            0.08,
             0.1,
             0.3,
+            0.45,
             0.5,
             0.6,
             0.6,
         ],
     ):
         timer.mark_value("start", 0.0)
+        timer.mark("queue")
+        timer.mark("pre_h2d")
         timer.mark("fetch")
         timer.mark("fwd")
+        timer.mark("pre_clip")
         timer.mark("bwd")
         timer.mark("opt")
         t_next = timer.now()
 
-    assert mock_sync.call_count == 5
+    assert mock_sync.call_count == 8
     assert t_next == 0.6
 
     profile = timer.profile(num_tokens=4096)
     assert profile is not None
+    assert profile["queue_ms"] == (0.05 - 0.0) * 1000
+    assert profile["h2d_ms"] == (0.1 - 0.08) * 1000
     assert profile["fetch_ms"] == (0.1 - 0.0) * 1000
     assert profile["fwd_ms"] == (0.3 - 0.1) * 1000
+    assert profile["clip_ms"] == (0.5 - 0.45) * 1000
     assert profile["bwd_ms"] == (0.5 - 0.3) * 1000
     assert profile["opt_ms"] == (0.6 - 0.5) * 1000
     assert profile["step_ms"] == (0.6 - 0.0) * 1000
@@ -64,8 +76,11 @@ def test_disabled_to_enabled_transition():
     # --- disabled step (global_step=1, log_freq=2 → 1%2 != 0) ---
     timer.reset(enabled=False)
     timer.mark_value("start", 1.0)
+    timer.mark("queue")
+    timer.mark("pre_h2d")
     timer.mark("fetch")
     timer.mark("fwd")
+    timer.mark("pre_clip")
     timer.mark("bwd")
     timer.mark("opt")
     assert timer.now() is None
@@ -82,11 +97,14 @@ def test_disabled_to_enabled_transition():
         patch("speculators.train.trainer.torch.accelerator.synchronize"),
         patch(
             "speculators.train.trainer.time.perf_counter",
-            side_effect=[2.1, 2.4, 2.5, 2.6, 2.6],
+            side_effect=[2.05, 2.08, 2.1, 2.4, 2.45, 2.5, 2.6, 2.6],
         ),
     ):
+        timer.mark("queue")
+        timer.mark("pre_h2d")
         timer.mark("fetch")
         timer.mark("fwd")
+        timer.mark("pre_clip")
         timer.mark("bwd")
         timer.mark("opt")
         t_next = timer.now()
@@ -94,8 +112,11 @@ def test_disabled_to_enabled_transition():
     assert t_next == 2.6
     profile = timer.profile(num_tokens=2048)
     assert profile is not None
+    assert profile["queue_ms"] == (2.05 - 2.0) * 1000
+    assert profile["h2d_ms"] == (2.1 - 2.08) * 1000
     assert profile["fetch_ms"] == (2.1 - 2.0) * 1000
     assert profile["fwd_ms"] == (2.4 - 2.1) * 1000
+    assert profile["clip_ms"] == (2.5 - 2.45) * 1000
     assert profile["bwd_ms"] == (2.5 - 2.4) * 1000
     assert profile["opt_ms"] == (2.6 - 2.5) * 1000
     assert profile["step_ms"] == (2.6 - 2.0) * 1000
@@ -109,8 +130,11 @@ def test_zero_step_ms_returns_zero_throughput():
         patch("speculators.train.trainer.torch.accelerator.synchronize"),
         patch("speculators.train.trainer.time.perf_counter", return_value=1.0),
     ):
+        timer.mark("queue")
+        timer.mark("pre_h2d")
         timer.mark("fetch")
         timer.mark("fwd")
+        timer.mark("pre_clip")
         timer.mark("bwd")
         timer.mark("opt")
     profile = timer.profile(num_tokens=4096)

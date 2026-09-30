@@ -2,6 +2,7 @@ import json
 import logging
 import time
 import warnings
+from collections.abc import Callable
 from pathlib import Path
 from typing import Literal, NamedTuple
 
@@ -73,8 +74,8 @@ class _StepTimer:
         if self.enabled:
             torch.accelerator.synchronize()
             self._marks[name] = time.perf_counter()
-            if torch.cuda.is_available():
-                self._memory[name] = torch.cuda.memory_allocated() / (1024**2)
+            if torch.accelerator.is_available():
+                self._memory[name] = torch.accelerator.memory_allocated() / (1024**2)
 
     def mark_value(self, name: str, value: float) -> None:
         if self.enabled:
@@ -90,29 +91,20 @@ class _StepTimer:
         if not self.enabled:
             return None
         m = self._marks
-        has_start = "start" in m
-        fwd_ms = (m["fwd"] - m["fetch"]) * 1000
-        bwd_ms = (m["bwd"] - m["fwd"]) * 1000
-        opt_ms = (m["opt"] - m["bwd"]) * 1000
-        fetch_ms = (m["fetch"] - m["start"]) * 1000 if has_start else 0.0
-        step_ms = (m["opt"] - m["start"]) * 1000 if has_start else 0.0
-        tokens_per_s = num_tokens / (step_ms / 1000) if step_ms > 0 else 0.0
-        fetch_frac = fetch_ms / step_ms if step_ms > 0 else 0.0
+        fetch_ms = (m["fetch"] - m["start"]) * 1000
+        step_ms = (m["opt"] - m["start"]) * 1000
         result: dict = {
             "fetch_ms": fetch_ms,
-            "fwd_ms": fwd_ms,
-            "bwd_ms": bwd_ms,
-            "opt_ms": opt_ms,
+            "fwd_ms": (m["fwd"] - m["fetch"]) * 1000,
+            "bwd_ms": (m["bwd"] - m["fwd"]) * 1000,
+            "opt_ms": (m["opt"] - m["bwd"]) * 1000,
             "step_ms": step_ms,
-            "tokens_per_s": tokens_per_s,
-            "fetch_frac": fetch_frac,
+            "tokens_per_s": num_tokens / (step_ms / 1000) if step_ms > 0 else 0.0,
+            "fetch_frac": fetch_ms / step_ms if step_ms > 0 else 0.0,
+            "queue_ms": (m["queue"] - m["start"]) * 1000,
+            "h2d_ms": (m["fetch"] - m["pre_h2d"]) * 1000,
+            "clip_ms": (m["bwd"] - m["pre_clip"]) * 1000,
         }
-        if "queue" in m and has_start:
-            result["queue_ms"] = (m["queue"] - m["start"]) * 1000
-        if "pre_h2d" in m:
-            result["h2d_ms"] = (m["fetch"] - m["pre_h2d"]) * 1000
-        if "pre_clip" in m:
-            result["clip_ms"] = (m["bwd"] - m["pre_clip"]) * 1000
         if self._memory:
             result["memory_mb"] = dict(self._memory)
         return result
@@ -236,7 +228,6 @@ class Trainer:
         )
         self.checkpointer: BaseCheckpointer = checkpointer_class(self.config.save_path)
 
-        self.profiler = None
         self.setup_trainer()
         self.setup_model()
         self.setup_optimizer()
@@ -484,7 +475,12 @@ class Trainer:
             )
         return skip_steps
 
-    def train_epoch(self, epoch: int):
+    def train_epoch(
+        self,
+        epoch: int,
+        *,
+        step_callback: Callable[[], None] | None = None,
+    ):
         self.model.train()
         if hasattr(self.train_loader.batch_sampler, "set_epoch"):
             self.train_loader.batch_sampler.set_epoch(epoch)  # type: ignore[union-attr]
@@ -594,8 +590,8 @@ class Trainer:
                     extra={"step": self.global_step},
                 )
             self.global_step += 1
-            if self.profiler is not None:
-                self.profiler.step()
+            if step_callback is not None:
+                step_callback()
 
             if (
                 self.config.max_steps is not None
