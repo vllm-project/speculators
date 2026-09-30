@@ -445,16 +445,13 @@ def parse_gen_len_results(files: list[Path], output: Path) -> dict[str, int]:
     return max_tokens_map
 
 
-def parse_sweep_results(
-    filepath: Path,
-    spec_decode_metrics: dict[str, float] | None = None,
-) -> list[dict]:
-    """Parse a sweep JSON and enrich rows with pre-computed acceptance metrics."""
-    rows = parse_sweep_file(filepath)
-    if spec_decode_metrics:
-        for row in rows:
-            row.update(spec_decode_metrics)
-    return rows
+def parse_sweep_results(filepath: Path) -> list[dict]:
+    """Parse per-load-point performance metrics from a sweep JSON.
+
+    Acceptance measured across the entire sweep belongs in acceptance.csv,
+    since it cannot be attributed to individual load points.
+    """
+    return parse_sweep_file(filepath)
 
 
 class CsvWriter:
