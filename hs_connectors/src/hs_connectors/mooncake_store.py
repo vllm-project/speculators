@@ -13,6 +13,7 @@ import logging
 import threading
 import time
 from dataclasses import dataclass
+from math import prod
 from typing import Any
 
 import torch
@@ -21,7 +22,6 @@ from hs_connectors.device import ensure_accelerator_context
 
 logger = logging.getLogger(__name__)
 
-_MANIFEST_VERSION = 2
 _TRAILER_LEN_BYTES = 8
 _TENSOR_ALIGN = 64
 _STAGING_GRANULE = 64 << 20
@@ -78,20 +78,23 @@ def _encode_trailer(manifest: dict[str, Any]) -> bytes:
     return body + len(body).to_bytes(_TRAILER_LEN_BYTES, "little")
 
 
-def _layout(tensors: dict[str, torch.Tensor]) -> tuple[dict[str, Any], int]:
-    """Assign aligned offsets; return the manifest and where its trailer starts."""
+def packed_layout(
+    tensors: dict[str, tuple[tuple[int, ...], torch.dtype]],
+) -> tuple[dict[str, Any], int]:
+    """Assign aligned offsets; return the tensor spec and total size"""
     specs: dict[str, dict[str, Any]] = {}
     offset = 0
-    for name, tensor in tensors.items():
-        nbytes = tensor.numel() * tensor.element_size()
+    for name, tensor_metadata in tensors.items():
+        shape, dtype = tensor_metadata
+        nbytes = prod(shape) * torch.empty((), dtype=dtype).element_size()
         specs[name] = {
-            "shape": list(tensor.shape),
-            "dtype": str(tensor.dtype),
-            "offset": offset,
+            "shape": shape,
+            "dtype": str(dtype),
             "nbytes": nbytes,
+            "offset": offset,  # byte offset in packed tensor
         }
         offset = _align(offset + nbytes)
-    return {"version": _MANIFEST_VERSION, "status": "ok", "tensors": specs}, offset
+    return specs, offset
 
 
 def _parse_dtype(key: str, name: str, value: Any) -> torch.dtype:
@@ -209,38 +212,39 @@ class MooncakeHiddenStatesStore:
         self._staging[slot] = buffer
         return buffer
 
-    def put_sample(self, key: str, tensors: dict[str, torch.Tensor]) -> None:
+    def put_sample(
+        self, transfer_manifest: dict[str, Any], tensors: dict[str, torch.Tensor]
+    ) -> None:
         """Publish ``tensors``, which may live on the accelerator.
 
         Device tensors are copied into the pinned staging buffer on the current
         stream, so callers can pick the stream the DtoH copy runs on.
         """
         store = self._require_store()
-        manifest, trailer_offset = _layout(tensors)
-        trailer = _encode_trailer(manifest)
-        total = trailer_offset + len(trailer)
-        staging = self._staging_buffer("put", total)
-        for name, tensor in tensors.items():
-            spec = manifest["tensors"][name]
+        tensor_spec = transfer_manifest["tensors"]
+        total_bytes = transfer_manifest["metadata"]["total_aligned_bytes"]
+        staging = self._staging_buffer("put", total_bytes)
+
+        for name, spec in tensor_spec.items():
+            tensor = tensors[name]
             region = staging[spec["offset"] : spec["offset"] + spec["nbytes"]]
             region.view(tensor.dtype).view(tensor.shape).copy_(tensor)
-        staging[trailer_offset:total].copy_(
-            torch.frombuffer(bytearray(trailer), dtype=torch.uint8)
-        )
 
-        result = store.put_from(key, staging.data_ptr(), total)
-        _check_store_result("put_from", key, result)
+        handle = transfer_manifest["handle"]
+        result = store.put_from(handle, staging.data_ptr(), total_bytes)
+        _check_store_result("put_from", handle, result)
 
-    def put_error(self, key: str, error: str) -> None:
+    def put_error(self, transfer_manifest: dict[str, Any], error: str) -> None:
         """Publish a small terminal marker so consumers fail fast and can retry."""
         store = self._require_store()
         manifest = {
-            "version": _MANIFEST_VERSION,
-            "status": "error",
+            "transfer_manifest": transfer_manifest,
             "error": error[:4096],
-            "tensors": {},
         }
-        _check_store_result("put", key, store.put(key, _encode_trailer(manifest)))
+        error_handle = transfer_manifest["handle"] + ":error"
+        _check_store_result(
+            "put", error_handle, store.put(error_handle, _encode_trailer(manifest))
+        )
 
     def delete_sample(self, key: str) -> None:
         """Remove a sample from the store; a missing sample is not an error."""
@@ -304,11 +308,6 @@ class MooncakeHiddenStatesStore:
             raise MooncakeIntegrityError(
                 f"Mooncake producer rejected key={key}: "
                 f"{manifest.get('error', 'unknown producer error')}"
-            )
-        if manifest.get("version") != _MANIFEST_VERSION:
-            raise MooncakeIntegrityError(
-                f"Unsupported Mooncake manifest version for key={key}: "
-                f"{manifest.get('version')!r}"
             )
         tensor_specs = manifest.get("tensors")
         if not isinstance(tensor_specs, dict) or not tensor_specs:

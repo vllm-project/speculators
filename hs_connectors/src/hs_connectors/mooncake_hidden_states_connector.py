@@ -36,6 +36,7 @@ from hs_connectors.mooncake_store import (
     MooncakeHiddenStatesStore,
     MooncakeStoreConfig,
     assert_finite,
+    packed_layout,
 )
 
 if TYPE_CHECKING:
@@ -46,7 +47,7 @@ if TYPE_CHECKING:
 logger = init_logger(__name__)
 
 
-MANIFEST_VERSION = 1
+VERSION = 1
 
 
 def sanitize_key(key: str) -> str:
@@ -61,6 +62,7 @@ class PendingSave:
     mooncake_key: str
     token_ids: torch.Tensor
     block_ids: list[int]
+    transfer_manifest: dict[str, Any]
 
 
 @dataclass
@@ -258,13 +260,13 @@ class MooncakeHiddenStatesConnector(KVConnectorBase_V1, SupportsHMA):
                 # The DtoH copy into the store's registered staging buffer runs
                 # on the copy stream and completes before the put.
                 self._store.put_sample(
-                    pending.mooncake_key,
+                    pending.transfer_manifest,
                     {"hidden_states": hidden_states, "token_ids": pending.token_ids},
                 )
         except Exception as exc:
             try:
                 # Store error marker instead of the sample, so consumer can re-request
-                self._store.put_error(pending.mooncake_key, str(exc))
+                self._store.put_error(pending.transfer_manifest, str(exc))
             except Exception:
                 logger.exception(
                     "Failed to publish Mooncake error marker for %s",
@@ -354,42 +356,39 @@ class MooncakeHiddenStatesConnector(KVConnectorBase_V1, SupportsHMA):
         else:
             token_ids = torch.tensor([], dtype=torch.long)
 
-        self._pending_saves[req_id] = PendingSave(
-            req_id=req_id,
-            mooncake_key=mooncake_key,
-            token_ids=token_ids,
-            block_ids=list(block_ids),
-        )
-
         # Produce transfer manifest
         num_tokens = token_ids.numel()
         num_layers = self._hidden_state_cache_spec.num_heads
         hidden_size = self._hidden_state_cache_spec.head_size
-        dtype = self._hidden_state_cache_spec.dtype
-        nbytes = (
-            num_tokens
-            * num_layers
-            * hidden_size
-            * torch.empty((), dtype=dtype).element_size()
+        tensor_spec, total_bytes = packed_layout(
+            {
+                "hidden_states": (
+                    [num_tokens, num_layers, hidden_size],
+                    self._hidden_state_cache_spec.dtype,
+                ),
+                "token_ids": (list(token_ids.shape), token_ids.dtype),
+            }
         )
-        hs_transfer_spec = {
-                            "shape": [num_tokens, num_layers, hidden_size],
-                            "dtype": str(self._hidden_state_cache_spec.dtype),
-                            "nbytes": nbytes,
-                            "offset": 0, # byte offset in packed tensor
-                        }
         transfer_manifest = {
             "handle": mooncake_key,
-            "version": MANIFEST_VERSION,
-            "tensors": {
-                "hidden_states":  hs_transfer_spec           },
+            "version": VERSION,
+            "tensors": tensor_spec,
             "metadata": {
                 "num_tokens": num_tokens,
+                "total_aligned_bytes": total_bytes,
                 "extract_mode": "all"
                 if kv_params.get("include_output_tokens", False)
                 else "prompt_only",
             },
         }
+
+        self._pending_saves[req_id] = PendingSave(
+            req_id=req_id,
+            mooncake_key=mooncake_key,
+            token_ids=token_ids,
+            block_ids=list(block_ids),
+            transfer_manifest=transfer_manifest,
+        )
 
         return True, transfer_manifest
 
