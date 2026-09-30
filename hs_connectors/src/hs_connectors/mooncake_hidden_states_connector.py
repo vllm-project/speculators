@@ -46,6 +46,9 @@ if TYPE_CHECKING:
 logger = init_logger(__name__)
 
 
+MANIFEST_VERSION = 1
+
+
 def sanitize_key(key: str) -> str:
     """Make a request id safe to use as a Mooncake key."""
     safe = re.sub(r"[^a-zA-Z0-9_-]", "_", key)
@@ -131,6 +134,9 @@ class MooncakeHiddenStatesConnector(KVConnectorBase_V1, SupportsHMA):
         self._block_size = self._get_cache_block_size(
             vllm_config, kv_cache_config, self._hs_group_idx
         )
+        self._hidden_state_cache_spec = kv_cache_config.kv_cache_groups[
+            self._hs_group_idx
+        ].kv_cache_spec
 
         if (
             self._vllm_config.speculative_config is None
@@ -354,8 +360,38 @@ class MooncakeHiddenStatesConnector(KVConnectorBase_V1, SupportsHMA):
             token_ids=token_ids,
             block_ids=list(block_ids),
         )
-        # Returning True delays block freeing until get_finished extracts.
-        return True, {"handle": mooncake_key}
+
+        # Produce transfer manifest
+        num_tokens = token_ids.numel()
+        num_layers = self._hidden_state_cache_spec.num_heads
+        hidden_size = self._hidden_state_cache_spec.head_size
+        dtype = self._hidden_state_cache_spec.dtype
+        nbytes = (
+            num_tokens
+            * num_layers
+            * hidden_size
+            * torch.empty((), dtype=dtype).element_size()
+        )
+        hs_transfer_spec = {
+                            "shape": [num_tokens, num_layers, hidden_size],
+                            "dtype": str(self._hidden_state_cache_spec.dtype),
+                            "nbytes": nbytes,
+                            "offset": 0, # byte offset in packed tensor
+                        }
+        transfer_manifest = {
+            "handle": mooncake_key,
+            "version": MANIFEST_VERSION,
+            "tensors": {
+                "hidden_states":  hs_transfer_spec           },
+            "metadata": {
+                "num_tokens": num_tokens,
+                "extract_mode": "all"
+                if kv_params.get("include_output_tokens", False)
+                else "prompt_only",
+            },
+        }
+
+        return True, transfer_manifest
 
     def request_finished_all_groups(
         self, request: Request, block_ids: tuple[list[int], ...]
