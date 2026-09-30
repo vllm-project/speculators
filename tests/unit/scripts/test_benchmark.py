@@ -208,6 +208,7 @@ class TestCreateSyntheticBatch:
             "loss_mask",
             "position_ids",
             "document_ids",
+            "error_records",
         }
         assert set(batch.keys()) == expected_keys
 
