@@ -11,6 +11,7 @@ training code path.
 Subcommands:
     run        Run a training benchmark
     compare    Compare two benchmark result files
+    report     Generate an interactive HTML report from results
 
 Examples:
     # Synthetic benchmark (no dataset / vLLM needed)
@@ -32,6 +33,9 @@ Examples:
 
     # Compare two runs
     python scripts/benchmark.py compare baseline.json candidate.json
+
+    # Generate interactive HTML report
+    python scripts/benchmark.py report benchmark_20260818.json
 """
 
 from __future__ import annotations
@@ -46,6 +50,7 @@ import statistics
 import subprocess
 import sys
 from datetime import datetime, timezone
+from html import escape as html_escape
 from pathlib import Path
 
 import torch
@@ -93,6 +98,12 @@ KERNEL_TOP_N = 20
 # table they land in; the leading portion is what identifies them.
 KERNEL_NAME_WIDTH = 64
 # Legend entries have less room than a table cell, but not much less: cuBLAS
+# names only become distinguishable once the tile shape survives the elision.
+KERNEL_LABEL_WIDTH = 52
+# Kernels below this share of device time are merged into one "Other" slice.
+# A profiled step launches dozens of kernels and all but a handful are under a
+# millisecond; drawn individually they are an unreadable fringe of hairlines.
+KERNEL_PIE_MIN_PCT = 2.0
 
 
 def _short_kernel_name(name: str, width: int = KERNEL_NAME_WIDTH) -> str:
@@ -107,6 +118,25 @@ def _short_kernel_name(name: str, width: int = KERNEL_NAME_WIDTH) -> str:
         return name
     tail = (width - 1) // 3
     return name[: width - 1 - tail] + "…" + name[len(name) - tail :]
+
+
+def _unique_labels(labels: list[str]) -> list[str]:
+    """Suffix repeated labels: plotly merges pie slices that share a label.
+
+    Elision can still collide on kernels that differ only in the elided middle,
+    and a silent merge would misattribute their time.
+    """
+    seen: dict[str, int] = {}
+    out = []
+    for label in labels:
+        seen[label] = seen.get(label, 0) + 1
+        out.append(label if seen[label] == 1 else f"{label} #{seen[label]}")
+    return out
+
+
+def _wrap_kernel_name(name: str, width: int = 60) -> str:
+    """Break a kernel name across lines so a hover tooltip stays on screen."""
+    return "<br>".join(name[i : i + width] for i in range(0, len(name), width))
 
 
 # ---------------------------------------------------------------------------
@@ -916,6 +946,638 @@ def _print_memory_comparison(baseline, candidate):
 
 
 # ---------------------------------------------------------------------------
+# Visualize
+# ---------------------------------------------------------------------------
+
+_PHASE_COLORS = {
+    "queue_ms": "#636EFA",
+    "h2d_ms": "#AB63FA",
+    "fwd_ms": "#00CC96",
+    "bwd_ms": "#FFA15A",
+    "clip_ms": "#FECB52",
+    "opt_ms": "#EF553B",
+    "fetch_ms": "#636EFA",
+}
+
+_PHASE_LABELS = {
+    "queue_ms": "DataLoader wait",
+    "h2d_ms": "H2D transfer",
+    "fwd_ms": "Forward",
+    "bwd_ms": "Backward",
+    "clip_ms": "Grad clip",
+    "opt_ms": "Optimizer",
+    "fetch_ms": "Data fetch",
+}
+
+_MEMORY_MARK_LABELS = {
+    "queue": "After queue",
+    "fetch": "After H2D",
+    "fwd": "After forward",
+    "pre_clip": "After backward",
+    "bwd": "After clip",
+    "opt": "After optimizer",
+}
+
+
+def _build_timing_traces(per_step):
+    """Build stacked area traces for timing breakdown."""
+    import plotly.graph_objects as go  # noqa: PLC0415
+
+    steps = list(range(len(per_step)))
+    has_detail = "queue_ms" in per_step[0]
+
+    if has_detail:
+        phases = [("queue_ms", [s["queue_ms"] for s in per_step])]
+        phases.append(("h2d_ms", [s["h2d_ms"] for s in per_step]))
+        phases.append(("fwd_ms", [s["fwd_ms"] for s in per_step]))
+        if "clip_ms" in per_step[0]:
+            bwd_only = [s["bwd_ms"] - s.get("clip_ms", 0) for s in per_step]
+            phases.append(("bwd_ms", bwd_only))
+            phases.append(("clip_ms", [s["clip_ms"] for s in per_step]))
+        else:
+            phases.append(("bwd_ms", [s["bwd_ms"] for s in per_step]))
+        phases.append(("opt_ms", [s["opt_ms"] for s in per_step]))
+    else:
+        phases = [
+            ("fetch_ms", [s["fetch_ms"] for s in per_step]),
+            ("fwd_ms", [s["fwd_ms"] for s in per_step]),
+            ("bwd_ms", [s["bwd_ms"] for s in per_step]),
+            ("opt_ms", [s["opt_ms"] for s in per_step]),
+        ]
+
+    traces = []
+    for key, values in phases:
+        traces.append(
+            go.Scatter(
+                x=steps,
+                y=values,
+                name=_PHASE_LABELS.get(key, key),
+                mode="lines",
+                stackgroup="timing",
+                line={"width": 0.5, "color": _PHASE_COLORS.get(key)},
+            )
+        )
+    return traces
+
+
+def _build_memory_traces(per_step):
+    """Build line traces for memory at phase boundaries."""
+    import plotly.graph_objects as go  # noqa: PLC0415
+
+    steps = list(range(len(per_step)))
+    traces = []
+    for mark, label in _MEMORY_MARK_LABELS.items():
+        values = [s.get("memory_mb", {}).get(mark) for s in per_step]
+        if not any(v is not None for v in values):
+            continue
+        traces.append(go.Scatter(x=steps, y=values, mode="lines", name=label))
+    return traces
+
+
+def _get_phase_means(per_step):
+    """Compute mean phase durations, splitting bwd/clip when detail is available."""
+    has_detail = "queue_ms" in per_step[0]
+    if has_detail:
+        phases = [
+            ("queue_ms", "DataLoader wait"),
+            ("h2d_ms", "H2D transfer"),
+            ("fwd_ms", "Forward"),
+            ("bwd_ms", "Backward"),
+            ("clip_ms", "Grad clip"),
+            ("opt_ms", "Optimizer"),
+        ]
+        if "clip_ms" not in per_step[0]:
+            phases = [p for p in phases if p[0] != "clip_ms"]
+    else:
+        phases = [
+            ("fetch_ms", "Data fetch"),
+            ("fwd_ms", "Forward"),
+            ("bwd_ms", "Backward"),
+            ("opt_ms", "Optimizer"),
+        ]
+
+    result = []
+    for key, label in phases:
+        values = [s[key] for s in per_step if key in s]
+        if not values:
+            continue
+        mean_val = statistics.mean(values)
+        std_val = statistics.stdev(values) if len(values) > 1 else 0.0
+        if key == "bwd_ms" and has_detail and "clip_ms" in per_step[0]:
+            clip_values = [s["clip_ms"] for s in per_step]
+            bwd_only = [b - c for b, c in zip(values, clip_values, strict=True)]
+            mean_val = statistics.mean(bwd_only)
+            std_val = statistics.stdev(bwd_only) if len(bwd_only) > 1 else 0.0
+        result.append((key, label, mean_val, std_val))
+    return result
+
+
+def _build_timing_fig(per_step):
+    """Mean time per training phase as a horizontal bar chart."""
+    import plotly.graph_objects as go  # noqa: PLC0415
+
+    phase_stats = _get_phase_means(per_step)
+    total_ms = sum(mean for _, _, mean, _ in phase_stats)
+
+    fig = go.Figure()
+    for key, label, mean_val, std_val in reversed(phase_stats):
+        pct = mean_val / total_ms * 100 if total_ms > 0 else 0
+        fig.add_trace(
+            go.Bar(
+                y=[label],
+                x=[mean_val],
+                error_x={"type": "data", "array": [std_val], "visible": True},
+                orientation="h",
+                name=label,
+                marker_color=_PHASE_COLORS.get(key, "#999"),
+                text=f"{mean_val:.1f}ms ({pct:.1f}%)",
+                textposition="auto",
+                showlegend=False,
+            )
+        )
+    fig.update_layout(barmode="stack", yaxis={"categoryorder": "array"})
+    return fig
+
+
+def _timing_sub(per_step) -> str:
+    """Key numbers for the timing section: step time, throughput, spread."""
+    step_stats = compute_statistics([s["step_ms"] for s in per_step])
+    tps_stats = compute_statistics([s["tokens_per_s"] for s in per_step])
+    return (
+        f"{step_stats['mean']:.1f} ms/step "
+        f"[{step_stats['ci95_lower']:.1f}, {step_stats['ci95_upper']:.1f}] · "
+        f"{tps_stats['mean']:.0f} tok/s "
+        f"[{tps_stats['ci95_lower']:.0f}, {tps_stats['ci95_upper']:.0f}] · "
+        f"n={step_stats['count']} steps · brackets are 95% CI, "
+        "error bars ±1 std"
+    )
+
+
+def _build_memory_fig(per_step):
+    """Mean allocated memory at each phase boundary, with std error bars."""
+    import plotly.graph_objects as go  # noqa: PLC0415
+
+    means = []
+    stds = []
+    for mark in _MEMORY_MARK_LABELS:
+        vals = [
+            s["memory_mb"][mark]
+            for s in per_step
+            if "memory_mb" in s and mark in s["memory_mb"]
+        ]
+        means.append(statistics.mean(vals) if vals else 0)
+        stds.append(statistics.stdev(vals) if len(vals) > 1 else 0.0)
+
+    fig = go.Figure(
+        go.Bar(
+            x=list(_MEMORY_MARK_LABELS.values()),
+            y=means,
+            error_y={"type": "data", "array": stds, "visible": True},
+            marker_color="#636EFA",
+            text=[f"{m:.0f}" for m in means],
+            textposition="outside",
+            # The section margins are tight; without this the label on the
+            # tallest bar is clipped at the plot edge.
+            cliponaxis=False,
+            showlegend=False,
+        )
+    )
+    fig.update_yaxes(rangemode="tozero")
+    return fig
+
+
+def _memory_sub(results) -> str:
+    """Key numbers for the memory section: the two peaks torch reports."""
+    mem = results.get("memory", {})
+    return (
+        f"{mem.get('peak_allocated_mb', 0):.0f} MB peak allocated · "
+        f"{mem.get('peak_reserved_mb', 0):.0f} MB peak reserved · "
+        "bars are the mean at each phase boundary, error bars ±1 std"
+    )
+
+
+def _build_appendix_fig(per_step):
+    """Build per-step raw data charts for the appendix."""
+    import plotly.graph_objects as go  # noqa: PLC0415
+    from plotly.subplots import make_subplots  # noqa: PLC0415
+
+    steps = list(range(len(per_step)))
+    has_memory = any("memory_mb" in s for s in per_step)
+    n_rows = 4 if has_memory else 3
+
+    titles = [
+        "Per-Step Timing Breakdown (ms)",
+        "Per-Step Throughput (tokens/s)",
+        "Per-Step Time (ms)",
+    ]
+    if has_memory:
+        titles.insert(2, "Per-Step GPU Memory Allocated (logical) (MB)")
+
+    fig = make_subplots(
+        rows=n_rows,
+        cols=1,
+        subplot_titles=titles,
+        vertical_spacing=0.06,
+    )
+
+    for trace in _build_timing_traces(per_step):
+        fig.add_trace(trace, row=1, col=1)
+
+    fig.add_trace(
+        go.Scatter(
+            x=steps,
+            y=[s["tokens_per_s"] for s in per_step],
+            mode="lines+markers",
+            name="tokens/s",
+            marker={"size": 3},
+            showlegend=False,
+        ),
+        row=2,
+        col=1,
+    )
+    fig.update_yaxes(rangemode="tozero", row=2, col=1)
+
+    if has_memory:
+        for trace in _build_memory_traces(per_step):
+            fig.add_trace(trace, row=3, col=1)
+        fig.update_yaxes(rangemode="tozero", row=3, col=1)
+
+    step_row = n_rows
+    fig.add_trace(
+        go.Scatter(
+            x=steps,
+            y=[s["step_ms"] for s in per_step],
+            mode="lines+markers",
+            name="step_ms",
+            marker={"size": 3},
+            line={"color": "#19D3F3"},
+            showlegend=False,
+        ),
+        row=step_row,
+        col=1,
+    )
+    fig.update_yaxes(rangemode="tozero", row=step_row, col=1)
+    fig.update_xaxes(title_text="Step", row=n_rows, col=1)
+
+    return fig, n_rows
+
+
+def _kernel_markdown_lines(kernels: dict | None) -> list[str]:
+    """Markdown table of the top GPU kernels, or nothing when not profiled."""
+    if not kernels or not kernels.get("kernels"):
+        return []
+    total = kernels.get("total_device_ms_per_step", 0)
+    lines = [
+        f"## Appendix: Top {KERNEL_TOP_N} GPU Kernels",
+        "",
+        (
+            f"{total:.1f} ms GPU time/step · {len(kernels['kernels'])} kernels"
+            " · self time, averaged over the profiled steps"
+        ),
+        "",
+        "| Kernel | ms/step | % GPU | calls/step |",
+        "|--------|---------|-------|------------|",
+    ]
+    for k in kernels["kernels"][:KERNEL_TOP_N]:
+        pct = k["ms_per_step"] / total * 100 if total else 0
+        lines.append(
+            f"| `{_short_kernel_name(k['name'])}` | {k['ms_per_step']:.2f}"
+            f" | {pct:.1f}% | {k['calls_per_step']:.1f} |"
+        )
+    lines.append("")
+    return lines
+
+
+def _write_markdown_summary(results: dict, md_path: str) -> None:
+    """Write a markdown summary of benchmark results."""
+    cfg = results.get("config", {})
+    prov = results.get("provenance", {})
+    mem = results.get("memory", {})
+    timing = results.get("timing", {})
+    per_step = results.get("per_step")
+    aggregate = results.get("aggregate", {})
+
+    spec = cfg.get("speculator_type", "?")
+    verifier = cfg.get("verifier_name_or_path", "?")
+    gpu_desc = f"{cfg.get('num_gpus_used', 1)} x {_get_gpu_name(results)}"
+    steps_desc = (
+        f"{cfg.get('warmup_steps', '?')} warmup"
+        f" + {cfg.get('measured_steps', '?')} measured"
+    )
+    lines = [
+        f"# Benchmark: {spec} / {verifier}",
+        "",
+        f"- **seq_len**: {cfg.get('total_seq_len', '?')}",
+        f"- **GPUs**: {gpu_desc}",
+        f"- **optimizer**: {cfg.get('optimizer', '?')}",
+        f"- **dtype**: {cfg.get('hidden_states_dtype', '?')}",
+        f"- **synthetic**: {cfg.get('synthetic_data', '?')}",
+        f"- **steps**: {steps_desc}",
+        f"- **git**: `{prov.get('git_sha', 'unknown')[:12]}`",
+        f"- **date**: {prov.get('timestamp', '?')[:10]}",
+        "",
+        "## Timing",
+        "",
+        "| Metric | Mean | Std | 95% CI | Min | Max |",
+        "|--------|------|-----|--------|-----|-----|",
+    ]
+
+    all_keys = list(TIMING_KEYS) + [k for k in DETAIL_TIMING_KEYS if k in timing]
+    for key in all_keys:
+        stats = timing.get(key)
+        if not stats:
+            continue
+        ci = _get_ci(stats, per_step, key)
+        lines.append(
+            f"| {key} | {stats['mean']:.2f} | {stats['std']:.2f}"
+            f" | {ci} | {stats['min']:.2f} | {stats['max']:.2f} |"
+        )
+
+    if aggregate:
+        eff = aggregate.get("effective_rank0_tokens_per_s", 0)
+        dur = aggregate.get("measured_time_s", 0)
+        lines += [
+            "",
+            f"**Effective throughput**: {eff:.0f} tokens/s over {dur:.1f}s",
+        ]
+
+    lines += [
+        "",
+        "## Memory",
+        "",
+        f"- **Peak allocated**: {mem.get('peak_allocated_mb', 0):.0f} MB",
+        f"- **Peak reserved**: {mem.get('peak_reserved_mb', 0):.0f} MB",
+        "",
+    ]
+
+    # Phase breakdown percentages
+    if per_step:
+        phase_stats = _get_phase_means(per_step)
+        total_ms = sum(m for _, _, m, _ in phase_stats)
+        if total_ms > 0:
+            lines += ["## Phase Breakdown", ""]
+            lines.append("| Phase | Mean (ms) | % |")
+            lines.append("|-------|-----------|---|")
+            for _, label, mean_val, _ in phase_stats:
+                pct = mean_val / total_ms * 100
+                lines.append(f"| {label} | {mean_val:.1f} | {pct:.1f}% |")
+            lines.append("")
+
+    lines += _kernel_markdown_lines(results.get("kernels"))
+
+    Path(md_path).write_text("\n".join(lines))
+    print(f"Markdown summary written to {md_path}")
+
+
+def _build_kernel_pie(kernels: dict):
+    """Pie of device time per kernel, with the sub-2% tail merged into "Other"."""
+    import plotly.graph_objects as go  # noqa: PLC0415
+
+    total = kernels.get("total_device_ms_per_step", 0) or 1.0
+    labels: list[str] = []
+    values: list[float] = []
+    hovers: list[str] = []
+    tail_ms = 0.0
+    tail_n = 0
+
+    for k in kernels["kernels"]:
+        if k["ms_per_step"] / total * 100 < KERNEL_PIE_MIN_PCT:
+            tail_ms += k["ms_per_step"]
+            tail_n += 1
+            continue
+        labels.append(_short_kernel_name(k["name"], KERNEL_LABEL_WIDTH))
+        values.append(k["ms_per_step"])
+        # The legend label is clipped, so the full name lives in the hover.
+        hovers.append(
+            f"<b>{_wrap_kernel_name(k['name'])}</b><br>"
+            f"{k['ms_per_step']:.2f} ms/step · "
+            f"{k['calls_per_step']:.1f} calls/step"
+        )
+
+    if tail_n:
+        labels.append(f"Other ({tail_n} kernels)")
+        values.append(tail_ms)
+        hovers.append(
+            f"<b>{tail_n} kernels</b>, each under {KERNEL_PIE_MIN_PCT:.0f}% "
+            f"of device time<br>{tail_ms:.2f} ms/step combined"
+        )
+
+    fig = go.Figure(
+        go.Pie(
+            labels=_unique_labels(labels),
+            values=values,
+            customdata=hovers,
+            hovertemplate="%{customdata}<extra></extra>",
+            texttemplate="%{percent}",
+            textposition="inside",
+            insidetextorientation="horizontal",
+            sort=False,  # already sorted by time; keep "Other" last
+            direction="clockwise",
+            marker={"line": {"color": "#fff", "width": 1}},
+        )
+    )
+    fig.update_layout(
+        legend={"font": {"family": "ui-monospace, monospace", "size": 10}}
+    )
+    return fig
+
+
+def _kernel_name_cell(name: str) -> str:
+    """Kernel name as HTML, carrying the full name in a tooltip when clipped.
+
+    Deliberately a ``span.kname`` rather than a ``<code>``: viewers and browser
+    extensions routinely restyle ``code`` -- a dark chip behind every cell is
+    the common one -- and a class we style ourselves cannot be hijacked that
+    way. Elided names get a dotted underline and a help cursor so it is visible
+    that there is more to hover for; whole ones stay plain.
+    """
+    short = _short_kernel_name(name)
+    if short == name:
+        return f'<span class="kname">{html_escape(name)}</span>'
+    return (
+        f'<span class="kname trunc" title="{html_escape(name)}">'
+        f"{html_escape(short)}</span>"
+    )
+
+
+def _section_html(title: str, sub: str, fig, height: int, *, with_js=False) -> str:
+    """One report section: heading, a line of key data, then its chart.
+
+    Every body section goes through here so the three of them stay visually
+    identical; plotly's own subplot titles and annotations cannot match the
+    surrounding page, which is why the figures carry neither.
+
+    ``with_js`` embeds the plotly bundle and must be set on exactly one section.
+    """
+    fig.update_layout(
+        height=height,
+        template="plotly_white",
+        margin={"t": 30, "b": 40, "l": 20, "r": 20},
+    )
+    fig_html = fig.to_html(
+        full_html=False, include_plotlyjs="cdn" if with_js else False
+    )
+    return f"""
+<h2 class="sec">{title}</h2>
+<p class="sub">{sub}</p>
+{fig_html}"""
+
+
+def _kernel_html(kernels: dict | None) -> tuple[str, str]:
+    """Kernel-time pie for the body and top-N table for the appendix.
+
+    Returns ``("", "")`` when the run was not profiled.
+    """
+    if not kernels or not kernels.get("kernels"):
+        return "", ""
+    entries = kernels["kernels"]
+    total = kernels.get("total_device_ms_per_step", 0)
+    shown = sum(
+        1
+        for k in entries
+        if k["ms_per_step"] / (total or 1) * 100 >= KERNEL_PIE_MIN_PCT
+    )
+    body = _section_html(
+        "GPU Kernel Breakdown",
+        f"{total:.1f} ms GPU time/step · {len(entries)} kernels · "
+        f"{shown} at or above {KERNEL_PIE_MIN_PCT:.0f}%, rest grouped as "
+        '"Other" · hover for full name, ms/step and calls/step',
+        _build_kernel_pie(kernels),
+        height=420,
+    )
+
+    rows = "".join(
+        f"<tr><td>{_kernel_name_cell(k['name'])}</td>"
+        f"<td>{k['ms_per_step']:.2f}</td>"
+        f"<td>{(k['ms_per_step'] / total * 100 if total else 0):.1f}%</td>"
+        f"<td>{k['calls_per_step']:.1f}</td></tr>"
+        for k in entries[:KERNEL_TOP_N]
+    )
+    appendix = f"""
+<details>
+<summary>Appendix: Top {KERNEL_TOP_N} GPU Kernels</summary>
+<table class="kernels">
+<thead><tr><th>Kernel</th><th>ms/step</th><th>% GPU</th><th>calls/step</th></tr>
+</thead><tbody>{rows}</tbody></table>
+</details>"""
+    return body, appendix
+
+
+def report_benchmark(result_path: str, output_path: str | None = None) -> None:
+    """Generate an interactive HTML report from benchmark results."""
+    try:
+        import plotly  # noqa: PLC0415, F401
+    except ImportError:
+        print("plotly is required: pip install plotly", file=sys.stderr)
+        sys.exit(1)
+
+    with open(result_path) as f:
+        results = json.load(f)
+
+    per_step = results.get("per_step")
+    if not per_step:
+        print(
+            "No per-step data found. Re-run benchmark without --no-per-step.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
+    if output_path is None:
+        output_path = result_path.replace(".json", "_report.html")
+
+    cfg = results.get("config", {})
+    prov = results.get("provenance", {})
+    heading = (
+        f"{cfg.get('speculator_type', '?')} &middot; "
+        f"{cfg.get('verifier_name_or_path', '?')} &middot; "
+        f"seq_len={cfg.get('total_seq_len', '?')} &middot; "
+        f"{cfg.get('num_gpus_used', 1)} GPU(s)"
+    )
+    sub = (
+        f"{cfg.get('measured_steps', '?')} measured steps &middot; "
+        f"{_get_gpu_name(results)} &middot; "
+        f"{prov.get('git_sha', 'unknown')[:12]}"
+    )
+
+    # --- Body sections: timing, memory, kernels ---
+    timing_html = _section_html(
+        "Step Timing Breakdown",
+        _timing_sub(per_step),
+        _build_timing_fig(per_step),
+        height=340,
+        with_js=True,  # first figure on the page carries the plotly bundle
+    )
+    memory_html = ""
+    if any("memory_mb" in s for s in per_step):
+        memory_html = _section_html(
+            "GPU Memory Allocated (logical)",
+            _memory_sub(results),
+            _build_memory_fig(per_step),
+            height=340,
+        )
+
+    # --- Appendix: per-step raw data ---
+    appendix_fig, n_rows = _build_appendix_fig(per_step)
+    appendix_fig.update_layout(
+        height=300 * n_rows,
+        template="plotly_white",
+        legend={"orientation": "h", "yanchor": "bottom", "y": 1.02, "x": 0},
+    )
+    appendix_html = appendix_fig.to_html(full_html=False, include_plotlyjs=False)
+
+    # --- Kernel breakdown (only present when the run used --profile) ---
+    kernel_html, kernel_appendix_html = _kernel_html(results.get("kernels"))
+
+    html = f"""<!DOCTYPE html>
+<html><head><meta charset="utf-8">
+<title>Benchmark Report</title>
+<!-- The plotly figures render on a white template, so the page is light-only.
+     Without this the browser paints a dark canvas in dark mode and leaves the
+     text at its (dark grey) authored colour. -->
+<meta name="color-scheme" content="light">
+<style>
+  body {{ font-family: system-ui, sans-serif; max-width: 1200px;
+         margin: 0 auto; padding: 20px; color: #24292f; background: #fff; }}
+  h1 {{ font-size: 1.3em; margin-bottom: 0; }}
+  h2.sec {{ font-size: 1.1em; font-weight: 600; margin: 34px 0 0; }}
+  .sub {{ color: #656d76; font-size: 0.85em; max-width: 900px;
+          margin: 4px 0 12px; }}
+  details {{ margin-top: 30px; }}
+  summary {{ cursor: pointer; font-size: 1.1em; font-weight: 600;
+             padding: 8px 0; }}
+  table.kernels {{ border-collapse: collapse; font-size: 0.85em; width: 100%; }}
+  table.kernels th, table.kernels td {{ text-align: right; padding: 5px 8px;
+                                        border-bottom: 1px solid #d8dee4; }}
+  table.kernels th {{ color: #656d76; font-weight: 600; }}
+  table.kernels tbody tr:nth-child(odd) {{ background: #f6f8fa; }}
+  table.kernels th:first-child, table.kernels td:first-child
+      {{ text-align: left; }}
+  .kname {{ font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+            font-size: 0.95em; color: #0550ae; background: none;
+            white-space: nowrap; padding: 0; border-radius: 0; }}
+  .kname.trunc {{ border-bottom: 1px dotted #8c959f; cursor: help; }}
+</style>
+</head><body>
+<h1>{heading}</h1>
+<div class="sub">{sub}</div>
+{timing_html}
+{memory_html}
+{kernel_html}
+{kernel_appendix_html}
+<details>
+<summary>Appendix: Per-Step Raw Data</summary>
+{appendix_html}
+</details>
+</body></html>"""
+
+    Path(output_path).write_text(html)
+    print(f"Report written to {output_path}")
+
+    md_path = output_path.replace(".html", ".md")
+    _write_markdown_summary(results, md_path)
+
+
+# ---------------------------------------------------------------------------
 # CLI
 # ---------------------------------------------------------------------------
 
@@ -991,6 +1653,18 @@ def build_parser():
     cmp_parser.add_argument("baseline", help="Path to baseline result JSON.")
     cmp_parser.add_argument("candidate", help="Path to candidate result JSON.")
 
+    # --- report ---
+    viz_parser = subparsers.add_parser(
+        "report", help="Generate interactive HTML report from results"
+    )
+    viz_parser.add_argument("result", help="Path to benchmark result JSON.")
+    viz_parser.add_argument(
+        "--output",
+        type=str,
+        default=None,
+        help="Output HTML path. Default: <result>_report.html.",
+    )
+
     return parser
 
 
@@ -1011,6 +1685,10 @@ def main():
 
     if bench_args.command == "compare":
         compare_benchmarks(bench_args.baseline, bench_args.candidate)
+        return
+
+    if bench_args.command == "report":
+        report_benchmark(bench_args.result, bench_args.output)
         return
 
     # --- run command ---
