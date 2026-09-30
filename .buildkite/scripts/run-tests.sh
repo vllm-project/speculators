@@ -8,8 +8,8 @@ case "${TEST_TYPE}" in
   unit)       TEST_PATH="tests/unit" ;;
   integration) TEST_PATH="tests/integration" ;;
   smoke)      TEST_PATH="tests/e2e/smoke" ;;
-  e2e)        TEST_PATH="tests/e2e"; PYTEST_EXTRA_ARGS+=(--ignore=tests/e2e/hs_connectors -m "not regression") ;;
-  regression) TEST_PATH="tests/e2e"; PYTEST_EXTRA_ARGS+=(--ignore=tests/e2e/hs_connectors -m "regression") ;;
+  e2e)        TEST_PATH="tests/e2e"; PYTEST_EXTRA_ARGS+=(-m "not regression") ;;
+  regression) TEST_PATH="tests/e2e"; PYTEST_EXTRA_ARGS+=(-m "regression") ;;
   multi-gpu)  TEST_PATH="tests/e2e"; PYTEST_EXTRA_ARGS+=(-m "multi_gpu") ;;
   *) echo "Unknown test type: ${TEST_TYPE}" >&2; exit 1 ;;
 esac
@@ -60,11 +60,16 @@ if [[ "${TEST_TYPE}" =~ ^(smoke|e2e|regression|multi-gpu)$ ]]; then
     uv pip install --python "${VLLM_VENV_PYTHON}" setuptools
   fi
 
-  if [ "${VLLM_VERSION:-}" = "nightly" ]; then
+  if [ "${VLLM_VERSION:-}" = "latest" ]; then
+    UV_TORCH_BACKEND=cu130 uv pip install --python "${VLLM_VENV_PYTHON}" vllm
+  else
     UV_TORCH_BACKEND=cu130 uv pip install --python "${VLLM_VENV_PYTHON}" vllm \
       --extra-index-url https://wheels.vllm.ai/nightly/cu130
-  else
-    UV_TORCH_BACKEND=cu130 uv pip install --python "${VLLM_VENV_PYTHON}" vllm
+  fi
+
+  if [ "${TEST_TYPE}" = "e2e" ]; then
+    echo "--- Installing hs_connectors dependencies"
+    uv pip install --python "${VLLM_VENV_PYTHON}" mooncake-transfer-engine-cuda13 ./hs_connectors
   fi
 
   export VLLM_PYTHON="${VLLM_VENV_PYTHON}"
