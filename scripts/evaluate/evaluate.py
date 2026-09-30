@@ -299,6 +299,70 @@ def _run_subset(
     return acceptance_csv, perf_csv, max_tokens if is_sweep else None
 
 
+def _speedbench_run_items(args: argparse.Namespace) -> list[tuple[str, dict]]:
+    """Resolve a ``speedbench/`` spec into ``(label, guidellm_common)`` pairs."""
+    if not getattr(args, "speedbench_data_dir", None):
+        logger.error(
+            "--speedbench-data-dir is required for speedbench/ datasets.\n"
+            "Run scripts/evaluate/prepare_speedbench.py first, then add"
+            " --speedbench-data-dir <dir>.",
+        )
+        sys.exit(1)
+    return [
+        (
+            label,
+            {
+                "target": args.target,
+                "dataset": str(local_path),
+                "data_column_mapper": _SPEEDBENCH_COLUMN_MAPPER,
+                "max_concurrency": args.max_concurrency,
+            },
+        )
+        for label, local_path in _resolve_speedbench(
+            args.dataset, Path(args.speedbench_data_dir)
+        )
+    ]
+
+
+def _mrcr_run_items(
+    args: argparse.Namespace, artifacts_dir: Path
+) -> list[tuple[str, dict]]:
+    """Prepare MRCR data and build its ``(label, guidellm_common)`` pairs."""
+    if args.mrcr_max_samples is not None and args.mrcr_max_samples < 1:
+        logger.error("--mrcr-max-samples must be at least 1")
+        sys.exit(1)
+    pairs = prepare_mrcr(
+        target=args.target,
+        needles=args.mrcr_needles,
+        buckets=args.mrcr_buckets,
+        data_dir=args.mrcr_data_dir,
+        artifacts_dir=artifacts_dir,
+        max_samples=args.mrcr_max_samples,
+        gen_budget=parse_gen_kwargs(args.gen_kwargs).get("max_tokens", 4096),
+        retry_failed=args.mrcr_retry_failed,
+    )
+    if not pairs:
+        logger.error("No MRCR buckets could run on this server")
+        sys.exit(1)
+    return [
+        (
+            label,
+            {
+                "target": args.target,
+                "dataset": str(bucket_path),
+                "data_column_mapper": args.data_column_mapper,
+                "max_concurrency": args.max_concurrency,
+                "request_format": "/v1/completions",
+                # Prevents a repeated BOS on models whose tokenizer
+                # adds one (e.g. Llama); a no-op on models that
+                # don't (e.g. Qwen).
+                "gen_kwargs": {"add_special_tokens": False},
+            },
+        )
+        for label, bucket_path in pairs
+    ]
+
+
 def run_benchmark(args: argparse.Namespace) -> None:
     check_dependencies()
     is_sweep = args.mode == "sweep"
@@ -327,60 +391,9 @@ def run_benchmark(args: argparse.Namespace) -> None:
     run_items: list[tuple[str, dict]] = []
 
     if dataset_spec == MRCR_DATASET:
-        if args.mrcr_max_samples is not None and args.mrcr_max_samples < 1:
-            logger.error("--mrcr-max-samples must be at least 1")
-            sys.exit(1)
-        pairs = prepare_mrcr(
-            target=args.target,
-            needles=args.mrcr_needles,
-            buckets=args.mrcr_buckets,
-            data_dir=args.mrcr_data_dir,
-            artifacts_dir=artifacts_dir,
-            max_samples=args.mrcr_max_samples,
-            gen_budget=parse_gen_kwargs(args.gen_kwargs).get("max_tokens", 4096),
-            retry_failed=args.mrcr_retry_failed,
-        )
-        if not pairs:
-            logger.error("No MRCR buckets could run on this server")
-            sys.exit(1)
-        for label, bucket_path in pairs:
-            run_items.append(
-                (
-                    label,
-                    {
-                        "target": args.target,
-                        "dataset": str(bucket_path),
-                        "data_column_mapper": args.data_column_mapper,
-                        "max_concurrency": args.max_concurrency,
-                        "request_format": "/v1/completions",
-                        # Prevents a repeated BOS on models whose tokenizer
-                        # adds one (e.g. Llama); a no-op on models that
-                        # don't (e.g. Qwen).
-                        "gen_kwargs": {"add_special_tokens": False},
-                    },
-                )
-            )
+        run_items = _mrcr_run_items(args, artifacts_dir)
     elif dataset_spec.startswith("speedbench/"):
-        if not getattr(args, "speedbench_data_dir", None):
-            logger.error(
-                "--speedbench-data-dir is required for speedbench/ datasets.\n"
-                "Run scripts/evaluate/prepare_speedbench.py first, then add"
-                " --speedbench-data-dir <dir>.",
-            )
-            sys.exit(1)
-        pairs = _resolve_speedbench(dataset_spec, Path(args.speedbench_data_dir))
-        for label, local_path in pairs:
-            run_items.append(
-                (
-                    label,
-                    {
-                        "target": args.target,
-                        "dataset": str(local_path),
-                        "data_column_mapper": _SPEEDBENCH_COLUMN_MAPPER,
-                        "max_concurrency": args.max_concurrency,
-                    },
-                )
-            )
+        run_items = _speedbench_run_items(args)
     else:
         guidellm_common = {
             "target": args.target,

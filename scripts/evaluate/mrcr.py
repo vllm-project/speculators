@@ -83,9 +83,7 @@ def parse_buckets(spec: str) -> list[tuple[str, int, int]]:
         else:
             raise argparse.ArgumentTypeError(f"unknown bucket: {part!r}")
         if bucket in selected:
-            raise argparse.ArgumentTypeError(
-                f"bucket selected more than once: {part}"
-            )
+            raise argparse.ArgumentTypeError(f"bucket selected more than once: {part}")
         selected.append(bucket)
     if not selected:
         raise argparse.ArgumentTypeError("empty bucket selection")
@@ -97,18 +95,20 @@ def _root_url(target: str) -> str:
 
 
 def _post_json(url: str, payload: dict) -> dict:
-    request = urllib.request.Request(
+    request = urllib.request.Request(  # noqa: S310
         url,
         json.dumps(payload).encode(),
         {"Content-Type": "application/json"},
     )
-    with urllib.request.urlopen(request, timeout=_HTTP_TIMEOUT) as response:
+    with urllib.request.urlopen(request, timeout=_HTTP_TIMEOUT) as response:  # noqa: S310
         return json.load(response)
 
 
 def _model_info(target: str) -> tuple[str, int | None]:
     """Return the (model id, max_model_len) served at *target*."""
-    with urllib.request.urlopen(f"{_root_url(target)}/v1/models", timeout=30) as resp:
+    with urllib.request.urlopen(  # noqa: S310
+        f"{_root_url(target)}/v1/models", timeout=30
+    ) as resp:
         model = json.load(resp)["data"][0]
     return model["id"], model.get("max_model_len")
 
@@ -208,12 +208,11 @@ def _render_prompts(
     tmp_path = path.with_suffix(".jsonl.tmp")
     failed = 0
     written = 0
-    with ThreadPoolExecutor(max_workers=_RENDER_WORKERS) as pool, tmp_path.open(
-        "w"
-    ) as file:
-        for row in pool.map(
-            partial(_render, root, model, cached), enumerate(prompts)
-        ):
+    with (
+        ThreadPoolExecutor(max_workers=_RENDER_WORKERS) as pool,
+        tmp_path.open("w") as file,
+    ):
+        for row in pool.map(partial(_render, root, model, cached), enumerate(prompts)):
             if row is None:
                 failed += 1
                 file.write("null\n")
@@ -346,7 +345,9 @@ def prepare_mrcr(
                         open_files[label] = stack.enter_context(
                             (out_dir / f"{n_needles}needle_{label}.jsonl").open("w")
                         )
-                    open_files[label].write(json.dumps({"prompt": row["prompt"]}) + "\n")
+                    open_files[label].write(
+                        json.dumps({"prompt": row["prompt"]}) + "\n"
+                    )
                     counts[label] += 1
                     break
 
