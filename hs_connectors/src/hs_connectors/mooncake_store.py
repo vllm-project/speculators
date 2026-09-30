@@ -163,8 +163,8 @@ class MooncakeHiddenStatesStore:
         except ImportError as e:  # pragma: no cover - optional dependency
             raise ImportError(
                 "Mooncake is required for the Mooncake hidden-states backend. "
-                "Install it with `pip install mooncake-transfer-engine` or "
-                "`pip install mooncake-transfer-engine-cuda13`."
+                "Install it with `pip install 'mooncake-transfer-engine>=0.3.12'` or "
+                "`pip install 'mooncake-transfer-engine-cuda13>=0.3.12'`."
             ) from e
 
         store = MooncakeDistributedStore()

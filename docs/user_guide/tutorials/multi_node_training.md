@@ -40,10 +40,10 @@ Install the Mooncake transfer engine in **both** the vLLM and Speculators enviro
 
 ```bash
 # Standard CUDA
-pip install mooncake-transfer-engine
+pip install "mooncake-transfer-engine>=0.3.12"
 
 # CUDA 13.x
-pip install mooncake-transfer-engine-cuda13
+pip install "mooncake-transfer-engine-cuda13>=0.3.12"
 ```
 
 Or install Speculators with the mooncake extra:
