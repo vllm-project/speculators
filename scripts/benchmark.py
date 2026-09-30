@@ -310,7 +310,6 @@ def _build_train_loader(
         transfer=transfer,
         vllm_endpoint=train_args.vllm_endpoint,
         on_missing=train_args.on_missing,
-        on_generate=train_args.on_generate,
         verifier_name_or_path=train_args.verifier_name_or_path,
         request_timeout=train_args.request_timeout,
         max_retries=train_args.max_retries,
@@ -326,6 +325,7 @@ def _build_train_loader(
         preprocess=preprocess,
         train_data_ratio=train_args.train_data_ratio,
         max_train_batches=total_steps,
+        seed=train_args.seed,
     )
     return train_loader, False
 

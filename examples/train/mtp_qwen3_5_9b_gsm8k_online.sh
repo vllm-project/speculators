@@ -110,8 +110,7 @@ CUDA_VISIBLE_DEVICES="$TRAIN_GPU" python \
     --epochs "$EPOCHS" \
     --lr "$LR" \
     --total-seq-len "$SEQ_LENGTH" \
-    --on-missing generate \
-    --on-generate delete
+    --on-missing generate
 
 # Step 4: Stitch finetuned weights back into the verifier
 echo "=== Step 4: Stitching finetuned weights ==="

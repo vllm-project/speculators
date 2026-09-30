@@ -92,7 +92,6 @@ CUDA_VISIBLE_DEVICES="$TRAIN_GPUS" torchrun \
     --max-anchors "$MAX_ANCHORS" \
     --num-layers "$NUM_LAYERS" \
     --target-layer-ids $TARGET_LAYER_IDS \
-    --on-missing generate \
-    --on-generate delete
+    --on-missing generate
 
 echo "Done. Checkpoints saved to $OUTPUT_DIR/checkpoints/"
