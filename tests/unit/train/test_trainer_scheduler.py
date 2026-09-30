@@ -100,6 +100,20 @@ def test_scheduler_total_steps_override_wins_over_max_steps():
     assert warmup_steps == 2  # 1% of 250
 
 
+def test_explicit_scheduler_total_steps_warns_with_gradient_accumulation():
+    with pytest.warns(UserWarning, match="measured in optimizer steps"):
+        warmup_steps, total_steps = _resolve_scheduler_steps(
+            make_config(
+                scheduler_total_steps=250,
+                gradient_accumulation_steps=4,
+            ),
+            20,
+        )
+
+    assert total_steps == 250
+    assert warmup_steps == 2
+
+
 def test_scheduler_warmup_ratio_uses_scheduler_total_steps():
     warmup_steps, total_steps = _resolve_scheduler_steps(
         make_config(scheduler_total_steps=200, scheduler_warmup_ratio=0.1),

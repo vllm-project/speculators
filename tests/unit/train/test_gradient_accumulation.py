@@ -22,6 +22,7 @@ from torch import nn
 from torch.nn.parallel import DistributedDataParallel
 from torch.utils.data import DataLoader, TensorDataset
 
+import speculators.train.trainer as trainer_module
 from speculators.model import SpeculatorModel
 from speculators.train.trainer import Trainer, TrainerConfig
 
@@ -124,6 +125,29 @@ def test_maybe_no_sync_ddp_skips_sync_off_boundary(single_process_group) -> None
     # Boundary micro-step: sync must happen, so a no-op context.
     on_boundary = _call_maybe_no_sync(ddp, is_boundary=True)
     assert isinstance(on_boundary, contextlib.nullcontext)
+
+
+def test_maybe_no_sync_fsdp2_toggles_sync_at_boundary(monkeypatch) -> None:
+    class FakeFSDPModule(nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.sync_values: list[bool] = []
+
+        def set_requires_gradient_sync(
+            self, requires_gradient_sync: bool, *, recurse: bool = True
+        ) -> None:
+            assert recurse
+            self.sync_values.append(requires_gradient_sync)
+
+    monkeypatch.setattr(trainer_module, "FSDPModule", FakeFSDPModule)
+    model = FakeFSDPModule()
+
+    off_boundary = _call_maybe_no_sync(model, is_boundary=False)
+    on_boundary = _call_maybe_no_sync(model, is_boundary=True)
+
+    assert isinstance(off_boundary, contextlib.nullcontext)
+    assert isinstance(on_boundary, contextlib.nullcontext)
+    assert model.sync_values == [False, True]
 
 
 # ---------------------------------------------------------------------------
