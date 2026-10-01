@@ -82,7 +82,7 @@ mooncake-cuda = [
     "mooncake-transfer-engine>=0.3.12",
 ]
 mooncake-cuda13 = [
-    "mooncake-transfer-engine-cuda13>=0.3.12",
+    "mooncake-transfer-engine-cuda13>=0.3.13.post1",
 ]
 dev = [
     # build
