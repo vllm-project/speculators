@@ -23,7 +23,7 @@ export HF_HUB_DISABLE_PROGRESS_BARS=1
 
 echo "--- Installing system packages"
 git fetch --tags --unshallow 2>/dev/null || git fetch --tags
-apt-get update -qq > /dev/null 2>&1 && apt-get install -y -qq curl g++ gcc make python3-dev
+apt-get update -qq > /dev/null 2>&1 && apt-get install -y -qq curl g++ gcc make python3-dev libibverbs-dev libnuma-dev librdmacm-dev
 curl -LsSf https://astral.sh/uv/install.sh | sh
 
 export LD_LIBRARY_PATH=/usr/local/nvidia/lib64
