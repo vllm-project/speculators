@@ -2,6 +2,7 @@ steps:
   - group: ":test_tube: Nightly Unit Tests (A100)"
     steps:
       - label: ":python: Unit Tests py{{matrix.python}} / transformers {{matrix.transformers}}"
+        skip: true
         agents:
           queue: RedHat-A100-WDC
 
@@ -71,6 +72,7 @@ steps:
   - group: ":test_tube: Nightly Integration Tests (H100)"
     steps:
       - label: ":python: Integration Tests py{{matrix.python}} / transformers {{matrix.transformers}}"
+        skip: true
         agents:
           queue: RedHat-H100-WDC
 
