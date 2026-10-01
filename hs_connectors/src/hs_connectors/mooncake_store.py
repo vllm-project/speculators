@@ -76,7 +76,6 @@ def _align(offset: int) -> int:
     return -(-offset // _TENSOR_ALIGN) * _TENSOR_ALIGN
 
 
-
 def packed_layout(
     tensors: dict[str, tuple[tuple[int, ...], torch.dtype]],
 ) -> tuple[dict[str, Any], int]:
@@ -297,7 +296,6 @@ class MooncakeHiddenStatesStore:
             if result != _OBJECT_NOT_FOUND:
                 _check_store_result("remove", k, result)
 
-
     def get_sample(
         self,
         transfer_manifest: dict[str, Any],
@@ -359,7 +357,7 @@ class MooncakeHiddenStatesStore:
 
         raw = obj.numpy().tobytes()
         try:
-            error_dict =  json.loads(raw)
+            error_dict = json.loads(raw)
         except (UnicodeDecodeError, json.JSONDecodeError) as e:
             raise MooncakeIntegrityError(
                 f"Corrupt Mooncake json for key={error_handle}: {e}"

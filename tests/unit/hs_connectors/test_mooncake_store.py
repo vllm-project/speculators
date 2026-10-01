@@ -87,10 +87,7 @@ def store() -> MooncakeHiddenStatesStore:
 
 def _manifest(key: str, tensors: dict[str, torch.Tensor]) -> dict:
     tensor_specs, total_bytes = packed_layout(
-        {
-            name: (tuple(tensor.shape), tensor.dtype)
-            for name, tensor in tensors.items()
-        }
+        {name: (tuple(tensor.shape), tensor.dtype) for name, tensor in tensors.items()}
     )
     return {
         "handle": key,
@@ -148,9 +145,7 @@ def test_missing_sample_times_out(store):
 def test_delete_sample_removes_object(store):
     hs = torch.randn(4, 2, 8, dtype=torch.bfloat16)
     tids = torch.arange(4, dtype=torch.int64)
-    manifest = _put_sample(
-        store, "req-del", {"hidden_states": hs, "token_ids": tids}
-    )
+    manifest = _put_sample(store, "req-del", {"hidden_states": hs, "token_ids": tids})
     store.put_error(manifest, "producer failed")
 
     store.delete_sample("req-del")
@@ -170,9 +165,7 @@ def test_delete_sample_raises_on_negative_status(store, monkeypatch):
 
 
 def test_get_sample_raises_on_evicted_sample(store, monkeypatch):
-    manifest = _put_sample(
-        store, "req-evict", {"hidden_states": torch.zeros(4, 2, 8)}
-    )
+    manifest = _put_sample(store, "req-evict", {"hidden_states": torch.zeros(4, 2, 8)})
     monkeypatch.setattr(store._store, "get_size", lambda _key: -704)
 
     with pytest.raises(MooncakeIntegrityError, match="unavailable"):
@@ -180,9 +173,7 @@ def test_get_sample_raises_on_evicted_sample(store, monkeypatch):
 
 
 def test_get_sample_raises_on_short_read(store, monkeypatch):
-    manifest = _put_sample(
-        store, "req-short", {"hidden_states": torch.zeros(4, 2, 8)}
-    )
+    manifest = _put_sample(store, "req-short", {"hidden_states": torch.zeros(4, 2, 8)})
     monkeypatch.setattr(store._store, "get_into", lambda _key, _ptr, _size: 16)
 
     with pytest.raises(MooncakeIntegrityError, match="returned 16"):
