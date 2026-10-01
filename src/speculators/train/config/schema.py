@@ -382,7 +382,10 @@ class SchedulerArgs(_Group):
         "(with a warning) when --scheduler-warmup-steps is also set.",
     )
     scheduler_total_steps: int | None = Field(
-        default=None, description="Total scheduler steps (default: inferred)."
+        default=None,
+        description="Total scheduler steps, measured in optimizer updates (default: "
+        "inferred). When gradient accumulation is enabled, an explicit value is not "
+        "automatically divided by gradient_accumulation_steps.",
     )
     scheduler_num_cosine_cycles: float = Field(
         default=0.5, description="Number of cosine cycles for the cosine scheduler."
@@ -427,6 +430,14 @@ class TrainerArgs(_Group):
         ge=1,
         description="Stop training after this many optimizer steps (counted across "
         "epochs). Useful for quick smoke runs. Default: run all epochs to completion.",
+    )
+    gradient_accumulation_steps: int = Field(
+        default=1,
+        ge=1,
+        description="Accumulate gradients over N microbatches before each optimizer "
+        "step (effective batch = per-step batch * N). The trailing partial window is "
+        "dropped each epoch. global_step, the LR scheduler, logging cadence, and "
+        "sub-epoch checkpoint cadence advance once per optimizer update.",
     )
 
     @field_validator("checkpoint_freq")
