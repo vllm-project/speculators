@@ -48,8 +48,6 @@ if TYPE_CHECKING:
 logger = init_logger(__name__)
 
 
-
-
 def sanitize_key(key: str) -> str:
     """Make a request id safe to use as a Mooncake key."""
     safe = re.sub(r"[^a-zA-Z0-9_-]", "_", key)
@@ -103,8 +101,7 @@ class MooncakeHiddenStatesConnector(KVConnectorBase_V1, SupportsHMA):
             # layer in the wrapper.
             layer_specs = getattr(group_spec, "kv_cache_specs", None)
             if layer_specs and any(
-                isinstance(spec, HiddenStateCacheSpec)
-                for spec in layer_specs.values()
+                isinstance(spec, HiddenStateCacheSpec) for spec in layer_specs.values()
             ):
                 group_ids.append(gid)
         if len(group_ids) == 1:

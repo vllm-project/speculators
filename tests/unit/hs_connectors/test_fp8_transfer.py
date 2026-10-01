@@ -35,9 +35,12 @@ def test_get_generated_dequantizes_transparently(tmp_path):
 
 def test_get_generated_missing_file_returns_none(tmp_path):
     transfer = FP8Transfer(tmp_path)
-    assert transfer.get_generated(
-        {"hidden_states_path": str(tmp_path / "missing.safetensors")}
-    ) is None
+    assert (
+        transfer.get_generated(
+            {"hidden_states_path": str(tmp_path / "missing.safetensors")}
+        )
+        is None
+    )
 
 
 def test_get_cached_dequantizes_transparently(tmp_path):
