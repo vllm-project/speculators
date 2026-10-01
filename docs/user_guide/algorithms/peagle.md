@@ -56,4 +56,4 @@ P-EAGLE is based on research from AWS AI Labs: [arXiv Paper](https://arxiv.org/a
 
 ## See Also
 
-- [Train a Speculator](../tutorials/train.md) -- Step-by-step training guide (select P-EAGLE, then online, offline, or hybrid)
+- [Train a Speculator](../tutorials/train.md) -- Step-by-step training guide (select P-EAGLE, then online or offline)
