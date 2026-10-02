@@ -152,7 +152,7 @@ speculators regenerate-responses \
 
 ## Supported Datasets
 
-The text presets from the shared dataset registry (`DATASET_CONFIGS` in `speculators/data_generation/configs.py`) — the same ones `prepare-data` accepts:
+The text presets from the dataset registry (`DATASET_CONFIGS` in `speculators/data_generation/configs.py`) are accepted by `regenerate-responses`. Pass its generated JSONL to `prepare-data`:
 
 | Dataset             | HuggingFace ID                                    | Default Split |
 | ------------------- | ------------------------------------------------- | ------------- |

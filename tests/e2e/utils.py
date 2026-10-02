@@ -14,10 +14,15 @@ from pathlib import Path
 from textwrap import indent
 
 import pytest
+from datasets import Dataset as HFDataset
+from datasets import load_dataset
 from loguru import logger
 from PIL import Image
 
-from speculators.data_generation.preprocessing import load_raw_dataset
+from speculators.data_generation.configs import (
+    DATASET_CONFIGS,
+    _normalize_sharegpt4v_coco,
+)
 
 __all__ = [
     "SCRIPTS_DIR",
@@ -307,6 +312,14 @@ def launch_mooncake_master_context(port: int):
         stop_mooncake_master(process)
 
 
+def load_sharegpt4v_coco_fixture() -> HFDataset:
+    """Load raw multimodal fixture data for pipeline tests, not on-policy training."""
+    config = DATASET_CONFIGS["sharegpt4v_coco"]
+    return load_dataset(config.hf_path, name=config.subset, split=config.split).filter(
+        config.filter_fn
+    )
+
+
 def setup_dummy_sharegpt4v_coco(coco_dir: Path):
     """Enable ShareGPT4V to be used without downloading the actual COCO dataset."""
     coco_dir.mkdir(parents=True, exist_ok=True)
@@ -315,7 +328,7 @@ def setup_dummy_sharegpt4v_coco(coco_dir: Path):
     dummy_image_path = coco_dir / "dummy.png"
     dummy_image.save(dummy_image_path)
 
-    raw_dataset, normalize_fn = load_raw_dataset("sharegpt4v_coco")
+    raw_dataset = load_sharegpt4v_coco_fixture()
 
     # Use symlinks to avoid copying the image
     for raw_path in raw_dataset["image"]:
@@ -337,6 +350,16 @@ def run_prepare_data(
     skip_token_freq: bool = True,
 ):
     """Tokenize data using prepare_data.py."""
+    if data == "sharegpt4v_coco":
+        # Preserve the existing off-policy multimodal test fixture as an explicit
+        # conversation file. Production preparation no longer resolves presets.
+        fixture = load_sharegpt4v_coco_fixture()
+        fixture = fixture.map(_normalize_sharegpt4v_coco, keep_in_memory=True)
+        fixture_path = data_path.with_suffix(".jsonl")
+        fixture_path.parent.mkdir(parents=True, exist_ok=True)
+        fixture.select_columns(["conversations"]).to_json(str(fixture_path))
+        data = str(fixture_path)
+
     cmd = [
         sys.executable,
         str(SCRIPTS_DIR / "prepare_data.py"),
