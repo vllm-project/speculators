@@ -1,6 +1,6 @@
 [build-system]
 requires = [
-    "setuptools >= 82.0.1",
+    "setuptools >= 84.0.0",
     "setuptools-git-versioning>=2.0,<3",
     "tomli>=2.0; python_version < '3.11'",
 ]
@@ -82,12 +82,12 @@ mooncake-cuda = [
     "mooncake-transfer-engine>=0.3.12",
 ]
 mooncake-cuda13 = [
-    "mooncake-transfer-engine-cuda13>=0.3.12",
+    "mooncake-transfer-engine-cuda13>=0.3.13.post1",
 ]
 dev = [
     # build
-    "build>=1.5.0",
-    "setuptools>=61.0",
+    "build>=1.6.1",
+    "setuptools>=84.0.0",
     "setuptools-git-versioning>=2.0,<3",
 
     # docs build
@@ -95,7 +95,7 @@ dev = [
     "mkdocs~=1.6.1",
     "mkdocs-material[imaging]~=9.7.6",
     "markdown~=3.10.2",
-    "pymdown-extensions~=11.0.0",
+    "pymdown-extensions~=12.1.0",
     "mkdocs-section-index~=0.3.12",
     "mkdocs-minify-plugin~=0.8.0",
     "mkdocs-api-autonav~=0.4.0",
@@ -113,8 +113,11 @@ dev = [
     "pytest~=9.1.1",
     "pytest-asyncio~=1.4.0",
     "pytest-cov~=7.1.0",
-    "pytest-mock~=3.15.1",
+    "pytest-mock~=3.16.0",
     "pytest-rerunfailures~=16.4",
+
+    # benchmarking (scripts/benchmark.py statistics)
+    "scipy",
 
     # code quality
     "mypy~=2.1.0",

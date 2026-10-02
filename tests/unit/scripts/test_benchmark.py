@@ -15,8 +15,12 @@ import torch
 sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "scripts"))
 
 from benchmark import (  # type: ignore[import-not-found]
+    _aggregate_timing,
+    _fmt_welch,
     _MetricCapture,
+    _print_summary,
     _SyntheticLoader,
+    _welch_test,
     collect_provenance,
     compare_benchmarks,
     compute_aggregate_throughput,
@@ -208,8 +212,96 @@ class TestCreateSyntheticBatch:
             "loss_mask",
             "position_ids",
             "document_ids",
+            "error_records",
         }
         assert set(batch.keys()) == expected_keys
+
+
+# ---------------------------------------------------------------------------
+# _aggregate_timing
+# ---------------------------------------------------------------------------
+
+
+class TestAggregateTiming:
+    def test_aggregates_numeric_keys_and_skips_memory(self):
+        profiles = [
+            {
+                "step_ms": 40.0 + i,
+                "fwd_ms": 20.0,
+                "queue_ms": 3.0,
+                "memory_mb": {"fetch": 100.0, "opt": 110.0},
+            }
+            for i in range(3)
+        ]
+        agg = _aggregate_timing(profiles)
+        assert set(agg) == {"step_ms", "fwd_ms", "queue_ms"}
+        assert agg["step_ms"]["mean"] == pytest.approx(41.0)
+        assert agg["step_ms"]["count"] == 3
+        assert "ci95_lower" in agg["fwd_ms"]
+        assert "ci95_upper" in agg["fwd_ms"]
+
+
+# ---------------------------------------------------------------------------
+# _welch_test / _fmt_welch
+# ---------------------------------------------------------------------------
+
+
+class TestWelchTest:
+    def test_shifted_samples(self):
+        a = [{"step_ms": v} for v in (10.0, 11.0, 12.0, 13.0)]
+        b = [{"step_ms": v} for v in (20.0, 21.0, 22.0, 23.0)]
+        t_stat, p_value, cohens_d = _welch_test(a, b, "step_ms")
+        assert t_stat < 0
+        assert p_value < 0.05
+        assert cohens_d > 0.8
+
+    def test_missing_per_step_returns_none(self):
+        assert _welch_test([], [{"step_ms": 1.0}], "step_ms") is None
+        assert _welch_test([{"step_ms": 1.0}], [], "step_ms") is None
+
+    def test_single_sample_returns_none(self):
+        assert _welch_test([{"step_ms": 1.0}], [{"step_ms": 2.0}], "step_ms") is None
+
+
+class TestFmtWelch:
+    def test_na_without_data(self):
+        out = _fmt_welch([], [], "step_ms")
+        assert out.count("n/a") == 2
+
+    def test_formats_p_and_d(self):
+        a = [{"step_ms": v} for v in (10.0, 11.0, 12.0, 13.0)]
+        b = [{"step_ms": v} for v in (20.0, 21.0, 22.0, 23.0)]
+        out = _fmt_welch(a, b, "step_ms")
+        assert "n/a" not in out
+
+
+# ---------------------------------------------------------------------------
+# _print_summary
+# ---------------------------------------------------------------------------
+
+
+class TestPrintSummary:
+    def test_prints_metrics_ci_throughput_memory(self, capsys):
+        profiles = [{"step_ms": 40.0 + i, "queue_ms": 3.0} for i in range(3)]
+        results = {
+            "timing": _aggregate_timing(profiles),
+            "memory": {
+                "peak_allocated_mb": 2048.0,
+                "peak_reserved_mb": 3072.0,
+            },
+            "aggregate": {
+                "effective_rank0_tokens_per_s": 1000.0,
+                "measured_time_s": 1.5,
+            },
+        }
+        _print_summary(results)
+        out = capsys.readouterr().out
+        assert "95% CI" in out
+        assert "step_ms" in out
+        assert "queue_ms" in out
+        assert "[3.00, 3.00]" in out
+        assert "Effective rank-0 throughput: 1000.00 tokens/s" in out
+        assert "Peak memory: 2048.0 MB" in out
 
 
 # ---------------------------------------------------------------------------
@@ -436,6 +528,19 @@ class TestCompareBenchmarks:
         assert "step_ms" in output
         assert "-5.00" in output or "-10.0%" in output
         assert "1000.00 -> 1200.00" in output
+
+    def test_version_mismatch_rejected(self, tmp_path):
+        baseline = _make_result()
+        candidate = _make_result()
+        candidate["benchmark_version"] = "99.9"
+
+        baseline_path = tmp_path / "baseline.json"
+        candidate_path = tmp_path / "candidate.json"
+        baseline_path.write_text(json.dumps(baseline))
+        candidate_path.write_text(json.dumps(candidate))
+
+        with pytest.raises(SystemExit, match="Incompatible benchmark versions"):
+            compare_benchmarks(str(baseline_path), str(candidate_path))
 
     def test_comparability_warning_gpu(self, tmp_path, capsys):
         baseline = _make_result(gpu_name="H100")
