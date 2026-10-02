@@ -114,7 +114,7 @@ dev = [
     "pytest-asyncio~=1.4.0",
     "pytest-cov~=7.1.0",
     "pytest-mock~=3.16.0",
-    "pytest-rerunfailures~=16.4",
+    "pytest-rerunfailures~=16.7",
 
     # benchmarking (scripts/benchmark.py statistics)
     "scipy",
