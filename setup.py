@@ -1,5 +1,6 @@
 import os
 import re
+import warnings
 from pathlib import Path
 
 try:
@@ -7,7 +8,6 @@ try:
 except ImportError:
     import tomli as tomllib
 
-import warnings
 from packaging.version import Version
 from setuptools import setup
 from setuptools_git_versioning import count_since, get_branch, get_sha, get_tags
@@ -67,11 +67,12 @@ def get_next_version(
 
     if build_type == "release":
         if not tag:
-           warnings.warn("RELEASE build requires a vX.Y.Z tag")
+           warnings.warn("RELEASE build requires a vX.Y.Z tag", stacklevel=2)
         if commits_since_last:
            warnings.warn(
                f"RELEASE build must be on tag vX.Y.Z; "
-               f"HEAD is {commits_since_last} commit(s) ahead"
+               f"HEAD is {commits_since_last} commit(s) ahead",
+               stacklevel=2
            )
         return version, tag, 0
 
