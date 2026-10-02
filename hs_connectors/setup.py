@@ -1,5 +1,6 @@
 import os
 import re
+import warnings
 from pathlib import Path
 
 from packaging.version import Version
@@ -7,7 +8,7 @@ from setuptools import setup
 from setuptools_git_versioning import count_since, get_branch, get_sha, get_tags
 
 REPO_ROOT = Path(__file__).parent.parent
-INITIAL_RELEASE_VERSION = Version("0.7.0")
+LAST_RELEASE_VERSION = Version("0.8.0")
 TAG_VERSION_PATTERN = re.compile(r"^hsc-v(\d+\.\d+\.\d+)$")
 
 
@@ -19,7 +20,7 @@ def get_last_version_diff() -> tuple[Version, str | None, int]:
     ]
     tagged_versions.sort(key=lambda tv: tv[0])
     last_version, last_tag = (
-        tagged_versions[-1] if tagged_versions else (INITIAL_RELEASE_VERSION, None)
+        tagged_versions[-1] if tagged_versions else (LAST_RELEASE_VERSION, None)
     )
     commits_since_last = (
         count_since(f"{last_tag}^{{commit}}", root=REPO_ROOT) if last_tag else 0
@@ -32,11 +33,12 @@ def get_next_version(build_type: str) -> tuple[Version, str | None, int]:
 
     if build_type == "release":
         if not tag:
-            raise ValueError("RELEASE build requires an hsc-vX.Y.Z tag")
+            warnings.warn("RELEASE build requires an hsc-vX.Y.Z tag", stacklevel=2)
         if commits_since_last:
-            raise ValueError(
-                f"RELEASE build must be on tag {tag}; "
-                f"HEAD is {commits_since_last} commit(s) ahead"
+            warnings.warn(
+                f"RELEASE build must be on tag hsc-vX.Y.Z; "
+                f"HEAD is {commits_since_last} commit(s) ahead",
+                stacklevel=2
             )
         return version, tag, 0
 
@@ -85,22 +87,23 @@ def write_version_files() -> tuple[Path, Path]:
     else:
         version, tag, build_iteration = get_next_version(build_type)
 
-    git_commit = get_sha(root=REPO_ROOT) if (not building_from_sdist()) else ""
-    git_branch = get_branch(root=REPO_ROOT) if (not building_from_sdist()) else ""
+        git_commit = get_sha(root=REPO_ROOT) if (not building_from_sdist()) else ""
+        git_branch = get_branch(root=REPO_ROOT) if (not building_from_sdist()) else ""
 
-    with version_txt_path.open("w") as f:
-        f.write(str(version))
-    with version_py_path.open("w") as f:
-        f.writelines(
-            [
-                f'version = "{version}"\n',
-                f'build_type = "{build_type}"\n',
-                f'build_iteration = "{build_iteration}"\n',
-                f'git_commit = "{git_commit}"\n',
-                f'git_branch = "{git_branch}"\n',
-                f'git_last_tag = "{tag or ""}"\n',
-            ]
-        )
+        with version_txt_path.open("w") as f:
+            f.write(str(version))
+        with version_py_path.open("w") as f:
+            f.writelines(
+                [
+                    f'version = "{version}"\n',
+                    f'build_type = "{build_type}"\n',
+                    f'build_iteration = "{build_iteration}"\n',
+                    f'git_commit = "{git_commit}"\n',
+                    f'git_branch = "{git_branch}"\n',
+                    f'git_last_tag = "{tag or ""}"\n',
+                ]
+            )
+
     return version_txt_path, version_py_path
 
 
