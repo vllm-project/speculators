@@ -382,11 +382,7 @@ def _warn_mismatched_algorithm_blocks(cfg: TrainConfig, provided: set[str]) -> N
 
 
 def _warn_deprecated(provided: set[str]) -> None:
-    """Warn when a deprecated option is set explicitly (by flag or yaml).
-
-    ``--on-generate`` only accepts its default ``delete`` since hybrid training was
-    removed, so it is a no-op kept so existing command lines still parse.
-    """
+    """Warn when a deprecated option is set explicitly (by flag or yaml)."""
     if "on_generate" in provided:
         warnings.warn(
             "--on-generate is deprecated and has no effect: generated hidden states "
