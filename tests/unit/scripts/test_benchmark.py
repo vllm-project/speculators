@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import logging
 import sys
+import types
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -15,10 +16,14 @@ import torch
 sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "scripts"))
 
 from benchmark import (  # type: ignore[import-not-found]
+    _aggregate_kernel_rows,
     _aggregate_timing,
     _fmt_welch,
+    _gather_per_rank,
     _MetricCapture,
+    _phase_peaks,
     _print_summary,
+    _run_training,
     _SyntheticLoader,
     _welch_test,
     collect_provenance,
@@ -26,6 +31,7 @@ from benchmark import (  # type: ignore[import-not-found]
     compute_aggregate_throughput,
     compute_statistics,
     create_synthetic_batch,
+    measured_step_window,
     select_measured_profiles,
     shutdown_dataloader_workers,
 )
@@ -286,8 +292,19 @@ class TestPrintSummary:
         results = {
             "timing": _aggregate_timing(profiles),
             "memory": {
-                "peak_allocated_mb": 2048.0,
-                "peak_reserved_mb": 3072.0,
+                "per_rank": [
+                    {
+                        "rank": 0,
+                        "peak_allocated_mb": 2048.0,
+                        "peak_reserved_mb": 3072.0,
+                    },
+                    {
+                        "rank": 1,
+                        "peak_allocated_mb": 1900.0,
+                        "peak_reserved_mb": 2900.0,
+                    },
+                ],
+                "phases": {"fwd": 1800.0, "bwd": 1900.0},
             },
             "aggregate": {
                 "effective_rank0_tokens_per_s": 1000.0,
@@ -301,7 +318,9 @@ class TestPrintSummary:
         assert "queue_ms" in out
         assert "[3.00, 3.00]" in out
         assert "Effective rank-0 throughput: 1000.00 tokens/s" in out
-        assert "Peak memory: 2048.0 MB" in out
+        assert "rank 0: 2048.0 MB allocated" in out
+        assert "rank 1: 1900.0 MB allocated" in out
+        assert "fwd=1800.0" in out
 
 
 # ---------------------------------------------------------------------------
@@ -420,38 +439,156 @@ class TestSyntheticLoader:
 # ---------------------------------------------------------------------------
 
 
+class TestMeasuredStepWindow:
+    def test_window_is_single_source_for_slice_and_normalization(self):
+        window = measured_step_window(3, 5)
+        assert list(window) == [3, 4, 5, 6, 7]
+        assert window.start == 3  # profiler warmup count
+        assert len(window) == 5  # kernel normalization divisor
+
+
 class TestWarmupMeasuredSplit:
     """Tests for the profile slicing logic used in run_benchmark."""
 
     def test_discard_warmup(self):
-        warmup_steps = 3
         all_profiles = [{"step_ms": float(i)} for i in range(13)]
-        measured = select_measured_profiles(all_profiles, warmup_steps, 10)
+        measured = select_measured_profiles(all_profiles, measured_step_window(3, 10))
         assert len(measured) == 10
         assert measured[0]["step_ms"] == 3.0
 
     def test_exact_boundary(self):
-        warmup_steps = 5
         all_profiles = [{"step_ms": float(i)} for i in range(5)]
         with pytest.raises(RuntimeError, match="dataset exhausted"):
-            select_measured_profiles(all_profiles, warmup_steps, 1)
+            select_measured_profiles(all_profiles, measured_step_window(5, 1))
 
     def test_zero_warmup(self):
-        warmup_steps = 0
         all_profiles = [{"step_ms": float(i)} for i in range(10)]
-        measured = select_measured_profiles(all_profiles, warmup_steps, 10)
+        measured = select_measured_profiles(all_profiles, measured_step_window(0, 10))
         assert len(measured) == 10
         assert measured[0]["step_ms"] == 0.0
 
     def test_insufficient_profiles_raises(self):
         all_profiles = [{"step_ms": float(i)} for i in range(5)]
         with pytest.raises(RuntimeError, match="got 5, requested 15"):
-            select_measured_profiles(all_profiles, 10, 5)
+            select_measured_profiles(all_profiles, measured_step_window(10, 5))
 
     def test_extra_profiles_are_not_measured(self):
         all_profiles = [{"step_ms": float(i)} for i in range(20)]
-        measured = select_measured_profiles(all_profiles, 3, 5)
-        assert [profile["step_ms"] for profile in measured] == [3.0, 4.0, 5.0, 6.0, 7.0]
+        measured = select_measured_profiles(all_profiles, measured_step_window(3, 5))
+        assert [profile["step_ms"] for profile in measured] == [
+            3.0,
+            4.0,
+            5.0,
+            6.0,
+            7.0,
+        ]
+
+
+# ---------------------------------------------------------------------------
+# Kernel breakdown
+# ---------------------------------------------------------------------------
+
+
+class TestAggregateKernelRows:
+    def test_sums_across_ranks_and_normalizes_per_step(self):
+        rank0 = [{"name": "kA", "self_device_us": 6000.0, "count": 3}]
+        rank1 = [
+            {"name": "kA", "self_device_us": 4000.0, "count": 2},
+            {"name": "kB", "self_device_us": 1000.0, "count": 1},
+        ]
+        out = _aggregate_kernel_rows([rank0, rank1], active_steps=2)
+        assert out["num_ranks"] == 2
+        by_name = {k["name"]: k for k in out["kernels"]}
+        assert by_name["kA"]["ms_per_step"] == pytest.approx(5.0)
+        assert by_name["kA"]["calls_per_step"] == pytest.approx(2.5)
+        assert by_name["kB"]["ms_per_step"] == pytest.approx(0.5)
+        assert out["kernels"][0]["name"] == "kA"  # sorted by time
+        assert out["total_device_ms_per_step"] == pytest.approx(5.5)
+
+    def test_zero_time_entries_dropped(self):
+        rows = [[{"name": "z", "self_device_us": 0.0, "count": 5}]]
+        out = _aggregate_kernel_rows(rows, active_steps=1)
+        assert out["kernels"] == []
+        assert out["total_device_ms_per_step"] == pytest.approx(0.0)
+
+
+class TestPhasePeaks:
+    def test_max_per_phase_across_steps(self):
+        profiles = [
+            {"memory_mb": {"fwd": 100.0, "bwd": 150.0}},
+            {"memory_mb": {"fwd": 120.5, "bwd": 140.0}},
+            {"step_ms": 1.0},  # step without memory marks (CPU-only run)
+        ]
+        assert _phase_peaks(profiles) == {"fwd": 120.5, "bwd": 150.0}
+
+
+class TestGatherPerRank:
+    def test_single_rank_passthrough(self):
+        entry = {"rank": 0, "peak_allocated_mb": 1.0}
+        assert _gather_per_rank(entry) == [entry]
+
+
+class TestRunTrainingPlain:
+    def test_no_profiler_runs_without_callback(self):
+        seen = {}
+
+        class _T:
+            @staticmethod
+            def train_epoch(epoch, step_callback=None):
+                seen["epoch"] = epoch
+                seen["step_callback"] = step_callback
+
+        args = types.SimpleNamespace(profile=False)
+        result = _run_training(args, _T(), rank=0, window=measured_step_window(1, 2))
+        assert result is None
+        assert seen == {"epoch": 0, "step_callback": None}
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="needs CUDA")
+class TestRunTrainingProfiled:
+    def _args(self, tmp_path):
+        return types.SimpleNamespace(
+            profile=True,
+            profile_dir=str(tmp_path / "traces"),
+            profile_stacks=False,
+            output=str(tmp_path / "run.json"),
+        )
+
+    def _trainer(self, steps):
+        class _T:
+            @staticmethod
+            def train_epoch(epoch, step_callback=None):
+                assert step_callback is not None
+                x = torch.randn(128, 128, device="cuda")
+                for _ in range(steps):
+                    x @ x
+                    step_callback()
+
+        return _T()
+
+    def test_breakdown_and_traces_over_measured_window(self, tmp_path):
+        out = _run_training(
+            self._args(tmp_path),
+            self._trainer(3),
+            rank=0,
+            window=measured_step_window(1, 2),
+        )
+        assert out["num_ranks"] == 1
+        assert out["total_device_ms_per_step"] > 0
+        traces = list((tmp_path / "traces").iterdir())
+        assert traces
+        assert all(".pt.trace.json" in f.name for f in traces)
+        assert all(f.name.startswith("run-rank0") for f in traces)
+
+    def test_callback_drift_raises(self, tmp_path):
+        # 2 steps into a window that expects 3.
+        with pytest.raises(RuntimeError, match="step_callback must fire"):
+            _run_training(
+                self._args(tmp_path),
+                self._trainer(2),
+                rank=0,
+                window=measured_step_window(1, 2),
+            )
 
 
 # ---------------------------------------------------------------------------
@@ -501,8 +638,14 @@ def _make_result(
             "hidden_states_dtype": "bfloat16",
         },
         "memory": {
-            "peak_allocated_mb": peak_alloc,
-            "peak_reserved_mb": peak_alloc + 1024,
+            "per_rank": [
+                {
+                    "rank": 0,
+                    "peak_allocated_mb": peak_alloc,
+                    "peak_reserved_mb": peak_alloc + 1024,
+                }
+            ],
+            "phases": {"fwd": peak_alloc * 0.5},
         },
         "timing": timing,
     }
@@ -584,5 +727,6 @@ class TestCompareBenchmarks:
         compare_benchmarks(str(baseline_path), str(candidate_path))
 
         output = capsys.readouterr().out
-        assert "peak_allocated_mb" in output
+        assert "rank0 peak_allocated" in output
+        assert "phase fwd" in output
         assert "-200.0" in output
