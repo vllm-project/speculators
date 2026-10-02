@@ -6,13 +6,15 @@ from typing import Annotated, Any
 
 import typer
 
-from speculators.convert import convert_model
+from speculators.convert import SUPPORTED_ALGORITHMS, convert_model
 
-
-class AlgorithmChoice(str, Enum):
-    eagle3 = "eagle3"
-    mtp = "mtp"
-    dflash = "dflash"
+# Derived from the backend's supported algorithms so the CLI choices and the
+# algorithms convert_model dispatches on cannot drift apart.
+AlgorithmChoice = Enum(  # type: ignore[misc]
+    "AlgorithmChoice",
+    {algorithm: algorithm for algorithm in SUPPORTED_ALGORITHMS},
+    type=str,
+)
 
 
 def convert(
