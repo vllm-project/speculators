@@ -7,12 +7,13 @@ try:
 except ImportError:
     import tomli as tomllib
 
+import warnings
 from packaging.version import Version
 from setuptools import setup
 from setuptools_git_versioning import count_since, get_branch, get_sha, get_tags
 
 REPO_ROOT = Path(__file__).parent
-LAST_RELEASE_VERSION = Version("0.7.0")
+LAST_RELEASE_VERSION = Version("0.8.0")
 TAG_VERSION_PATTERN = re.compile(r"^v(\d+\.\d+\.\d+)$")
 
 
@@ -47,10 +48,8 @@ def get_next_version(
     Get the next version based on the build type and iteration.
     - build_type == release: take the last version and add a post if build iteration
     - build_type == nightly: increment to next minor, add 'a' with build iteration
-    - build_type == alpha: increment to next minor, add 'a' with build iteration
-    - build_type == dev: increment to next minor, add 'dev' with build iteration
 
-    :param build_type: The type of build (release, candidate, nightly, alpha, dev).
+    :param build_type: The type of build (release, nightly).
     :param build_iteration: The build iteration number. If None, defaults to the number
         of commits since the last tag or 0 if no commits since the last tag.
     :returns: A tuple containing the next version, the last tag the version is based
@@ -67,23 +66,20 @@ def get_next_version(
     version = max(version, LAST_RELEASE_VERSION)
 
     if build_type == "release":
-        # if not tag:
-        #    raise ValueError("RELEASE build requires a vX.Y.Z tag")
-        # if commits_since_last:
-        #    raise ValueError(
-        #        f"HEAD is {commits_since_last} commit(s) ahead"
-        #    )
+        if not tag:
+           warnings.warn("RELEASE build requires a vX.Y.Z tag")
+        if commits_since_last:
+           warnings.warn(
+               f"HEAD is {commits_since_last} commit(s) ahead"
+           )
         return version, tag, 0
 
     # not in release pathway, so need to increment minor to target next release version
     version = Version(f"{version.major}.{version.minor + 1}.0")
 
-    if build_type in ["nightly", "alpha"]:
+    if build_type == "nightly":
         # add 'a' since we are in nightly or alpha pathway
         version = Version(f"{version}.a{build_iteration}")
-    else:
-        # assume 'dev' if not in any of the above pathways
-        version = Version(f"{version}.dev{build_iteration}")
 
     return version, tag, build_iteration
 
@@ -118,7 +114,7 @@ def write_version_files() -> tuple[Path, Path]:
 
     :returns: A tuple containing the paths to the version.txt and version.py files.
     """
-    build_type = os.getenv("SPECULATORS_BUILD_TYPE", "dev").lower()
+    build_type = os.getenv("SPECULATORS_BUILD_TYPE", "nightly").lower()
     module_path = REPO_ROOT / "src" / "speculators"
     version_txt_path = module_path / "version.txt"
     version_py_path = module_path / "version.py"
@@ -153,7 +149,7 @@ def write_version_files() -> tuple[Path, Path]:
 
 
 def get_hs_connectors_requirement() -> str:
-    build_type = os.getenv("SPECULATORS_BUILD_TYPE", "dev").lower()
+    build_type = os.getenv("SPECULATORS_BUILD_TYPE", "nightly").lower()
     version_py_path = REPO_ROOT / "src" / "speculators" / "version.py"
 
     if building_from_sdist() and version_py_path.exists():
@@ -164,11 +160,7 @@ def get_hs_connectors_requirement() -> str:
             build_iteration=os.getenv("SPECULATORS_BUILD_ITERATION"),
         )
 
-    if build_type == "dev":
-        # Source install: path dep for pip; uv workspace overrides anyway
-        local = (REPO_ROOT / "hs_connectors").resolve()
-        return f"hs-connectors @ file://{local.as_posix()}"
-    elif build_type == "release":
+    if build_type == "release":
         # Install release version: hs_connectors has the same version as speculators
         return f"hs-connectors=={version}"
     else:
