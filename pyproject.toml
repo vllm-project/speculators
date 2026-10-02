@@ -93,7 +93,7 @@ dev = [
     # docs build
     "mike~=2.2.0",
     "mkdocs~=1.6.1",
-    "mkdocs-material[imaging]~=9.7.6",
+    "mkdocs-material[imaging]~=9.7.7",
     "markdown~=3.10.2",
     "pymdown-extensions~=12.1.0",
     "mkdocs-section-index~=0.3.12",
@@ -114,7 +114,7 @@ dev = [
     "pytest-asyncio~=1.4.0",
     "pytest-cov~=7.1.0",
     "pytest-mock~=3.16.0",
-    "pytest-rerunfailures~=16.4",
+    "pytest-rerunfailures~=16.7",
 
     # benchmarking (scripts/benchmark.py statistics)
     "scipy",
