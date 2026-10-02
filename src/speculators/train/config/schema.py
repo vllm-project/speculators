@@ -151,6 +151,20 @@ class DraftArgs(_Group):
         description="Whether to train embedding layer weights (default: False).",
         json_schema_extra=_CLI_BOOL_OPTIONAL,
     )
+    freeze_experts: bool = Field(
+        default=False,
+        description="For MoE drafts: hold the routed experts read-only. They keep "
+        "their initial values, get no gradients and are left out of the optimizer, "
+        "so a large expert stack trains without expert parallelism (default: False).",
+        json_schema_extra=_CLI_BOOL_OPTIONAL,
+    )
+    init_from_target: list[str] = Field(
+        default_factory=list,
+        description="Warm-start these parts of every draft layer from the "
+        "corresponding verifier layer instead of initializing them fresh: any of "
+        "'attn', 'moe', 'hc', 'norm', or 'all'. The MoE router is never warm-started, "
+        "only its experts. Off by default.",
+    )
     norm_before_fc: bool | None = Field(
         default=None,
         description="Apply a single RMSNorm to the concatenated auxiliary hidden "
