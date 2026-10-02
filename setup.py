@@ -70,6 +70,7 @@ def get_next_version(
            warnings.warn("RELEASE build requires a vX.Y.Z tag")
         if commits_since_last:
            warnings.warn(
+               f"RELEASE build must be on tag vX.Y.Z; "
                f"HEAD is {commits_since_last} commit(s) ahead"
            )
         return version, tag, 0
