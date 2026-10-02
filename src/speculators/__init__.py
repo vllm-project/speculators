@@ -40,6 +40,8 @@ from .models import (
     MTPSpeculatorConfig,
     PEagleDraftModel,
     PEagleSpeculatorConfig,
+    XPressDraftModel,
+    XPressSpeculatorConfig,
 )
 from .proposals import TokenProposalConfig
 
@@ -61,6 +63,8 @@ __all__ = [
     "SpeculatorsConfig",
     "TokenProposalConfig",
     "VerifierConfig",
+    "XPressDraftModel",
+    "XPressSpeculatorConfig",
     "reload_schemas",
 ]
 
