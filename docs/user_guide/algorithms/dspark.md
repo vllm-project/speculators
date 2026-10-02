@@ -60,4 +60,4 @@ DSpark is based on research from DeepSeek: [arXiv Paper](https://arxiv.org/abs/2
 ## See Also
 
 - [DFlash](dflash.md) -- The base algorithm DSpark extends
-- [Train a Speculator](../tutorials/train.md) -- Step-by-step training guide (select DSpark, then online, offline, or hybrid)
+- [Train a Speculator](../tutorials/train.md) -- Step-by-step training guide (select DSpark, then online or offline)

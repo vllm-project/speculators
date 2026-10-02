@@ -40,10 +40,10 @@ Install the Mooncake transfer engine in **both** the vLLM and Speculators enviro
 
 ```bash
 # Standard CUDA
-pip install mooncake-transfer-engine
+pip install "mooncake-transfer-engine>=0.3.12"
 
 # CUDA 13.x
-pip install mooncake-transfer-engine-cuda13
+pip install "mooncake-transfer-engine-cuda13>=0.3.12"
 ```
 
 Or install Speculators with the mooncake extra:
@@ -111,8 +111,7 @@ torchrun --standalone --nproc_per_node 4 \
   --mooncake-master <master-ip>:50051 \
   --mooncake-protocol tcp \
   --vllm-endpoint http://<extractor-ip>:8000/v1 \
-  --on-missing generate \
-  --on-generate delete
+  --on-missing generate
 ```
 
 This is the same as single-node online training, but with `--hidden-states-backend mooncake` and `--mooncake-*` flags replacing the default filesystem backend.
@@ -126,6 +125,7 @@ These flags are available on both `launch_vllm.py` and `speculators train` (`tor
 | `--mooncake-master`             | `127.0.0.1:50051` | Mooncake master server address                                                                    |
 | `--mooncake-metadata-server`    | `P2PHANDSHAKE`    | Metadata server address, or `P2PHANDSHAKE` for peer-to-peer                                       |
 | `--mooncake-protocol`           | `tcp`             | Transport protocol: `tcp` or `rdma`                                                               |
+| `--mooncake-device`             | `""`              | Transport device(s), e.g. `mlx5_0` or `mlx5_0,mlx5_1` for RDMA. Empty lets Mooncake choose        |
 | `--mooncake-global-segment-gib` | `4.0`             | Memory registered for globally visible objects (GiB). Increase for many concurrent long sequences |
 | `--mooncake-local-buffer-gib`   | `2.0`             | Local staging buffer size (GiB)                                                                   |
 | `--mooncake-writer-threads`     | `4`               | Async writer threads on the vLLM side (`launch_vllm.py` only)                                     |

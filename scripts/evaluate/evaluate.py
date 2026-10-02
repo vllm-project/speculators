@@ -18,6 +18,10 @@ Examples:
     python evaluate.py --target http://localhost:8000/v1 throughput \\
         --dataset speedbench/qualitative/coding \\
         --speedbench-data-dir ./speedbench_data
+
+    # MRCR long-context (first run renders and caches data in ./mrcr_data):
+    python evaluate.py --target http://localhost:8000/v1 throughput \\
+        --dataset openai/mrcr --mrcr-needles 2 --mrcr-buckets 1,2
 """
 
 from __future__ import annotations
@@ -32,6 +36,13 @@ from pathlib import Path
 from urllib.error import URLError
 from urllib.request import urlopen
 
+from mrcr import (
+    BUCKETS,
+    MRCR_DATASET,
+    parse_buckets,
+    parse_needles,
+    prepare_mrcr,
+)
 from perf_utils import (
     BASE_CSV_COLUMNS,
     CsvWriter,
@@ -203,6 +214,13 @@ def _run_subset(
     safe = subset.replace("/", "_").replace(" ", "_")
     max_tokens = 4096
 
+    # Dataset-provided request-body defaults (MRCR sets add_special_tokens)
+    # merged under user-supplied --gen-kwargs.
+    gen_kwargs = {
+        **guidellm_common.pop("gen_kwargs", {}),
+        **parse_gen_kwargs(args.gen_kwargs),
+    }
+
     # For local JSONL files (SPEED-Bench) the dataset path IS the file —
     # no --data-args needed.  For HF datasets subset name doubles as the filter.
     guidellm_subset = None if Path(guidellm_common["dataset"]).exists() else subset
@@ -219,7 +237,7 @@ def _run_subset(
             max_requests=None,
             output_path=gen_len_output,
             max_tokens=4096,
-            gen_kwargs=parse_gen_kwargs(args.gen_kwargs),
+            gen_kwargs=gen_kwargs,
         )
         mapping = parse_gen_len_results(
             [gen_len_output],
@@ -240,7 +258,7 @@ def _run_subset(
         max_requests=args.max_requests,
         output_path=run_output,
         max_tokens=max_tokens,
-        gen_kwargs=parse_gen_kwargs(args.gen_kwargs),
+        gen_kwargs=gen_kwargs,
     )
     current = _require_metrics(metrics_url)
 
@@ -281,6 +299,70 @@ def _run_subset(
     return acceptance_csv, perf_csv, max_tokens if is_sweep else None
 
 
+def _speedbench_run_items(args: argparse.Namespace) -> list[tuple[str, dict]]:
+    """Resolve a ``speedbench/`` spec into ``(label, guidellm_common)`` pairs."""
+    if not getattr(args, "speedbench_data_dir", None):
+        logger.error(
+            "--speedbench-data-dir is required for speedbench/ datasets.\n"
+            "Run scripts/evaluate/prepare_speedbench.py first, then add"
+            " --speedbench-data-dir <dir>.",
+        )
+        sys.exit(1)
+    return [
+        (
+            label,
+            {
+                "target": args.target,
+                "dataset": str(local_path),
+                "data_column_mapper": _SPEEDBENCH_COLUMN_MAPPER,
+                "max_concurrency": args.max_concurrency,
+            },
+        )
+        for label, local_path in _resolve_speedbench(
+            args.dataset, Path(args.speedbench_data_dir)
+        )
+    ]
+
+
+def _mrcr_run_items(
+    args: argparse.Namespace, artifacts_dir: Path
+) -> list[tuple[str, dict]]:
+    """Prepare MRCR data and build its ``(label, guidellm_common)`` pairs."""
+    if args.mrcr_max_samples is not None and args.mrcr_max_samples < 1:
+        logger.error("--mrcr-max-samples must be at least 1")
+        sys.exit(1)
+    pairs = prepare_mrcr(
+        target=args.target,
+        needles=args.mrcr_needles,
+        buckets=args.mrcr_buckets,
+        data_dir=args.mrcr_data_dir,
+        artifacts_dir=artifacts_dir,
+        max_samples=args.mrcr_max_samples,
+        gen_budget=parse_gen_kwargs(args.gen_kwargs).get("max_tokens", 4096),
+        retry_failed=args.mrcr_retry_failed,
+    )
+    if not pairs:
+        logger.error("No MRCR buckets could run on this server")
+        sys.exit(1)
+    return [
+        (
+            label,
+            {
+                "target": args.target,
+                "dataset": str(bucket_path),
+                "data_column_mapper": args.data_column_mapper,
+                "max_concurrency": args.max_concurrency,
+                "request_format": "/v1/completions",
+                # Prevents a repeated BOS on models whose tokenizer
+                # adds one (e.g. Llama); a no-op on models that
+                # don't (e.g. Qwen).
+                "gen_kwargs": {"add_special_tokens": False},
+            },
+        )
+        for label, bucket_path in pairs
+    ]
+
+
 def run_benchmark(args: argparse.Namespace) -> None:
     check_dependencies()
     is_sweep = args.mode == "sweep"
@@ -308,27 +390,10 @@ def run_benchmark(args: argparse.Namespace) -> None:
     dataset_spec = args.dataset
     run_items: list[tuple[str, dict]] = []
 
-    if dataset_spec.startswith("speedbench/"):
-        if not getattr(args, "speedbench_data_dir", None):
-            logger.error(
-                "--speedbench-data-dir is required for speedbench/ datasets.\n"
-                "Run scripts/evaluate/prepare_speedbench.py first, then add"
-                " --speedbench-data-dir <dir>.",
-            )
-            sys.exit(1)
-        pairs = _resolve_speedbench(dataset_spec, Path(args.speedbench_data_dir))
-        for label, local_path in pairs:
-            run_items.append(
-                (
-                    label,
-                    {
-                        "target": args.target,
-                        "dataset": str(local_path),
-                        "data_column_mapper": _SPEEDBENCH_COLUMN_MAPPER,
-                        "max_concurrency": args.max_concurrency,
-                    },
-                )
-            )
+    if dataset_spec == MRCR_DATASET:
+        run_items = _mrcr_run_items(args, artifacts_dir)
+    elif dataset_spec.startswith("speedbench/"):
+        run_items = _speedbench_run_items(args)
     else:
         guidellm_common = {
             "target": args.target,
@@ -462,6 +527,41 @@ def main() -> None:
             "Path to directory produced by SPEED-Bench prepare.py. "
             "Required when --dataset is a speedbench/ spec."
         ),
+    )
+    parser.add_argument(
+        "--mrcr-needles",
+        type=parse_needles,
+        default=[2, 4, 8],
+        help="MRCR needle counts: comma list of 2, 4, 8 (default: 2,4,8)",
+    )
+    parser.add_argument(
+        "--mrcr-buckets",
+        type=parse_buckets,
+        default=list(BUCKETS),
+        help=(
+            "MRCR context-length buckets as a comma list of numbers or"
+            " labels, e.g. 1,4,8 or 4096-8192,32769-65536,524289-1048576"
+            " (default: all buckets): "
+            + ", ".join(f"{i}={label}" for i, (label, _, _) in enumerate(BUCKETS, 1))
+        ),
+    )
+    parser.add_argument(
+        "--mrcr-data-dir",
+        type=Path,
+        default=Path("mrcr_data"),
+        help="Cache directory for rendered MRCR data (default: ./mrcr_data)",
+    )
+    parser.add_argument(
+        "--mrcr-max-samples",
+        type=int,
+        default=None,
+        help="Maximum samples per MRCR bucket (default: no limit)",
+    )
+    parser.add_argument(
+        "--mrcr-retry-failed",
+        action="store_true",
+        help="Retry MRCR rows whose render previously failed (default: reuse "
+        "the partial cache as-is)",
     )
     args = parser.parse_args()
 
