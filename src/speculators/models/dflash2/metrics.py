@@ -130,6 +130,7 @@ def compute_metrics(
     selector_loss_alpha: float = 1.0,
     per_position_loss_weight: str = "fixed-exp-decay",
     dpace_alpha: float = 0.5,
+    loss_step: torch.Tensor | None = None,
 ) -> tuple[torch.Tensor, dict[str, Any]]:
     """Combine the unary DFlash objective with a K-way selector objective."""
     unary_loss, metrics = compute_unary_metrics(
@@ -145,6 +146,7 @@ def compute_metrics(
         per_position_loss_weight=per_position_loss_weight,
         dpace_alpha=dpace_alpha,
         sample_from_anchor=sample_from_anchor,
+        loss_step=loss_step,
     )
     selector_loss = compute_selector_loss(
         candidate_logits,

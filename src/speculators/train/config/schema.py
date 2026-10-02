@@ -312,8 +312,10 @@ class LossArgs(_Group):
     loss_fn: str | None = Field(
         default=None,
         description="Loss function specification. A name (kl_div, rkl, jsd, ce, tv, "
-        'nla, lk_hybrid) or a JSON dict for a weighted combination, e.g. \'{"ce": 0.1, '
-        '"tv": 0.9}\'. (default: "ce" for dflash, "kl_div" otherwise).',
+        "nla, lk_hybrid) or a JSON dict for a weighted combination. Values may be raw "
+        'weights or linear schedules, e.g. \'{"ce": 0.1, "tv": {"type": "linear", '
+        '"start": 0.9, "end": 0.1, "start_step": 0, "end_step": 10000}}\'. '
+        '(default: "ce" for dflash, "kl_div" otherwise).',
     )
     ttt_steps: int = Field(
         default=3,
