@@ -36,7 +36,7 @@ def get_next_version(build_type: str) -> tuple[Version, str | None, int]:
             warnings.warn("RELEASE build requires an hsc-vX.Y.Z tag")
         if commits_since_last:
             warnings.warn(
-                f"RELEASE build must be on tag {tag}; "
+                f"RELEASE build must be on tag hsc-vX.Y.Z; "
                 f"HEAD is {commits_since_last} commit(s) ahead"
             )
         return version, tag, 0
