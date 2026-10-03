@@ -1,8 +1,4 @@
-"""Training entrypoint for ``speculators train`` / ``torchrun -m speculators.train``.
-
-``scripts/train.py`` is kept only as a deprecated backward-compatible shim
-around this module.
-"""
+"""Training entrypoint for ``speculators train`` / ``torchrun -m speculators.train``."""
 
 import argparse
 import gc

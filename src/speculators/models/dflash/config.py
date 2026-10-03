@@ -18,7 +18,7 @@ class DFlashSpeculatorConfig(SpeculatorModelConfig):
     """
     Configuration for DFlash speculator with vocabulary mapping.
 
-    DFlash features vocabulary mapping between draft (32K) and target (128K)
+    DFlash features vocabulary mapping between draft (e.g. 32K) and target (e.g. 128K)
     vocabularies, enabling cross-tokenizer speculation.
 
     Attributes:
