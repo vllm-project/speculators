@@ -12,8 +12,6 @@ dynamic discovery and instantiation based on configuration parameters.
 Classes:
     ClassRegistryMixin: Base mixin for creating class registries with decorators
         and optional auto-discovery capabilities through registry_auto_discovery flag.
-    AutoClassRegistryMixin: A backward-compatible version of ClassRegistryMixin with
-        auto-discovery enabled by default
 """
 
 from collections.abc import Callable
@@ -136,7 +134,7 @@ class ClassRegistryMixin:
         if not isinstance(clazz, type):
             raise TypeError(
                 "ClassRegistryMixin.register_decorator must be used as a class "
-                "decorator and without invocation."
+                "decorator and without invocation. "
                 f"Got improper clazz arg {clazz}."
             )
 
@@ -146,7 +144,7 @@ class ClassRegistryMixin:
             raise ValueError(
                 "ClassRegistryMixin.register_decorator must be used as a class "
                 "decorator and without invocation. "
-                f"Got imporoper name arg {name}."
+                f"Got improper name arg {name}."
             )
 
         # A subclass inherits its parent's registry attribute until it writes its
@@ -169,11 +167,6 @@ class ClassRegistryMixin:
     def registered_classes(cls) -> tuple[type[Any], ...]:
         """
         Returns a tuple of all classes that have been registered with this registry.
-
-        If registry_auto_discovery is True, this method will first call
-        auto_populate_registry to ensure that all available implementations from
-        the specified auto_package are discovered and registered before returning
-        the list.
 
         :return: A tuple containing all registered class implementations, including
             those discovered through auto-importing when registry_auto_discovery==True.
