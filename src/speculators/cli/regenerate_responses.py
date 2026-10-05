@@ -9,6 +9,7 @@ import re
 import sys
 import time
 from collections import deque
+from copy import deepcopy
 from pathlib import Path
 from typing import Annotated, Any
 
@@ -456,6 +457,15 @@ async def regenerate_conversation(
                 idx=item["idx"],
                 endpoint=endpoint,
                 sampling_params=recorded_params,
+            )
+            # Human-readable request/response snapshot, independent of training
+            # tokens and future history. Keep server reasoning/tool fields too.
+            sample["debug"] = deepcopy(
+                {
+                    "prompt_messages": payload["messages"],
+                    "response": data["choices"][0]["message"],
+                    **({"tools": payload["tools"]} if "tools" in payload else {}),
+                }
             )
             samples.append(sample)
             prefix.append(assistant_msg)

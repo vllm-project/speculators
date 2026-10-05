@@ -14,6 +14,7 @@ from typing import Any
 
 import pytest
 import typer
+from datasets import load_from_disk
 from transformers import AutoTokenizer
 from typer.testing import CliRunner
 
@@ -32,6 +33,7 @@ from speculators.cli.regenerate_responses import (
     prepare_row,
     regenerate_conversation,
 )
+from speculators.data_generation import preprocessing as preprocessing_module
 from speculators.data_generation import vllm_client
 from speculators.data_generation.configs import DATASET_CONFIGS, DatasetConfig
 from speculators.data_generation.preprocessing import _preprocess_batch
@@ -527,6 +529,16 @@ def test_worker_row_identity_and_all_or_nothing_writes(tmp_path):
     # The boundary is the mask: prompt 0s then completion 1s.
     assert rows[0]["input_ids"] == [1, 2, 3, 4]
     assert rows[0]["loss_mask"] == [0, 0, 1, 1]
+    # Each row keeps its own prompt snapshot, without later turns or responses.
+    assert rows[0]["debug"] == {
+        "prompt_messages": [{"role": "user", "content": "2+2?"}],
+        "response": {"content": "four"},
+    }
+    assert rows[1]["debug"]["prompt_messages"] == [
+        {"role": "user", "content": "2+2?"},
+        {"role": "assistant", "content": "four"},
+        {"role": "user", "content": "3+3?"},
+    ]
     assert load_seen(str(out_path)) == {"conv-abc"}
 
     # Turn 2 fails: turn 1's sample is discarded rather than half-written, which
@@ -819,7 +831,7 @@ def test_regenerate_plain_conversation_is_unchanged_and_sends_no_tools():
 
 
 def test_regenerate_splices_cached_result_after_regenerated_call():
-    item = {
+    item: dict[str, Any] = {
         "idx": 1,
         "primary_id": "u1",
         "turns": [{"role": "user", "content": "weather?"}],
@@ -839,6 +851,7 @@ def test_regenerate_splices_cached_result_after_regenerated_call():
             content="It is 15C.",
         ),
     ]
+    responses[0]["choices"][0]["message"]["reasoning_content"] = "Check the weather."
     samples, truncated, sent = _regen(item, responses)
 
     assert not truncated
@@ -854,6 +867,22 @@ def test_regenerate_splices_cached_result_after_regenerated_call():
         "content": "15C",
         "tool_call_id": "call_1",
     }
+    for sample, request, response in zip(samples, sent, responses, strict=True):
+        assert sample["debug"] == {
+            "prompt_messages": request["messages"],
+            "response": response["choices"][0]["message"],
+            "tools": request["tools"],
+        }
+    # Debug reasoning stays out of subsequent generation history as before.
+    assert "reasoning_content" not in sent[1]["messages"][-2]
+    # Nested tool objects are snapshots too, rather than references to history.
+    responses[0]["choices"][0]["message"]["tool_calls"][0]["function"]["name"] = (
+        "changed"
+    )
+    item["tools"][0]["function"]["name"] = "changed"
+    assert samples[0]["debug"]["response"]["tool_calls"][0] == _tool_call()
+    assert samples[1]["debug"]["prompt_messages"][-2]["tool_calls"][0] == _tool_call()
+    assert samples[0]["debug"]["tools"][0]["function"]["name"] == "get_weather"
 
 
 @pytest.mark.parametrize(
@@ -1086,3 +1115,29 @@ def test_regeneration_cli_accepts_served_alias_without_tokenizer(tmp_path, monke
     assert row["loss_mask"] == [0, 0, 1, 1]
     assert row["primary_id"] == "p"
     assert "text" not in row
+    assert row["debug"] == {
+        "prompt_messages": [{"role": "user", "content": "question"}],
+        "response": {"content": "answer", "tool_calls": None},
+    }
+
+    # The real JSONL -> Arrow path drops debug output without rendering it or
+    # changing the endpoint's training tokens and completion mask.
+    monkeypatch.setattr(preprocessing_module, "render_conversation", fail)
+    prepared = tmp_path / "prepared"
+    result = CliRunner(env={"COLUMNS": "200"}).invoke(
+        app,
+        [
+            "prepare-data",
+            "--data",
+            str(output),
+            "--output",
+            str(prepared),
+            "--num-preprocessing-workers",
+            "1",
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    dataset = load_from_disk(str(prepared))
+    assert dataset[0]["input_ids"].tolist() == row["input_ids"]
+    assert dataset[0]["loss_mask"].tolist() == row["loss_mask"]
+    assert "debug" not in dataset.column_names

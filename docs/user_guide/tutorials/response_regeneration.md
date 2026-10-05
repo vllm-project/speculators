@@ -86,6 +86,10 @@ The output is a JSONL file with one speculator-format row per target generation.
   "primary_id": "conv-abc",
   "input_ids": [151644, 872, ...],
   "loss_mask": [0, 0, ..., 1, 1],
+  "debug": {
+    "prompt_messages": [{"role": "user", "content": "What is 2 + 2?"}],
+    "response": {"role": "assistant", "content": "4"}
+  },
   "metadata": {
     "idx": 0,
     "finish_reason": "stop",
@@ -96,7 +100,7 @@ The output is a JSONL file with one speculator-format row per target generation.
 }
 ```
 
-Each assistant turn produces at least one row — and more when the target calls a tool, since every call is its own generation — so expect more lines than input conversations. Output contains token IDs and masks without a decoded text copy; regeneration needs no local tokenizer.
+Each assistant turn produces at least one row — and more when the target calls a tool, since every call is its own generation — so expect more lines than input conversations. The `debug` field preserves the readable prompt and server response for each generation, including tool calls and any returned reasoning. It is a conversation transcript, not a decoding of the training tokens with template markers. Regeneration needs no local tokenizer, and preparation drops this debugging field.
 
 For multi-turn datasets, later turns include the regenerated history as context. For example, the second turn of the same conversation would be:
 
@@ -106,6 +110,14 @@ For multi-turn datasets, later turns include the regenerated history as context.
   "primary_id": "conv-abc",
   "input_ids": [151644, 872, ...],
   "loss_mask": [0, 0, ..., 1, 1],
+  "debug": {
+    "prompt_messages": [
+      {"role": "user", "content": "What is 2 + 2?"},
+      {"role": "assistant", "content": "4"},
+      {"role": "user", "content": "And 3 + 3?"}
+    ],
+    "response": {"role": "assistant", "content": "6"}
+  },
   "metadata": {
     "idx": 0,
     "finish_reason": "stop",

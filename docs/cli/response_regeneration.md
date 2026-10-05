@@ -176,6 +176,10 @@ Rows are in speculator format and ready for training: one row per target generat
   "primary_id": "conv-abc",
   "input_ids": [151644, 872, ...],
   "loss_mask": [0, 0, ..., 1, 1],
+  "debug": {
+    "prompt_messages": [{"role": "user", "content": "What is 2 + 2?"}],
+    "response": {"role": "assistant", "content": "4"}
+  },
   "metadata": {
     "idx": 0,
     "finish_reason": "stop",
@@ -192,7 +196,9 @@ Rows are in speculator format and ready for training: one row per target generat
 - `primary_id` is the conversation's stable id, used by `--resume`. The row `id` is generation-suffixed and never matches it.
 - `is_tool_call` marks a row whose generated tokens are a tool call rather than a final answer.
 
-Regeneration uses the token IDs returned by the endpoint and loads no local tokenizer. The review-only `text` field is no longer emitted; `input_ids`, `loss_mask`, IDs, and metadata are unchanged.
+Regeneration uses the token IDs returned by the endpoint and loads no local tokenizer. Each row's `debug` field keeps a readable snapshot of the request's `prompt_messages` and the server's complete assistant `response`, including tool calls and any reasoning fields the server returns. When tools were sent, `debug.tools` records their definitions. Later turns do not change earlier snapshots. Preparation drops `debug` and uses only the saved IDs and mask for text training.
+
+The former `text` field decoded the full token sequence with special tokens visible. `debug` replaces it for conversation inspection, but does not show chat-template markers, exact token boundaries, or reasoning the server did not return. It requires no extra server request or tokenizer download. `input_ids`, `loss_mask`, IDs, and metadata are unchanged.
 
 Rows are written only once a conversation finishes. A conversation that fails partway writes nothing to the output file and one row to a sibling error file instead (`--outfile out.jsonl` gives `out.errors.jsonl`), so `--resume` retries it whole:
 
