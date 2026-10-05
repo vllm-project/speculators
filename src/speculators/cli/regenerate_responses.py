@@ -883,7 +883,7 @@ def _validate_dataset(value: str) -> str:
     if value in MULTIMODAL_DATASETS:
         raise typer.BadParameter(
             f"{value!r} is multimodal; on-policy regeneration does not support "
-            "images yet. Use it off-policy with `prepare-data`."
+            "images yet. Pass externally generated JSONL to `prepare-data`."
         )
     if value in REGEN_DATASETS:
         return value

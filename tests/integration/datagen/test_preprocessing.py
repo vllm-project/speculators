@@ -341,18 +341,15 @@ def test_load_raw_dataset_empty_directory_raises(tmp_path):
 
 
 @pytest.mark.sanity
-def test_load_raw_dataset_named_preset():
-    """A named preset resolves through DATASET_CONFIGS to load_dataset."""
-    sentinel = HFDataset.from_list([_conv_row("x")])
-    with patch(f"{PREFIX}.load_dataset", return_value=sentinel) as mock_load:
-        dataset, normalize_fn = load_raw_dataset("sharegpt")
-
-    config = DATASET_CONFIGS["sharegpt"]
-    mock_load.assert_called_once_with(
-        config.hf_path, name=config.subset, split=config.split
-    )
-    assert dataset is sentinel
-    assert normalize_fn is config.normalize_fn
+@pytest.mark.parametrize("preset", DATASET_CONFIGS)
+def test_load_raw_dataset_rejects_named_preset(preset):
+    """Raw presets require regeneration before their answers can be supervised."""
+    with (
+        patch(f"{PREFIX}.load_dataset") as mock_load,
+        pytest.raises(ValueError, match="speculators regenerate-responses"),
+    ):
+        load_raw_dataset(preset)
+    mock_load.assert_not_called()
 
 
 @pytest.mark.sanity
