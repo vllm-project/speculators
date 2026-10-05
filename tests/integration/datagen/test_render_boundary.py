@@ -78,7 +78,7 @@ def test_encode_render_sends_training_window(monkeypatch):
 
 
 # --------------------------------------------------------------------------- #
-# _render_boundary_rows -- branches no real template reaches                    #
+# _render_boundary_samples -- branches no real template reaches                    #
 # --------------------------------------------------------------------------- #
 def test_scaffold_lcp_fallback(monkeypatch):
     # Load-bearing, not hypothetical: DeepSeek-R1 distills pre-fill `<think>\n`
@@ -95,7 +95,7 @@ def test_scaffold_lcp_fallback(monkeypatch):
             (2, False): [1, 2, 3, 4, 5],  # full: diverges from prompt at idx 3
         },
     )
-    rows = preprocessing._render_boundary_rows(_conv(2), "http://x", 100)
+    rows = preprocessing._render_boundary_samples(_conv(2), "http://x", 100)
     assert len(rows) == 1
     assert rows[0]["loss_mask"] == [0, 0, 0, 1, 1]
 
@@ -111,7 +111,7 @@ def test_boundary_unstable_raises(monkeypatch):
         },
     )
     with pytest.raises(preprocessing.BoundaryUnstableError):
-        preprocessing._render_boundary_rows(_conv(2), "http://x", 100)
+        preprocessing._render_boundary_samples(_conv(2), "http://x", 100)
 
 
 def test_over_length_turn_does_not_drop_later_turns(monkeypatch):
@@ -127,7 +127,7 @@ def test_over_length_turn_does_not_drop_later_turns(monkeypatch):
             (6, False): [1, 2, 3, 4, 7, 7],
         },
     )
-    rows = preprocessing._render_boundary_rows(_conv(6), "http://x", 10)
+    rows = preprocessing._render_boundary_samples(_conv(6), "http://x", 10)
     assert len(rows) == 2  # turns 1 and 5; only turn 3 is skipped
     assert rows[0]["loss_mask"] == [0, 0, 1, 1]
     assert rows[1]["loss_mask"] == [0, 0, 0, 0, 1, 1]
@@ -143,35 +143,7 @@ def test_over_length_first_turn_yields_no_rows(monkeypatch):
             (3, True): [1] * 15,
         },
     )
-    assert preprocessing._render_boundary_rows(_conv(4), "http://x", 10) == []
-
-
-# --------------------------------------------------------------------------- #
-# _append_row -- clip / filter / keep                                          #
-# --------------------------------------------------------------------------- #
-def test_append_row_statuses():
-    results: dict[str, list] = {"input_ids": [], "loss_mask": [], "seq_len": []}
-    assert (
-        preprocessing._append_row(results, [1, 2, 3], [0, 0, 0], 10, None)
-        == "unsupervised"
-    )
-    assert preprocessing._append_row(results, [1, 2, 3], [0, 1, 1], 10, 3) == "filtered"
-    assert preprocessing._append_row(results, [1, 2, 3], [0, 1, 1], 10, 1) == "kept"
-    assert len(results["input_ids"]) == 1
-    assert results["seq_len"] == [3]
-
-
-def test_append_boundary_rows_counts_rows_at_limit_as_maybe_truncated():
-    results: dict[str, list] = {"input_ids": [], "loss_mask": [], "seq_len": []}
-    rows: list[preprocessing.BoundaryRow] = [
-        {
-            "input_ids": [1, 2, 3, 4],
-            "loss_mask": [0, 1, 1, 1],
-            "conv": _conv(2),
-        }
-    ]
-
-    assert preprocessing._append_boundary_rows(results, rows, 4, None) == (1, 0, 1)
+    assert preprocessing._render_boundary_samples(_conv(4), "http://x", 10) == []
 
 
 # --------------------------------------------------------------------------- #
@@ -345,3 +317,42 @@ def test_rendered_messages_route_by_content_and_mix_with_prepared_rows(monkeypat
         render_endpoint="http://render",
     )
     assert build_client_item(typed_text[0]) == text_item
+
+
+def test_rendered_media_fanout_round_trips_as_prepared_records(monkeypatch):
+    _patch_encode(
+        monkeypatch,
+        {
+            (1, True): [1, 2],
+            (2, False): [1, 2, 3],
+            (3, True): [1, 2, 3, 4],
+            (4, False): [1, 2, 3, 4, 5, 6],
+        },
+    )
+    conversation = [
+        turn | {"content": [{"type": "text", "text": turn["content"]}]}
+        for turn in _conv(4)
+    ]
+    conversation[0]["content"].append(
+        {"type": "image", "url": "https://example.com/image.png"}
+    )
+    rendered = build_speculator_training_dataset(
+        HFDataset.from_dict({"conversations": [conversation]}),
+        render_endpoint="http://render",
+        num_proc=1,
+    )
+    assert [len(row["messages"]) for row in rendered] == [2, 4]
+    assert [row["loss_mask"].tolist() for row in rendered] == [
+        [0, 0, 1],
+        [0, 0, 0, 0, 1, 1],
+    ]
+
+    def fail(*args, **kwargs):
+        pytest.fail("Prepared media must not be re-rendered")
+
+    monkeypatch.setattr(preprocessing, "_encode_render", fail)
+    prepared = build_speculator_training_dataset(rendered.with_format(None), num_proc=1)
+    for before, after in zip(rendered, prepared, strict=True):
+        assert after["input_ids"].tolist() == before["input_ids"].tolist()
+        assert after["loss_mask"].tolist() == before["loss_mask"].tolist()
+        assert build_client_item(after) == build_client_item(before)

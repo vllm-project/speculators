@@ -25,7 +25,6 @@ from speculators.cli.regenerate_responses import (
     _sample_from_response,
     _validate_dataset,
     _worker,
-    build_boundary_sample,
     extract_conversation,
     extract_tools,
     load_input_dataset,
@@ -37,6 +36,7 @@ from speculators.data_generation import preprocessing as preprocessing_module
 from speculators.data_generation import vllm_client
 from speculators.data_generation.configs import DATASET_CONFIGS, DatasetConfig
 from speculators.data_generation.preprocessing import _preprocess_batch
+from speculators.data_generation.records import prepared_sample
 from speculators.data_generation.vllm_client import InvalidResponseError
 
 
@@ -195,16 +195,28 @@ def test_extract_conversation_no_usable_input_returns_empty():
 # ---------------------------------------------------------------------------
 
 
-def test_build_boundary_sample_is_the_mask():
-    input_ids, loss_mask = build_boundary_sample([10, 11, 12, 13], [20, 21, 22])
-    assert input_ids == [10, 11, 12, 13, 20, 21, 22]
-    assert loss_mask == [0, 0, 0, 0, 1, 1, 1]
+def test_generated_sample_uses_endpoint_boundary():
+    sample, _, _ = _sample_from_response(
+        _response(
+            prompt_token_ids=[10, 11, 12, 13],
+            token_ids=[20, 21, 22],
+            content="answer",
+        ),
+        conv_id="c",
+        sample_index=0,
+        idx=0,
+        endpoint="ep",
+        sampling_params={},
+    )
+    assert sample["input_ids"] == [10, 11, 12, 13, 20, 21, 22]
+    assert sample["loss_mask"] == [0, 0, 0, 0, 1, 1, 1]
 
 
 def test_pretokenized_rows_pass_through_preprocessing():
     # A speculator-format regeneration row reaches training already masked: no
     # processor or re-masking; extra fields are dropped.
-    input_ids, loss_mask = build_boundary_sample([10, 11, 12], [20, 21])
+    sample = prepared_sample([10, 11, 12, 20, 21], boundary=3)
+    input_ids, loss_mask = sample["input_ids"], sample["loss_mask"]
     out = _preprocess_batch(
         {
             "input_ids": [input_ids],
@@ -222,10 +234,13 @@ def test_pretokenized_rows_pass_through_preprocessing():
 def test_pretokenized_passthrough_truncates_and_filters():
     # Truncation can cut the completion span away (all-zero mask); such a row must
     # be dropped by minimum_valid_tokens, like the tokenized path.
-    kept = build_boundary_sample([1, 2], [3, 4])  # fits max_length=4
-    cut = build_boundary_sample([1, 2, 3, 4], [5, 6])  # completion truncated off
+    kept = prepared_sample([1, 2, 3, 4], boundary=2)  # fits max_length=4
+    cut = prepared_sample([1, 2, 3, 4, 5, 6], boundary=4)  # completion truncated off
     out = _preprocess_batch(
-        {"input_ids": [kept[0], cut[0]], "loss_mask": [kept[1], cut[1]]},
+        {
+            "input_ids": [kept["input_ids"], cut["input_ids"]],
+            "loss_mask": [kept["loss_mask"], cut["loss_mask"]],
+        },
         max_length=4,
         render_endpoint=None,
         minimum_valid_tokens=1,

@@ -31,6 +31,20 @@ speculators prepare-data \
 
 `--render-endpoint` is not needed when every input row already contains `input_ids` and `loss_mask`.
 
+## Prepared Records
+
+Rendered conversations, regenerated responses, and prepared input all use the same training fields:
+
+- `input_ids`: token IDs from the target model's generation or render endpoint.
+- `loss_mask`: one value per token, `0` for context and `1` for supervision.
+- `messages` (optional): messages in the serving API's format, retained when needed to carry media into hidden-state extraction.
+
+Preparation validates equal ID/mask lengths and binary mask values before truncating either field. Invalid values are rejected even if they occur beyond `--seq-length`. It then truncates IDs and masks together, drops rows with no remaining supervision or fewer than `--minimum-valid-tokens`, and saves the retained rows as tensors in an Arrow dataset. Optional messages stay attached to their corresponding rows through filtering.
+
+For example, IDs `[10, 11, 20, 21]` with mask `[0, 0, 1, 1]` become `[10, 11, 20]` and `[0, 0, 1]` at `--seq-length 3`. At length 2, the row is dropped because no supervised tokens remain. A mask containing `2` is invalid at any sequence length.
+
+Regeneration's `debug` transcript, IDs, and metadata are excluded from these training fields. Text-only hidden-state extraction uses the saved token IDs; rows containing media also send their retained messages.
+
 ## Arguments
 
 ### Data Arguments

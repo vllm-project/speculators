@@ -19,6 +19,7 @@ from datasets import load_dataset
 from tqdm import tqdm
 
 from speculators.data_generation.configs import DATASET_CONFIGS, DatasetConfig
+from speculators.data_generation.records import prepared_sample
 from speculators.data_generation.vllm_client import (
     DEFAULT_MAX_RETRIES,
     InvalidResponseError,
@@ -297,19 +298,6 @@ async def _post_chat(
 # ---------------------------------------------------------------------------
 
 
-def build_boundary_sample(
-    prompt_token_ids: list[int],
-    completion_token_ids: list[int],
-) -> tuple[list[int], list[int]]:
-    """Build one training sample: prompt (loss_mask 0) + generated tokens (1).
-
-    The generation boundary is the mask -- no ``{% generation %}`` markers, no regex.
-    """
-    input_ids = [*prompt_token_ids, *completion_token_ids]
-    loss_mask = [0] * len(prompt_token_ids) + [1] * len(completion_token_ids)
-    return input_ids, loss_mask
-
-
 def _tool_result_message(tool_call: dict, content: str) -> dict[str, Any]:
     """Build the ``tool`` message that feeds a cached (off-policy) result back to
     the target, paired to the id of the call the target just generated."""
@@ -353,7 +341,9 @@ def _sample_from_response(
             "endpoint returned no token ids; it must support return_token_ids"
         )
 
-    input_ids, loss_mask = build_boundary_sample(prompt_token_ids, completion_token_ids)
+    prepared = prepared_sample(
+        [*prompt_token_ids, *completion_token_ids], len(prompt_token_ids)
+    )
     if tool_calls:
         # History keeps the parsed call; any generated <think> is supervised in
         # this row's completion tokens, not re-rendered.
@@ -370,8 +360,7 @@ def _sample_from_response(
         # Conversation-level key for --resume; the row `id` is generation-suffixed
         # and would never match a recomputed one.
         "primary_id": conv_id,
-        "input_ids": input_ids,
-        "loss_mask": loss_mask,
+        **prepared,
         "metadata": {
             "idx": idx,
             "finish_reason": choice.get("finish_reason"),
