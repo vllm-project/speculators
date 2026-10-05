@@ -15,7 +15,10 @@ from transformers import (
 )
 
 from speculators.data_generation.logging_utils import PipelineLogger
-from speculators.data_generation.render_client import render_conversation
+from speculators.data_generation.render_client import (
+    RenderEndpointError,
+    render_conversation,
+)
 from speculators.data_generation.torch_utils import set_default_torch_num_threads
 from speculators.train.vocab_mapping import save_token_frequency_distribution
 
@@ -367,6 +370,12 @@ def _render_conversation_rows(
             max_length,
             tools=parsed_tools,
         )
+    except RenderEndpointError:
+        # The endpoint, not this conversation, is failing: every remaining
+        # conversation would fail the same way. Let it abort the build instead
+        # of returning a training set silently missing everything after the
+        # first failure.
+        raise
     # One row the render endpoint or boundary derivation can't handle must
     # not kill the run. The failure modes can't be enumerated -- templates
     # are swappable and raise arbitrary types -- so catch broadly and skip.
