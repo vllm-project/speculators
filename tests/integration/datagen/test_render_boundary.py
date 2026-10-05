@@ -78,7 +78,7 @@ def test_encode_render_sends_training_window(monkeypatch):
 
 
 # --------------------------------------------------------------------------- #
-# _render_boundary_samples -- branches no real template reaches                    #
+# _render_boundary_rows -- branches no real template reaches                    #
 # --------------------------------------------------------------------------- #
 def test_scaffold_lcp_fallback(monkeypatch):
     # Load-bearing, not hypothetical: DeepSeek-R1 distills pre-fill `<think>\n`
@@ -95,7 +95,7 @@ def test_scaffold_lcp_fallback(monkeypatch):
             (2, False): [1, 2, 3, 4, 5],  # full: diverges from prompt at idx 3
         },
     )
-    rows = preprocessing._render_boundary_samples(_conv(2), "http://x", 100)
+    rows = preprocessing._render_boundary_rows(_conv(2), "http://x", 100)
     assert len(rows) == 1
     assert rows[0]["loss_mask"] == [0, 0, 0, 1, 1]
 
@@ -111,7 +111,7 @@ def test_boundary_unstable_raises(monkeypatch):
         },
     )
     with pytest.raises(preprocessing.BoundaryUnstableError):
-        preprocessing._render_boundary_samples(_conv(2), "http://x", 100)
+        preprocessing._render_boundary_rows(_conv(2), "http://x", 100)
 
 
 def test_over_length_turn_does_not_drop_later_turns(monkeypatch):
@@ -127,7 +127,7 @@ def test_over_length_turn_does_not_drop_later_turns(monkeypatch):
             (6, False): [1, 2, 3, 4, 7, 7],
         },
     )
-    rows = preprocessing._render_boundary_samples(_conv(6), "http://x", 10)
+    rows = preprocessing._render_boundary_rows(_conv(6), "http://x", 10)
     assert len(rows) == 2  # turns 1 and 5; only turn 3 is skipped
     assert rows[0]["loss_mask"] == [0, 0, 1, 1]
     assert rows[1]["loss_mask"] == [0, 0, 0, 0, 1, 1]
@@ -143,7 +143,7 @@ def test_over_length_first_turn_yields_no_rows(monkeypatch):
             (3, True): [1] * 15,
         },
     )
-    assert preprocessing._render_boundary_samples(_conv(4), "http://x", 10) == []
+    assert preprocessing._render_boundary_rows(_conv(4), "http://x", 10) == []
 
 
 # --------------------------------------------------------------------------- #

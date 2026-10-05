@@ -19,7 +19,7 @@ from datasets import load_dataset
 from tqdm import tqdm
 
 from speculators.data_generation.configs import DATASET_CONFIGS, DatasetConfig
-from speculators.data_generation.records import prepared_sample
+from speculators.data_generation.records import build_boundary_sample
 from speculators.data_generation.vllm_client import (
     DEFAULT_MAX_RETRIES,
     InvalidResponseError,
@@ -341,7 +341,7 @@ def _sample_from_response(
             "endpoint returned no token ids; it must support return_token_ids"
         )
 
-    prepared = prepared_sample(
+    prepared = build_boundary_sample(
         [*prompt_token_ids, *completion_token_ids], len(prompt_token_ids)
     )
     if tool_calls:
@@ -447,15 +447,12 @@ async def regenerate_conversation(
                 endpoint=endpoint,
                 sampling_params=recorded_params,
             )
-            # Human-readable request/response snapshot, independent of training
-            # tokens and future history. Keep server reasoning/tool fields too.
-            sample["debug"] = deepcopy(
-                {
-                    "prompt_messages": payload["messages"],
-                    "response": data["choices"][0]["message"],
-                    **({"tools": payload["tools"]} if "tools" in payload else {}),
-                }
+            # Readable transcript, independent of training tokens and future
+            # history. Keep the returned assistant's reasoning/tool fields too.
+            sample["conversations"] = deepcopy(
+                [*prefix, {**data["choices"][0]["message"], "role": "assistant"}]
             )
+            sample.update({"tools": deepcopy(tools)} if tools else {})
             samples.append(sample)
             prefix.append(assistant_msg)
 

@@ -9,7 +9,7 @@ from datasets import Dataset as HFDataset
 from datasets import Value, concatenate_datasets, load_dataset
 from huggingface_hub import hf_hub_download
 
-from speculators.data_generation.records import PreparedSample, prepared_sample
+from speculators.data_generation.records import PreparedSample, build_boundary_sample
 from speculators.data_generation.render_client import render_conversation
 from speculators.train.vocab_mapping import save_token_frequency_distribution
 
@@ -190,7 +190,7 @@ def _common_prefix_len(a: list[int], b: list[int]) -> int:
     return length
 
 
-def _render_boundary_samples(
+def _render_boundary_rows(
     normalized_conv: list[dict],
     render_endpoint: str,
     max_length: int,
@@ -261,7 +261,7 @@ def _render_boundary_samples(
                 )
 
         rows.append(
-            prepared_sample(
+            build_boundary_sample(
                 full_ids,
                 boundary,
                 messages=(
@@ -298,7 +298,7 @@ def _parse_conv_tools(conv_tools: object, idx: int) -> list | None:
         return None
 
 
-def _render_conversation_samples(
+def _render_conversation_rows(
     conv: list[dict],
     conv_tools: object,
     idx: int,
@@ -317,7 +317,7 @@ def _render_conversation_samples(
 
     parsed_tools = _parse_conv_tools(conv_tools, idx)
     try:
-        return _render_boundary_samples(
+        return _render_boundary_rows(
             normalized_conv,
             render_endpoint,
             max_length,
@@ -431,7 +431,7 @@ def _render_conversation_batch(
     num_convs_empty = 0
     num_samples = 0
     for idx, conv in enumerate(conversations):
-        rows = _render_conversation_samples(
+        rows = _render_conversation_rows(
             conv,
             tools_col[idx] if tools_col is not None else None,
             idx,
@@ -459,7 +459,7 @@ def _render_conversation_batch(
 
 
 def _read_prepared_batch(examples: dict) -> Iterator[PreparedSample]:
-    """Read training fields, excluding regeneration's debug text and metadata."""
+    """Read training fields, excluding regeneration's conversations and metadata."""
     messages = examples.get("messages", [None] * len(examples["input_ids"]))
     for ids, mask, conv in zip(
         examples["input_ids"], examples["loss_mask"], messages, strict=True
@@ -547,11 +547,13 @@ def build_speculator_training_dataset(
     # Content parts may carry media, which hidden-state extraction must receive.
     # Plain text needs only token IDs. Inspect the dataset schema once, rather
     # than loading a model processor or varying columns between map batches.
-    turns = getattr(dataset.features.get("conversations"), "feature", {})
-    keep_messages = any(
-        field in turns and not isinstance(turns[field], Value)
-        for field in ("content", "value")
-    )
+    keep_messages = False
+    if not pretokenized:
+        turns = getattr(dataset.features.get("conversations"), "feature", {})
+        keep_messages = any(
+            field in turns and not isinstance(turns[field], Value)
+            for field in ("content", "value")
+        )
 
     dataset = dataset.map(
         lambda examples: _preprocess_batch(

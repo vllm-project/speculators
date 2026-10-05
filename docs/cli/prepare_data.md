@@ -43,7 +43,7 @@ Preparation validates equal ID/mask lengths and binary mask values before trunca
 
 For example, IDs `[10, 11, 20, 21]` with mask `[0, 0, 1, 1]` become `[10, 11, 20]` and `[0, 0, 1]` at `--seq-length 3`. At length 2, the row is dropped because no supervised tokens remain. A mask containing `2` is invalid at any sequence length.
 
-Regeneration's `debug` transcript, IDs, and metadata are excluded from these training fields. Text-only hidden-state extraction uses the saved token IDs; rows containing media also send their retained messages.
+Regeneration's readable `conversations`, tool definitions, sample identifiers, and metadata are excluded from these training fields. Text-only hidden-state extraction uses the saved token IDs; rows containing media also send their retained messages.
 
 ## Arguments
 

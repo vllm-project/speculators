@@ -36,7 +36,7 @@ from speculators.data_generation import preprocessing as preprocessing_module
 from speculators.data_generation import vllm_client
 from speculators.data_generation.configs import DATASET_CONFIGS, DatasetConfig
 from speculators.data_generation.preprocessing import _preprocess_batch
-from speculators.data_generation.records import prepared_sample
+from speculators.data_generation.records import build_boundary_sample
 from speculators.data_generation.vllm_client import InvalidResponseError
 
 
@@ -215,7 +215,7 @@ def test_generated_sample_uses_endpoint_boundary():
 def test_pretokenized_rows_pass_through_preprocessing():
     # A speculator-format regeneration row reaches training already masked: no
     # processor or re-masking; extra fields are dropped.
-    sample = prepared_sample([10, 11, 12, 20, 21], boundary=3)
+    sample = build_boundary_sample([10, 11, 12, 20, 21], boundary=3)
     input_ids, loss_mask = sample["input_ids"], sample["loss_mask"]
     out = _preprocess_batch(
         {
@@ -234,8 +234,10 @@ def test_pretokenized_rows_pass_through_preprocessing():
 def test_pretokenized_passthrough_truncates_and_filters():
     # Truncation can cut the completion span away (all-zero mask); such a row must
     # be dropped by minimum_valid_tokens, like the tokenized path.
-    kept = prepared_sample([1, 2, 3, 4], boundary=2)  # fits max_length=4
-    cut = prepared_sample([1, 2, 3, 4, 5, 6], boundary=4)  # completion truncated off
+    kept = build_boundary_sample([1, 2, 3, 4], boundary=2)  # fits max_length=4
+    cut = build_boundary_sample(
+        [1, 2, 3, 4, 5, 6], boundary=4
+    )  # completion truncated off
     out = _preprocess_batch(
         {
             "input_ids": [kept["input_ids"], cut["input_ids"]],
@@ -544,16 +546,19 @@ def test_worker_row_identity_and_all_or_nothing_writes(tmp_path):
     # The boundary is the mask: prompt 0s then completion 1s.
     assert rows[0]["input_ids"] == [1, 2, 3, 4]
     assert rows[0]["loss_mask"] == [0, 0, 1, 1]
-    # Each row keeps its own prompt snapshot, without later turns or responses.
-    assert rows[0]["debug"] == {
-        "prompt_messages": [{"role": "user", "content": "2+2?"}],
-        "response": {"content": "four"},
-    }
-    assert rows[1]["debug"]["prompt_messages"] == [
+    # Each row ends at its own response, without later turns or responses.
+    assert rows[0]["conversations"] == [
+        {"role": "user", "content": "2+2?"},
+        {"role": "assistant", "content": "four"},
+    ]
+    assert rows[1]["conversations"] == [
         {"role": "user", "content": "2+2?"},
         {"role": "assistant", "content": "four"},
         {"role": "user", "content": "3+3?"},
+        {"role": "assistant", "content": "six"},
     ]
+    assert "debug" not in rows[0]
+    assert "tools" not in rows[0]
     assert load_seen(str(out_path)) == {"conv-abc"}
 
     # Turn 2 fails: turn 1's sample is discarded rather than half-written, which
@@ -883,21 +888,22 @@ def test_regenerate_splices_cached_result_after_regenerated_call():
         "tool_call_id": "call_1",
     }
     for sample, request, response in zip(samples, sent, responses, strict=True):
-        assert sample["debug"] == {
-            "prompt_messages": request["messages"],
-            "response": response["choices"][0]["message"],
-            "tools": request["tools"],
+        assert sample["conversations"][:-1] == request["messages"]
+        assert sample["conversations"][-1] == {
+            **response["choices"][0]["message"],
+            "role": "assistant",
         }
-    # Debug reasoning stays out of subsequent generation history as before.
+        assert sample["tools"] == request["tools"]
+    # Readable reasoning stays out of subsequent generation history as before.
     assert "reasoning_content" not in sent[1]["messages"][-2]
     # Nested tool objects are snapshots too, rather than references to history.
     responses[0]["choices"][0]["message"]["tool_calls"][0]["function"]["name"] = (
         "changed"
     )
     item["tools"][0]["function"]["name"] = "changed"
-    assert samples[0]["debug"]["response"]["tool_calls"][0] == _tool_call()
-    assert samples[1]["debug"]["prompt_messages"][-2]["tool_calls"][0] == _tool_call()
-    assert samples[0]["debug"]["tools"][0]["function"]["name"] == "get_weather"
+    assert samples[0]["conversations"][-1]["tool_calls"][0] == _tool_call()
+    assert samples[1]["conversations"][-3]["tool_calls"][0] == _tool_call()
+    assert samples[0]["tools"][0]["function"]["name"] == "get_weather"
 
 
 @pytest.mark.parametrize(
@@ -1130,13 +1136,14 @@ def test_regeneration_cli_accepts_served_alias_without_tokenizer(tmp_path, monke
     assert row["loss_mask"] == [0, 0, 1, 1]
     assert row["primary_id"] == "p"
     assert "text" not in row
-    assert row["debug"] == {
-        "prompt_messages": [{"role": "user", "content": "question"}],
-        "response": {"content": "answer", "tool_calls": None},
-    }
+    assert "debug" not in row
+    assert row["conversations"] == [
+        {"role": "user", "content": "question"},
+        {"role": "assistant", "content": "answer", "tool_calls": None},
+    ]
 
-    # The real JSONL -> Arrow path drops debug output without rendering it or
-    # changing the endpoint's training tokens and completion mask.
+    # The real JSONL -> Arrow path ignores the transcript without rendering it
+    # or changing the endpoint's training tokens and completion mask.
     monkeypatch.setattr(preprocessing_module, "render_conversation", fail)
     prepared = tmp_path / "prepared"
     result = CliRunner(env={"COLUMNS": "200"}).invoke(
@@ -1155,4 +1162,5 @@ def test_regeneration_cli_accepts_served_alias_without_tokenizer(tmp_path, monke
     dataset = load_from_disk(str(prepared))
     assert dataset[0]["input_ids"].tolist() == row["input_ids"]
     assert dataset[0]["loss_mask"].tolist() == row["loss_mask"]
+    assert "conversations" not in dataset.column_names
     assert "debug" not in dataset.column_names

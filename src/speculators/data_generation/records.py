@@ -9,7 +9,7 @@ class PreparedSample(TypedDict):
     """Token IDs and their supervision mask, with optional serving messages.
 
     Messages carry media that token IDs alone cannot represent. IDs, provenance,
-    and readable debug transcripts belong to the enclosing regeneration row.
+    and readable conversations belong to the enclosing regeneration row.
     Preparation validates and finalizes these fields before saving the dataset.
     """
 
@@ -18,7 +18,7 @@ class PreparedSample(TypedDict):
     messages: NotRequired[list[dict[str, Any]]]
 
 
-def prepared_sample(
+def build_boundary_sample(
     input_ids: list[int],
     boundary: int,
     *,
