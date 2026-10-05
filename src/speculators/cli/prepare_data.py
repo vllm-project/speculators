@@ -22,7 +22,6 @@ Token frequencies are saved in the output directory by default.
 Usage::
 
     speculators prepare-data \\
-        --model meta-llama/Llama-3.1-8B-Instruct \\
         --data ./on_policy_conversations.jsonl \\
         --render-endpoint http://localhost:8000 \\
         --output ./training_data \\
@@ -36,13 +35,12 @@ from typing import Annotated
 
 import typer
 
-from speculators.data_generation.logging_utils import PipelineLogger
 from speculators.data_generation.preprocessing import (
     default_preprocessing_workers,
     load_and_preprocess_dataset,
 )
 
-log = PipelineLogger(__name__)
+log = logging.getLogger(__name__)
 
 
 PREPARE_DATA_OVERWRITE_ALLOWED_FILES = {
@@ -80,10 +78,6 @@ def assert_safe_to_overwrite(output: Path, token_freq_path: Path) -> None:
 
 
 def prepare_data(
-    model: Annotated[
-        str,
-        typer.Option(help="HuggingFace model ID or local path for target model"),
-    ],
     data: Annotated[
         list[str],
         typer.Option("--data", help="Path to training data (repeatable)"),
@@ -157,16 +151,6 @@ def prepare_data(
             ),
         ),
     ] = False,
-    trust_remote_code: Annotated[
-        bool,
-        typer.Option(
-            "--trust-remote-code",
-            help=(
-                "Allow executing code from HF Hub when loading the target "
-                "model's processor."
-            ),
-        ),
-    ] = False,
     skip_token_freq: Annotated[
         bool,
         typer.Option(
@@ -188,14 +172,7 @@ def prepare_data(
         level=logging.INFO,
         format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
     )
-    log.section("Preparing data")
-    log.config(
-        {
-            "Target Model": model,
-            "Dataset": data,
-            "Output Dir": output,
-        }
-    )
+    log.info("Preparing data")
 
     output_path = Path(output)
     resolved_token_freq_path = (
@@ -219,8 +196,7 @@ def prepare_data(
     else:
         output_path.mkdir(parents=True)
 
-    dataset, _ = load_and_preprocess_dataset(
-        target_model_path=model,
+    dataset = load_and_preprocess_dataset(
         train_data_paths=data,
         seq_length=seq_length,
         build_dataset_num_proc=(
@@ -234,10 +210,9 @@ def prepare_data(
         render_endpoint=render_endpoint,
         minimum_valid_tokens=minimum_valid_tokens,
         allow_empty_output=allow_empty_output,
-        trust_remote_code=trust_remote_code,
         skip_token_freq=skip_token_freq,
     )
 
     log.info("Done preparing data")
-    log.section(f"Writing dataset to {output}")
+    log.info(f"Writing dataset to {output}")
     dataset.save_to_disk(output)

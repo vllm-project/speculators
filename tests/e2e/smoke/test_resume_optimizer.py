@@ -83,7 +83,6 @@ def test_resume_after_checkpoint_best(tmp_path: Path):
 
     # Step 1: Prepare data
     run_prepare_data(
-        MODEL,
         "hf:inference-optimization/speculators-ci-datasets:smoke_regen",
         data_path,
     )

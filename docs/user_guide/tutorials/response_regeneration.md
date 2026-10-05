@@ -86,10 +86,6 @@ The output is a JSONL file with one speculator-format row per target generation.
   "primary_id": "conv-abc",
   "input_ids": [151644, 872, ...],
   "loss_mask": [0, 0, ..., 1, 1],
-  "conversations": [
-    {"role": "user", "content": "What is the capital of France?"},
-    {"role": "assistant", "content": "The capital of France is Paris."}
-  ],
   "metadata": {
     "idx": 0,
     "finish_reason": "stop",
@@ -100,7 +96,7 @@ The output is a JSONL file with one speculator-format row per target generation.
 }
 ```
 
-Each assistant turn produces at least one row — and more when the target calls a tool, since every call is its own generation — so expect more lines than input conversations. `conversations` is a review-only twin of `input_ids`; training drops it.
+Each assistant turn produces at least one row — and more when the target calls a tool, since every call is its own generation — so expect more lines than input conversations. Output contains token IDs and masks without a decoded text copy; regeneration needs no local tokenizer.
 
 For multi-turn datasets, later turns include the regenerated history as context. For example, the second turn of the same conversation would be:
 
@@ -110,12 +106,6 @@ For multi-turn datasets, later turns include the regenerated history as context.
   "primary_id": "conv-abc",
   "input_ids": [151644, 872, ...],
   "loss_mask": [0, 0, ..., 1, 1],
-  "conversations": [
-    {"role": "user", "content": "What is the capital of France?"},
-    {"role": "assistant", "content": "The capital of France is Paris."},
-    {"role": "user", "content": "What about Germany?"},
-    {"role": "assistant", "content": "The capital of Germany is Berlin."}
-  ],
   "metadata": {
     "idx": 0,
     "finish_reason": "stop",
@@ -142,7 +132,6 @@ The output JSONL is in speculator format (it carries `input_ids` and `loss_mask`
 
 ```bash
 speculators prepare-data \
-  --model meta-llama/Llama-3.3-70B-Instruct \
   --data ./magpie_Llama-3.3-70B-Instruct.jsonl \
   --output ./output \
   --seq-length 8192

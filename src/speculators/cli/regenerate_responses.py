@@ -9,15 +9,13 @@ import re
 import sys
 import time
 from collections import deque
-from collections.abc import Callable
 from pathlib import Path
-from typing import Annotated, Any, cast
+from typing import Annotated, Any
 
 import aiohttp
 import typer
 from datasets import load_dataset
 from tqdm import tqdm
-from transformers import AutoTokenizer
 
 from speculators.data_generation.configs import DATASET_CONFIGS, DatasetConfig
 from speculators.data_generation.vllm_client import (
@@ -28,8 +26,8 @@ from speculators.data_generation.vllm_client import (
 
 logger = logging.getLogger(__name__)
 
-# On-policy regeneration has no multimodal support yet; off-policy `prepare-data`
-# does, so these presets are gated here rather than dropped from the registry.
+# On-policy regeneration has no multimodal support yet. Preparation accepts
+# externally generated multimodal conversations through explicit files.
 MULTIMODAL_DATASETS = {"sharegpt4v_coco"}
 REGEN_DATASETS = [name for name in DATASET_CONFIGS if name not in MULTIMODAL_DATASETS]
 
@@ -257,24 +255,6 @@ async def detect_model(endpoint: str) -> str:
         ) from e
 
 
-def build_detokenizer(model: str) -> Callable[[list[int]], str]:
-    """Return a decoder for the review-only ``text`` twin (see _sample_from_response).
-
-    Loads ``model``'s tokenizer so the twin is exactly ``decode(input_ids)``;
-    ``skip_special_tokens=False`` keeps the chat/control tokens (``<|im_start|>``,
-    ``<think>``, ``<|im_end|>``) visible. Pass a tokenizer path as ``--model``
-    (the checkpoint, not a ``--served-model-name`` alias).
-    """
-    typer.echo(f"Loading tokenizer: {model}")
-    tokenizer = AutoTokenizer.from_pretrained(model)
-
-    def detokenize(token_ids: list[int]) -> str:
-        # decode() is typed str | list[str]; a 1-D id list always yields str.
-        return cast("str", tokenizer.decode(token_ids, skip_special_tokens=False))
-
-    return detokenize
-
-
 # Transient statuses worth retrying: request timeout, conflict, too-early, and
 # rate limiting, plus all 5xx. Other non-2xx replies (e.g. 400/401/404) are
 # permanent config/client errors and fail fast.
@@ -342,7 +322,6 @@ def _tool_result_message(tool_call: dict, content: str) -> dict[str, Any]:
 def _sample_from_response(
     data: dict[str, Any],
     *,
-    detokenize: Callable[[list[int]], str],
     conv_id: str,
     sample_index: int,
     idx: int,
@@ -392,10 +371,6 @@ def _sample_from_response(
         "primary_id": conv_id,
         "input_ids": input_ids,
         "loss_mask": loss_mask,
-        # Review-only decode of input_ids; ignored by training. Faithful to the
-        # tokens by construction -- system/user context, the template's <think>
-        # priming, and history with prior-turn reasoning already stripped.
-        "text": detokenize(input_ids),
         "metadata": {
             "idx": idx,
             "finish_reason": choice.get("finish_reason"),
@@ -417,7 +392,6 @@ async def regenerate_conversation(
     endpoint: str,
     sampling_params: dict[str, Any],
     samples: list[dict[str, Any]],
-    detokenize: Callable[[list[int]], str],
     reasoning_effort: str | None = None,
     temperature: float | None = None,
 ) -> bool:
@@ -477,7 +451,6 @@ async def regenerate_conversation(
             data = await post_fn(payload)
             sample, assistant_msg, tool_calls = _sample_from_response(
                 data,
-                detokenize=detokenize,
                 conv_id=conv_id,
                 sample_index=len(samples),
                 idx=item["idx"],
@@ -577,7 +550,6 @@ async def _worker(
     err_fh,
     progress,
     stats: dict[str, Any],
-    detokenize: Callable[[list[int]], str],
 ):
     """Pull conversations off the queue and regenerate them into boundary rows.
 
@@ -614,7 +586,6 @@ async def _worker(
                 endpoint=endpoint,
                 sampling_params=sampling_params,
                 samples=samples,
-                detokenize=detokenize,
                 reasoning_effort=item.get("reasoning_effort"),
                 temperature=item.get("temperature"),
             )
@@ -721,9 +692,6 @@ async def _run(  # noqa: C901
     if reasoning_effort_dist or temperature_dist:
         typer.echo(f"Sampling seed: {seed}")
 
-    # Decoder for the review-only `text` twin; see build_detokenizer.
-    detokenize = build_detokenizer(model)
-
     dataset_config, hf_dataset, split = load_input_dataset(dataset_name, split, subset)
     dataset_id = dataset_config.hf_path
 
@@ -798,7 +766,6 @@ async def _run(  # noqa: C901
                         err_fh=error_file,
                         progress=progress,
                         stats=stats,
-                        detokenize=detokenize,
                     )
                 )
                 for _ in range(concurrency)

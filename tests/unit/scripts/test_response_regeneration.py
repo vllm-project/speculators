@@ -8,12 +8,16 @@ over a fake endpoint.
 import asyncio
 import copy
 import json
+import sys
 import time
 from typing import Any
 
 import pytest
 import typer
+from transformers import AutoTokenizer
+from typer.testing import CliRunner
 
+from speculators.cli import app
 from speculators.cli.regenerate_responses import (
     _post_chat,
     _primary_identifier,
@@ -197,8 +201,7 @@ def test_build_boundary_sample_is_the_mask():
 
 def test_pretokenized_rows_pass_through_preprocessing():
     # A speculator-format regeneration row reaches training already masked: no
-    # processor, no re-masking, and the review-only `conversations` field is
-    # dropped.
+    # processor or re-masking; extra fields are dropped.
     input_ids, loss_mask = build_boundary_sample([10, 11, 12], [20, 21])
     out = _preprocess_batch(
         {
@@ -206,7 +209,6 @@ def test_pretokenized_rows_pass_through_preprocessing():
             "loss_mask": [loss_mask],
             "conversations": [[{"role": "user", "content": "2+2?"}]],
         },
-        is_multimodal=False,  # passthrough returns before this is read
         max_length=2048,
         render_endpoint=None,
     )
@@ -222,7 +224,6 @@ def test_pretokenized_passthrough_truncates_and_filters():
     cut = build_boundary_sample([1, 2, 3, 4], [5, 6])  # completion truncated off
     out = _preprocess_batch(
         {"input_ids": [kept[0], cut[0]], "loss_mask": [kept[1], cut[1]]},
-        is_multimodal=False,  # passthrough returns before this is read
         max_length=4,
         render_endpoint=None,
         minimum_valid_tokens=1,
@@ -238,7 +239,6 @@ def test_pretokenized_passthrough_rejects_length_mismatch():
     with pytest.raises(ValueError, match="shape mismatch"):
         _preprocess_batch(
             {"input_ids": [[1, 2, 3, 4, 5]], "loss_mask": [[0, 0, 1]]},
-            is_multimodal=False,  # passthrough returns before this is read
             max_length=2048,
             render_endpoint=None,
         )
@@ -496,7 +496,6 @@ def _run_worker(responses, tmp_path, stem):
             err_fh=err_fh,
             progress=_NullProgress(),
             stats=stats,
-            detokenize=_detok,
         )
         return stats
 
@@ -582,11 +581,6 @@ def _response(
     }
 
 
-def _detok(token_ids):
-    """Test stand-in for ``tokenizer.decode`` -- deterministic and readable."""
-    return " ".join(str(t) for t in token_ids)
-
-
 def _fake_post(responses):
     """A post_fn returning canned responses in order and recording sent payloads."""
     sent = []
@@ -620,7 +614,6 @@ def _regen(
             endpoint=endpoint,
             sampling_params=sampling_params or {},
             samples=samples,
-            detokenize=_detok,
             reasoning_effort=reasoning_effort,
             temperature=temperature,
         )
@@ -715,7 +708,6 @@ def test_sample_from_response_rejects_empty_and_missing_token_ids():
     with pytest.raises(ValueError, match="empty assistant generation"):
         _sample_from_response(
             _response(prompt_token_ids=[1], token_ids=[2], content=None),
-            detokenize=_detok,
             conv_id="c",
             sample_index=0,
             idx=0,
@@ -730,7 +722,6 @@ def test_sample_from_response_rejects_empty_and_missing_token_ids():
     with pytest.raises(ValueError, match="return_token_ids"):
         _sample_from_response(
             bad,
-            detokenize=_detok,
             conv_id="c",
             sample_index=0,
             idx=0,
@@ -1046,3 +1037,52 @@ def test_tools_and_results_are_read_from_the_normalized_row():
     assert tool_results == [("sunny", [])]
     # the raw row hides the conversation behind `input`: results would be lost
     assert extract_conversation(row, None)[1] == []
+
+
+def test_regeneration_cli_accepts_served_alias_without_tokenizer(tmp_path, monkeypatch):
+
+    def fail(*args, **kwargs):
+        pytest.fail("Regeneration must not load a tokenizer for a served model alias")
+
+    async def post(session, endpoint, payload, **kwargs):
+        assert payload["model"] == "served-alias"
+        return _response(prompt_token_ids=[1, 2], token_ids=[3, 4], content="answer")
+
+    monkeypatch.setattr(AutoTokenizer, "from_pretrained", fail)
+    monkeypatch.setattr(
+        sys.modules["speculators.cli.regenerate_responses"], "_post_chat", post
+    )
+    source = tmp_path / "prompts.jsonl"
+    source.write_text(
+        json.dumps(
+            {
+                "id": "p",
+                "conversations": [
+                    {"role": "user", "content": "question"},
+                    {"role": "assistant", "content": "discard this answer"},
+                ],
+            }
+        )
+        + "\n"
+    )
+    output = tmp_path / "generated.jsonl"
+    result = CliRunner(env={"COLUMNS": "200"}).invoke(
+        app,
+        [
+            "regenerate-responses",
+            "--model",
+            "served-alias",
+            "--dataset",
+            str(source),
+            "--outfile",
+            str(output),
+            "--concurrency",
+            "1",
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    row = json.loads(output.read_text())
+    assert row["input_ids"] == [1, 2, 3, 4]
+    assert row["loss_mask"] == [0, 0, 1, 1]
+    assert row["primary_id"] == "p"
+    assert "text" not in row

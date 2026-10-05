@@ -340,7 +340,6 @@ def setup_dummy_sharegpt4v_coco(coco_dir: Path):
 
 
 def run_prepare_data(
-    model: str,
     data: str,
     data_path: Path,
     max_samples: int = 50,
@@ -363,8 +362,6 @@ def run_prepare_data(
     cmd = [
         sys.executable,
         str(SCRIPTS_DIR / "prepare_data.py"),
-        "--model",
-        model,
         "--data",
         data,
         "--output",

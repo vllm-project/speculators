@@ -7,6 +7,8 @@ Converts on-policy target-model data into the format consumed by speculator trai
 
 For natural-language conversations, `prepare_data.py` asks the target model's vLLM `/render` endpoint to apply the serving chat template, tokenize each assistant turn, and derive its loss mask. Rendering only converts the data's representation: it does not generate responses or turn an arbitrary dataset into on-policy data.
 
+Preparation loads no local model or tokenizer. Prepared token rows need no server; natural-language conversations need only the target model’s render endpoint. The `--model` and `--trust-remote-code` preparation options have been removed.
+
 The output is ready for online training or offline hidden-state generation.
 
 ## Basic Usage
@@ -21,7 +23,6 @@ where the assistant response came from the target model:
 
 ```bash
 speculators prepare-data \
-  --model meta-llama/Llama-3.1-8B-Instruct \
   --data ./on_policy_conversations.jsonl \
   --render-endpoint http://localhost:8000 \
   --output ./training_data \
@@ -31,14 +32,6 @@ speculators prepare-data \
 `--render-endpoint` is not needed when every input row already contains `input_ids` and `loss_mask`.
 
 ## Arguments
-
-### Model Arguments
-
-- **`--model`** (str, required) HuggingFace model ID or local path for the target model.
-
-  Example: `meta-llama/Llama-3.1-8B-Instruct`
-
-- **`--trust-remote-code`** (flag) Allow executing code from HF Hub when loading the target model's processor.
 
 ### Data Arguments
 
@@ -78,7 +71,6 @@ speculators prepare-data \
 
 ```bash
 speculators prepare-data \
-  --model meta-llama/Llama-3.1-8B-Instruct \
   --data ./target_responses_part1.jsonl \
   --data ./target_responses_part2.jsonl \
   --render-endpoint http://localhost:8000 \

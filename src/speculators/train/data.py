@@ -59,11 +59,15 @@ def create_empty_sample(
 def _has_multimodal_content(messages: list[dict]) -> bool:
     """True when any turn carries non-text content (images, video, audio).
 
-    Text-only turns store ``content`` as a plain string.  Multimodal turns
-    (produced by ``_adapt_conv_for_vllm``) store it as a list of typed parts,
+    Text may be a string or text-only content parts. Multimodal turns
+    (produced by ``_adapt_conv_for_vllm``) include non-text parts,
     e.g. ``[{"type": "text", ...}, {"type": "image_url", ...}]``.
     """
-    return any(isinstance(m.get("content"), list) for m in messages)
+    return any(
+        isinstance(m.get("content"), list)
+        and any(part.get("type") != "text" for part in m["content"])
+        for m in messages
+    )
 
 
 def build_client_item(dataset_item: dict) -> ClientItem:
@@ -82,16 +86,14 @@ def build_client_item(dataset_item: dict) -> ClientItem:
     contains multimodal content.  Text-only conversations always go through
     the Completions API with the pre-truncated ``input_ids``.
 
-    This matters for models like Qwen3.5-0.8B whose ``AutoProcessor`` returns
-    a ``ProcessorMixin`` (``Qwen3VLProcessor``), causing preprocessing to
-    populate the ``messages`` column even for purely text-only datasets.
-    Text-only EAGLE-3 models (e.g. Llama) use a plain tokenizer, so
-    ``messages`` is never created and this guard is a no-op.
+    Preparation retains rendered messages without loading a local processor.
+    Text-only content parts must also use the pre-truncated token IDs.
     """
     out_dict: dict = {"input_ids": dataset_item["input_ids"].tolist()}
 
-    if "messages" in dataset_item and _has_multimodal_content(dataset_item["messages"]):
-        out_dict["messages"] = dataset_item["messages"]
+    messages = dataset_item.get("messages")
+    if messages and _has_multimodal_content(messages):
+        out_dict["messages"] = messages
 
     return cast("ClientItem", out_dict)
 

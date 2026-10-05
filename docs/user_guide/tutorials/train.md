@@ -105,7 +105,6 @@ Response Regeneration writes speculator-format rows containing `input_ids` and `
 ```bash
 # in speculators venv
 speculators prepare-data \
-  --model Qwen/Qwen3-8B \
   --data ./target_responses.jsonl \
   --output ./output \
   --max-samples 5000 \
@@ -116,7 +115,6 @@ If your generation pipeline saves natural-language conversations instead, start 
 
 ```bash
 speculators prepare-data \
-  --model Qwen/Qwen3-8B \
   --data ./on_policy_conversations.jsonl \
   --render-endpoint http://localhost:8000 \
   --output ./output \

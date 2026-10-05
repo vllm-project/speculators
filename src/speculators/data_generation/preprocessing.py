@@ -1,22 +1,15 @@
 import json
+import logging
 import os
-from contextlib import nullcontext
 from pathlib import Path
 from typing import Literal, TypedDict
 
 import torch
 from datasets import Dataset as HFDataset
-from datasets import concatenate_datasets, load_dataset
+from datasets import Value, concatenate_datasets, load_dataset
 from huggingface_hub import hf_hub_download
-from transformers import (
-    AutoProcessor,
-    PreTrainedTokenizerBase,
-    ProcessorMixin,
-)
 
-from speculators.data_generation.logging_utils import PipelineLogger
 from speculators.data_generation.render_client import render_conversation
-from speculators.data_generation.torch_utils import set_default_torch_num_threads
 from speculators.train.vocab_mapping import save_token_frequency_distribution
 
 __all__ = [
@@ -26,7 +19,7 @@ __all__ = [
     "load_raw_dataset",
 ]
 
-log = PipelineLogger(__name__)
+log = logging.getLogger(__name__)
 
 _warned_roles: set[str] = set()
 
@@ -60,45 +53,6 @@ def default_preprocessing_workers(cpus: int | None = None) -> int:
             int(cpus * CPU_BUDGET_FRACTION) // EFFECTIVE_CPUS_PER_PREPROCESSING_WORKER,
         ),
     )
-
-
-ProcessorLike = PreTrainedTokenizerBase | ProcessorMixin
-
-
-def _visualize_sample(preprocessed: HFDataset, processor: ProcessorLike, idx: int = 0):
-    """Visualize a single sample with color-coded trainable regions."""
-    # Get preprocessed sample
-    prep_sample = preprocessed[idx]
-    input_ids = prep_sample["input_ids"].tolist()
-    loss_mask = prep_sample["loss_mask"].tolist()
-
-    log.info(f"SAMPLE #{idx}")
-    log.info("HIGHLIGHTED TEXT (BLUE = trainable, GREY = masked)")
-
-    # Create color-highlighted text
-    blue = "\033[38;5;153m"  # Very light blue text for trainable tokens
-    grey = "\033[90m"  # Grey text for masked tokens
-    reset = "\033[0m"  # Reset color
-
-    output = []
-    prev_state = None
-
-    for i in range(len(input_ids)):
-        is_train = loss_mask[i] == 1
-        token = processor.decode([input_ids[i]])
-        assert isinstance(token, str)
-
-        # Switch colors when state changes
-        if is_train != prev_state:
-            output.append(blue if is_train else grey)
-            prev_state = is_train
-
-        output.append(token)
-
-    output.append(reset)
-    highlighted = "".join(output)
-
-    log.info(highlighted)
 
 
 def _normalize_conversation(
@@ -485,10 +439,11 @@ def _passthrough_pretokenized(
 
 def _preprocess_batch(
     examples: dict,
-    is_multimodal: bool,
     render_endpoint: str | None,
     max_length: int,
     minimum_valid_tokens: int | None = None,
+    *,
+    keep_messages: bool = False,
 ) -> dict[str, list]:
     """Convert on-policy conversations or speculator-format rows for training."""
 
@@ -508,7 +463,7 @@ def _preprocess_batch(
 
     # MM inputs are extracted via the Chat Completions API, which needs the
     # original messages -- token ids alone cannot carry the images.
-    if is_multimodal:
+    if keep_messages:
         results["messages"] = []
 
     if not conversations:
@@ -571,7 +526,6 @@ def _preprocess_batch(
 
 def build_speculator_training_dataset(
     dataset: HFDataset,
-    processor: ProcessorLike,
     max_length: int = 2048,
     num_proc: int = 8,
     *,
@@ -590,7 +544,6 @@ def build_speculator_training_dataset(
     Args:
         dataset: On-policy natural-language conversations, or speculator-format
             rows containing ``input_ids`` and ``loss_mask``.
-        processor: Processor, used to detect multimodal inputs and to decode.
         max_length: Maximum sequence length.
         num_proc: Number of worker processes; each renders concurrently.
         render_endpoint: Base URL of a vLLM server. Required unless the dataset
@@ -601,10 +554,6 @@ def build_speculator_training_dataset(
     # These rows carry their supervision mask, so _preprocess_batch passes them
     # through without rendering or boundary derivation.
     pretokenized = {"input_ids", "loss_mask"} <= set(original_cols)
-    # Multimodal rows keep their `messages` so the images survive to hidden-state
-    # extraction. Compute once here rather than pickling the heavyweight processor
-    # into every map worker just to recheck it.
-    is_multimodal = isinstance(processor, ProcessorMixin)
 
     if pretokenized:
         log.info("Speculator-format rows: using their loss mask, skipping render")
@@ -617,23 +566,29 @@ def build_speculator_training_dataset(
     else:
         log.info("Deriving loss masks from vLLM render boundaries")
 
-    # Avoid CPU contention for MM processing:
-    # https://github.com/vllm-project/vllm/pull/31879
-    with set_default_torch_num_threads() if is_multimodal else nullcontext():
-        dataset = dataset.map(
-            lambda examples: _preprocess_batch(
-                examples,
-                is_multimodal,
-                render_endpoint,
-                max_length,
-                minimum_valid_tokens,
-            ),
-            batched=True,
-            num_proc=num_proc,
-            batch_size=1000,
-            remove_columns=original_cols,
-            keep_in_memory=True,  # skip caching
-        )
+    # Content parts may carry media, which hidden-state extraction must receive.
+    # Plain text needs only token IDs. Inspect the dataset schema once, rather
+    # than loading a model processor or varying columns between map batches.
+    turns = getattr(dataset.features.get("conversations"), "feature", {})
+    keep_messages = any(
+        field in turns and not isinstance(turns[field], Value)
+        for field in ("content", "value")
+    )
+
+    dataset = dataset.map(
+        lambda examples: _preprocess_batch(
+            examples,
+            render_endpoint,
+            max_length,
+            minimum_valid_tokens,
+            keep_messages=keep_messages,
+        ),
+        batched=True,
+        num_proc=num_proc,
+        batch_size=1000,
+        remove_columns=original_cols,
+        keep_in_memory=True,  # skip caching
+    )
 
     dataset.set_format(type="torch")
     return dataset
@@ -777,31 +732,7 @@ def load_raw_dataset(
     )
 
 
-def get_tokenizer(processor: ProcessorLike):
-    if isinstance(processor, ProcessorMixin):
-        return processor.tokenizer  # type: ignore[attr-defined]
-
-    return processor
-
-
-def _resolve_pad_token(processor: ProcessorLike):
-    tokenizer = get_tokenizer(processor)
-    if tokenizer.pad_token is None:
-        tokenizer.pad_token = tokenizer.eos_token
-
-
-def load_processor(target_model_path: str, *, trust_remote_code: bool = False):
-    processor = AutoProcessor.from_pretrained(
-        target_model_path,
-        trust_remote_code=trust_remote_code,
-    )
-    _resolve_pad_token(processor)
-
-    return processor
-
-
 def load_and_preprocess_dataset(
-    target_model_path: str,
     train_data_paths: list[str],
     *,
     seq_length: int,
@@ -812,9 +743,8 @@ def load_and_preprocess_dataset(
     render_endpoint: str | None = None,
     minimum_valid_tokens: int | None = None,
     allow_empty_output: bool = False,
-    trust_remote_code: bool = False,
     skip_token_freq: bool = True,
-) -> tuple[HFDataset, ProcessorLike]:
+) -> HFDataset:
     """Load, tokenize, and preprocess a dataset for speculator training.
 
     Natural-language conversations containing target-model responses are
@@ -824,47 +754,36 @@ def load_and_preprocess_dataset(
     Caching is handled automatically by HuggingFace datasets.
 
     Args:
-        target_model_path: HuggingFace model ID or local path
-        train_data_path: Dataset name or path to JSON/JSONL file
+        train_data_paths: On-policy JSON/JSONL files, directories, or HF sources
         seq_length: Maximum sequence length
         build_dataset_num_proc: Number of processes for dataset building
         seed: Random seed for shuffling
         max_samples: Optional limit on number of samples
         token_freq_path: Path to save token frequency distribution
-        cache_dir: Directory to cache HuggingFace datasets (optional)
         render_endpoint: Base URL of a running vLLM server (e.g.
             ``http://localhost:8000``) used to render conversations. Required
             unless every dataset is already in speculator format.
         minimum_valid_tokens: Number of tokens to consider for a valid sample
         allow_empty_output: If True, allow returning an empty dataset instead of
                           raising when no samples survive preprocessing.
-        trust_remote_code: If True, allows executing code from HF Hub.
 
     Returns:
-        Tuple of (preprocessed_dataset, processor)
+        Preprocessed dataset
     """
     if minimum_valid_tokens is not None and minimum_valid_tokens < 0:
         raise ValueError("minimum_valid_tokens must be >= 0")
-    log.section("Starting dataset preprocessing")
+    log.info("Starting dataset preprocessing")
     if minimum_valid_tokens is not None:
         log.info(
             f"Filtering samples with fewer than {minimum_valid_tokens} valid tokens"
         )
-
-    log.subsection("Loading processor")
-    processor = load_processor(target_model_path, trust_remote_code=trust_remote_code)
-
-    processor_has_chat_template = (
-        hasattr(processor, "apply_chat_template")
-        and getattr(processor, "chat_template", None) is not None
-    )
 
     if render_endpoint is not None:
         log.info(f"Rendering conversations via vLLM endpoint: {render_endpoint}")
 
     processed_datasets = []
     for train_data_path in train_data_paths:
-        log.subsection(f"Processing {train_data_path}")
+        log.info(f"Processing {train_data_path}")
         raw_dataset, _ = load_raw_dataset(train_data_path)
         raw_dataset = raw_dataset.shuffle(seed=seed)
 
@@ -874,26 +793,10 @@ def load_and_preprocess_dataset(
             # after combining datasets and shuffling
             raw_dataset = raw_dataset.select(range(3 * max_samples))
 
-        pretokenized = {"input_ids", "loss_mask"} <= set(raw_dataset.column_names)
-        # With a render endpoint the chat template is applied server-side, so a
-        # local processor without a chat_template attribute is fine.
-        if (
-            not pretokenized
-            and not processor_has_chat_template
-            and render_endpoint is None
-        ):
-            raise ValueError(
-                f"Processor for {target_model_path} does not support chat templates. "
-                "Please use a model with a pre-configured chat template, provide "
-                "pre-tokenized input_ids and loss_mask columns, or pass "
-                "--render-endpoint so vLLM renders conversations server-side."
-            )
-
         log.info(f"Loaded {len(raw_dataset)} samples")
 
         preprocessed_dataset = build_speculator_training_dataset(
             dataset=raw_dataset,
-            processor=processor,
             max_length=seq_length,
             num_proc=build_dataset_num_proc,
             render_endpoint=render_endpoint,
@@ -904,6 +807,7 @@ def load_and_preprocess_dataset(
         processed_datasets.append(preprocessed_dataset)
 
     combined_dataset = concatenate_datasets(processed_datasets)
+    combined_dataset.set_format(type="torch")
     combined_dataset = combined_dataset.shuffle(seed=seed)
     if max_samples is not None and len(combined_dataset) > max_samples:
         combined_dataset = combined_dataset.select(range(max_samples))
@@ -916,18 +820,12 @@ def load_and_preprocess_dataset(
         )
 
     if not skip_token_freq:
-        log.subsection("Computing token frequency distribution")
+        log.info("Computing token frequency distribution")
         save_token_frequency_distribution(
             dataset=combined_dataset,
             output_path=token_freq_path,
         )
 
-    if len(combined_dataset) == 0:
-        log.warning("No samples remain after preprocessing; skipping visualization")
-    else:
-        log.subsection("Visualizing sample")
-        _visualize_sample(combined_dataset, processor, idx=0)
+    log.info("Dataset preprocessing complete")
 
-    log.section("Dataset preprocessing complete")
-
-    return combined_dataset, processor
+    return combined_dataset
