@@ -499,6 +499,7 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
         max_anchors: int = 512,
         per_position_loss_weight: str = "fixed-exp-decay",
         dpace_alpha: float = 0.5,
+        loss_step: torch.Tensor | None = None,
         **kwargs,
     ):
         _, logits, targets, aligned_loss_mask, _ = self._backbone_forward(
@@ -521,5 +522,6 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
             per_position_loss_weight=per_position_loss_weight,
             dpace_alpha=dpace_alpha,
             sample_from_anchor=self.config.sample_from_anchor,
+            loss_step=loss_step,
         )
         return None, loss, metrics
