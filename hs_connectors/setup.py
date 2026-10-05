@@ -38,7 +38,7 @@ def get_next_version(build_type: str) -> tuple[Version, str | None, int]:
             warnings.warn(
                 f"RELEASE build must be on tag hsc-vX.Y.Z; "
                 f"HEAD is {commits_since_last} commit(s) ahead",
-                stacklevel=2
+                stacklevel=2,
             )
         return version, tag, 0
 
