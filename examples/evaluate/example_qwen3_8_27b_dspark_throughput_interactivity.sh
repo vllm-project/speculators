@@ -40,6 +40,10 @@ STREAMS_LONG="32,64,128"       # 60 s warmup + 120 s window each
 MAX_TOKENS=1024
 REPEATS=1
 MAX_MODEL_LEN=16384
+# Pin the scheduler limits: vLLM picks them from GPU memory otherwise (max-num-seqs 256 to
+# 1024, batched tokens 2048 to 16384), and the batch cap must be at least the largest N.
+MAX_NUM_SEQS=256
+MAX_NUM_BATCHED_TOKENS=16384
 VLLM_PORT=8110
 SERVER_URL="http://localhost:${VLLM_PORT}"
 OUT_DIR="${OUT_DIR:-./qwen3_8_27b_dspark_$(date +%Y%m%d_%H%M%S)}"
@@ -68,7 +72,8 @@ trap cleanup EXIT
 
 start_server() {  # <config> [extra vllm args...]
     local config=$1; shift
-    local cmd=(vllm serve "$TARGET_MODEL" --port "$VLLM_PORT" --max-model-len "$MAX_MODEL_LEN" "$@")
+    local cmd=(vllm serve "$TARGET_MODEL" --port "$VLLM_PORT" --max-model-len "$MAX_MODEL_LEN"
+               --max-num-seqs "$MAX_NUM_SEQS" --max-num-batched-tokens "$MAX_NUM_BATCHED_TOKENS" "$@")
     echo "=== Launching vLLM ($config): ${cmd[*]}"
     printf '%s\n' "${cmd[*]}" > "$OUT_DIR/serve_${config}_command.txt"
     "${cmd[@]}" > "$OUT_DIR/serve_${config}.log" 2>&1 &

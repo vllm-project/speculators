@@ -53,6 +53,7 @@ It launches vLLM for each configuration, sweeps N = 1 to 128 on each dataset, st
 
    ```bash
    vllm serve Qwen/Qwen3.8-27B --port 8010 --max-model-len 16384 \
+     --max-num-seqs 256 --max-num-batched-tokens 16384 \
      --speculative-config '{"model":"RedHatAI/Qwen3.8-27B-speculator.dspark","num_speculative_tokens":7,"method":"dspark"}'
    ```
 
@@ -99,7 +100,8 @@ It launches vLLM for each configuration, sweeps N = 1 to 128 on each dataset, st
 
 ## Choosing N and windows
 
-- Double N from 1 until the server's batch cap, and raise the cap if you want the left end of the curve to show the GPU rather than the default configuration.
+- Pin the server's scheduler limits and set the batch cap at or above the largest N: `--max-num-seqs 256 --max-num-batched-tokens 16384` for a sweep to N = 128. Left unset, vLLM derives them from GPU memory (`max-num-seqs` 256 to 1,024, batched tokens 2,048 to 16,384), so the same script measures a different scheduler on a different host. InferenceX pins the batch size in every recipe, usually at or above the concurrency of the point, with a large chunked-prefill budget. Raise the cap if you want the left end of the curve to show the GPU rather than one configuration. When the cap is above N and check 8 still fires, something else is limiting admission; sample vLLM's `num_requests_running` and `num_requests_waiting` gauges while the point runs.
+- A smaller `--max-num-batched-tokens` gives better ITL, because fewer prefill tokens interrupt decode steps; a larger one gives better TTFT and throughput. vLLM's tuning guide recommends above 8,192 for throughput.
 - At 1,024 output tokens, a request takes a few seconds at N = 1 and tens of seconds at N = 128, so the high-N points need a 60 s warmup and a 120 s window or more.
 - Run the configurations one at a time on a quiet machine, keep the server flags identical apart from the speculator, and repeat every point before quoting a difference of a few percent.
 
