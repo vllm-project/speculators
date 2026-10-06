@@ -43,7 +43,9 @@ Give `--streams`, `--rates`, or both.
 
 ### Data
 
-Choose exactly one of the three.
+Give one data source per run: a dataset subset, random text, or a raw GuideLLM spec. The script exits if flags from two sources are combined.
+
+**A dataset subset** (real prompts, sent through `/v1/chat/completions`):
 
 - **`--dataset`** (str) Hugging Face dataset id, e.g. `RedHatAI/speculator_benchmarks`, or a local directory or `.jsonl` file.
 - **`--subset`** (str) File name without `.jsonl`, e.g. `HumanEval` or `math_reasoning`.
@@ -51,10 +53,16 @@ Choose exactly one of the three.
 - **`--dataset-repeat`** (int, default: `0`) Repeat the subset this many times; `0` picks enough rows for 20 requests per stream and at least 5,000 requests. GuideLLM ends a run when its dataset runs out.
 - **`--max-tokens`** (int) `max_tokens` per request. Set it with a dataset.
 - **`--ignore-eos`** Force every output to `--max-tokens`.
-- **`--prompt-tokens`**, **`--output-tokens`** (int) Random text with these target lengths; the output length is forced.
-- **`--range-ratio`** (float, default: `0.8`) Random text: each request's lengths drawn uniformly from `ratio × L` to `L`. `1` gives fixed lengths, which make closed-loop streams move in lockstep.
-- **`--data`** (str) Any raw GuideLLM data spec, passed through unchanged.
-- **`--data-column-mapper`** (str) Raw GuideLLM column mapper; with `--dataset` it defaults to `kind=generative_column_mapper,column_mappings.text_column=<prompt column>`.
+
+**Random text** (lengths forced, prefix caching defeated; not meaningful for a speculator):
+
+- **`--prompt-tokens`**, **`--output-tokens`** (int) Target prompt and output lengths.
+- **`--range-ratio`** (float, default: `0.8`) Each request's lengths drawn uniformly from `ratio × L` to `L`. `1` gives fixed lengths, which make closed-loop streams move in lockstep.
+
+**A raw GuideLLM spec** (anything GuideLLM accepts, passed through unchanged):
+
+- **`--data`** (str) The data spec, e.g. `kind=synthetic_text,prompt_tokens=1000,output_tokens=1000`.
+- **`--data-column-mapper`** (str) Column mapper spec. Also usable with `--dataset`, where it defaults to `kind=generative_column_mapper,column_mappings.text_column=<prompt column>`.
 
 ### Output and control
 
