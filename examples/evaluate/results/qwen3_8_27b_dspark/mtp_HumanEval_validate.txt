@@ -1,0 +1,13 @@
+
+    point  offered achieved  ratio   tok/s    conc   1/itl  little  itl_ms  ttft_ms accept  burst spread
+    conc1      N=1     0.20      -     179     1.0   185.2   178.9    5.40       46   2.25   2.00   0.0%
+    conc2      N=2     0.44      -     361     2.0   185.2   180.4    5.40       60   2.27   1.21   0.0%
+    conc4      N=4     0.98      -     687     4.0   176.5   171.9    5.67       59   2.28   0.94   0.0%
+    conc8      N=8     1.66      -    1273     8.0   163.3   159.1    6.12       61   2.29   0.75   0.0%
+   conc16     N=16     2.83      -    2249    16.0   144.7   140.6    6.91       62   2.26   0.48   0.0%
+   conc32     N=32     4.86      -    3707    32.0   119.1   115.8    8.39       67   2.27   0.39   0.0%
+   conc64     N=64     6.77      -    5174    64.0    83.0    80.9   12.05       92   2.28   0.33   0.0%
+  conc128    N=128     7.90      -    6129   128.0    49.4    47.9   20.25      157   2.27   0.30   0.0%
+
+WARNING: conc1: the window holds 894 generated tokens per completed request but requests average 798; the run did not reach steady state within the window. Lengthen --max-seconds and --warmup-seconds.
+

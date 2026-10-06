@@ -1,12 +1,12 @@
 #!/bin/bash
-# Example: throughput vs. interactivity of Qwen3.8-27B with and without its
-# DSpark speculator, on the HumanEval and math_reasoning subsets of
-# RedHatAI/speculator_benchmarks.
+# Example: throughput vs. interactivity of Qwen3.8-27B alone, with its DSpark
+# speculator, and with its own MTP head, on the HumanEval and math_reasoning
+# subsets of RedHatAI/speculator_benchmarks.
 #
-# For each of the two server configurations this script launches vLLM, runs an
+# For each of the three server configurations this script launches vLLM, runs an
 # InferenceX-style closed-loop sweep (N = 1, 2, 4, ... requests kept in flight)
 # on each dataset, stops the server, and finally draws one chart per dataset
-# with both curves. The x axis is output tokens per second per user
+# with all curves. The x axis is output tokens per second per user
 # (1000 / mean inter-token latency), the y axis output tokens per second for
 # the GPU. The further right the speculator's curve sits at a given
 # throughput, the more each user gains from it.
@@ -21,10 +21,10 @@
 #   <config>_<subset>/            raw GuideLLM JSON per point, acceptance
 #                                 sidecars, bench_command.txt (provenance)
 #   <config>_<subset>.csv         one row per point
-#   <subset>.png                  the chart, both configurations
+#   <subset>.png                  the chart, all configurations
 #   serve_<config>.log            vLLM server logs and the exact serve command
 #
-# Expect about 40 minutes per configuration with the defaults below. Raise
+# Expect about 40 minutes per configuration (three configurations) with the defaults below. Raise
 # REPEATS to 3 before quoting a number; the validate step reports the spread.
 
 set -euo pipefail
@@ -32,7 +32,8 @@ set -euo pipefail
 # ============ Configuration ============
 TARGET_MODEL="Qwen/Qwen3.8-27B"
 SPECULATOR="RedHatAI/Qwen3.8-27B-speculator.dspark"
-SPEC_TOKENS=7
+SPEC_TOKENS=7                  # DSpark draft tokens per step (the speculator's model card)
+MTP_SPEC_TOKENS=2              # MTP draft tokens per step (Qwen's model cards recommend 2)
 DATASET="RedHatAI/speculator_benchmarks"
 SUBSETS="HumanEval math_reasoning"
 STREAMS_SHORT="1,2,4,8,16"     # 30 s warmup + 90 s window each
@@ -111,11 +112,18 @@ start_server dspark --speculative-config \
 for subset in $SUBSETS; do sweep dspark "$subset"; done
 cleanup
 
-# One chart per dataset, both configurations.
+# Configuration 3: the target model with its own MTP head (shipped in the checkpoint).
+start_server mtp --speculative-config \
+    "{\"method\":\"mtp\",\"num_speculative_tokens\":${MTP_SPEC_TOKENS}}"
+for subset in $SUBSETS; do sweep mtp "$subset"; done
+cleanup
+
+# One chart per dataset, all configurations.
 for subset in $SUBSETS; do
     python "$BENCH" plot \
         --series "$OUT_DIR/baseline_${subset}.csv:${TARGET_MODEL}, no speculator:#7a8c3f" \
         --series "$OUT_DIR/dspark_${subset}.csv:+ ${SPECULATOR} (${SPEC_TOKENS} draft tokens):#b52513" \
+        --series "$OUT_DIR/mtp_${subset}.csv:+ MTP head (${MTP_SPEC_TOKENS} draft tokens):#2c6e9b" \
         --title "Output Throughput vs. Interactivity: ${subset}" --label-format "N={streams:.0f}" \
         --subtitle "${TARGET_MODEL} · ${DATASET} ${subset} · max_tokens ${MAX_TOKENS} · closed loop, N = ${STREAMS_SHORT},${STREAMS_LONG} · ${REPEATS} run(s) per point" \
         --out "$OUT_DIR/${subset}.png"

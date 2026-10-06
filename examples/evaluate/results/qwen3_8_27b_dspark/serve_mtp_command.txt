@@ -1,0 +1,1 @@
+vllm serve Qwen/Qwen3.8-27B --served-model-name Qwen/Qwen3.8-27B --port 8012 --max-model-len 16384 --max-num-seqs 256 --max-num-batched-tokens 16384 --speculative-config {"method":"mtp","num_speculative_tokens":2}
