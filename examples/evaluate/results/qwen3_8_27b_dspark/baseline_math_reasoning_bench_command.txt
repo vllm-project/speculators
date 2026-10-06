@@ -1,0 +1,10 @@
+timestamp: 2026-10-06T13:07:25+00:00
+command: python3 <run dir>/throughput_interactivity.py collect --target http://localhost:8010 --model Qwen/Qwen3.8-27B --tokenizer Qwen/Qwen3.8-27B --dataset RedHatAI/speculator_benchmarks --subset math_reasoning --max-tokens 1024 --repeats 1 --out-dir <run dir>/baseline_math_reasoning --label baseline --csv <run dir>/baseline_math_reasoning.csv --keep-going --streams 32,64,128 --max-seconds 120 --warmup-seconds 60
+cwd: <run dir>
+python: 3.12.13
+git_sha: unknown
+guidellm: 0.8.0
+vllm: not installed
+speculators: not installed
+server_version: {"version":"0.30.1rc1.dev418+g50319916a"}
+server_models: {"object":"list","data":[{"id":"Qwen/Qwen3.8-27B","object":"model","created":1791292045,"owned_by":"vllm","root":"Qwen/Qwen3.8-27B","parent":null,"max_model_len":16384,"permission":[{"id":"modelperm-90f00b86d8ca985d","object":"model_permission","created":1791292045,"allow_create_engine":false,"allow_sampling":true,"allow_logprobs":true,"allow_search_indices":false,"allow_view":true,"allow_fine_tuning":false,"organization":"*","group":null,"is_blocking":false}]}]}

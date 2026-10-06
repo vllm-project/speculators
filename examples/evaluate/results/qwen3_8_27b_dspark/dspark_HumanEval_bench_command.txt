@@ -1,0 +1,10 @@
+timestamp: 2026-10-06T12:47:23+00:00
+command: python3 <run dir>/throughput_interactivity.py collect --target http://localhost:8011 --model Qwen/Qwen3.8-27B --tokenizer Qwen/Qwen3.8-27B --dataset RedHatAI/speculator_benchmarks --subset HumanEval --max-tokens 1024 --repeats 1 --out-dir <run dir>/dspark_HumanEval --label dspark --csv <run dir>/dspark_HumanEval.csv --keep-going --streams 32,64,128 --max-seconds 120 --warmup-seconds 60
+cwd: <run dir>
+python: 3.12.13
+git_sha: unknown
+guidellm: 0.8.0
+vllm: not installed
+speculators: not installed
+server_version: {"version":"0.30.1rc1.dev418+g50319916a"}
+server_models: {"object":"list","data":[{"id":"Qwen/Qwen3.8-27B","object":"model","created":1791290843,"owned_by":"vllm","root":"Qwen/Qwen3.8-27B","parent":null,"max_model_len":16384,"permission":[{"id":"modelperm-89eb673d34c6540a","object":"model_permission","created":1791290843,"allow_create_engine":false,"allow_sampling":true,"allow_logprobs":true,"allow_search_indices":false,"allow_view":true,"allow_fine_tuning":false,"organization":"*","group":null,"is_blocking":false}]}]}

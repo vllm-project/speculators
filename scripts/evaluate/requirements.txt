@@ -5,6 +5,7 @@ speculators>0.7.1
 
 # Visualization dependencies
 matplotlib
+pillow
 numpy
 scikit-learn
 scipy

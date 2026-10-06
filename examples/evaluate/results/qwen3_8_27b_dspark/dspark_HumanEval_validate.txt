@@ -1,0 +1,13 @@
+
+    point  offered achieved  ratio   tok/s    conc   1/itl  little  itl_ms  ttft_ms accept  burst spread
+    conc1      N=1     0.29      -     247     1.0   262.8   247.6    3.81       46   3.40   1.57   0.0%
+    conc2      N=2     0.61      -     469     2.0   251.9   234.4    3.97       61   3.36   1.21   0.0%
+    conc4      N=4     1.19      -     909     4.0   236.3   227.2    4.23       63   3.44   0.77   0.0%
+    conc8      N=8     2.09      -    1624     8.0   213.4   203.0    4.69       65   3.44   0.58   0.0%
+   conc16     N=16     3.33      -    2601    16.0   173.5   162.6    5.77       72   3.45   0.43   0.0%
+   conc32     N=32     4.61      -    3549    32.0   117.4   110.9    8.52      103   3.43   0.41   0.0%
+   conc64     N=64     5.32      -    4034    64.0    67.0    63.0   14.92      178   3.44   0.41   0.0%
+  conc128    N=128     5.24      -    3967   128.0    59.7    31.0   16.75    11037   3.43   0.41   0.0%
+
+WARNING: 1 closed-loop points have a median TTFT above 1.0 s: conc128 (11.0 s). More streams than the server admits at once (max-num-seqs) wait inside the server, so these points measure queueing plus decode. Raise max-num-seqs or stop the sweep below this N.
+
