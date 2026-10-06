@@ -1,0 +1,108 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Open Speculative Model Configuration",
+  "description": "Schema for a DFlash speculative decoding draft model configuration. Architecture-specific model fields are accepted but not validated by Open Spec Config.",
+  "type": "object",
+  "properties": {
+    "open_spec_config_version": {
+      "type": "string",
+      "const": "0.0.0",
+      "description": "Version of the Open Spec Config format. Each schema release validates exactly one version."
+    },
+    "architectures": {
+      "type": "array",
+      "description": "Model implementation class that loads this configuration. DFlash checkpoints use DflashDraftModel.",
+      "minItems": 1,
+      "maxItems": 1,
+      "items": {
+        "const": "DflashDraftModel"
+      }
+    },
+    "speculative_config": {
+      "type": "object",
+      "description": "Speculative decoding settings: shared metadata plus DFlash-specific fields. Each speculative method has its own standalone schema, so unknown fields are rejected.",
+      "properties": {
+        "method": {
+          "type": "string",
+          "const": "dflash",
+          "description": "Speculative decoding algorithm identifier. This schema supports DFlash."
+        },
+        "speculative_tokens": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Maximum number of candidate tokens the draft model can propose for verification in one decoding step, excluding the existing anchor. At runtime may request fewer tokens."
+        },
+        "verifier": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Optional model identifier for the verifier model."
+        },
+        "target_layer_ids": {
+          "type": "array",
+          "description": "Verifier hidden-state layer indices consumed by the draft model.",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "A verifier layer index interpreted according to target_layer_start_idx."
+          }
+        },
+        "target_layer_start_idx": {
+          "type": "integer",
+          "enum": [
+            0,
+            1
+          ],
+          "description": "Index of the first target layer used by the draft model. 0 or 1."
+        },
+        "draft_vocab_size": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Optional size of the reduced vocabulary used by the draft model."
+        },
+        "sample_from_anchor": {
+          "type": "boolean",
+          "description": "Whether token sampling may start from the anchor token."
+        },
+        "mask_token_id": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Vocabulary ID of the mask token used during draft generation."
+        },
+        "sliding_window_non_causal": {
+          "type": "boolean",
+          "description": "Whether draft sliding-window attention may attend non-causally within its window."
+        },
+        "training_framework": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Framework used to train the draft model, as a GitHub org/repo, e.g. vllm-project/speculators or sgl-project/SpecForge. Lets a checkpoint be traced back to its training framework, since the same drafter can perform differently across inference engines depending on where it was trained."
+        },
+        "training_framework_version": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Version of the training framework."
+        }
+      },
+      "required": [
+        "method",
+        "speculative_tokens",
+        "target_layer_ids",
+        "target_layer_start_idx",
+        "sample_from_anchor",
+        "mask_token_id",
+        "sliding_window_non_causal"
+      ],
+      "additionalProperties": false
+    }
+  },
+  "required": [
+    "architectures",
+    "open_spec_config_version",
+    "speculative_config"
+  ],
+  "additionalProperties": {
+    "description": "Architecture-specific base-model configuration property, such as a Qwen3Config constructor argument. Open Spec Config does not define or validate these properties."
+  }
+}

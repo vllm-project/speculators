@@ -22,6 +22,7 @@ from transformers import PretrainedConfig
 from speculators.convert.dflash.converter import DFlashConverter
 from speculators.convert.eagle.eagle3_converter import Eagle3Converter
 from speculators.convert.mtp.converter import MTPConverter
+from speculators.open_spec_config import open_spec_to_native
 
 __all__ = ["convert_model", "maybe_convert_external_checkpoint"]
 
@@ -134,6 +135,9 @@ def maybe_convert_external_checkpoint(
     if config_dict is None:
         config_dict, _ = PretrainedConfig.get_config_dict(model, cache_dir=cache_dir)
     if "speculators_model_type" in config_dict:
+        return str(model)
+    if "open_spec_config_version" in config_dict:
+        open_spec_to_native(config_dict)
         return str(model)
 
     architectures = config_dict.get("architectures") or []

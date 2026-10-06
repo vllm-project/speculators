@@ -23,13 +23,22 @@ from speculators.convert.utils import (
     load_checkpoint_weights,
 )
 from speculators.models.dflash import DFlashDraftModel, DFlashSpeculatorConfig
+from speculators.open_spec_config import open_spec_to_native
 from speculators.proposals.greedy import GreedyTokenProposalConfig
 
 __all__ = ["DFlashConverter"]
 
 # config.json keys that are not part of the draft transformer (Qwen3) config
 _NON_TRANSFORMER_KEYS = frozenset(
-    {"architectures", "auto_map", "block_size", "dflash_config", "num_target_layers"}
+    {
+        "architectures",
+        "auto_map",
+        "block_size",
+        "dflash_config",
+        "num_target_layers",
+        "open_spec_config_version",
+        "speculative_config",
+    }
 )
 
 # state dict keys that are filled from the verifier (not the source checkpoint), so
@@ -84,7 +93,17 @@ class DFlashConverter:
         base_model: str,
         aux_hidden_state_layer_ids: list[int] | None,
     ) -> DFlashSpeculatorConfig:
+        is_open_spec = "open_spec_config_version" in source_config
+        if is_open_spec:
+            native = open_spec_to_native(source_config)
+            native["speculators_config"]["verifier"] = VerifierConfig.from_pretrained(
+                base_model
+            ).model_dump()
+            if aux_hidden_state_layer_ids is not None:
+                native["aux_hidden_state_layer_ids"] = aux_hidden_state_layer_ids
+            return DFlashSpeculatorConfig(**native)
         dflash = source_config.get("dflash_config", {})
+        sample_from_anchor = dflash.get("sample_from_anchor", False)
         # block_size lives at the top level in older checkpoints (Qwen3, LLaMA)
         # and inside dflash_config in newer ones (Qwen3.5+)
         block_size = source_config.get("block_size") or dflash.get("block_size")
@@ -129,7 +148,7 @@ class DFlashConverter:
             algorithm="dflash",
             proposal_methods=[
                 GreedyTokenProposalConfig(
-                    speculative_tokens=block_size - 1,
+                    speculative_tokens=block_size - (not sample_from_anchor),
                 )
             ],
             default_proposal_method="greedy",
@@ -141,10 +160,14 @@ class DFlashConverter:
 
         return DFlashSpeculatorConfig(
             transformer_layer_config=transformer_config,  # type: ignore[arg-type]
-            draft_vocab_size=transformer_config["vocab_size"],
+            draft_vocab_size=dflash.get(
+                "draft_vocab_size", transformer_config["vocab_size"]
+            ),
             block_size=block_size,
             aux_hidden_state_layer_ids=aux_hidden_state_layer_ids,
             mask_token_id=dflash.get("mask_token_id"),
+            sample_from_anchor=sample_from_anchor,
+            sliding_window_non_causal=dflash.get("sliding_window_non_causal", False),
             speculators_config=speculators_config,
         )
 

@@ -26,6 +26,7 @@ import torch
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 from transformers import PretrainedConfig
 
+from speculators.open_spec_config import open_spec_to_native
 from speculators.proposals import TokenProposalConfig
 from speculators.utils import PydanticClassRegistryMixin, ReloadableBaseModel
 
@@ -211,7 +212,10 @@ class SpeculatorModelConfig(PydanticClassRegistryMixin, PretrainedConfig):
             **kwargs,
         )
 
-        if "speculators_model_type" not in config_dict:
+        if (
+            "speculators_model_type" not in config_dict
+            and "open_spec_config_version" not in config_dict
+        ):
             # Conversion pathway
             raise NotImplementedError(
                 "Loading a non-speculator model config is not supported yet."
@@ -231,6 +235,8 @@ class SpeculatorModelConfig(PydanticClassRegistryMixin, PretrainedConfig):
         :param kwargs: Additional keyword arguments that override config values
         :return: A SpeculatorModelConfig instance of the appropriate subclass
         """
+        if "open_spec_config_version" in config_dict:
+            config_dict = open_spec_to_native(config_dict)
         dict_obj = {**config_dict, **kwargs}
 
         if "speculators_model_type" not in dict_obj:
@@ -287,6 +293,8 @@ class SpeculatorModelConfig(PydanticClassRegistryMixin, PretrainedConfig):
     )
 
     def __init__(self, **kwargs):
+        if "open_spec_config_version" in kwargs:
+            kwargs = open_spec_to_native(kwargs)
         # initialize the Pydantic arguments first to set all valid fields
         PydanticClassRegistryMixin.__init__(self, **kwargs)
 

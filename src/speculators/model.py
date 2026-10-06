@@ -324,7 +324,10 @@ class SpeculatorModel(ClassRegistryMixin, PreTrainedModel):  # type: ignore[misc
             config_dict, _ = PretrainedConfig.get_config_dict(
                 pretrained_model_name_or_path, cache_dir=cache_dir
             )
-            if "speculators_model_type" not in config_dict:
+            if (
+                "speculators_model_type" not in config_dict
+                and "open_spec_config_version" not in config_dict
+            ):
                 from speculators.convert.entrypoints import (  # noqa: PLC0415
                     maybe_convert_external_checkpoint,
                 )
@@ -343,6 +346,8 @@ class SpeculatorModel(ClassRegistryMixin, PreTrainedModel):  # type: ignore[misc
                 token=token,
                 revision=revision,
             )
+            if "open_spec_config_version" in config_dict and verifier is not None:
+                config.speculators_config.verifier.name_or_path = verifier
 
         if not isinstance(config, SpeculatorModelConfig):
             raise TypeError(

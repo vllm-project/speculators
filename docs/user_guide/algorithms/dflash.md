@@ -29,6 +29,14 @@ The sampling mode affects both training (which targets are used and which slots 
 
 **Training:** Use the `--sample-from-anchor` / `--no-sample-from-anchor` flags to override the algorithm-specific default.
 
+## Checkpoint Configuration
+
+DFlash checkpoints saved by Speculators use the [Open Spec Config DFlash schema](https://github.com/open-spec-config/open-spec-config/blob/main/src/open-spec-config/schema/dflash.schema.json), version `0.0.0`. The saved `config.json` uses `architectures: ["DflashDraftModel"]`, stores decoder configuration fields at the top level, and places speculative decoding settings in `speculative_config`.
+
+`speculative_tokens` is the number of proposed tokens: `block_size - 1` when `sample_from_anchor` is false, or `block_size` when it is true. Saved target layer IDs use `target_layer_start_idx: 1`, matching Speculators' hidden-state indices. Loading also accepts zero-based layer IDs and converts them to the runtime convention.
+
+Existing Speculators DFlash checkpoints continue to load through `from_pretrained`. Saving them again writes the new format. Legacy external DFlash checkpoints still use the conversion pathway. Speculators-specific metadata is retained under `speculators_metadata`; DFlash2 and other variants keep their existing configuration formats.
+
 ## Pretrained Models
 
 Pretrained DFlash speculator models are available on HuggingFace from the [RedHatAI speculator models collection](https://huggingface.co/collections/RedHatAI/speculator-models):

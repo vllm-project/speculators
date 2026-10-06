@@ -7,6 +7,7 @@ from transformers.models.qwen3.modeling_qwen3 import (
 )
 
 from speculators import SpeculatorModelConfig
+from speculators.open_spec_config import DFlashSpeculativeConfig
 
 __all__ = [
     "DFlashSpeculatorConfig",
@@ -103,3 +104,53 @@ class DFlashSpeculatorConfig(SpeculatorModelConfig):
     def target_vocab_size(self) -> int:
         """Get target vocabulary size from transformer config."""
         return self.transformer_layer_config.vocab_size
+
+    def to_dict(self) -> dict[str, Any]:
+        """Save DFlash using Open Spec Config; retain variant formats."""
+        native = super().to_dict()
+        if self.speculators_model_type != "dflash" or self.speculators_config is None:
+            return native
+        if self.aux_hidden_state_layer_ids is None or self.mask_token_id is None:
+            raise ValueError(
+                "Saving DFlash requires target layer IDs and mask_token_id"
+            )
+        settings = DFlashSpeculativeConfig(
+            method="dflash",
+            speculative_tokens=self.block_size - (not self.sample_from_anchor),
+            verifier=self.speculators_config.verifier.name_or_path,
+            target_layer_ids=self.aux_hidden_state_layer_ids,
+            target_layer_start_idx=1,
+            draft_vocab_size=self.draft_vocab_size,
+            sample_from_anchor=self.sample_from_anchor,
+            mask_token_id=self.mask_token_id,
+            sliding_window_non_causal=self.sliding_window_non_causal,
+            training_framework="vllm-project/speculators",
+            training_framework_version=self.speculators_version,
+        )
+        metadata = {
+            key: value
+            for key, value in native.items()
+            if key not in self.__class__.model_fields and key != "architectures"
+        }
+        metadata["verifier_architectures"] = (
+            self.speculators_config.verifier.architectures
+        )
+        metadata["speculators_version"] = self.speculators_version
+        return {
+            **self.transformer_layer_config.to_dict(),
+            "dtype": native.get("dtype"),
+            "architectures": ["DflashDraftModel"],
+            "open_spec_config_version": "0.0.0",
+            "speculative_config": settings.model_dump(exclude_none=True),
+            "target_hidden_size": self.target_hidden_size,
+            "speculators_metadata": metadata,
+        }
+
+    def to_diff_dict(self) -> dict[str, Any]:
+        """Keep the standalone wire config complete in config.json."""
+        if (
+            self.speculators_model_type == "dflash"
+            and self.speculators_config is not None
+        ):
+            return self.to_dict()
+        return super().to_diff_dict()
