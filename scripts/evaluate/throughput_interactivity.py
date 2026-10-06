@@ -124,8 +124,9 @@ least once.
    means the streams are synchronized; jitter the lengths or use real data.
 7. Datasets: a small subset repeated many times is served partly from the
    prefix cache (`mean_cached_tokens`). Disable prefix caching for a clean number.
-8. Closed loop past the server's batch cap: when N streams exceed max-num-seqs
-   the extra requests wait inside the server, so TTFT jumps while ITL does not.
+8. Closed loop past what the server can hold: when N streams exceed
+   max-num-seqs, or the KV cache is full, the extra requests wait inside the
+   server, so TTFT jumps while ITL does not.
 """
 
 from __future__ import annotations
@@ -1088,7 +1089,7 @@ def validate_rows(rows: list[dict]) -> list[str]:  # noqa: C901
             "server or report these as cached-workload numbers."
         )
 
-    # 8. closed loop past the server's batch cap: queueing shows up as TTFT
+    # 8. closed loop past what the server can hold: queueing shows up as TTFT
     ttfts = [p["ttft"] for p in points if p["ttft"]]
     if closed_loop and ttfts:
         floor = max(QUEUE_TTFT_MS, QUEUE_TTFT_FACTOR * min(ttfts))
@@ -1099,11 +1100,10 @@ def validate_rows(rows: list[dict]) -> list[str]:  # noqa: C901
             )
             warnings.append(
                 f"{len(queued)} closed-loop points have a median TTFT above "
-                f"{floor / 1000:.1f} s: {names}. More streams than the server "
-                "admits at "
-                "once (max-num-seqs) wait inside the server, so these points measure "
-                "queueing plus decode. Raise max-num-seqs or stop the sweep below "
-                "this N."
+                f"{floor / 1000:.1f} s: {names}. More streams than the server can "
+                "hold at once wait inside it (a batch cap, or a full KV cache), so "
+                "these points measure queueing plus decode. Raise max-num-seqs, free "
+                "KV cache memory, or stop the sweep below this N."
             )
 
     print()
