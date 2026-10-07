@@ -17,7 +17,17 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "scripts" / "evalua
 import evaluate  # type: ignore[import-not-found]
 
 
-def _benchmark(strategy: str, rate: float = 0) -> dict:
+def _benchmark(
+    strategy: str,
+    rate: float = 0,
+    successful: int = 1,
+    errored: int = 0,
+    sampled_successful: list | None = None,
+) -> dict:
+    if sampled_successful is None:
+        sampled_successful = (
+            [{"output_metrics": {"text_tokens": 200}}] if successful else []
+        )
     return {
         "config": {"strategy": {"type_": strategy, "rate": rate}},
         "metrics": {
@@ -27,8 +37,14 @@ def _benchmark(strategy: str, rate: float = 0) -> dict:
             "time_to_first_token_ms": {"successful": {"median": 18.0}},
             "output_tokens_per_second": {"successful": {"median": 95.0}},
             "output_tokens": {"successful": {"sum": 200}},
+            "request_totals": {
+                "successful": successful,
+                "errored": errored,
+                "incomplete": 0,
+                "total": successful + errored,
+            },
         },
-        "requests": {"successful": [{"output_metrics": {"text_tokens": 200}}]},
+        "requests": {"successful": sampled_successful},
     }
 
 
@@ -140,10 +156,19 @@ def test_acceptance_is_reported_once_per_subset(
 
     if mode == "sweep":
         columns, rows = _read_csv(tmp_path / "perf_results.csv")
-        assert columns == evaluate.BASE_CSV_COLUMNS
+        assert columns == evaluate.BASE_CSV_COLUMNS + [
+            "num_drafts",
+            "num_draft_tokens",
+            "num_accepted_tokens",
+            "acceptance_length",
+            "acceptance_at_pos_0",
+            "acceptance_at_pos_1",
+        ]
         assert [row["subset"] for row in rows] == ["qa", "qa", "HumanEval", "HumanEval"]
         assert [float(row["target_rate"]) for row in rows] == [1, 5, 1, 5]
         assert all(float(row["latency_median_s"]) == 0.15 for row in rows)
+        assert [float(row["num_drafts"]) for row in rows] == [20, 20, 10, 10]
+        assert [float(row["acceptance_length"]) for row in rows] == [2.3, 2.3, 1.8, 1.8]
         assert json.loads((tmp_path / "max_tokens.json").read_text()) == {
             "qa": 256,
             "HumanEval": 256,
@@ -228,3 +253,82 @@ def test_sweep_without_load_points_is_fatal(benchmark_args, benchmark_io):
     with pytest.raises(SystemExit) as error:
         evaluate.run_benchmark(benchmark_args)
     assert error.value.code == 1
+
+
+def test_zero_successful_throughput_requests_is_fatal(benchmark_args, benchmark_io):
+    benchmark_args.mode = "throughput"
+    run, _ = benchmark_io
+
+    def write_zero_successful(**kwargs):
+        kwargs["output_path"].write_text(
+            json.dumps(
+                {
+                    "benchmarks": [
+                        _benchmark("throughput", successful=0, errored=2)
+                    ]
+                }
+            )
+        )
+
+    run.side_effect = write_zero_successful
+
+    with pytest.raises(SystemExit) as error:
+        evaluate.run_benchmark(benchmark_args)
+    assert error.value.code == 1
+
+
+def _write_missing_report(**_kwargs):
+    """Never create run_output."""
+
+
+def _write_empty_report(**kwargs):
+    kwargs["output_path"].write_text("")
+
+
+def _write_malformed_report(**kwargs):
+    kwargs["output_path"].write_text(
+        json.dumps({"benchmarks": [{"config": {}, "metrics": {}}]})
+    )
+
+
+@pytest.mark.parametrize(
+    "write_report",
+    [_write_missing_report, _write_empty_report, _write_malformed_report],
+    ids=["missing", "empty", "malformed"],
+)
+def test_invalid_throughput_report_is_fatal(
+    benchmark_args, benchmark_io, write_report
+):
+    benchmark_args.mode = "throughput"
+    run, _ = benchmark_io
+    run.side_effect = write_report
+
+    with pytest.raises(SystemExit) as error:
+        evaluate.run_benchmark(benchmark_args)
+    assert error.value.code == 1
+
+
+def test_throughput_succeeds_with_empty_sampled_requests(
+    benchmark_args, benchmark_io, tmp_path
+):
+    benchmark_args.mode = "throughput"
+    run, _ = benchmark_io
+
+    def write_results(**kwargs):
+        kwargs["output_path"].write_text(
+            json.dumps(
+                {
+                    "benchmarks": [
+                        _benchmark(
+                            "throughput", successful=5, sampled_successful=[]
+                        )
+                    ]
+                }
+            )
+        )
+
+    run.side_effect = write_results
+
+    evaluate.run_benchmark(benchmark_args)
+
+    assert (tmp_path / "artifacts" / "run_qa.json").is_file()

@@ -262,6 +262,21 @@ def _run_subset(
     )
     current = _require_metrics(metrics_url)
 
+    if not is_sweep:
+        try:
+            with run_output.open() as stream:
+                benchmarks = json.load(stream)["benchmarks"]
+
+            successful = sum(
+                benchmark["metrics"]["request_totals"]["successful"]
+                for benchmark in benchmarks
+            )
+            if successful <= 0:
+                raise ValueError("No successful throughput requests")
+        except (OSError, ValueError, KeyError, TypeError) as exc:
+            logger.error("[%s] Invalid throughput results: %s", subset, exc)
+            sys.exit(1)
+
     spec = extract_spec_decode_metrics(
         current,
         baseline_metrics=baseline,
@@ -282,14 +297,16 @@ def _run_subset(
         logger.warning("[%s] No speculative decoding metrics found", subset)
 
     if is_sweep:
-        rows = parse_sweep_results(run_output)
+        rows = parse_sweep_results(run_output, spec if has_spec else None)
         if not rows:
             logger.error("[%s] No performance results collected", subset)
             sys.exit(1)
         for row in rows:
             row["subset"] = subset
         if perf_csv is None:
-            perf_csv = CsvWriter(output_dir / "perf_results.csv", BASE_CSV_COLUMNS)
+            acc_cols = acceptance_csv_columns(spec) if has_spec else []
+            cols = BASE_CSV_COLUMNS + acc_cols
+            perf_csv = CsvWriter(output_dir / "perf_results.csv", cols)
         perf_csv.append_rows(rows)
 
     logger.info("[%s] Complete", subset)
