@@ -22,6 +22,9 @@ Examples:
     # MRCR long-context (first run renders and caches data in ./mrcr_data):
     python evaluate.py --target http://localhost:8000/v1 throughput \\
         --dataset openai/mrcr --mrcr-needles 2 --mrcr-buckets 1,2
+
+    # OTEL trace replay (recorded semantic content, both modes):
+    python evaluate.py --target http://localhost:8000/v1 throughput --otel
 """
 
 from __future__ import annotations
@@ -68,6 +71,7 @@ from speculators.provenance import (
 logger = logging.getLogger("evaluate")
 
 DEFAULT_DATASET = "RedHatAI/speculator_benchmarks"
+DEFAULT_OTEL_DATASET = "ibm-research/lmcache-agentic-traces_Otel"
 DEFAULT_SUBSETS = (
     "HumanEval,math_reasoning,qa,question,rag,"
     "summarization,tool_call,translation,writing"
@@ -213,6 +217,7 @@ def _run_subset(
     logger.info("[%s] Starting", subset)
     safe = subset.replace("/", "_").replace(" ", "_")
     max_tokens = 4096
+    is_otel = guidellm_common.get("data_kind") == "otel"
 
     # Dataset-provided request-body defaults (MRCR sets add_special_tokens)
     # merged under user-supplied --gen-kwargs.
@@ -223,9 +228,14 @@ def _run_subset(
 
     # For local JSONL files (SPEED-Bench) the dataset path IS the file —
     # no --data-args needed.  For HF datasets subset name doubles as the filter.
-    guidellm_subset = None if Path(guidellm_common["dataset"]).exists() else subset
+    guidellm_subset = (
+        None if is_otel or Path(guidellm_common["dataset"]).exists() else subset
+    )
 
-    if is_sweep:
+    # OTEL traces carry their own recorded output token counts (the span's
+    # completion count becomes each request's max_tokens with ignore_eos),
+    # so the gen-len estimation pass does not apply to them.
+    if is_sweep and not is_otel:
         gen_len_dir = artifacts_dir / "gen_len"
         gen_len_dir.mkdir(parents=True, exist_ok=True)
         gen_len_output = gen_len_dir / f"gen_len_{safe}.json"
@@ -296,7 +306,7 @@ def _run_subset(
             perf_csv.append_rows(rows)
 
     logger.info("[%s] Complete", subset)
-    return acceptance_csv, perf_csv, max_tokens if is_sweep else None
+    return acceptance_csv, perf_csv, max_tokens if is_sweep and not is_otel else None
 
 
 def _speedbench_run_items(args: argparse.Namespace) -> list[tuple[str, dict]]:
@@ -363,6 +373,32 @@ def _mrcr_run_items(
     ]
 
 
+def _otel_run_item(args: argparse.Namespace) -> tuple[str, dict]:
+    """Build the single ``(label, guidellm_common)`` run item for --otel.
+
+    The whole trace replays as one workload through guidellm's otel
+    deserializer with its recorded semantic content. OTEL data runs under
+    the mode's normal throughput/sweep profiles like any other dataset:
+    requests go out at max concurrency (recorded trace timestamps are
+    ignored), while turns within one conversation stay serialized by
+    guidellm's conversation DAG.
+    """
+    if args.dataset == MRCR_DATASET or args.dataset.startswith("speedbench/"):
+        logger.error("--otel cannot be combined with dataset %s", args.dataset)
+        sys.exit(1)
+    return (
+        args.dataset,
+        {
+            "target": args.target,
+            "dataset": args.dataset,
+            "data_kind": "otel",
+            "history": args.otel_history,
+            "data_column_mapper": args.data_column_mapper,
+            "max_concurrency": args.max_concurrency,
+        },
+    )
+
+
 def run_benchmark(args: argparse.Namespace) -> None:
     check_dependencies()
     is_sweep = args.mode == "sweep"
@@ -390,7 +426,9 @@ def run_benchmark(args: argparse.Namespace) -> None:
     dataset_spec = args.dataset
     run_items: list[tuple[str, dict]] = []
 
-    if dataset_spec == MRCR_DATASET:
+    if args.otel:
+        run_items = [_otel_run_item(args)]
+    elif dataset_spec == MRCR_DATASET:
         run_items = _mrcr_run_items(args, artifacts_dir)
     elif dataset_spec.startswith("speedbench/"):
         run_items = _speedbench_run_items(args)
@@ -450,6 +488,8 @@ def main() -> None:
             "  python evaluate.py --target http://localhost:8000/v1 sweep\n"
             "  python evaluate.py --target http://localhost:8000/v1 sweep "
             '--subsets "HumanEval,qa"\n'
+            "  python evaluate.py --target http://localhost:8000/v1 throughput "
+            "--otel\n"
         ),
     )
     parser.add_argument(
@@ -467,8 +507,11 @@ def main() -> None:
     )
     parser.add_argument(
         "--dataset",
-        default=DEFAULT_DATASET,
-        help=f"HF dataset ID or local directory (default: {DEFAULT_DATASET})",
+        default=None,
+        help=(
+            "HF dataset ID or local directory (default: "
+            f"{DEFAULT_DATASET}, or {DEFAULT_OTEL_DATASET} with --otel)"
+        ),
     )
     parser.add_argument(
         "--subsets",
@@ -563,7 +606,30 @@ def main() -> None:
         help="Retry MRCR rows whose render previously failed (default: reuse "
         "the partial cache as-is)",
     )
+    parser.add_argument(
+        "--otel",
+        action="store_true",
+        help=(
+            "Treat --dataset as an OTEL GenAI trace source (HF dataset id or "
+            "local JSONL) and replay it with guidellm's otel format; requests "
+            "carry the recorded semantic content (default source: "
+            f"{DEFAULT_OTEL_DATASET})"
+        ),
+    )
+    parser.add_argument(
+        "--otel-history",
+        choices=["trace", "runtime"],
+        default="trace",
+        help=(
+            "How OTEL turns get prior context: 'trace' resends each span's "
+            "full recorded input; 'runtime' sends only new messages and "
+            "chains live completions (default: trace)"
+        ),
+    )
     args = parser.parse_args()
+
+    if args.dataset is None:
+        args.dataset = DEFAULT_OTEL_DATASET if args.otel else DEFAULT_DATASET
 
     if args.output_dir is None:
         model_name = _fetch_model_name(args.target)
