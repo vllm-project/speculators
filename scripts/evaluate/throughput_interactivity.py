@@ -46,7 +46,8 @@ Tokens and in-flight time are counted over every request that overlaps the
 window, successful or still in flight when the run stopped. A request's output
 tokens are spread evenly between its first and last token and only the part
 inside the window counts, so requests that started during warmup or were cut off
-at the end are neither over- nor under-counted.
+at the end are neither over- nor under-counted. The synchronous point measures
+about 0.9995 concurrent, not 1.0; do not filter on >= 1.
 
 
 TWO WAYS TO LOAD THE SERVER
@@ -119,9 +120,11 @@ least once.
 3. A benchmark that ends on `requests_exhausted` ran out of dataset.
 4. Steady state: tokens generated in the window per completed request should
    match the mean output length; a gap means the window was too short.
-5. The synchronous point measures ~0.9995 concurrent, not 1.0.
+5. Repeats that disagree by more than 5% in throughput: differences smaller
+   than that are noise.
 6. Closed loop, fixed lengths: lockstep waves. `arrival_burstiness` above 2
-   means the streams are synchronized; jitter the lengths or use real data.
+   means the streams are synchronized, which overstates throughput and
+   interactivity; jitter the lengths or use real data.
 7. Datasets: a small subset repeated many times is served partly from the
    prefix cache (`mean_cached_tokens`). Disable prefix caching for a clean number.
 8. Closed loop past what the server can hold: when N streams exceed
@@ -626,6 +629,14 @@ def build_data_args(args: argparse.Namespace, out_dir: Path) -> list[str]:
     return text
 
 
+def normalize_target(target: str) -> str:
+    """Server base URL without a trailing slash or /v1 (GuideLLM adds the route)."""
+    target = target.rstrip("/")
+    if target.endswith("/v1"):
+        target = target[: -len("/v1")]
+    return target
+
+
 def build_backend(args: argparse.Namespace) -> str:
     """GuideLLM backend spec as JSON, so nested `extras` survive."""
     default_format = "/v1/chat/completions" if args.dataset else "/v1/completions"
@@ -711,6 +722,10 @@ def collect(args: argparse.Namespace) -> int:  # noqa: C901
         raise SystemExit(
             f"{args.guidellm_bin!r} not found on PATH; pip install guidellm"
         )
+    target = normalize_target(args.target)
+    if target != args.target:
+        print(f"target {args.target!r} normalized to {target!r}")
+        args.target = target
     out_dir = Path(args.out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     points = _points(args)
@@ -946,7 +961,14 @@ def _print_table(points: list[dict]) -> None:
     layout = (
         "{:>9} {:>8} {:>8} {:>6} {:>7} {:>7} {:>7} {:>7} {:>7} {:>8} {:>6} {:>6} {:>6}"
     )
-    print("\n" + layout.format(*header))
+    print(
+        "\nper point, mean over repeats: offered = N streams or req/s; achieved = "
+        "started req/s; tok/s = output throughput; conc = mean requests in flight; "
+        "1/itl = 1000 / mean ITL (tok/s per user, the x axis); little = throughput / "
+        "conc; accept = acceptance length; burst = cv of request starts per second; "
+        "spread = throughput range across repeats"
+    )
+    print(layout.format(*header))
     for p in points:
         open_loop = not p["synchronous"] and not p["closed_loop"]
         ratio = (
@@ -998,8 +1020,8 @@ def validate_rows(rows: list[dict]) -> list[str]:  # noqa: C901
         if abs(drift - 1.0) > RATE_DRIFT_TOLERANCE:
             warnings.append(
                 f"offered rate looks mis-scaled: achieved/offered averages {drift:.3f} "
-                "on points that kept up. The generator is not sending its nominal "
-                "rate, so per-rate comparisons with another sweep are invalid."
+                "on the points below capacity. The generator is not sending its "
+                "nominal rate, so per-rate comparisons with another sweep are invalid."
             )
 
     # 2. open loop: concurrency cap / plateau (closed loop pins concurrency to N)
@@ -1025,7 +1047,8 @@ def validate_rows(rows: list[dict]) -> list[str]:  # noqa: C901
         warnings.append(
             f"{len(exhausted)} points ended on requests_exhausted ({shown}): the sweep "
             "ran out of dataset, so its concurrency is bounded by dataset size, not "
-            "the server. With --dataset, raise --dataset-repeat."
+            "the server. With --dataset, set --dataset-repeat above the automatic "
+            "choice."
         )
 
     # 4. steady state: tokens in the window per completed request vs output length
@@ -1068,7 +1091,7 @@ def validate_rows(rows: list[dict]) -> list[str]:  # noqa: C901
             f"{len(waves)} points start their requests in synchronized waves: {names}. "
             "Streams with identical lengths finish together, prefill in one burst and "
             "then decode with no prefill in the batch, which overstates throughput and "
-            "ITL. Jitter the lengths (--range-ratio 0.8) or use a dataset."
+            "interactivity. Jitter the lengths (--range-ratio 0.8) or use a dataset."
         )
 
     # 7. prefix cache hits on repeated prompts
@@ -1450,9 +1473,16 @@ def _comma_list(cast: type) -> Any:
 
 def _add_collect_parser(sub: Any) -> None:
     c = sub.add_parser("collect", help="run a GuideLLM sweep, then parse + validate")
-    c.add_argument("--target", required=True, help="e.g. http://127.0.0.1:8000")
     c.add_argument(
-        "--model", required=True, help="model name as served (`model` field)"
+        "--target",
+        required=True,
+        help="server base URL without /v1, e.g. http://127.0.0.1:8000 (a trailing /v1 "
+        "is removed)",
+    )
+    c.add_argument(
+        "--model",
+        required=True,
+        help="model name as the server reports it (the request's `model` field)",
     )
     c.add_argument(
         "--tokenizer", default="", help="tokenizer path or HF id (default: --model)"
@@ -1468,26 +1498,37 @@ def _add_collect_parser(sub: Any) -> None:
         "--streams",
         type=_comma_list(int),
         default=None,
-        help="closed loop, InferenceX style: requests kept in flight, e.g. 1,2,4,8,16",
+        help="closed loop, InferenceX style: requests kept in flight at all times; one "
+        "point per value, e.g. 1,2,4,8,16",
     )
     load.add_argument(
         "--rates",
         type=_comma_list(float),
         default=None,
-        help="open loop: constant arrival rates in req/s, e.g. 0.5,1,2,4",
+        help="open loop: constant arrival rates in requests per second; one point per "
+        "value, e.g. 0.5,1,2,4",
     )
     load.add_argument(
         "--synchronous",
         action="store_true",
         default=None,
-        help="also run a single-stream point (default: only without --streams)",
+        help="also run a single-stream point named sync (on by default only when no "
+        "--streams are given, since --streams 1 is the same point)",
     )
     load.add_argument("--no-synchronous", dest="synchronous", action="store_false")
     load.add_argument("--repeats", type=int, default=3)
     load.add_argument(
-        "--max-seconds", type=float, default=100.0, help="window per point"
+        "--max-seconds",
+        type=float,
+        default=100.0,
+        help="measurement window per point, in seconds, after the warmup",
     )
-    load.add_argument("--warmup-seconds", type=float, default=30.0, help="excluded")
+    load.add_argument(
+        "--warmup-seconds",
+        type=float,
+        default=30.0,
+        help="warmup per point, in seconds, excluded from every number",
+    )
     data = c.add_argument_group(
         "data (choose one: a dataset, random text, or a raw spec)"
     )
@@ -1509,10 +1550,15 @@ def _add_collect_parser(sub: Any) -> None:
         help="repeat the dataset this many times (0 = enough for the sweep)",
     )
     data.add_argument(
-        "--max-tokens", type=int, default=None, help="max_tokens per request"
+        "--max-tokens",
+        type=int,
+        default=None,
+        help="max_tokens sent with every request; set it with --dataset",
     )
     data.add_argument(
-        "--ignore-eos", action="store_true", help="force max_tokens on every request"
+        "--ignore-eos",
+        action="store_true",
+        help="generate exactly --max-tokens tokens per request (ignores end of text)",
     )
     data.add_argument(
         "--prompt-tokens", type=int, default=None, help="random text: prompt length"
@@ -1536,10 +1582,19 @@ def _add_collect_parser(sub: Any) -> None:
         help="raw GuideLLM column mapper (default with --dataset: text_column=prompt)",
     )
     c.add_argument("--out-dir", required=True)
-    c.add_argument("--label", required=True, help="series name recorded in the CSV")
+    c.add_argument(
+        "--label",
+        required=True,
+        help="name of this server configuration, written to the CSV's model column "
+        "(e.g. baseline, dspark)",
+    )
     c.add_argument("--csv", default="", help="default: <out-dir>/<label>.csv")
     c.add_argument("--metrics-url", default=None, help="default: <target>/metrics")
-    c.add_argument("--no-metrics", action="store_true", help="do not record acceptance")
+    c.add_argument(
+        "--no-metrics",
+        action="store_true",
+        help="skip the /metrics snapshots (speculative-decoding acceptance)",
+    )
     c.add_argument("--guidellm-bin", default="guidellm", help="GuideLLM executable")
     c.add_argument(
         "--guidellm-arg",
@@ -1562,7 +1617,8 @@ def _add_plot_parser(sub: Any) -> None:
         action="append",
         required=True,
         metavar="CSV[:NAME[:#COLOR]]",
-        help="repeatable; first series is drawn on top",
+        help="one curve per CSV, fields separated by colons; repeatable; the first "
+        "series is drawn on top",
     )
     g.add_argument("--out", required=True)
     g.add_argument("--title", default="Output Throughput vs. Interactivity")
@@ -1582,10 +1638,16 @@ def _add_plot_parser(sub: Any) -> None:
         help="'auto', or a format string over {rps}, {conc} and {streams}",
     )
     g.add_argument(
-        "--max-concurrency", type=float, default=None, help="drop points above"
+        "--max-concurrency",
+        type=float,
+        default=None,
+        help="drop points whose mean concurrency is above this",
     )
     g.add_argument(
-        "--min-concurrency", type=float, default=None, help="drop points below"
+        "--min-concurrency",
+        type=float,
+        default=None,
+        help="drop points whose mean concurrency is below this (sync is ~0.9995)",
     )
     g.add_argument("--drop", action="append", help="drop a point by name, repeatable")
     g.add_argument("--force-legend", action="store_true")

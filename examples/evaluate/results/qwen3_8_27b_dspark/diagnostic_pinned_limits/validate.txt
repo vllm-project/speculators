@@ -1,4 +1,5 @@
 
+per point, mean over repeats: offered = N streams or req/s; achieved = started req/s; tok/s = output throughput; conc = mean requests in flight; 1/itl = 1000 / mean ITL (tok/s per user, the x axis); little = throughput / conc; accept = acceptance length; burst = cv of request starts per second; spread = throughput range across repeats
     point  offered achieved  ratio   tok/s    conc   1/itl  little  itl_ms  ttft_ms accept  burst spread
    conc96     N=96     5.19      -    3888    96.0    56.6    40.5   17.67     4614   3.41   0.38   0.0%
   conc128    N=128     5.19      -    3897   128.0    56.5    30.4   17.69    10851   3.42   0.40   0.0%

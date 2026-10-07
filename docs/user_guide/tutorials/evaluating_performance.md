@@ -119,4 +119,4 @@ Both accept CSVs or raw GuideLLM sweep JSONs. Available metrics: `latency`, `itl
 
 ## Throughput vs. Interactivity
 
-To measure the production trade-off, output tokens per second for the GPU against tokens per second for each user, at fixed concurrency and with and without a speculator, see [Throughput vs. Interactivity](throughput_interactivity.md). It uses `scripts/evaluate/throughput_interactivity.py` and the same `RedHatAI/speculator_benchmarks` subsets.
+To measure the production trade-off, output tokens per second for the GPU against tokens per second for each user, at fixed concurrency and with one or more speculators, see [Throughput vs. Interactivity](throughput_interactivity.md). It uses `scripts/evaluate/throughput_interactivity.py` and the same `RedHatAI/speculator_benchmarks` subsets.

@@ -8,6 +8,7 @@ Requirements: Python 3.10+, `guidellm>=0.7.1` (tested with 0.8.0) for `collect`,
 
 ```bash
 # run a closed-loop sweep against a server, then parse and validate
+# (defaults: 3 repeats, 30 s warmup + 100 s window per point, about 52 minutes here)
 python scripts/evaluate/throughput_interactivity.py collect \
   --target http://localhost:8000 --model Qwen/Qwen3.8-27B \
   --dataset RedHatAI/speculator_benchmarks --subset HumanEval --max-tokens 1024 \
@@ -57,7 +58,7 @@ Give one data source per run: a dataset subset, random text, or a raw GuideLLM s
 **Random text** (lengths forced, prefix caching defeated; not meaningful for a speculator):
 
 - **`--prompt-tokens`**, **`--output-tokens`** (int) Target prompt and output lengths.
-- **`--range-ratio`** (float, default: `0.8`) Each request's lengths drawn uniformly from `ratio × L` to `L`. `1` gives fixed lengths, which make closed-loop streams move in lockstep.
+- **`--range-ratio`** (float, default: `0.8`) Each request's lengths drawn uniformly from `ratio × L` to `L`. `1` gives fixed lengths, which make closed-loop streams move in lockstep (finish and restart together).
 
 **A raw GuideLLM spec** (anything GuideLLM accepts, passed through unchanged):
 

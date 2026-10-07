@@ -20,7 +20,7 @@
 # Output (in $OUT_DIR, default ./qwen3_8_27b_dspark_<timestamp>):
 #   <config>_<subset>/            raw GuideLLM JSON per point, acceptance
 #                                 sidecars, bench_command.txt (provenance)
-#   <config>_<subset>.csv         one row per point
+#   <config>_<subset>.csv         one row per point and repeat
 #   <subset>.png                  the chart, all configurations
 #   serve_<config>.log            vLLM server logs and the exact serve command
 #
@@ -32,7 +32,7 @@ set -euo pipefail
 # ============ Configuration ============
 TARGET_MODEL="Qwen/Qwen3.8-27B"
 SPECULATOR="RedHatAI/Qwen3.8-27B-speculator.dspark"
-SPEC_TOKENS=7                  # DSpark draft tokens per step (the speculator's model card)
+SPEC_TOKENS=7                  # DSpark draft tokens per step (per the speculator's model card)
 MTP_SPEC_TOKENS=2              # MTP draft tokens per step (Qwen's model cards recommend 2)
 DATASET="RedHatAI/speculator_benchmarks"
 SUBSETS="HumanEval math_reasoning"
