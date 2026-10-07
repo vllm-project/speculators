@@ -126,7 +126,9 @@ least once.
    means the streams are synchronized, which overstates throughput and
    interactivity; jitter the lengths or use real data.
 7. Datasets: a small subset repeated many times is served partly from the
-   prefix cache (`mean_cached_tokens`). Disable prefix caching for a clean number.
+   prefix cache (`prefix_cache_hit_rate`, from the server's /metrics counters;
+   GuideLLM's HTTP backend never fills `mean_cached_tokens`). Serve with
+   --no-enable-prefix-caching for a clean number.
 8. Closed loop past what the server can hold: when N streams exceed
    max-num-seqs, or the KV cache is full, the extra requests wait inside the
    server, so TTFT jumps while ITL does not.
@@ -200,6 +202,7 @@ CSV_COLUMNS = [
     "mean_output_tokens",
     "mean_prompt_tokens",
     "mean_cached_tokens",
+    "prefix_cache_hit_rate",
     "mean_output_tokens_per_iteration",
     "median_ttft_ms",
     "p99_ttft_ms",
@@ -376,6 +379,7 @@ def read_acceptance(json_path: Path) -> dict:
         "acceptance_length": float("nan"),
         "num_drafts": float("nan"),
         "num_accepted_tokens": float("nan"),
+        "prefix_cache_hit_rate": float("nan"),
     }
     if not sidecar.is_file():
         return empty
@@ -387,6 +391,7 @@ def read_acceptance(json_path: Path) -> dict:
         "acceptance_length": delta.get("acceptance_length", float("nan")),
         "num_drafts": delta.get("num_drafts", float("nan")),
         "num_accepted_tokens": delta.get("num_accepted_tokens", float("nan")),
+        "prefix_cache_hit_rate": delta.get("prefix_cache_hit_rate", float("nan")),
     }
 
 
@@ -453,6 +458,15 @@ def write_csv(rows: list[dict], out: Path) -> None:
 # ---------------------------------------------------------------------------
 
 SPEC_PREFIX = "vllm:spec_decode_"
+# Prompt tokens looked up in, and served from, the server's prefix cache (older
+# vLLM names them gpu_prefix_cache_*; the external_* variants are a KV connector's).
+PREFIX_CACHE_COUNTERS = {
+    "prefix_cache_queries": (
+        "vllm:prefix_cache_queries",
+        "vllm:gpu_prefix_cache_queries",
+    ),
+    "prefix_cache_hits": ("vllm:prefix_cache_hits", "vllm:gpu_prefix_cache_hits"),
+}
 _RE_METRIC = re.compile(r"^([a-zA-Z_:][a-zA-Z0-9_:]*)(?:\{([^}]*)\})?\s+([0-9.eE+-]+)$")
 _RE_POSITION = re.compile(r'position="(\d+)"')
 
@@ -466,11 +480,12 @@ def fetch_text(url: str, timeout: float = 30.0) -> str | None:
 
 
 def spec_decode_counters(text: str) -> dict:
-    """Sum vLLM's speculative-decoding counters over engines.
+    """Sum vLLM's speculative-decoding and prefix-cache counters over engines.
 
     Reads `vllm:spec_decode_num_drafts`, `..._num_draft_tokens`,
     `..._num_accepted_tokens` and `..._num_accepted_tokens_per_pos` (with or
-    without the `_total` suffix) and returns the sums plus the per-position list.
+    without the `_total` suffix) and returns the sums plus the per-position list,
+    and `vllm:prefix_cache_queries` / `vllm:prefix_cache_hits`.
     """
     sums: dict[str, float] = defaultdict(float)
     per_position: dict[int, float] = defaultdict(float)
@@ -482,9 +497,12 @@ def spec_decode_counters(text: str) -> dict:
         if not match:
             continue
         name = match.group(1).replace("_total", "")
+        labels, value = match.group(2) or "", float(match.group(3))
+        for key, names in PREFIX_CACHE_COUNTERS.items():
+            if name in names:
+                sums[key] += value
         if not name.startswith(SPEC_PREFIX):
             continue
-        labels, value = match.group(2) or "", float(match.group(3))
         if "per_pos" in name:
             position = _RE_POSITION.search(labels)
             if position:
@@ -499,11 +517,17 @@ def spec_decode_counters(text: str) -> dict:
         "num_draft_tokens": sums.get("num_draft_tokens", 0.0),
         "num_accepted_tokens": sums.get("num_accepted_tokens", 0.0),
         "accepted_per_position": positions,
+        "prefix_cache_queries": sums.get("prefix_cache_queries", 0.0),
+        "prefix_cache_hits": sums.get("prefix_cache_hits", 0.0),
     }
 
 
 def acceptance_delta(before: dict, after: dict) -> dict:
-    """Acceptance over one run from two snapshots of the cumulative counters."""
+    """Acceptance and cache hits over one run, from two snapshots of the counters."""
+    queries = after.get("prefix_cache_queries", 0.0) - before.get(
+        "prefix_cache_queries", 0.0
+    )
+    hits = after.get("prefix_cache_hits", 0.0) - before.get("prefix_cache_hits", 0.0)
     drafts = after["num_drafts"] - before["num_drafts"]
     draft_tokens = after["num_draft_tokens"] - before["num_draft_tokens"]
     accepted = after["num_accepted_tokens"] - before["num_accepted_tokens"]
@@ -525,6 +549,10 @@ def acceptance_delta(before: dict, after: dict) -> dict:
         "acceptance_at_position": (
             [count / drafts for count in per_position] if drafts > 0 else []
         ),
+        "prefix_cache_queries": queries,
+        "prefix_cache_hits": hits,
+        # prompt tokens served from the prefix cache, as a share of those looked up
+        "prefix_cache_hit_rate": hits / queries if queries > 0 else None,
     }
 
 
@@ -648,8 +676,19 @@ def build_backend(args: argparse.Namespace) -> str:
     }
     if args.max_tokens:
         backend["max_tokens"] = args.max_tokens
+    body: dict[str, Any] = {}
     if args.ignore_eos:
-        backend["extras"] = {"body": {"ignore_eos": True}}
+        body["ignore_eos"] = True
+    for item in args.extra_body or []:
+        key, sep, value = item.partition("=")
+        if not sep or not key:
+            raise SystemExit(f"--extra-body expects KEY=JSON, got {item!r}")
+        try:
+            body[key] = json.loads(value)
+        except json.JSONDecodeError:
+            body[key] = value  # a bare string
+    if body:
+        backend["extras"] = {"body": body}
     return json.dumps(backend)
 
 
@@ -715,7 +754,8 @@ def collect(args: argparse.Namespace) -> int:  # noqa: C901
     `rate<r>` for each --rates value (open loop). Existing JSONs are skipped unless
     --overwrite, so a sweep can be resumed or extended into the same directory.
     Around every run the server's /metrics counters are snapshotted, and the
-    acceptance over the run is stored in `<point>_r<N>.metrics.json`.
+    acceptance and prefix-cache hit rate over the run are stored in
+    `<point>_r<N>.metrics.json`.
     """
     guidellm = shutil.which(args.guidellm_bin)
     if guidellm is None and not args.dry_run:
@@ -898,6 +938,7 @@ AGGREGATE_FIELDS = {
     "tokens": "mean_output_tokens",
     "prompt_tokens": "mean_prompt_tokens",
     "cached": "mean_cached_tokens",
+    "cache_hit": "prefix_cache_hit_rate",
     "per_iteration": "mean_output_tokens_per_iteration",
     "burst": "arrival_burstiness",
     "acceptance": "acceptance_length",
@@ -999,6 +1040,17 @@ def _print_table(points: list[dict]) -> None:
         )
 
 
+def _prefix_cache_share(point: dict) -> float | None:
+    """Share of prompt tokens served from the prefix cache: the server's counters
+    (`prefix_cache_hit_rate`), else GuideLLM's `cached_tokens` when a backend
+    reports them (its HTTP backend does not)."""
+    if point["cache_hit"] is not None:
+        return point["cache_hit"]
+    if point["cached"] and point["prompt_tokens"]:
+        return point["cached"] / point["prompt_tokens"]
+    return None
+
+
 def validate_rows(rows: list[dict]) -> list[str]:  # noqa: C901
     points = aggregate_points(rows)
     warnings: list[str] = []
@@ -1096,20 +1148,17 @@ def validate_rows(rows: list[dict]) -> list[str]:  # noqa: C901
 
     # 7. prefix cache hits on repeated prompts
     cached = [
-        p
+        (p, share)
         for p in points
-        if p["cached"]
-        and p["prompt_tokens"]
-        and p["cached"] / p["prompt_tokens"] > CACHE_HIT_FRACTION
+        if (share := _prefix_cache_share(p)) is not None and share > CACHE_HIT_FRACTION
     ]
     if cached:
-        worst = max(cached, key=lambda p: p["cached"] / p["prompt_tokens"])
-        share = 100 * worst["cached"] / worst["prompt_tokens"]
+        worst, share = max(cached, key=lambda item: item[1])
         warnings.append(
             f"{len(cached)} points were served partly from the prefix cache (up to "
-            f"{share:.0f}% of prompt tokens at {worst['point']}). Prefill work is "
-            "smaller than the prompt length suggests; disable prefix caching on the "
-            "server or report these as cached-workload numbers."
+            f"{100 * share:.0f}% of prompt tokens at {worst['point']}). Prefill work "
+            "is smaller than the prompt length suggests; serve with "
+            "--no-enable-prefix-caching or report these as cached-workload numbers."
         )
 
     # 8. closed loop past what the server can hold: queueing shows up as TTFT
@@ -1272,7 +1321,13 @@ def _point_label(point: dict, label_format: str) -> str:
 def _load_series(args: argparse.Namespace) -> list[dict]:
     series = []
     for spec in args.series:
-        path_text, name, color = (spec.split(":") + ["", ""])[:3]
+        # CSV[:NAME[:#COLOR]]: the color is a trailing `:#...` field, so the name
+        # may contain colons ("B200: no speculator").
+        path_text, _, name = spec.partition(":")
+        color = ""
+        head, sep, tail = name.rpartition(":")
+        if sep and tail.startswith("#"):
+            name, color = head, tail
         path = Path(path_text)
         name = name or path.stem
         color = color or PALETTE[len(series) % len(PALETTE)]
@@ -1492,6 +1547,15 @@ def _add_collect_parser(sub: Any) -> None:
         default=None,
         help="/v1/completions (default), or /v1/chat/completions (default with "
         "--dataset)",
+    )
+    c.add_argument(
+        "--extra-body",
+        action="append",
+        default=[],
+        metavar="KEY=JSON",
+        help="extra field sent in every request body, repeatable, e.g. temperature=0 "
+        "for greedy decoding or top_p=0.95; without it the server's sampling defaults "
+        "apply (vLLM takes them from the model's generation_config.json)",
     )
     load = c.add_argument_group("load (give --streams, --rates, or both)")
     load.add_argument(

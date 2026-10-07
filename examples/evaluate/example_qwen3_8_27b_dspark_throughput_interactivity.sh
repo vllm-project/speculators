@@ -16,6 +16,8 @@
 #
 # Usage:
 #   CUDA_VISIBLE_DEVICES=0 bash examples/evaluate/example_qwen3_8_27b_dspark_throughput_interactivity.sh
+#   Environment: OUT_DIR (results directory), VLLM_PORT (default 8110; set a different
+#   port and GPU to run a second copy of this script on the same host).
 #
 # Output (in $OUT_DIR, default ./qwen3_8_27b_dspark_<timestamp>):
 #   <config>_<subset>/            raw GuideLLM JSON per point, acceptance
@@ -33,7 +35,8 @@ set -euo pipefail
 TARGET_MODEL="Qwen/Qwen3.8-27B"
 SPECULATOR="RedHatAI/Qwen3.8-27B-speculator.dspark"
 SPEC_TOKENS=7                  # DSpark draft tokens per step (per the speculator's model card)
-MTP_SPEC_TOKENS=2              # MTP draft tokens per step (Qwen's model cards recommend 2)
+MTP_SPEC_TOKENS=2              # MTP draft tokens per step; the head has one layer, so vLLM's
+                               # default would be 1, and the vLLM recipe for this model suggests 3
 DATASET="RedHatAI/speculator_benchmarks"
 SUBSETS="HumanEval math_reasoning"
 STREAMS_SHORT="1,2,4,8,16"     # 30 s warmup + 90 s window each
@@ -45,7 +48,12 @@ MAX_MODEL_LEN=16384
 # 1024, batched tokens 2048 to 16384), and the batch cap must be at least the largest N.
 MAX_NUM_SEQS=256
 MAX_NUM_BATCHED_TOKENS=16384
-VLLM_PORT=8110
+# Prefix caching is off so the curves measure the drafter and nothing else: the
+# repeated prompts would otherwise be prefilled from cache, and GuideLLM cannot see
+# cache hits over HTTP. Serve on one GPU, the way a 27B model is deployed.
+VLLM_EXTRA_ARGS=(--no-enable-prefix-caching)
+VLLM_PORT="${VLLM_PORT:-8110}"
+SERVER_START_TIMEOUT=1800      # seconds to wait for the server's /health before giving up
 SERVER_URL="http://localhost:${VLLM_PORT}"
 OUT_DIR="${OUT_DIR:-./qwen3_8_27b_dspark_$(date +%Y%m%d_%H%M%S)}"
 # Uses CUDA_VISIBLE_DEVICES from the environment (set it before running).
@@ -74,17 +82,23 @@ trap cleanup EXIT
 start_server() {  # <config> [extra vllm args...]
     local config=$1; shift
     local cmd=(vllm serve "$TARGET_MODEL" --port "$VLLM_PORT" --max-model-len "$MAX_MODEL_LEN"
-               --max-num-seqs "$MAX_NUM_SEQS" --max-num-batched-tokens "$MAX_NUM_BATCHED_TOKENS" "$@")
+               --max-num-seqs "$MAX_NUM_SEQS" --max-num-batched-tokens "$MAX_NUM_BATCHED_TOKENS"
+               "${VLLM_EXTRA_ARGS[@]}" "$@")
     echo "=== Launching vLLM ($config): ${cmd[*]}"
     printf '%s\n' "${cmd[*]}" > "$OUT_DIR/serve_${config}_command.txt"
     "${cmd[@]}" > "$OUT_DIR/serve_${config}.log" 2>&1 &
     VLLM_PID=$!
+    local waited=0
     until curl -sf "${SERVER_URL}/health" > /dev/null 2>&1; do
         if ! kill -0 "$VLLM_PID" 2>/dev/null; then
             echo "ERROR: vLLM exited; see $OUT_DIR/serve_${config}.log"
             exit 1
         fi
-        sleep 5
+        if (( waited >= SERVER_START_TIMEOUT )); then
+            echo "ERROR: vLLM not healthy after ${SERVER_START_TIMEOUT}s; see $OUT_DIR/serve_${config}.log"
+            exit 1
+        fi
+        sleep 5; waited=$((waited + 5))
     done
     echo "vLLM server ready."
 }
