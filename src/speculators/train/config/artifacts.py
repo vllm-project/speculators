@@ -67,7 +67,7 @@ def dump_yaml(cfg: "TrainConfig") -> str:
 def save(cfg: "TrainConfig", save_dir: str) -> None:
     """Write ``run.yaml`` + ``train_command.txt`` next to the checkpoints.
 
-    Called at rank 0 by ``scripts/train.py`` so every checkpoint carries the
+    Called at rank 0 by ``speculators.train.cli`` so every checkpoint carries the
     config that produced it. ``run.yaml`` is the clean resolved config (re-run via
     ``--config run.yaml``); ``train_command.txt`` records the exact argv this
     config was resolved from plus the environment manifest.

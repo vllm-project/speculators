@@ -1,4 +1,4 @@
-"""Training entrypoint — core logic moved from scripts/train.py."""
+"""Training entrypoint for ``speculators train`` / ``torchrun -m speculators.train``."""
 
 import argparse
 import gc
