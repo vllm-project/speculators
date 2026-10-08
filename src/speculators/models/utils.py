@@ -25,6 +25,8 @@ GEMMA_STYLE_FINAL_NORM_MODEL_TYPES = frozenset(
         "gemma3_text",
         "qwen3_5",
         "qwen3_5_text",
+        "qwen3_5_moe",
+        "qwen3_5_moe_text",
         "recurrent_gemma",
     )
 )
