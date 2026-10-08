@@ -62,7 +62,8 @@ def test_fp8_hidden_states_roundtrip(tmp_path: Path):
             f"http://127.0.0.1:{VLLM_PORT}", MODEL, prompt, timeout=300.0
         )
 
-        path = resp["kv_transfer_params"]["hidden_states_path"]
+        transfer_params = resp["kv_transfer_params"]
+        path = transfer_params["hidden_states_path"]
         ptids = resp["choices"][0].get("prompt_token_ids") or resp.get(
             "prompt_token_ids"
         )
@@ -74,7 +75,7 @@ def test_fp8_hidden_states_roundtrip(tmp_path: Path):
         # disk write is actually done -- unlike a bare safe_open(path), which
         # can race the writer thread.
         transfer = FP8Transfer(hs_path)
-        sample = transfer.get_generated(path)
+        sample = transfer.get_generated(transfer_params)
         assert sample is not None
         hs, ids = sample["hidden_states"], sample["token_ids"]
 

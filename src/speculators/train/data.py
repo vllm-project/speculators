@@ -241,7 +241,7 @@ class ArrowDataset(BaseDataset):
         try:
             if not self.client:
                 self._setup_client()
-            handle = generate_hidden_states(
+            handle, hs_transfer_params = generate_hidden_states(
                 self.client,  # type:ignore[arg-type]
                 self.model,  # type:ignore[arg-type]
                 client_item,
@@ -249,7 +249,7 @@ class ArrowDataset(BaseDataset):
                 max_retries=self.max_retries,
             )
 
-            loaded_hs = self.transfer.get_generated(handle)
+            loaded_hs = self.transfer.get_generated(hs_transfer_params)
             if loaded_hs is None:
                 raise ValueError(f"Failed to load hidden states for handle {handle}")
 
