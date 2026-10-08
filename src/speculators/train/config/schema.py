@@ -215,9 +215,6 @@ class DataArgs(_Group):
         description="Fraction of the dataset used for training; the remainder is held "
         "out for validation.",
     )
-    noise_std: float = Field(
-        default=0.05, description="Standard deviation for noise augmentation."
-    )
     hidden_states_dtype: str = Field(
         default="bfloat16",
         description="Data type for dataloader hidden states and autocast compute. "

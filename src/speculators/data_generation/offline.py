@@ -25,7 +25,6 @@ def check_hidden_states(data: dict, tokens: list[int]):
             f" doesn't match num tokens {len(tokens)}"
         )
 
-
     lo, hi = torch.aminmax(hs)
     if bool(torch.isfinite(torch.stack((lo, hi))).all()):
         return
