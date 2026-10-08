@@ -4,17 +4,63 @@ This module contains attention functions and utilities shared across different
 speculator architectures (EAGLE3, DFlash, etc.) to avoid code duplication.
 """
 
+import json
+import os
 from collections.abc import Callable
+from typing import cast
 
 import torch
 from torch.nn.attention.flex_attention import (
     BlockMask,
+    FlexKernelOptions,
     flex_attention,
 )
 from torch.nn.attention.flex_attention import (
     create_mask as _create_mask,
 )
 from transformers.modeling_utils import AttentionInterface
+
+# ~99 KB per block on sm_120 (RTX PRO 6000 / RTX 5090) and sm_89 (L40S / 4090);
+# inductor's default flex backward tiles for head_dim > 128 need ~112 KB.
+_LOW_SHARED_MEMORY_BYTES = 128 * 1024
+_MAX_DEFAULT_TILE_HEAD_DIM = 128
+_LOW_SHARED_MEMORY_KERNEL_OPTIONS = {
+    "bwd_BLOCK_M1": 32,
+    "bwd_BLOCK_N1": 32,
+    "bwd_BLOCK_M2": 32,
+    "bwd_BLOCK_N2": 32,
+    "bwd_num_stages": 1,
+}
+# JSON dict, e.g. '{"bwd_BLOCK_M1": 16}'. Parsed once at import so the compiled
+# forward only sees a constant: reading os.environ inside the traced function
+# causes a dynamo graph break, which drops flex_attention out of the compiled
+# graph and back to the dense-materializing eager path.
+_ENV_KERNEL_OPTIONS = json.loads(
+    os.environ.get("SPECULATORS_FLEX_KERNEL_OPTIONS", "null")
+)
+
+
+def flex_kernel_options(
+    device: torch.device, head_dim: int
+) -> FlexKernelOptions | None:
+    """Flex ``kernel_options`` for this device, or None for inductor defaults.
+
+    The low-shared-memory defaults assume bf16/fp16 training; fp32 needs
+    smaller tiles still (e.g. 16x16), which can be forced via the
+    ``SPECULATORS_FLEX_KERNEL_OPTIONS`` env var (a JSON dict,
+    e.g. ``'{"bwd_BLOCK_M1": 16}'``) set before this module is imported.
+    """
+    if _ENV_KERNEL_OPTIONS is not None:
+        return cast("FlexKernelOptions", dict(_ENV_KERNEL_OPTIONS))
+    if device.type != "cuda" or head_dim <= _MAX_DEFAULT_TILE_HEAD_DIM:
+        return None
+    props = torch.cuda.get_device_properties(device)
+    # The attribute exists at runtime; torch's stubs only know the
+    # smaller static `shared_memory_per_block`.
+    optin = props.shared_memory_per_block_optin  # type: ignore[attr-defined]
+    if optin < _LOW_SHARED_MEMORY_BYTES:
+        return cast("FlexKernelOptions", dict(_LOW_SHARED_MEMORY_KERNEL_OPTIONS))
+    return None
 
 
 def flex_attention_forward(
@@ -60,6 +106,7 @@ def flex_attention_forward(
         block_mask=attention_mask,
         enable_gqa=enable_gqa,
         scale=scaling,
+        kernel_options=flex_kernel_options(query.device, query.shape[-1]),
     )
     attention_output: torch.Tensor = flex_attention_output
     attention_output = attention_output.transpose(1, 2).contiguous()
