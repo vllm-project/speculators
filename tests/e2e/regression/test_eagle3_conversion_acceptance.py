@@ -69,7 +69,7 @@ class TestEagle3vLLM:
         run_vllm_engine(
             model_path=str(converted_path),
             tmp_path=tmp_path,
-            enforce_eager=False,
+            enforce_eager=True,
             disable_compile_cache=disable_compile_cache,
             prompts=prompts,
             acceptance_thresholds=acceptance_thresholds,
@@ -101,5 +101,6 @@ class TestEagle3vLLM:
             tmp_path=tmp_path,
             prompts=prompts,
             acceptance_thresholds=acceptance_thresholds,
+            enforce_eager=True,
             ignore_eos=True,
         )
