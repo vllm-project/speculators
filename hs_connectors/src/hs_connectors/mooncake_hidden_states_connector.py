@@ -88,34 +88,19 @@ class MooncakeHiddenStatesConnector(KVConnectorBase_V1, SupportsHMA):
         from vllm.v1.kv_cache_interface import HiddenStateCacheSpec  # noqa: PLC0415
 
         groups = kv_cache_config.kv_cache_groups
-        group_ids = []
-        for gid, group in enumerate(groups):
-            group_spec = group.kv_cache_spec
-            if isinstance(group_spec, HiddenStateCacheSpec):
-                group_ids.append(gid)
-                continue
-
-            # Mixed attention groups may be represented by vLLM as a
-            # UniformTypeKVCacheSpecs wrapper. Inspect the per-layer specs so
-            # the hidden-state group is not mistaken for the first verifier
-            # layer in the wrapper.
-            layer_specs = getattr(group_spec, "kv_cache_specs", None)
-            if layer_specs and any(
-                isinstance(spec, HiddenStateCacheSpec) for spec in layer_specs.values()
-            ):
-                group_ids.append(gid)
+        group_ids = [
+            gid
+            for gid, group in enumerate(groups)
+            if isinstance(group.kv_cache_spec, HiddenStateCacheSpec)
+        ]
         if len(group_ids) == 1:
             return group_ids[0]
         if not group_ids and len(groups) == 1:
-            # The scheduler's generated config unwraps a mixed
-            # UniformTypeKVCacheSpecs group to a representative layer, so the
-            # HiddenStateCacheSpec marker is no longer available here. With a
-            # single group there is no ambiguity about the block table.
             return 0
         raise ValueError(
             "Could not uniquely identify the extract-hidden-states KV cache "
             f"group among {len(groups)} groups; the hidden-states layer must be "
-            "present in exactly one group."
+            "isolated in its own group (MLA verifiers are unsupported)."
         )
 
     @staticmethod
