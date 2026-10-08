@@ -18,7 +18,6 @@ from speculators.data_generation.vllm_client import (
     ClientItem,
     generate_hidden_states,
 )
-from speculators.train.noise_transforms import TransformTensors
 from speculators.train.recovery import (
     RECOVERY_METADATA_KEY,
     GenerationRecoveryGuard,
@@ -100,11 +99,9 @@ class BaseDataset(Dataset):
     def __init__(
         self,
         max_len: int,
-        transform: TransformTensors | None = None,
         hidden_states_dtype=torch.bfloat16,
     ):
         self.max_len = max_len
-        self.transform = transform
         self.hidden_states_dtype = hidden_states_dtype
         self.approx_lengths = self._compute_approx_lengths()
 
@@ -144,10 +141,6 @@ class BaseDataset(Dataset):
         #     "position_ids": [seq_len],
         # }
 
-        # Apply transform
-        if self.transform:
-            data = self.transform(data)
-
         return data
 
 
@@ -161,7 +154,6 @@ class ArrowDataset(BaseDataset):
         on_missing: Literal["generate", "skip", "warn", "raise"] = "generate",
         train_ratio: float = 1.0,
         split: Literal["train", "val"] = "train",
-        transform: TransformTensors | None = None,
         hidden_states_dtype=torch.bfloat16,
         model: str | None = None,
         request_timeout: float | None = DEFAULT_REQUEST_TIMEOUT,
@@ -202,7 +194,7 @@ class ArrowDataset(BaseDataset):
         )
 
         # Delay super init so that `_compute_approx_lengths` has required data
-        super().__init__(max_len, transform, hidden_states_dtype)
+        super().__init__(max_len, hidden_states_dtype)
 
     def _map_to_file_idx(self, index: int):
         return index + self.start_file_idx

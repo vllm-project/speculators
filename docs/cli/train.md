@@ -231,8 +231,6 @@ All speculator types (except `mtp`) use sliding window attention on all draft la
 
 - **`--prefetch-factor`** (int, default: `4`) Number of batches to prefetch per worker.
 
-- **`--noise-std`** (float, default: `0.05`) Standard deviation for noise augmentation on hidden states.
-
 ### Checkpoint Arguments
 
 - **`--checkpoint-freq`** (int, default: `1`) Save a checkpoint every N epochs. Must be ≥ 1.
