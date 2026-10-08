@@ -26,6 +26,10 @@ Examples:
     torchrun --standalone --nproc_per_node 2 scripts/benchmark.py run \
         --synthetic -- --verifier-name-or-path Qwen/Qwen3-8B
 
+    # With torch.profiler trace (outputs Chrome trace to profile_traces/)
+    python scripts/benchmark.py run --synthetic --profile \
+        -- --verifier-name-or-path Qwen/Qwen3-8B --total-seq-len 4096
+
     # Compare two runs
     python scripts/benchmark.py compare baseline.json candidate.json
 """
@@ -66,7 +70,29 @@ from speculators.train.distributed import (
 from speculators.train.logger import setup_root_logger
 from speculators.train.trainer import Trainer, TrainerConfig
 
-BENCHMARK_VERSION = "1.1"
+BENCHMARK_VERSION = "1.3"
+
+# Rows shown in the --profile kernel breakdown tables and the compare diff.
+KERNEL_TOP_N = 20
+# Mangled C++ and cuBLAS kernel names run to several hundred characters and
+# differ only near their ends, so the tables elide their middle at this width
+# (see _short_kernel_name).
+KERNEL_NAME_WIDTH = 52
+
+
+def _short_kernel_name(name: str, width: int = KERNEL_NAME_WIDTH) -> str:
+    """Shorten a kernel name to ``width`` characters by eliding its middle.
+
+    Mangled C++ and cuBLAS names share long prefixes and differ only near the
+    end (``..._stages_32x3_nn`` against ``..._stages_64x3_tn``), so clipping the
+    tail renders distinct kernels as identical-looking rows. Keeping both ends
+    does not.
+    """
+    if len(name) <= width:
+        return name
+    tail = (width - 1) // 3
+    return name[: width - 1 - tail] + "…" + name[len(name) - tail :]
+
 
 # ---------------------------------------------------------------------------
 # Metric capture
@@ -224,19 +250,25 @@ def compute_statistics(values: list[float]) -> dict[str, float]:
     }
 
 
-def select_measured_profiles(
-    all_profiles: list[dict], warmup_steps: int, measured_steps: int
-) -> list[dict]:
+def measured_step_window(warmup_steps: int, measured_steps: int) -> range:
+    """Which trainer steps the run measures — the single source of truth.
+
+    The same 0-based window drives the profiler schedule, the per-step
+    capture slice, and the kernel-time normalization, so the per-step
+    timings and the kernel breakdown always describe the same steps.
+    """
+    return range(warmup_steps, warmup_steps + measured_steps)
+
+
+def select_measured_profiles(all_profiles: list[dict], window: range) -> list[dict]:
     """Validate the sample count and discard warmup profiles."""
-    total_steps = warmup_steps + measured_steps
-    if len(all_profiles) < total_steps:
+    if len(all_profiles) < window.stop:
         raise RuntimeError(
             "Benchmark dataset exhausted before the requested number of steps: "
-            f"got {len(all_profiles)}, requested {total_steps} "
-            f"({warmup_steps} warmup + {measured_steps} measured). Use more "
+            f"got {len(all_profiles)}, requested {window.stop}. Use more "
             "samples or request fewer benchmark steps."
         )
-    return all_profiles[warmup_steps:total_steps]
+    return list(all_profiles[window.start : window.stop])
 
 
 def compute_aggregate_throughput(profiles: list[dict]) -> dict[str, float]:
@@ -338,6 +370,168 @@ def _aggregate_timing(measured_profiles: list[dict]) -> dict:
     return agg
 
 
+def _is_device_kernel(evt) -> bool:
+    """True for launched GPU kernels among ``key_averages()`` entries.
+
+    ``key_averages()`` emits one entry per launched device kernel alongside
+    the ATen op entries; the CUDA-device-type rows are the kernels
+    themselves, so the breakdown needs no extra instrumentation inside the
+    model. This is how a change to one kernel (an attention backend, a
+    fused loss tile) shows up attributed to that kernel instead of being
+    averaged into ``fwd_ms``.
+
+    User annotations (``ProfilerStep*``, ``Optimizer.step#...``, the
+    inductor ``## Call CompiledFxGraph <hash>`` spans) are also CUDA-typed
+    but are enclosing ranges, not kernels: keeping them would double-count
+    the total, and the graph hashes change whenever the compiled graph
+    does, so they turn a before/after diff into noise.
+    """
+    return (
+        evt.device_type == torch.autograd.DeviceType.CUDA
+        and not getattr(evt, "is_user_annotation", False)
+        and evt.self_device_time_total > 0
+    )
+
+
+def _local_kernel_rows(prof) -> list[dict]:
+    """This rank's kernel rows as plain dicts, safe to send in a collect."""
+    return [
+        {
+            "name": evt.key,
+            "self_device_us": evt.self_device_time_total,
+            "count": evt.count,
+        }
+        for evt in prof.key_averages()
+        if _is_device_kernel(evt)
+    ]
+
+
+def _aggregate_kernel_rows(per_rank_rows: list[list[dict]], active_steps: int) -> dict:
+    """Aggregate per-rank kernel rows into a per-step breakdown.
+
+    Device time is summed across ranks (total GPU time per step over the
+    run's devices) and divided by ``active_steps`` — the same window
+    ``select_measured_profiles`` slices for the per-step timings, so both
+    tables describe the same steps.
+    """
+    steps = max(active_steps, 1)
+    totals: dict[str, list] = {}
+    for rows in per_rank_rows:
+        for row in rows:
+            acc = totals.setdefault(row["name"], [0.0, 0])
+            acc[0] += row["self_device_us"]
+            acc[1] += row["count"]
+    kernels = [
+        {
+            "name": name,
+            "ms_per_step": us / 1000.0 / steps,
+            "calls_per_step": count / steps,
+        }
+        for name, (us, count) in totals.items()
+        if us > 0
+    ]
+    kernels.sort(key=lambda k: -k["ms_per_step"])
+    return {
+        "total_device_ms_per_step": sum(k["ms_per_step"] for k in kernels),
+        "kernels": kernels,
+        "num_ranks": len(per_rank_rows),
+    }
+
+
+def _collect_kernel_breakdown(prof, active_steps: int) -> dict:
+    """Kernel breakdown aggregated across every rank, normalized per step."""
+    rows = _local_kernel_rows(prof)
+    if dist.is_initialized() and dist.get_world_size() > 1:
+        gathered: list = [None] * dist.get_world_size()
+        dist.all_gather_object(gathered, rows)
+    else:
+        gathered = [rows]
+    return _aggregate_kernel_rows(gathered, active_steps)
+
+
+def _run_training(bench_args, trainer, rank, window: range) -> dict | None:
+    """Run the training loop, optionally with torch.profiler.
+
+    The profiler is active exactly over ``window`` (``wait=0``, warmup for
+    the first ``window.start`` steps, then ``len(window)`` active steps),
+    so the per-step capture and the kernel breakdown cover the same steps.
+    Timing fields measured inside the window do include profiling overhead;
+    the device-side kernel durations do not.
+
+    Returns the aggregated per-kernel breakdown when profiling, else None.
+    """
+    if not bench_args.profile:
+        trainer.train_epoch(0)
+        return None
+
+    profile_dir = Path(bench_args.profile_dir)
+    profile_dir.mkdir(parents=True, exist_ok=True)
+    # Timestamped per (run, rank) so concurrent or repeated runs do not
+    # collide in a shared trace directory.
+    worker_name = f"{Path(bench_args.output).stem}-rank{rank}"
+    steps_completed = 0
+
+    def _profiler_step() -> None:
+        nonlocal steps_completed
+        steps_completed += 1
+        prof.step()
+
+    with torch.profiler.profile(
+        activities=[
+            torch.profiler.ProfilerActivity.CPU,
+            torch.profiler.ProfilerActivity.CUDA,
+        ],
+        schedule=torch.profiler.schedule(
+            wait=0,
+            warmup=window.start,
+            active=len(window),
+            repeat=1,
+        ),
+        on_trace_ready=torch.profiler.tensorboard_trace_handler(
+            str(profile_dir), worker_name=worker_name
+        ),
+        record_shapes=True,
+        profile_memory=True,
+        with_stack=bench_args.profile_stacks,
+    ) as prof:
+        trainer.train_epoch(0, step_callback=_profiler_step)
+
+    # The window is only meaningful if the callback fired exactly once per
+    # step; catch loop/profiler drift as an error, not a silent skew.
+    if steps_completed != window.stop:
+        raise RuntimeError(
+            f"profiler stepped {steps_completed} times but the run had "
+            f"{window.stop} steps; step_callback must fire once per trainer "
+            "step"
+        )
+    if rank == 0:
+        print(f"Profile traces written to {profile_dir}")
+    return _collect_kernel_breakdown(prof, len(window))
+
+
+def _gather_per_rank(entry: dict) -> list[dict]:
+    """Collect one small per-rank dict (e.g. peak memory) onto every rank."""
+    if dist.is_initialized() and dist.get_world_size() > 1:
+        gathered: list = [None] * dist.get_world_size()
+        dist.all_gather_object(gathered, entry)
+        return sorted(gathered, key=lambda e: e["rank"])
+    return [entry]
+
+
+def _phase_peaks(measured_profiles: list[dict]) -> dict[str, float]:
+    """Peak allocated MiB at each timer phase, over the measured steps.
+
+    The per-step ``memory_mb`` marks say where in the step memory peaks;
+    this collapses them into one row per phase.
+    """
+    peaks: dict[str, float] = {}
+    for profile in measured_profiles:
+        for phase, mb in profile.get("memory_mb", {}).items():
+            if mb > peaks.get(phase, 0.0):
+                peaks[phase] = mb
+    return {phase: round(mb, 2) for phase, mb in peaks.items()}
+
+
 def run_benchmark(bench_args, train_args) -> dict:
     """Execute the benchmark using the real Trainer and return results."""
     set_seed(
@@ -416,29 +610,35 @@ def run_benchmark(bench_args, train_args) -> dict:
 
     # --- Reset memory tracking before the run ---
     local_rank = trainer.local_rank
-    torch.cuda.reset_peak_memory_stats(local_rank)
+    torch.accelerator.reset_peak_memory_stats(local_rank)
+
+    window = measured_step_window(bench_args.warmup_steps, bench_args.measured_steps)
 
     # --- Run the real training loop ---
-    trainer.train_epoch(0)
+    kernel_breakdown = _run_training(bench_args, trainer, rank, window)
 
     # --- Remove capture handler ---
     metric_logger.removeHandler(capture)
 
-    # --- Collect memory ---
-    peak_allocated_mb = torch.cuda.max_memory_allocated(local_rank) / (1024**2)
-    peak_reserved_mb = torch.cuda.max_memory_reserved(local_rank) / (1024**2)
-
     # --- Split warmup / measured profiles ---
-    all_profiles = capture.profiles
-    measured_profiles = select_measured_profiles(
-        all_profiles,
-        bench_args.warmup_steps,
-        bench_args.measured_steps,
-    )
+    measured_profiles = select_measured_profiles(capture.profiles, window)
+
+    # --- Collect memory: every rank reports its own device ---
+    own_memory = {
+        "rank": rank,
+        "peak_allocated_mb": round(
+            torch.accelerator.max_memory_allocated(local_rank) / (1024**2), 2
+        ),
+        "peak_reserved_mb": round(
+            torch.accelerator.max_memory_reserved(local_rank) / (1024**2), 2
+        ),
+    }
+    per_rank_memory = _gather_per_rank(own_memory)
 
     # --- Aggregate ---
     timing_agg = _aggregate_timing(measured_profiles)
     aggregate = compute_aggregate_throughput(measured_profiles)
+    phase_peaks = _phase_peaks(measured_profiles)
 
     num_gpus_used = dist.get_world_size() if dist.is_initialized() else 1
 
@@ -464,10 +664,11 @@ def run_benchmark(bench_args, train_args) -> dict:
             "warmup_steps": bench_args.warmup_steps,
             "measured_steps": bench_args.measured_steps,
             "seed": train_args.seed,
+            "profiled": bool(bench_args.profile),
         },
         "memory": {
-            "peak_allocated_mb": round(peak_allocated_mb, 2),
-            "peak_reserved_mb": round(peak_reserved_mb, 2),
+            "per_rank": per_rank_memory,
+            "phases": phase_peaks,
         },
         "timing": timing_agg,
         "aggregate": aggregate,
@@ -477,6 +678,9 @@ def run_benchmark(bench_args, train_args) -> dict:
         results["per_step"] = [
             {"step": i, **p} for i, p in enumerate(measured_profiles)
         ]
+
+    if kernel_breakdown:
+        results["kernels"] = kernel_breakdown
 
     # --- Write results (rank 0 only) ---
     if rank == 0:
@@ -523,10 +727,15 @@ def _print_summary(results: dict) -> None:
         f"{aggregate['effective_rank0_tokens_per_s']:.2f} tokens/s "
         f"over {aggregate['measured_time_s']:.2f} s"
     )
-    print(
-        f"\nPeak memory: {memory['peak_allocated_mb']:.1f} MB "
-        f"allocated, {memory['peak_reserved_mb']:.1f} MB reserved"
-    )
+    print("\nPeak memory (per rank):")
+    for r in memory["per_rank"]:
+        print(
+            f"  rank {r['rank']}: {r['peak_allocated_mb']:.1f} MB allocated, "
+            f"{r['peak_reserved_mb']:.1f} MB reserved"
+        )
+    if memory["phases"]:
+        phases = ", ".join(f"{p}={mb:.1f}" for p, mb in memory["phases"].items())
+        print(f"  phase peaks (MB allocated): {phases}")
 
 
 # ---------------------------------------------------------------------------
@@ -662,6 +871,60 @@ def compare_benchmarks(baseline_path: str, candidate_path: str) -> None:
         )
 
     _print_memory_comparison(baseline, candidate)
+    _print_kernel_comparison(baseline, candidate)
+
+
+def _kernel_diff_rows(baseline, candidate) -> list[tuple[str, float, float]]:
+    """(name, baseline ms/step, candidate ms/step) ranked by absolute change.
+
+    This is what localizes a regression or a win to the kernel that caused it:
+    the phase timings only say "forward got slower", the kernel rows say which
+    launch did it. Kernels present on only one side (a different attention
+    backend, a renamed Triton kernel) show up with the missing side at zero.
+    Empty unless both runs were profiled.
+    """
+    ka = (baseline.get("kernels") or {}).get("kernels")
+    kb = (candidate.get("kernels") or {}).get("kernels")
+    if not ka or not kb:
+        return []
+    base_ms = {k["name"]: k["ms_per_step"] for k in ka}
+    cand_ms = {k["name"]: k["ms_per_step"] for k in kb}
+    names = sorted(
+        set(base_ms) | set(cand_ms),
+        key=lambda n: -abs(cand_ms.get(n, 0.0) - base_ms.get(n, 0.0)),
+    )
+    return [(n, base_ms.get(n, 0.0), cand_ms.get(n, 0.0)) for n in names]
+
+
+def _print_kernel_comparison(baseline, candidate):
+    """Per-kernel GPU time diff, when both runs were profiled."""
+    rows = _kernel_diff_rows(baseline, candidate)
+    if not rows:
+        return
+
+    print(
+        f"\n{'GPU kernel (ms/step, self time)':<54}"
+        f"{'Baseline':>10}{'Candidate':>11}{'Delta':>10}{'Delta %':>10}"
+    )
+    print("-" * 95)
+    for name, a, b in rows[:KERNEL_TOP_N]:
+        delta = b - a
+        pct = f"{delta / a * 100:>+9.1f}%" if a else f"{'n/a':>10}"
+        label = _short_kernel_name(name)
+        print(f"{label:<54}{a:>10.2f}{b:>11.2f}{delta:>+10.2f}{pct}")
+
+    total_a = baseline["kernels"].get("total_device_ms_per_step", 0)
+    total_b = candidate["kernels"].get("total_device_ms_per_step", 0)
+    delta = total_b - total_a
+    pct = (delta / total_a * 100) if total_a else 0
+    print(
+        f"{'TOTAL device time':<54}{total_a:>10.2f}{total_b:>11.2f}"
+        f"{delta:>+10.2f}{pct:>+9.1f}%"
+    )
+    print(
+        "\n  Ranked by absolute change. Device-side durations, so the "
+        "synchronisation overhead --profile adds does not distort them."
+    )
 
 
 def _print_timing_comparison(baseline, candidate):
@@ -704,14 +967,26 @@ def _print_timing_comparison(baseline, candidate):
 
 
 def _print_memory_comparison(baseline, candidate):
-    """Print the memory comparison table."""
+    """Memory comparison: per-rank peaks and per-phase allocated peaks."""
     print(f"\n{'Memory':<24} {'Baseline':>12} {'Candidate':>12} {'Delta':>12}")
     print("-" * 62)
-    for key in ("peak_allocated_mb", "peak_reserved_mb"):
-        ba_val = baseline["memory"][key]
-        ca_val = candidate["memory"][key]
-        delta = ca_val - ba_val
-        print(f"{key:<24} {ba_val:>9.1f} MB {ca_val:>9.1f} MB {delta:>+9.1f} MB")
+    b_ranks = {r["rank"]: r for r in baseline["memory"]["per_rank"]}
+    c_ranks = {r["rank"]: r for r in candidate["memory"]["per_rank"]}
+    rows: list[tuple[str, float, float]] = []
+    for rank in sorted(b_ranks.keys() & c_ranks.keys()):
+        for key in ("peak_allocated_mb", "peak_reserved_mb"):
+            rows.append(
+                (f"rank{rank} {key[:-3]}", b_ranks[rank][key], c_ranks[rank][key])
+            )
+    b_phases = baseline["memory"].get("phases", {})
+    c_phases = candidate["memory"].get("phases", {})
+    for phase in sorted(b_phases.keys() & c_phases.keys()):
+        rows.append((f"phase {phase}", b_phases[phase], c_phases[phase]))
+    for label, ba_val, ca_val in rows:
+        print(
+            f"{label:<24} {ba_val:>9.1f} MB {ca_val:>9.1f} MB "
+            f"{ca_val - ba_val:>+9.1f} MB"
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -762,6 +1037,28 @@ def build_parser():
         action="store_true",
         help="Omit per-step timing data from the output JSON.",
     )
+    run_parser.add_argument(
+        "--profile",
+        action="store_true",
+        help=(
+            "Enable torch.profiler to emit a Chrome trace over the measured "
+            "steps (warmup steps are profiler warmup). Timing fields for "
+            "those steps include profiling overhead; device-side kernel "
+            "times do not. View traces in chrome://tracing or TensorBoard."
+        ),
+    )
+    run_parser.add_argument(
+        "--profile-dir",
+        type=str,
+        default="profile_traces",
+        help="Directory for torch.profiler trace output. Default: profile_traces/.",
+    )
+    run_parser.add_argument(
+        "--profile-stacks",
+        action="store_true",
+        help="Capture Python call stacks in the trace (adds overhead).",
+    )
+
     # --- compare ---
     cmp_parser = subparsers.add_parser(
         "compare", help="Compare two benchmark result files"
