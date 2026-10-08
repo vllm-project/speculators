@@ -113,7 +113,6 @@ def run_mtp_finetuning_e2e(
     ):
         logger.info("Preparing tokenized data")
         run_prepare_data(
-            model=verifier,
             data=training_data_path,
             data_path=data_path,
             max_samples=max_samples,

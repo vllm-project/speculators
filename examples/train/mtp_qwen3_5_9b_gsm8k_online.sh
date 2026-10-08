@@ -88,7 +88,6 @@ DATASET_DIR="$OUTPUT_DIR/dataset"
 hf download "$DATASET" "$DATASET_FILE" --repo-type dataset --local-dir "$DATASET_DIR"
 
 speculators prepare-data \
-    --model "$MODEL" \
     --data "$DATASET_DIR/$DATASET_FILE" \
     --render-endpoint "http://localhost:${VLLM_PORT}" \
     --max-samples "$MAX_SAMPLES" \

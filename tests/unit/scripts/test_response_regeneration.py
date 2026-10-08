@@ -8,19 +8,23 @@ over a fake endpoint.
 import asyncio
 import copy
 import json
+import sys
 import time
 from typing import Any
 
 import pytest
 import typer
+from datasets import load_from_disk
+from transformers import AutoTokenizer
+from typer.testing import CliRunner
 
+from speculators.cli import app
 from speculators.cli.regenerate_responses import (
     _post_chat,
     _primary_identifier,
     _sample_from_response,
     _validate_dataset,
     _worker,
-    build_boundary_sample,
     extract_conversation,
     extract_tools,
     load_input_dataset,
@@ -28,9 +32,11 @@ from speculators.cli.regenerate_responses import (
     prepare_row,
     regenerate_conversation,
 )
+from speculators.data_generation import preprocessing as preprocessing_module
 from speculators.data_generation import vllm_client
 from speculators.data_generation.configs import DATASET_CONFIGS, DatasetConfig
 from speculators.data_generation.preprocessing import _preprocess_batch
+from speculators.data_generation.records import build_boundary_sample
 from speculators.data_generation.vllm_client import InvalidResponseError
 
 
@@ -189,24 +195,34 @@ def test_extract_conversation_no_usable_input_returns_empty():
 # ---------------------------------------------------------------------------
 
 
-def test_build_boundary_sample_is_the_mask():
-    input_ids, loss_mask = build_boundary_sample([10, 11, 12, 13], [20, 21, 22])
-    assert input_ids == [10, 11, 12, 13, 20, 21, 22]
-    assert loss_mask == [0, 0, 0, 0, 1, 1, 1]
+def test_generated_sample_uses_endpoint_boundary():
+    sample, _, _ = _sample_from_response(
+        _response(
+            prompt_token_ids=[10, 11, 12, 13],
+            token_ids=[20, 21, 22],
+            content="answer",
+        ),
+        conv_id="c",
+        sample_index=0,
+        idx=0,
+        endpoint="ep",
+        sampling_params={},
+    )
+    assert sample["input_ids"] == [10, 11, 12, 13, 20, 21, 22]
+    assert sample["loss_mask"] == [0, 0, 0, 0, 1, 1, 1]
 
 
 def test_pretokenized_rows_pass_through_preprocessing():
     # A speculator-format regeneration row reaches training already masked: no
-    # processor, no re-masking, and the review-only `conversations` field is
-    # dropped.
-    input_ids, loss_mask = build_boundary_sample([10, 11, 12], [20, 21])
+    # processor or re-masking; extra fields are dropped.
+    sample = build_boundary_sample([10, 11, 12, 20, 21], boundary=3)
+    input_ids, loss_mask = sample["input_ids"], sample["loss_mask"]
     out = _preprocess_batch(
         {
             "input_ids": [input_ids],
             "loss_mask": [loss_mask],
             "conversations": [[{"role": "user", "content": "2+2?"}]],
         },
-        is_multimodal=False,  # passthrough returns before this is read
         max_length=2048,
         render_endpoint=None,
     )
@@ -218,11 +234,15 @@ def test_pretokenized_rows_pass_through_preprocessing():
 def test_pretokenized_passthrough_truncates_and_filters():
     # Truncation can cut the completion span away (all-zero mask); such a row must
     # be dropped by minimum_valid_tokens, like the tokenized path.
-    kept = build_boundary_sample([1, 2], [3, 4])  # fits max_length=4
-    cut = build_boundary_sample([1, 2, 3, 4], [5, 6])  # completion truncated off
+    kept = build_boundary_sample([1, 2, 3, 4], boundary=2)  # fits max_length=4
+    cut = build_boundary_sample(
+        [1, 2, 3, 4, 5, 6], boundary=4
+    )  # completion truncated off
     out = _preprocess_batch(
-        {"input_ids": [kept[0], cut[0]], "loss_mask": [kept[1], cut[1]]},
-        is_multimodal=False,  # passthrough returns before this is read
+        {
+            "input_ids": [kept["input_ids"], cut["input_ids"]],
+            "loss_mask": [kept["loss_mask"], cut["loss_mask"]],
+        },
         max_length=4,
         render_endpoint=None,
         minimum_valid_tokens=1,
@@ -238,7 +258,6 @@ def test_pretokenized_passthrough_rejects_length_mismatch():
     with pytest.raises(ValueError, match="shape mismatch"):
         _preprocess_batch(
             {"input_ids": [[1, 2, 3, 4, 5]], "loss_mask": [[0, 0, 1]]},
-            is_multimodal=False,  # passthrough returns before this is read
             max_length=2048,
             render_endpoint=None,
         )
@@ -496,7 +515,6 @@ def _run_worker(responses, tmp_path, stem):
             err_fh=err_fh,
             progress=_NullProgress(),
             stats=stats,
-            detokenize=_detok,
         )
         return stats
 
@@ -528,6 +546,19 @@ def test_worker_row_identity_and_all_or_nothing_writes(tmp_path):
     # The boundary is the mask: prompt 0s then completion 1s.
     assert rows[0]["input_ids"] == [1, 2, 3, 4]
     assert rows[0]["loss_mask"] == [0, 0, 1, 1]
+    # Each row ends at its own response, without later turns or responses.
+    assert rows[0]["conversations"] == [
+        {"role": "user", "content": "2+2?"},
+        {"role": "assistant", "content": "four"},
+    ]
+    assert rows[1]["conversations"] == [
+        {"role": "user", "content": "2+2?"},
+        {"role": "assistant", "content": "four"},
+        {"role": "user", "content": "3+3?"},
+        {"role": "assistant", "content": "six"},
+    ]
+    assert "debug" not in rows[0]
+    assert "tools" not in rows[0]
     assert load_seen(str(out_path)) == {"conv-abc"}
 
     # Turn 2 fails: turn 1's sample is discarded rather than half-written, which
@@ -582,11 +613,6 @@ def _response(
     }
 
 
-def _detok(token_ids):
-    """Test stand-in for ``tokenizer.decode`` -- deterministic and readable."""
-    return " ".join(str(t) for t in token_ids)
-
-
 def _fake_post(responses):
     """A post_fn returning canned responses in order and recording sent payloads."""
     sent = []
@@ -620,7 +646,6 @@ def _regen(
             endpoint=endpoint,
             sampling_params=sampling_params or {},
             samples=samples,
-            detokenize=_detok,
             reasoning_effort=reasoning_effort,
             temperature=temperature,
         )
@@ -715,7 +740,6 @@ def test_sample_from_response_rejects_empty_and_missing_token_ids():
     with pytest.raises(ValueError, match="empty assistant generation"):
         _sample_from_response(
             _response(prompt_token_ids=[1], token_ids=[2], content=None),
-            detokenize=_detok,
             conv_id="c",
             sample_index=0,
             idx=0,
@@ -730,7 +754,6 @@ def test_sample_from_response_rejects_empty_and_missing_token_ids():
     with pytest.raises(ValueError, match="return_token_ids"):
         _sample_from_response(
             bad,
-            detokenize=_detok,
             conv_id="c",
             sample_index=0,
             idx=0,
@@ -828,7 +851,7 @@ def test_regenerate_plain_conversation_is_unchanged_and_sends_no_tools():
 
 
 def test_regenerate_splices_cached_result_after_regenerated_call():
-    item = {
+    item: dict[str, Any] = {
         "idx": 1,
         "primary_id": "u1",
         "turns": [{"role": "user", "content": "weather?"}],
@@ -848,6 +871,7 @@ def test_regenerate_splices_cached_result_after_regenerated_call():
             content="It is 15C.",
         ),
     ]
+    responses[0]["choices"][0]["message"]["reasoning_content"] = "Check the weather."
     samples, truncated, sent = _regen(item, responses)
 
     assert not truncated
@@ -863,6 +887,23 @@ def test_regenerate_splices_cached_result_after_regenerated_call():
         "content": "15C",
         "tool_call_id": "call_1",
     }
+    for sample, request, response in zip(samples, sent, responses, strict=True):
+        assert sample["conversations"][:-1] == request["messages"]
+        assert sample["conversations"][-1] == {
+            **response["choices"][0]["message"],
+            "role": "assistant",
+        }
+        assert sample["tools"] == request["tools"]
+    # Readable reasoning stays out of subsequent generation history as before.
+    assert "reasoning_content" not in sent[1]["messages"][-2]
+    # Nested tool objects are snapshots too, rather than references to history.
+    responses[0]["choices"][0]["message"]["tool_calls"][0]["function"]["name"] = (
+        "changed"
+    )
+    item["tools"][0]["function"]["name"] = "changed"
+    assert samples[0]["conversations"][-1]["tool_calls"][0] == _tool_call()
+    assert samples[1]["conversations"][-3]["tool_calls"][0] == _tool_call()
+    assert samples[0]["tools"][0]["function"]["name"] == "get_weather"
 
 
 @pytest.mark.parametrize(
@@ -1046,3 +1087,80 @@ def test_tools_and_results_are_read_from_the_normalized_row():
     assert tool_results == [("sunny", [])]
     # the raw row hides the conversation behind `input`: results would be lost
     assert extract_conversation(row, None)[1] == []
+
+
+def test_regeneration_cli_accepts_served_alias_without_tokenizer(tmp_path, monkeypatch):
+
+    def fail(*args, **kwargs):
+        pytest.fail("Regeneration must not load a tokenizer for a served model alias")
+
+    async def post(session, endpoint, payload, **kwargs):
+        assert payload["model"] == "served-alias"
+        return _response(prompt_token_ids=[1, 2], token_ids=[3, 4], content="answer")
+
+    monkeypatch.setattr(AutoTokenizer, "from_pretrained", fail)
+    monkeypatch.setattr(
+        sys.modules["speculators.cli.regenerate_responses"], "_post_chat", post
+    )
+    source = tmp_path / "prompts.jsonl"
+    source.write_text(
+        json.dumps(
+            {
+                "id": "p",
+                "conversations": [
+                    {"role": "user", "content": "question"},
+                    {"role": "assistant", "content": "discard this answer"},
+                ],
+            }
+        )
+        + "\n"
+    )
+    output = tmp_path / "generated.jsonl"
+    result = CliRunner(env={"COLUMNS": "200"}).invoke(
+        app,
+        [
+            "regenerate-responses",
+            "--model",
+            "served-alias",
+            "--dataset",
+            str(source),
+            "--outfile",
+            str(output),
+            "--concurrency",
+            "1",
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    row = json.loads(output.read_text())
+    assert row["input_ids"] == [1, 2, 3, 4]
+    assert row["loss_mask"] == [0, 0, 1, 1]
+    assert row["primary_id"] == "p"
+    assert "text" not in row
+    assert "debug" not in row
+    assert row["conversations"] == [
+        {"role": "user", "content": "question"},
+        {"role": "assistant", "content": "answer", "tool_calls": None},
+    ]
+
+    # The real JSONL -> Arrow path ignores the transcript without rendering it
+    # or changing the endpoint's training tokens and completion mask.
+    monkeypatch.setattr(preprocessing_module, "render_conversation", fail)
+    prepared = tmp_path / "prepared"
+    result = CliRunner(env={"COLUMNS": "200"}).invoke(
+        app,
+        [
+            "prepare-data",
+            "--data",
+            str(output),
+            "--output",
+            str(prepared),
+            "--num-preprocessing-workers",
+            "1",
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    dataset = load_from_disk(str(prepared))
+    assert dataset[0]["input_ids"].tolist() == row["input_ids"]
+    assert dataset[0]["loss_mask"].tolist() == row["loss_mask"]
+    assert "conversations" not in dataset.column_names
+    assert "debug" not in dataset.column_names

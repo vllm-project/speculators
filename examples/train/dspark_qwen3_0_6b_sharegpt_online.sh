@@ -88,7 +88,6 @@ echo "vLLM server ready."
 # Pretokenized JSONL skips rendering; conversation-only JSONL uses the live server.
 echo "=== Step 2: Preparing data ==="
 speculators prepare-data \
-    --model "$MODEL" \
     --data "$DATASET" \
     --output "$OUTPUT_DIR" \
     --max-samples "$MAX_SAMPLES" \

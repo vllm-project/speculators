@@ -7,7 +7,8 @@ import sys
 import warnings
 from pathlib import Path
 
-from speculators.data_generation.preprocessing import get_tokenizer, load_processor
+from transformers import AutoTokenizer
+
 from speculators.provenance import atomic_write, find_repo_root, git_diff, git_sha
 
 logger = logging.getLogger("speculators")
@@ -32,11 +33,12 @@ def resolve_mask_token_id(
         logger.info(f"Using explicit mask_token_id={mask_token_id}")
         return mask_token_id
 
-    processor = load_processor(
+    tokenizer = AutoTokenizer.from_pretrained(
         verifier_name_or_path,
         trust_remote_code=trust_remote_code,
     )
-    tokenizer = get_tokenizer(processor)
+    if tokenizer.pad_token is None:
+        tokenizer.pad_token = tokenizer.eos_token
 
     if tokenizer.mask_token_id is not None:
         logger.info(f"Using tokenizer mask_token_id={tokenizer.mask_token_id}")

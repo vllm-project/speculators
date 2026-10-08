@@ -71,7 +71,8 @@ class TestPrepareDataCommand:
         result = runner.invoke(app, ["prepare-data", "--help"])
         assert result.exit_code == 0
         output = unstyled_output(result)
-        assert "--model" in output
+        assert "--model" not in output
+        assert "--trust-remote-code" not in output
         assert "--data" in output
         assert "--output" in output
         assert "--seq-length" in output

@@ -8,21 +8,17 @@ guard (needs a template that rewrites history), and the client's error paths.
 """
 
 import time
-from typing import cast
 
 import pytest
 from datasets import Dataset as HFDataset
+from datasets import concatenate_datasets
 
 from speculators.data_generation import preprocessing, render_client
 from speculators.data_generation.preprocessing import (
-    ProcessorLike,
     build_speculator_training_dataset,
 )
 from speculators.data_generation.vllm_client import InvalidResponseError
-
-# Neither build path below reads the processor: the missing-endpoint guard
-# raises before it is used, and speculator-format rows skip rendering entirely.
-NO_PROCESSOR = cast("ProcessorLike", None)
+from speculators.train.data import build_client_item
 
 
 def _conv(n: int) -> list[dict]:
@@ -151,34 +147,6 @@ def test_over_length_first_turn_yields_no_rows(monkeypatch):
 
 
 # --------------------------------------------------------------------------- #
-# _append_row -- clip / filter / keep                                          #
-# --------------------------------------------------------------------------- #
-def test_append_row_statuses():
-    results: dict[str, list] = {"input_ids": [], "loss_mask": [], "seq_len": []}
-    assert (
-        preprocessing._append_row(results, [1, 2, 3], [0, 0, 0], 10, None)
-        == "unsupervised"
-    )
-    assert preprocessing._append_row(results, [1, 2, 3], [0, 1, 1], 10, 3) == "filtered"
-    assert preprocessing._append_row(results, [1, 2, 3], [0, 1, 1], 10, 1) == "kept"
-    assert len(results["input_ids"]) == 1
-    assert results["seq_len"] == [3]
-
-
-def test_append_boundary_rows_counts_rows_at_limit_as_maybe_truncated():
-    results: dict[str, list] = {"input_ids": [], "loss_mask": [], "seq_len": []}
-    rows: list[preprocessing.BoundaryRow] = [
-        {
-            "input_ids": [1, 2, 3, 4],
-            "loss_mask": [0, 1, 1, 1],
-            "conv": _conv(2),
-        }
-    ]
-
-    assert preprocessing._append_boundary_rows(results, rows, 4, None) == (1, 0, 1)
-
-
-# --------------------------------------------------------------------------- #
 # render_client                                                                #
 # --------------------------------------------------------------------------- #
 class _Resp:
@@ -288,9 +256,7 @@ def test_build_speculator_training_dataset_requires_render_endpoint():
         ]
     }
     with pytest.raises(ValueError, match="render_endpoint is required"):
-        build_speculator_training_dataset(
-            HFDataset.from_dict(data), NO_PROCESSOR, num_proc=1
-        )
+        build_speculator_training_dataset(HFDataset.from_dict(data), num_proc=1)
 
 
 def test_pretokenized_dataset_skips_render():
@@ -298,7 +264,95 @@ def test_pretokenized_dataset_skips_render():
     # endpoint. Passthrough content (ids/mask) is covered by the regeneration
     # tests in test_response_regeneration.py.
     data = {"input_ids": [[1, 2, 3, 4]], "loss_mask": [[0, 0, 1, 1]]}
-    ds = build_speculator_training_dataset(
-        HFDataset.from_dict(data), NO_PROCESSOR, num_proc=1
-    )
+    ds = build_speculator_training_dataset(HFDataset.from_dict(data), num_proc=1)
     assert len(ds) == 1
+
+
+def test_rendered_messages_route_by_content_and_mix_with_prepared_rows(monkeypatch):
+
+    _patch_encode(monkeypatch, {(1, True): [1, 2], (2, False): [1, 2, 3, 4]})
+    text = _conv(2)
+    media = [
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "Describe this"},
+                {"type": "image", "url": "https://example.com/image.png"},
+            ],
+        },
+        {"role": "assistant", "content": [{"type": "text", "text": "An image"}]},
+    ]
+    datasets = [
+        build_speculator_training_dataset(
+            HFDataset.from_dict({"conversations": [conv]}),
+            num_proc=1,
+            max_length=3,
+            render_endpoint="http://render",
+        )
+        for conv in (text, media)
+    ]
+    datasets.append(
+        build_speculator_training_dataset(
+            HFDataset.from_dict({"input_ids": [[5, 6]], "loss_mask": [[0, 1]]}),
+            num_proc=1,
+        )
+    )
+    combined = concatenate_datasets(datasets).with_format("torch")
+    text_item, media_item, prepared_item = [build_client_item(row) for row in combined]
+    assert text_item == {"input_ids": [1, 2, 3]}
+    assert prepared_item == {"input_ids": [5, 6]}
+    assert media_item["messages"] == combined[1]["messages"]
+    assert combined[1]["messages"][0]["content"][1]["image_url"] == {
+        "url": "https://example.com/image.png"
+    }
+    assert combined[1]["loss_mask"].tolist() == [0, 0, 1]
+
+    text_parts = [
+        turn | {"content": [{"type": "text", "text": turn["content"]}]} for turn in text
+    ]
+    typed_text = build_speculator_training_dataset(
+        HFDataset.from_dict({"conversations": [text_parts]}),
+        num_proc=1,
+        max_length=3,
+        render_endpoint="http://render",
+    )
+    assert build_client_item(typed_text[0]) == text_item
+
+
+def test_rendered_media_fanout_round_trips_as_prepared_records(monkeypatch):
+    _patch_encode(
+        monkeypatch,
+        {
+            (1, True): [1, 2],
+            (2, False): [1, 2, 3],
+            (3, True): [1, 2, 3, 4],
+            (4, False): [1, 2, 3, 4, 5, 6],
+        },
+    )
+    conversation = [
+        turn | {"content": [{"type": "text", "text": turn["content"]}]}
+        for turn in _conv(4)
+    ]
+    conversation[0]["content"].append(
+        {"type": "image", "url": "https://example.com/image.png"}
+    )
+    rendered = build_speculator_training_dataset(
+        HFDataset.from_dict({"conversations": [conversation]}),
+        render_endpoint="http://render",
+        num_proc=1,
+    )
+    assert [len(row["messages"]) for row in rendered] == [2, 4]
+    assert [row["loss_mask"].tolist() for row in rendered] == [
+        [0, 0, 1],
+        [0, 0, 0, 0, 1, 1],
+    ]
+
+    def fail(*args, **kwargs):
+        pytest.fail("Prepared media must not be re-rendered")
+
+    monkeypatch.setattr(preprocessing, "_encode_render", fail)
+    prepared = build_speculator_training_dataset(rendered.with_format(None), num_proc=1)
+    for before, after in zip(rendered, prepared, strict=True):
+        assert after["input_ids"].tolist() == before["input_ids"].tolist()
+        assert after["loss_mask"].tolist() == before["loss_mask"].tolist()
+        assert build_client_item(after) == build_client_item(before)
