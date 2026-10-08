@@ -213,3 +213,69 @@ def test_pre_transformers_5_preserves_mrope_in_rope_scaling(patch_verifier):
     # Legacy fields should be stripped from rope_scaling too
     assert "type" not in config.rope_scaling
     assert "mrope_interleaved" not in config.rope_scaling
+
+
+# ---------------------------------------------------------------------------
+# DFlash plain-rope drafts (multimodal verifiers)
+# ---------------------------------------------------------------------------
+
+
+def test_dflash_strips_mrope_section(patch_verifier):
+    """DFlash drafts keep plain rope even on MRoPE (VL) verifiers.
+
+    vLLM's DFlash serving path rejects MRoPE draft configs, and the draft
+    consumes multimodal content exclusively through the captured verifier
+    hidden states, so neither ``mrope_section`` nor the coupled
+    ``partial_rotary_factor`` may leak into the draft config.
+    """
+    vc = _make_verifier_config(
+        rope_parameters={
+            "rope_type": "default",
+            "mrope_section": [16, 24, 24],
+            "partial_rotary_factor": 0.5,
+            "rope_theta": 1000000.0,
+        }
+    )
+    patch_verifier(vc, "5.0.0")
+
+    config = _build(speculator_type="dflash")
+
+    assert "mrope_section" not in config.rope_parameters
+    assert "partial_rotary_factor" not in config.rope_parameters
+    assert config.rope_parameters["rope_theta"] == 1000000.0
+    assert config.rope_parameters["rope_type"] == "default"
+
+
+def test_dflash_strips_mrope_from_rope_scaling(patch_verifier):
+    """Legacy transformers path: DFlash drafts stay plain rope too."""
+    vc = _make_verifier_config(
+        rope_theta=1000000.0,
+        rope_scaling={
+            "rope_type": "default",
+            "mrope_section": [16, 24, 24],
+            "type": "mrope",
+        },
+    )
+    patch_verifier(vc, "4.46.0")
+
+    config = _build(speculator_type="dflash")
+
+    assert "mrope_section" not in config.rope_scaling
+    assert "type" not in config.rope_scaling
+    assert config.rope_theta == 1000000.0
+
+
+def test_eagle3_keeps_mrope_when_speculator_type_passed(patch_verifier):
+    """Non-DFlash speculators keep the MRoPE inheritance unchanged."""
+    vc = _make_verifier_config(
+        rope_parameters={
+            "rope_type": "default",
+            "mrope_section": [16, 24, 24],
+            "rope_theta": 1000000.0,
+        }
+    )
+    patch_verifier(vc, "5.0.0")
+
+    config = _build(speculator_type="eagle3")
+
+    assert config.rope_parameters["mrope_section"] == [16, 24, 24]
