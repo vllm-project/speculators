@@ -16,6 +16,12 @@ from torch.nn.attention.flex_attention import (
 )
 from transformers.modeling_utils import AttentionInterface
 
+# Gradient checkpointing runs each decoder layer outside torch.compile, and an
+# uncompiled flex_attention materializes the full [heads, q_len, kv_len] scores.
+# torch.compile() is lazy: this is a cheap wrapper, compilation happens on
+# first call.
+_compiled_flex_attention = torch.compile(flex_attention, dynamic=False)
+
 
 def flex_attention_forward(
     module: torch.nn.Module,  # noqa: ARG001
@@ -52,7 +58,7 @@ def flex_attention_forward(
     key = key.contiguous()
     value = value.contiguous()
 
-    flex_attention_output = flex_attention(
+    flex_attention_output = _compiled_flex_attention(
         query,
         key,
         value,
