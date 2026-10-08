@@ -117,7 +117,7 @@ python evaluate.py throughput \
     --dataset ibm-research/synthetic-conversations-traces --otel
 ```
 
-Serve the target with a context window large enough for the trace's longest conversation plus its largest recorded completion — for the default dataset, `max_model_len` of at least 128k. The default dataset is a single ~2.7 GB JSONL fetched from Hugging Face on first use; pass a local JSONL path to avoid the download.
+Any `max_model_len` works: requests whose recorded prompt plus completion exceed the server's context length are simply dropped — the server rejects the request and the run continues with the remaining ones (the rest of an affected conversation is dropped too, since its later turns depend on the dropped turn). A larger context window just replays more of the longest conversations. The default dataset is a single ~2.7 GB JSONL fetched from Hugging Face on first use; pass a local JSONL path to avoid the download.
 
 OTEL traces run under the mode's normal profiles like any other dataset — requests go out at max concurrency (or across sweep rate points), with the recorded trace timestamps ignored. Turns within one conversation stay serialized (guidellm's conversation DAG), preserving prefix-cache order and multi-turn dependencies. Each request's output length comes from the span's recorded completion count, so the gen-length estimation pass is skipped for `--otel`; `--max-requests` (default 200) still bounds the run. Both `throughput` and `sweep` modes are supported.
 
