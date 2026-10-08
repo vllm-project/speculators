@@ -13,8 +13,9 @@ _WEIGHT_ALIASES: dict[str, list[str]] = {
         "tok_embeddings.weight",
         "llm.embed.weight",
         "backbone.embeddings.weight",  # HF Mamba-backbone (NemotronH, Mamba, ...)
+        "embed.weight",  # DeepSeek V4
     ],
-    "lm_head.weight": ["output.weight", "llm.unembed.weight"],
+    "lm_head.weight": ["output.weight", "llm.unembed.weight", "head.weight"],
     "model.norm.weight": [
         "llm.norm.weight",
         # HF Mamba-backbone final norm (NemotronH, Mamba, ...); before bare
