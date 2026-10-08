@@ -51,6 +51,16 @@ class RenderError(Exception):
     """Non-200, retry-eligible response from the render endpoint."""
 
 
+class RenderEndpointError(RenderError):
+    """The endpoint itself is unreachable or failing, not this request.
+
+    A connection failure, a timeout, or a retry-exhausted 5xx says nothing about
+    the conversation being rendered, so it affects every conversation. Callers
+    abort the build on this rather than skipping the conversations that happen
+    to hit it.
+    """
+
+
 @with_retries
 def render_conversation(
     endpoint: str,
@@ -84,7 +94,14 @@ def render_conversation(
     if truncation_side is not None:
         body["truncation_side"] = truncation_side
 
-    resp = _post(url, json=body, timeout=timeout)
+    try:
+        resp = _post(url, json=body, timeout=timeout)
+    except httpx.TransportError as e:
+        # Connection refused, DNS failure, read timeout -- none of these are
+        # about the conversation being rendered.
+        raise RenderEndpointError(
+            f"Render endpoint {endpoint} is unreachable: {type(e).__name__}: {e}"
+        ) from e
 
     if (
         HTTPStatus.BAD_REQUEST <= resp.status_code < HTTPStatus.INTERNAL_SERVER_ERROR
@@ -97,7 +114,9 @@ def render_conversation(
             f"Render endpoint returned {resp.status_code}: {resp.text}"
         )
     if resp.status_code != HTTPStatus.OK:
-        raise RenderError(f"Render endpoint returned {resp.status_code}: {resp.text}")
+        raise RenderEndpointError(
+            f"Render endpoint {endpoint} returned {resp.status_code}: {resp.text}"
+        )
 
     data = resp.json()
     if "token_ids" not in data:
