@@ -31,34 +31,41 @@ __all__ = [
 def selector_training_candidates(
     candidate_ids: torch.Tensor,  # [*, top_k]
     target_ids: torch.Tensor,  # [*]
+    miss_policy: str = "replace",
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-    """Build top-k selector candidates, injecting a missing target at rank K.
-
-    Unary top-k is the serving candidate set. Training replaces its weakest
-    candidate only when the hard target is absent, so every position has a
-    well-defined K-way cross-entropy label without expanding the selector to the
-    full vocabulary.
-
-    Returns (training_candidate_ids, target_positions, contains_target) where
-    contains_target is a boolean mask indicating positions where the target was
-    already present in the original unary top-k.
-    """
+    """Build selector candidates under the configured gold-miss policy."""
     top_k = candidate_ids.shape[-1]
     target_matches = candidate_ids.eq(target_ids.unsqueeze(-1))
     contains_target = target_matches.any(dim=-1)
     target_positions = target_matches.to(torch.int64).argmax(dim=-1)
-    target_positions = torch.where(
-        contains_target,
-        target_positions,
-        top_k - 1,
-    )
 
-    training_candidate_ids = candidate_ids.clone()
-    training_candidate_ids[..., -1] = torch.where(
-        contains_target,
-        training_candidate_ids[..., -1],
-        target_ids,
-    )
+    if miss_policy == "replace":
+        target_positions = torch.where(
+            contains_target,
+            target_positions,
+            top_k - 1,
+        )
+        training_candidate_ids = candidate_ids.clone()
+        training_candidate_ids[..., -1] = torch.where(
+            contains_target,
+            training_candidate_ids[..., -1],
+            target_ids,
+        )
+    elif miss_policy == "strict":
+        # Do not inject gold targets. Miss positions receive a dummy label,
+        # whose CE is masked in compute_selector_loss().
+        training_candidate_ids = candidate_ids
+        target_positions = torch.where(
+            contains_target,
+            target_positions,
+            torch.zeros_like(target_positions),
+        )
+    else:
+        raise ValueError(
+            f"Unknown selector miss policy: {miss_policy!r}; "
+            "expected 'replace' or 'strict'."
+        )
+
     return training_candidate_ids, target_positions, contains_target
 
 
@@ -76,23 +83,43 @@ def _candidate_cross_entropy(
 def compute_selector_loss(
     candidate_logits: torch.Tensor,  # [1, num_anchors*block_size, top_k]
     target_positions: torch.Tensor,  # [1, num_anchors*block_size]
-    loss_mask: torch.Tensor,  # [1, num_anchors*block_size]
+    loss_mask: torch.Tensor,  # base DFlash mask; used for denominator
     block_size: int,
     *,
     gamma: float,
     per_position_loss_weight: str,
     dpace_alpha: float,
     sample_from_anchor: bool = False,
+    selector_valid_mask: torch.Tensor | None = None,
 ) -> torch.Tensor:
-    """Compute teacher-forced hard CE over the runtime-sized candidate set."""
+    """Compute selector CE, optionally excluding positions with a top-K miss.
+
+    The original DFlash ``loss_mask`` remains the reduction denominator. In
+    strict mode, ``selector_valid_mask`` masks selector-loss positions only.
+    """
     pos_idx = (
         torch.arange(candidate_logits.shape[1], device=candidate_logits.device)
         % block_size
     ).unsqueeze(0)
+
+    if selector_valid_mask is None:
+        selector_loss_mask = loss_mask.to(torch.bool)
+    else:
+        selector_loss_mask = (
+            loss_mask.to(torch.bool) & selector_valid_mask.to(torch.bool)
+        )
+
+    def selector_ce(
+        logits: torch.Tensor,
+        positions: torch.Tensor,
+    ) -> torch.Tensor:
+        ce = _candidate_cross_entropy(logits, positions)
+        return ce * selector_loss_mask.to(ce.dtype)
+
     if per_position_loss_weight == "dpace":
         decay_fn = partial(
             dpace_loss_decay,
-            loss_mask=loss_mask,
+            loss_mask=selector_loss_mask.to(loss_mask.dtype),
             block_size=block_size,
             dpace_alpha=dpace_alpha,
         )
@@ -102,12 +129,13 @@ def compute_selector_loss(
             gamma=gamma,
             sample_from_anchor=sample_from_anchor,
         )
+
     return loss_function(
         candidate_logits,
         target_positions,
-        loss_mask,
+        loss_mask,  # keep the base valid-token denominator
         pos_idx,
-        loss_fn=_candidate_cross_entropy,
+        loss_fn=selector_ce,
         decay_fn=decay_fn,
     )
 
@@ -130,8 +158,15 @@ def compute_metrics(
     selector_loss_alpha: float = 1.0,
     per_position_loss_weight: str = "fixed-exp-decay",
     dpace_alpha: float = 0.5,
+    selector_miss_policy: str = "replace",
 ) -> tuple[torch.Tensor, dict[str, Any]]:
-    """Combine the unary DFlash objective with a K-way selector objective."""
+    """Combine the unary DFlash objective with the selector objective."""
+    if selector_miss_policy not in {"replace", "strict"}:
+        raise ValueError(
+            f"Unknown selector miss policy: {selector_miss_policy!r}; "
+            "expected 'replace' or 'strict'."
+        )
+
     unary_loss, metrics = compute_unary_metrics(
         unary_logits,
         targets,
@@ -146,6 +181,10 @@ def compute_metrics(
         dpace_alpha=dpace_alpha,
         sample_from_anchor=sample_from_anchor,
     )
+
+    selector_valid_mask = (
+        contains_target if selector_miss_policy == "strict" else None
+    )
     selector_loss = compute_selector_loss(
         candidate_logits,
         target_positions,
@@ -155,6 +194,7 @@ def compute_metrics(
         per_position_loss_weight=per_position_loss_weight,
         dpace_alpha=dpace_alpha,
         sample_from_anchor=sample_from_anchor,
+        selector_valid_mask=selector_valid_mask,
     )
     loss = unary_loss + selector_loss_alpha * selector_loss
 
@@ -178,14 +218,18 @@ def compute_metrics(
         metrics[f"unary_candidate_recall_at_{top_k}_total"] = valid_total
 
         target_log_normalizer = torch.logsumexp(targets.float(), dim=-1)
-        candidate_target_logits = targets.gather(-1, training_candidate_ids).float()
+        candidate_target_logits = targets.gather(
+            -1, training_candidate_ids
+        ).float()
         candidate_mass = torch.exp(
             torch.logsumexp(candidate_target_logits, dim=-1) - target_log_normalizer
         )
         metrics[f"unary_candidate_target_mass_at_{top_k}_sum"] = (
             candidate_mass * valid_float
         ).sum()
-        metrics[f"unary_candidate_target_mass_at_{top_k}_total"] = valid_total.clone()
+        metrics[f"unary_candidate_target_mass_at_{top_k}_total"] = (
+            valid_total.clone()
+        )
 
         teacher_forced_ids = training_candidate_ids.gather(
             -1, candidate_logits.detach().argmax(dim=-1, keepdim=True)
@@ -201,9 +245,8 @@ def compute_metrics(
         contains_target_blocks = contains_target.view(num_blocks, block_size)
         valid_blocks = valid.view(num_blocks, block_size)
 
-        # Teacher-forced predecessor tokens are exact while the greedy path is
-        # alive. Gate on the original unary candidate set because training may
-        # inject a missing target that would not be available during serving.
+        # Gate on the original unary candidate set: selector training must not
+        # make injected gold tokens appear available at inference.
         start_pos = 0 if sample_from_anchor else 1
         selector_correct = teacher_forced_ids.eq(target_ids) & contains_target
         eal_sum, eal_total = compute_accepted_length_counts(
@@ -226,6 +269,7 @@ def compute_metrics(
                 & contains_target_blocks[:, position]
             )
             oracle_accepted_length += oracle_alive.to(oracle_accepted_length.dtype)
+
         block_valid = valid_blocks[:, 1:].any(dim=-1)
         block_total = block_valid.sum().to(torch.float32)
         metrics[f"unary_top_{top_k}_oracle_accepted_length_sum"] = (
