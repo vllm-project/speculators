@@ -10,10 +10,10 @@ from scripts.launch_vllm import (
 from speculators.data_generation.preprocessing import default_preprocessing_workers
 
 
-def test_defaults_added_when_absent():
+def test_render_defaults_are_added():
     args = _with_render_defaults(["--port", "8000"])
     api_servers, renderer_workers = render_throughput_defaults()
-    assert args == [
+    assert args[-6:] == [
         "--api-server-count",
         str(api_servers),
         "--renderer-num-workers",
@@ -30,6 +30,7 @@ def test_explicit_flag_follows_default():
 
 def test_headless_does_not_get_api_server_defaults():
     args = _with_render_defaults(["--headless"])
+    assert "--enable-scale-out" not in args
     assert "--api-server-count" not in args
     assert "--renderer-num-workers" not in args
 

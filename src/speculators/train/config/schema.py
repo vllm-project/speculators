@@ -197,9 +197,9 @@ class DraftArgs(_Group):
 class DataArgs(_Group):
     data_path: str = Field(
         default="./output",
-        description="Root data directory with the preprocessed dataset, vocab "
-        "mappings (d2t.npy, t2d.npy), token frequencies (token_freq.pt), and hidden "
-        "states.",
+        description="Root data directory with the preprocessed dataset, size-keyed "
+        "vocab mappings (d2t-<size>.npy, t2d-<size>.npy), token frequencies "
+        "(token_freq.pt), and hidden states.",
     )
     hidden_states_backend: str = Field(
         default="file",

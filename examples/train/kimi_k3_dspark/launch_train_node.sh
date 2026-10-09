@@ -45,7 +45,6 @@ exec torchrun --standalone --nproc-per-node 4 \
   --draft-config "$script_dir/k3_draft_layer_config.json" \
   --data-path "$data_dir" \
   --save-path "$run_dir/checkpoints" \
-  --draft-vocab-size 163840 \
   --mask-token-id 163837 \
   --epochs 1 \
   --checkpoint-freq 0.1 \
