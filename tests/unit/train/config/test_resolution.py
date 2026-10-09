@@ -402,6 +402,8 @@ def test_resolve_dflash2_flags_and_derived_defaults():
             "12",
             "--selector-loss-alpha",
             "0.3",
+            "--selector-miss-policy",
+            "strict",
         ]
     )
     flat = cfg.flatten()
@@ -414,6 +416,7 @@ def test_resolve_dflash2_flags_and_derived_defaults():
     assert flat["selector_rank"] == 128
     assert flat["selector_top_k"] == 12
     assert flat["selector_loss_alpha"] == pytest.approx(0.3)
+    assert flat["selector_miss_policy"] == "strict"
 
 
 def test_resolve_dflash2_allows_explicit_causal_override():

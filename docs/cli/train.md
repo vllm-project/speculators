@@ -201,6 +201,8 @@ DFlash2 builds on DFlash, so all DFlash-specific arguments apply as well. It def
 
 - **`--selector-loss-alpha`** (float, default: `1.0`) Weight of the candidate-selector K-way cross-entropy term.
 
+- **`--selector-miss-policy`** (str, default: `"replace"`) DFlash2 selector target-miss policy. `replace` inserts the gold token into the training candidates when it's missing from the unary top-K; `strict` leaves top-K unchanged and excludes that position from the selector cross-entropy. The unary loss remains active either way. Options: `replace`, `strict`.
+
 ### DSpark-Specific Arguments
 
 DSpark builds on DFlash, so all DFlash-specific arguments apply as well.
