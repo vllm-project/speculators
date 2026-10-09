@@ -262,6 +262,54 @@ class TestRunGuidellm:
         assert "kind=json" in output
         assert "path=/tmp/out.json" in output
 
+    def test_data_otel_huggingface_source(self, perf_utils):
+        """OTEL replays through guidellm's otel deserializer with a nested
+        huggingface source; no column mapper applies."""
+        cmd = self._capture_cmd(
+            perf_utils,
+            subset=None,
+            dataset="ibm-research/lmcache-agentic-traces_Otel",
+            data_kind="otel",
+            history="trace",
+        )
+        idx = cmd.index("--data")
+        data = cmd[idx + 1]
+        assert data.startswith("kind=otel,")
+        assert "source.kind=huggingface" in data
+        assert "source.source=ibm-research/lmcache-agentic-traces_Otel" in data
+        assert "history=trace" in data
+        assert "--data-column-mapper" not in cmd
+
+    def test_data_otel_local_file_source(self, perf_utils, tmp_path):
+        path = tmp_path / "traces.jsonl"
+        path.touch()
+        cmd = self._capture_cmd(
+            perf_utils,
+            subset=None,
+            dataset=str(path),
+            data_kind="otel",
+        )
+        idx = cmd.index("--data")
+        data = cmd[idx + 1]
+        assert "source.kind=json_file" in data
+        assert f"source.path={path}" in data
+        assert "history" not in data
+
+    def test_data_otel_uses_standard_profile(self, perf_utils):
+        """OTEL data runs under the mode's normal profiles (max concurrency,
+        recorded trace timestamps ignored), like any other dataset."""
+        cmd = self._capture_cmd(
+            perf_utils,
+            subset=None,
+            dataset="ibm-research/lmcache-agentic-traces_Otel",
+            data_kind="otel",
+            profile="throughput",
+            rate=128,
+        )
+        idx = cmd.index("--profile")
+        profile = cmd[idx + 1]
+        assert profile == "kind=throughput,max_concurrency=128"
+
 
 # ---------------------------------------------------------------------------
 # _load_json — JSON output parsing
