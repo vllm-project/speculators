@@ -1,8 +1,10 @@
 import pytest
 import torch
+from safetensors.torch import save_file
 
 from speculators.data_generation.offline import (
     check_hidden_states,
+    find_corrupt_hidden_state_indices,
     get_existing_hidden_state_indices,
     get_indices_to_process,
 )
@@ -129,3 +131,82 @@ class TestGetExistingHiddenStateIndices:
             (tmp_path / f"hs_{i}.safetensors").touch()
         result = get_existing_hidden_state_indices(tmp_path)
         assert result == [0, 2, 5, 9]
+
+
+# ===== find_corrupt_hidden_state_indices Tests =====
+
+
+def _write_sample(path, seq_len=4):
+    save_file(
+        {
+            "token_ids": torch.arange(seq_len, dtype=torch.int64),
+            "hidden_states": torch.zeros(seq_len, 3, 2, dtype=torch.bfloat16),
+        },
+        path,
+    )
+
+
+def _truncate(path):
+    path.write_bytes(path.read_bytes()[:-1])
+
+
+class TestFindCorruptHiddenStateIndices:
+    def test_healthy_file_is_not_reported(self, tmp_path):
+        _write_sample(tmp_path / "hs_0.safetensors")
+        assert find_corrupt_hidden_state_indices(tmp_path, [0]) == {}
+
+    def test_truncated_file_is_reported_with_a_reason(self, tmp_path):
+        path = tmp_path / "hs_0.safetensors"
+        _write_sample(path)
+        _truncate(path)
+
+        corrupt = find_corrupt_hidden_state_indices(tmp_path, [0])
+
+        assert list(corrupt) == [0]
+        assert corrupt[0]
+
+    def test_extra_trailing_bytes_are_reported(self, tmp_path):
+        # Buffer coverage has to be exact in both directions, so a file that
+        # grew is just as unreadable as one that was cut short.
+        path = tmp_path / "hs_0.safetensors"
+        _write_sample(path)
+        path.write_bytes(path.read_bytes() + b"\x00")
+
+        assert list(find_corrupt_hidden_state_indices(tmp_path, [0])) == [0]
+
+    def test_empty_file_is_reported(self, tmp_path):
+        (tmp_path / "hs_0.safetensors").touch()
+        assert list(find_corrupt_hidden_state_indices(tmp_path, [0])) == [0]
+
+    def test_absent_file_is_skipped(self, tmp_path):
+        # Absence already means "not generated", which is not corruption.
+        assert find_corrupt_hidden_state_indices(tmp_path, [7]) == {}
+
+    def test_absent_directory_is_skipped(self, tmp_path):
+        assert find_corrupt_hidden_state_indices(tmp_path / "nope", [0, 1]) == {}
+
+    def test_only_requested_indices_are_checked(self, tmp_path):
+        _write_sample(tmp_path / "hs_0.safetensors")
+        broken = tmp_path / "hs_1.safetensors"
+        _write_sample(broken)
+        _truncate(broken)
+
+        assert find_corrupt_hidden_state_indices(tmp_path, [0]) == {}
+        assert list(find_corrupt_hidden_state_indices(tmp_path, [0, 1])) == [1]
+
+    def test_corrupt_index_rejoins_the_work_queue(self, tmp_path):
+        # The resume path must not treat mere presence as "done", otherwise an
+        # interrupted run leaves a file that is skipped forever.
+        _write_sample(tmp_path / "hs_0.safetensors")
+        broken = tmp_path / "hs_1.safetensors"
+        _write_sample(broken)
+        _truncate(broken)
+        _write_sample(tmp_path / "hs_2.safetensors")
+
+        existing = get_existing_hidden_state_indices(tmp_path)
+        assert existing == [0, 1, 2]
+
+        corrupt = find_corrupt_hidden_state_indices(tmp_path, existing)
+        existing = [i for i in existing if i not in corrupt]
+
+        assert get_indices_to_process(3, None, existing, world_size=1, rank=0) == [1]

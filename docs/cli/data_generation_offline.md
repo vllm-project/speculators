@@ -4,11 +4,11 @@ Generates training data for speculator models by extracting hidden states from a
 
 ## Features
 
-- **Automatic resumption** — Detects existing `.safetensors` files in the output directory and skips already-completed samples, so interrupted runs can be resumed without reprocessing.
+- **Automatic resumption** — Detects existing `.safetensors` files in the output directory and skips already-completed samples, so interrupted runs can be resumed without reprocessing. Each cached file is opened to confirm it is readable before being counted as complete: a file left truncated by an interrupted run is reported and regenerated instead of being skipped forever.
 - **Error handling with auto-retries** — Failed requests are automatically retried up to `--max-retries` times. Samples that still fail are skipped by default, allowing the rest of the dataset to complete.
 - **Consecutive failure detection** — Aborts early after `--max-consecutive-errors` consecutive failures to avoid silently churning through the dataset when the server is unreachable.
 - **Async concurrency** — Sends multiple requests to the vLLM server in parallel, controlled by `--concurrency`, for high throughput.
-- **Output validation** — Optional `--validate-outputs` flag verifies that saved hidden states match expected token IDs and sequence lengths.
+- **Output validation** — Optional `--validate-outputs` flag verifies that saved hidden states match expected token IDs and sequence lengths. This applies only to files the current run generates, so it is not a way to re-check a directory that is already complete.
 
 ## Basic Usage
 
