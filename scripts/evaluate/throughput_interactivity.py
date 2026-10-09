@@ -8,7 +8,7 @@ Run it once without a speculator and once with one, and the two curves show what
 speculative decoding buys at every concurrency.
 
 Self-contained helper: one file, Python 3.10+, standard library only except
-GuideLLM (>= 0.7.1, called as a shell command by `collect`) and Pillow (`plot`).
+GuideLLM (called as a shell command by `collect`) and Pillow (`plot`).
 
     pip install "guidellm>=0.8.0" pillow
 
@@ -851,7 +851,12 @@ def collect(args: argparse.Namespace) -> int:  # noqa: C901
     write_csv(rows, csv_path)
     print(f"\nwrote {len(rows)} rows -> {csv_path}")
     validate_rows(rows)
-    return 1 if failures and not args.keep_going else 0
+    if failures:
+        print(
+            f"!! {failures} run(s) failed; their points are missing from {csv_path}",
+            file=sys.stderr,
+        )
+    return 1 if failures else 0
 
 
 # ---------------------------------------------------------------------------
@@ -1670,7 +1675,12 @@ def _add_collect_parser(sub: Any) -> None:
         "--dry-run", action="store_true", help="print commands only; do this first"
     )
     c.add_argument("--overwrite", action="store_true")
-    c.add_argument("--keep-going", action="store_true")
+    c.add_argument(
+        "--keep-going",
+        action="store_true",
+        help="run the remaining points after a failed one; the exit status still "
+        "reports the failure",
+    )
     c.set_defaults(func=collect)
 
 
@@ -1681,8 +1691,8 @@ def _add_plot_parser(sub: Any) -> None:
         action="append",
         required=True,
         metavar="CSV[:NAME[:#COLOR]]",
-        help="one curve per CSV, fields separated by colons; repeatable; the first "
-        "series is drawn on top",
+        help="one curve per CSV, fields separated by colons; repeatable; later "
+        "series are drawn over earlier ones",
     )
     g.add_argument("--out", required=True)
     g.add_argument("--title", default="Output Throughput vs. Interactivity")

@@ -2,7 +2,7 @@
 
 Measures output-token throughput against per-user interactivity for a vLLM (or any OpenAI-compatible) server, in the way SemiAnalysis's InferenceX does, and draws the result. One file, four subcommands. See the [tutorial](../user_guide/tutorials/throughput_interactivity.md) for what the chart means and a worked example.
 
-Requirements: Python 3.10+, `guidellm>=0.7.1` (tested with 0.8.0) for `collect`, and `pillow` for `plot`. `parse` and `validate` use the standard library only.
+Requirements: Python 3.10+, `guidellm>=0.8.0` for `collect`, and `pillow` for `plot`. `parse` and `validate` use the standard library only.
 
 ## Basic Usage
 
@@ -77,7 +77,7 @@ Give one data source per run: a dataset subset, random text, or a raw GuideLLM s
 - **`--guidellm-arg`** (str, repeatable) Extra argument appended to every GuideLLM command.
 - **`--dry-run`** Print the GuideLLM commands and exit. Do this first.
 - **`--overwrite`** Re-run points whose JSON exists.
-- **`--keep-going`** Continue after a failed point.
+- **`--keep-going`** Run the remaining points after a failed one. The exit status is still non-zero, and the failed points are missing from the CSV.
 
 ## `parse`
 
@@ -97,7 +97,7 @@ Prints one row per point, averaged over repeats, then the warnings listed in the
 
 ## `plot`
 
-- **`--series`** (`CSV[:NAME[:#COLOR]]`, repeatable, required) One curve per CSV; the first is drawn on top.
+- **`--series`** (`CSV[:NAME[:#COLOR]]`, repeatable, required) One curve per CSV; later series are drawn over earlier ones.
 - **`--out`** (str, required) PNG path.
 - **`--x`** (`itl` | `little`, default: `itl`) X axis: `1000 / mean ITL` (InferenceX), or throughput divided by requests in flight.
 - **`--title`**, **`--subtitle`**, **`--xlabel`**, **`--ylabel`**, **`--note`** Chart text. Put the hardware, versions and workload in the subtitle.

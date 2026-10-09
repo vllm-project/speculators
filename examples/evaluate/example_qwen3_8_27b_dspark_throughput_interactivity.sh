@@ -81,6 +81,10 @@ trap cleanup EXIT
 
 start_server() {  # <config> [extra vllm args...]
     local config=$1; shift
+    if curl -sf "${SERVER_URL}/health" > /dev/null 2>&1; then
+        echo "ERROR: something already answers on ${SERVER_URL}; stop it or set VLLM_PORT"
+        exit 1
+    fi
     local cmd=(vllm serve "$TARGET_MODEL" --port "$VLLM_PORT" --max-model-len "$MAX_MODEL_LEN"
                --max-num-seqs "$MAX_NUM_SEQS" --max-num-batched-tokens "$MAX_NUM_BATCHED_TOKENS"
                "${VLLM_EXTRA_ARGS[@]}" "$@")
@@ -103,16 +107,21 @@ start_server() {  # <config> [extra vllm args...]
     echo "vLLM server ready."
 }
 
+INCOMPLETE=()  # <config>_<subset> sweeps with failed points (collect exits non-zero)
 sweep() {  # <config> <subset>
-    local config=$1 subset=$2
+    local config=$1 subset=$2 ok=1
     local common=(--target "$SERVER_URL" --model "$TARGET_MODEL"
                   --dataset "$DATASET" --subset "$subset" --max-tokens "$MAX_TOKENS"
                   --repeats "$REPEATS" --out-dir "$OUT_DIR/${config}_${subset}"
                   --label "$config" --csv "$OUT_DIR/${config}_${subset}.csv" --keep-going)
     python "$BENCH" collect "${common[@]}" --streams "$STREAMS_SHORT" \
-        --max-seconds 90 --warmup-seconds 30
+        --max-seconds 90 --warmup-seconds 30 || ok=0
     python "$BENCH" collect "${common[@]}" --streams "$STREAMS_LONG" \
-        --max-seconds 120 --warmup-seconds 60
+        --max-seconds 120 --warmup-seconds 60 || ok=0
+    if (( ! ok )); then
+        echo "WARNING: some points of ${config}/${subset} failed; its CSV is incomplete"
+        INCOMPLETE+=("${config}_${subset}")
+    fi
 }
 
 # Configuration 1: the target model alone.
@@ -145,3 +154,7 @@ done
 
 echo ""
 echo "Done. Results in $OUT_DIR: <subset>.png, <config>_<subset>.csv, and raw runs."
+if (( ${#INCOMPLETE[@]} )); then
+    echo "Incomplete sweeps (some points failed, see their logs): ${INCOMPLETE[*]}"
+    exit 1
+fi
