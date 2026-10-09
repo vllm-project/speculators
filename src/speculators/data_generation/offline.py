@@ -2,6 +2,7 @@ import logging
 from pathlib import Path
 
 import torch
+from safetensors import safe_open
 
 logger = logging.getLogger(__name__)
 
@@ -50,6 +51,44 @@ def get_existing_hidden_state_indices(output_path: Path) -> list[int]:
                 continue
 
     return sorted(existing_file_indices_set)
+
+
+def find_corrupt_hidden_state_indices(
+    output_path: Path, indices: list[int]
+) -> dict[int, str]:
+    """Find cached `hs_i.safetensors` files that cannot be opened.
+
+    Returns a mapping of file index to the reason that file is unreadable.
+
+    A file can be present and still be unusable. When the directory vLLM stages
+    hidden states in and ``output_path`` are on different filesystems, the
+    ``shutil.move`` in ``generate_offline_data`` hits ``EXDEV`` and falls back to
+    a non-atomic byte copy, so a run interrupted mid-copy leaves a truncated
+    file at its final name. :func:`get_existing_hidden_state_indices` only
+    inspects filenames and reports such a file as done, so every later run skips
+    it and training fails when it reads it.
+
+    ``safe_open`` performs safetensors' own header validation in its constructor
+    -- header length, header JSON, offset contiguity, dtype/shape/offset
+    consistency, and exact buffer coverage -- without reading any tensor data, so
+    the cost scales with the file count rather than the tensor size. Indices
+    whose file is absent are skipped; absence is already handled as "not generated".
+
+    Note that this cannot detect corruption that preserves the file's size: the
+    format carries no checksum, so bit-rot inside the tensor data still requires
+    loading it (see :func:`check_hidden_states`).
+    """
+    corrupt: dict[int, str] = {}
+    for idx in indices:
+        path = output_path / f"hs_{idx}.safetensors"
+        try:
+            with safe_open(path, framework="pt"):
+                pass
+        except FileNotFoundError:
+            continue
+        except Exception as e:  # noqa: BLE001
+            corrupt[idx] = str(e) or type(e).__name__
+    return corrupt
 
 
 def get_indices_to_process(

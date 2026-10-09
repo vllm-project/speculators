@@ -29,6 +29,7 @@ from tqdm import tqdm
 
 from speculators.data_generation.offline import (
     check_hidden_states,
+    find_corrupt_hidden_state_indices,
     get_existing_hidden_state_indices,
     get_indices_to_process,
 )
@@ -42,6 +43,46 @@ from speculators.train.data import build_client_item
 from speculators.train.logger import setup_root_logger
 
 logger = logging.getLogger(__name__)
+
+# Cap on how many unreadable filenames a single warning line lists.
+_MAX_CORRUPT_REPORTED = 10
+
+
+def _drop_unreadable_cached_files(
+    hidden_states_dir: Path, existing_file_indices: list[int]
+) -> list[int]:
+    """Drop cached files that cannot be opened, so they get regenerated.
+
+    The presence of ``hs_i.safetensors`` is not proof that it is readable; see
+    :func:`find_corrupt_hidden_state_indices`. Without this, a file truncated by
+    an interrupted run is treated as complete forever and only surfaces much
+    later as a ``SafetensorError`` inside the training dataloader.
+    """
+    if not existing_file_indices:
+        return existing_file_indices
+
+    corrupt = find_corrupt_hidden_state_indices(
+        hidden_states_dir, existing_file_indices
+    )
+    if not corrupt:
+        logger.info(
+            "Verified %d cached hidden-states file(s) are readable",
+            len(existing_file_indices),
+        )
+        return existing_file_indices
+
+    shown = sorted(corrupt)[:_MAX_CORRUPT_REPORTED]
+    names = ", ".join(f"hs_{i}.safetensors" for i in shown)
+    if len(shown) < len(corrupt):
+        names += ", ..."
+    logger.warning(
+        "%d cached hidden-states file(s) are unreadable and will be regenerated: "
+        "%s (first reason: %s)",
+        len(corrupt),
+        names,
+        corrupt[shown[0]],
+    )
+    return [i for i in existing_file_indices if i not in corrupt]
 
 
 class _FailureTracker:
@@ -230,6 +271,9 @@ async def _generate_and_save_hidden_states(
     hidden_states_dir.mkdir(parents=True, exist_ok=True)
 
     existing_file_indices = get_existing_hidden_state_indices(hidden_states_dir)
+    existing_file_indices = _drop_unreadable_cached_files(
+        hidden_states_dir, existing_file_indices
+    )
     num_samples = len(dataset)
 
     to_process = get_indices_to_process(
