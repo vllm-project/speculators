@@ -21,7 +21,6 @@ from speculators.train.distributed import get_dp_rank, get_dp_size
 from speculators.train.distributed_batch_sampler import (
     MultipackDistributedBatchSamplerV2,
 )
-from speculators.train.noise_transforms import AddUniformNoise
 
 logger = logging.getLogger(__name__)
 
@@ -97,7 +96,6 @@ def create_train_val_loaders(
     data_path: str,
     total_seq_len: int,
     hidden_states_dtype: torch.dtype,
-    noise_std: float,
     transfer: HiddenStatesTransfer | None = None,
     vllm_endpoint: str,
     on_missing: Literal["generate", "skip", "warn", "raise"],
@@ -126,7 +124,6 @@ def create_train_val_loaders(
     validated on the same packed batches.
     """
     _limit_worker_threads()
-    noise_transform = AddUniformNoise(std=noise_std)
 
     if not (0.0 < train_data_ratio < 1.0):
         raise ValueError(f"train_data_ratio must be in (0, 1), got {train_data_ratio}")
@@ -137,7 +134,6 @@ def create_train_val_loaders(
         transfer=transfer,
         vllm_endpoint=vllm_endpoint,
         on_missing=on_missing,
-        transform=noise_transform,
         train_ratio=train_data_ratio,
         split="train",
         model=verifier_name_or_path,
