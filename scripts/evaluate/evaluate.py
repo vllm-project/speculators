@@ -262,6 +262,21 @@ def _run_subset(
     )
     current = _require_metrics(metrics_url)
 
+    if not is_sweep:
+        try:
+            with run_output.open() as stream:
+                benchmarks = json.load(stream)["benchmarks"]
+
+            successful = sum(
+                benchmark["metrics"]["request_totals"]["successful"]
+                for benchmark in benchmarks
+            )
+            if successful <= 0:
+                raise ValueError("No successful throughput requests")
+        except (OSError, ValueError, KeyError, TypeError) as exc:
+            logger.error("[%s] Invalid throughput results: %s", subset, exc)
+            sys.exit(1)
+
     spec = extract_spec_decode_metrics(
         current,
         baseline_metrics=baseline,
@@ -270,6 +285,7 @@ def _run_subset(
 
     if has_spec:
         spec["subset"] = subset
+        logger.info("[%s] Acceptance metrics cover the entire %s run", subset, profile)
         print_acceptance_report(spec)
         if acceptance_csv is None:
             acceptance_csv = CsvWriter(
@@ -281,19 +297,17 @@ def _run_subset(
         logger.warning("[%s] No speculative decoding metrics found", subset)
 
     if is_sweep:
-        rows = parse_sweep_results(
-            run_output,
-            spec if has_spec else None,
-        )
-        if rows:
-            if perf_csv is None:
-                acc_cols = acceptance_csv_columns(spec) if has_spec else []
-                cols = BASE_CSV_COLUMNS + acc_cols
-                perf_csv = CsvWriter(
-                    output_dir / "perf_results.csv",
-                    cols,
-                )
-            perf_csv.append_rows(rows)
+        rows = parse_sweep_results(run_output, spec if has_spec else None)
+        if not rows:
+            logger.error("[%s] No performance results collected", subset)
+            sys.exit(1)
+        for row in rows:
+            row["subset"] = subset
+        if perf_csv is None:
+            acc_cols = acceptance_csv_columns(spec) if has_spec else []
+            cols = BASE_CSV_COLUMNS + acc_cols
+            perf_csv = CsvWriter(output_dir / "perf_results.csv", cols)
+        perf_csv.append_rows(rows)
 
     logger.info("[%s] Complete", subset)
     return acceptance_csv, perf_csv, max_tokens if is_sweep else None
@@ -404,6 +418,10 @@ def run_benchmark(args: argparse.Namespace) -> None:
         for subset in [s.strip() for s in args.subsets.split(",") if s.strip()]:
             run_items.append((subset, guidellm_common))
 
+    if not run_items:
+        logger.error("No subsets selected for benchmarking")
+        sys.exit(1)
+
     logger.info(
         "Mode: %s | %d subsets | Output: %s", args.mode, len(run_items), output_dir
     )
@@ -423,8 +441,10 @@ def run_benchmark(args: argparse.Namespace) -> None:
             all_max_tokens[label] = mt
 
     if acceptance_csv is None:
-        logger.error("No acceptance metrics collected from any subset")
-        sys.exit(1)
+        logger.info(
+            "No acceptance metrics collected; GuideLLM results are saved in %s",
+            artifacts_dir,
+        )
 
     if is_sweep and all_max_tokens:
         with (output_dir / "max_tokens.json").open("w") as f:
