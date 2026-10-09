@@ -619,11 +619,11 @@ def main() -> None:
     parser.add_argument(
         "--otel-history",
         choices=["trace", "runtime"],
-        default="trace",
+        default="runtime",
         help=(
-            "How OTEL turns get prior context: 'trace' resends each span's "
-            "full recorded input; 'runtime' sends only new messages and "
-            "chains live completions (default: trace)"
+            "How OTEL turns get prior context: 'runtime' sends only new "
+            "messages and chains live completions; 'trace' resends each "
+            "span's full recorded input (default: runtime)"
         ),
     )
     args = parser.parse_args()

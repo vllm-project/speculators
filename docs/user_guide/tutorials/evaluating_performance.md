@@ -123,7 +123,7 @@ OTEL traces run under the mode's normal profiles like any other dataset — requ
 
 Options:
 
-- `--otel-history trace` (default) resends each span's full recorded input, so prompts are exactly the recorded content; `runtime` sends only new messages and chains live completions (cache-friendly, but content diverges from the trace as the live model generates).
+- `--otel-history runtime` (default) sends only new messages and chains live completions (cache-friendly, but content diverges from the trace as the live model generates); `trace` resends each span's full recorded input, so prompts are exactly the recorded content.
 
 If you need replay pacing at the trace's recorded timestamps instead (for serving-realism experiments rather than acceptance rates), invoke `guidellm run` directly with `--profile kind=replay`.
 
