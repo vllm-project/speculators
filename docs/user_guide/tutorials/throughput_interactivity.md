@@ -38,7 +38,7 @@ Both load models (`--streams`, `--rates`), repeats (`--repeats`), a single-strea
 
 ## Run the example
 
-[`examples/evaluate/example_qwen3_8_27b_dspark_throughput_interactivity.sh`](https://github.com/vllm-project/speculators/blob/main/examples/evaluate/example_qwen3_8_27b_dspark_throughput_interactivity.sh) benchmarks `Qwen/Qwen3.8-27B` alone, with its DSpark speculator [`RedHatAI/Qwen3.8-27B-speculator.dspark`](https://huggingface.co/RedHatAI/Qwen3.8-27B-speculator.dspark) (7 draft tokens), and with its MTP head, the multi-token-prediction head shipped in the checkpoint (2 draft tokens; the head has one layer, so vLLM's own default would be 1, and the vLLM recipe for this model suggests 3, so treat the count as a knob), on the HumanEval and math_reasoning subsets of `RedHatAI/speculator_benchmarks`:
+`examples/evaluate/example_qwen3_8_27b_dspark_throughput_interactivity.sh` benchmarks `Qwen/Qwen3.8-27B` alone, with its DSpark speculator [`RedHatAI/Qwen3.8-27B-speculator.dspark`](https://huggingface.co/RedHatAI/Qwen3.8-27B-speculator.dspark) (7 draft tokens), and with its MTP head, the multi-token-prediction head shipped in the checkpoint (2 draft tokens; the head has one layer, so vLLM's own default would be 1, and the vLLM recipe for this model suggests 3, so treat the count as a knob), on the HumanEval and math_reasoning subsets of `RedHatAI/speculator_benchmarks`:
 
 ```bash
 pip install "guidellm>=0.8.0" pillow
