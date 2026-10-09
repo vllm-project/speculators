@@ -587,6 +587,37 @@ def _cumulative_counts(stats: dict[str, Any]) -> dict[str, int]:
     }
 
 
+def _count_total_convs(
+    hf_dataset: Any, language_filter: str | None, hf_path: str
+) -> int:
+    """Total conversations the progress bar counts against.
+
+    With ``language_filter`` the dataset is scanned once up front so the
+    total (and therefore 100%) only covers rows that pass the filter; the
+    main loop re-streams the dataset afterwards. The predicate must stay in
+    sync with the main loop's skip check. Without a filter, ``len()`` is
+    used; streaming IterableDatasets have no ``len()``, so fall back to
+    counting lines in the source file, including a final unterminated line.
+    Returns 0 when even the file cannot be read, which degrades the progress
+    bar to an indeterminate one.
+    """
+    if language_filter:
+        return sum(1 for row in hf_dataset if row.get("language") == language_filter)
+    try:
+        return len(hf_dataset)
+    except TypeError:
+        try:
+            with Path(hf_path).open("rb") as src:
+                newlines = 0
+                tail_unterminated = False
+                for chunk in iter(lambda: src.read(1 << 24), b""):
+                    newlines += chunk.count(b"\n")
+                    tail_unterminated = not chunk.endswith(b"\n")
+                return newlines + (1 if tail_unterminated else 0)
+        except OSError:
+            return 0
+
+
 def _log_summary(stats: dict[str, Any]) -> None:
     """Log the end-of-run pipeline summary.
 
@@ -821,25 +852,9 @@ async def _run(  # noqa: C901
     seen_ids, hist_trunc_ids = load_seen(outfile) if resume else (set(), set())
     hist_error_ids = _load_error_ids(error_outfile) if resume else set()
 
-    # Total conversations the progress bar counts against. HF datasets loaded
-    # from local jsonl files are streaming IterableDatasets without len();
-    # fall back to counting lines in the source file.
-    try:
-        total_convs = len(hf_dataset)
-    except TypeError:
-        try:
-            with Path(dataset_config.hf_path).open("rb") as src:  # noqa: ASYNC230
-                # Count newlines plus a final unterminated line (a file whose
-                # last line has no trailing \n is one line more than its
-                # newline count).
-                newlines = 0
-                tail_unterminated = False
-                for chunk in iter(lambda: src.read(1 << 24), b""):
-                    newlines += chunk.count(b"\n")
-                    tail_unterminated = not chunk.endswith(b"\n")
-                total_convs = newlines + (1 if tail_unterminated else 0)
-        except OSError:
-            total_convs = 0
+    total_convs = _count_total_convs(
+        hf_dataset, language_filter, dataset_config.hf_path
+    )
     if resume:
         # A previous run may have completed more conversations than the
         # current source accounts for (e.g. the source file changed between

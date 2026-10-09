@@ -7,6 +7,7 @@ from typer.testing import CliRunner
 
 from speculators.cli import app
 from speculators.cli.regenerate_responses import (
+    _count_total_convs,
     _cumulative_counts,
     _load_error_ids,
     load_seen,
@@ -420,3 +421,59 @@ class TestCumulativeCounts:
         # conv t1 truncated in a previous session and again in this session
         counts = _cumulative_counts(self._stats(trunc_ids={"t1", "t2"}, truncated=2))
         assert counts == {"ok": 0, "err": 0, "trunc": 2}
+
+
+class TestCountTotalConvs:
+    """Unit tests for the filter-aware progress total (RFC1 filter commit)."""
+
+    class _Sized:
+        """Minimal dataset that reports a size via len()."""
+
+        def __len__(self):
+            """Return the fake dataset size."""
+            return 7
+
+    class _Unsized:
+        """Minimal streaming dataset: iterable but no len()."""
+
+        # IterableDataset-like: iterable but no len()
+        def __iter__(self):
+            """Yield nothing; only the missing len() matters."""
+            return iter(())
+
+    def test_no_filter_uses_dataset_len(self):
+        """Without a filter the total is the dataset len()."""
+        assert _count_total_convs(self._Sized(), None, "unused.jsonl") == 7
+
+    def test_filter_counts_only_matching_rows(self):
+        """Only rows whose language matches the filter are counted."""
+        rows = [
+            {"language": "en"},
+            {"language": "zh"},
+            {"language": "en"},
+            {"language": "EN"},  # match is exact, not case-insensitive
+            {"question": "row without a language field"},
+        ]
+        assert _count_total_convs(rows, "en", "unused.jsonl") == 2
+
+    def test_filter_takes_precedence_over_dataset_len(self):
+        """A filter counts matching rows even when the dataset has a len()."""
+        rows = [{"language": "zh"}, {"language": "zh"}]
+        assert _count_total_convs(rows, "zh", "unused.jsonl") == 2
+
+    def test_streaming_dataset_falls_back_to_source_lines(self, tmp_path):
+        """Datasets without len() count lines in the source file."""
+        src = tmp_path / "data.jsonl"
+        src.write_text('{"a": 1}\n{"a": 2}\n{"a": 3}\n', encoding="utf-8")
+        assert _count_total_convs(self._Unsized(), None, str(src)) == 3
+
+    def test_streaming_fallback_counts_final_unterminated_line(self, tmp_path):
+        """A final line without a trailing newline still counts as one row."""
+        src = tmp_path / "data.jsonl"
+        src.write_text('{"a": 1}\n{"a": 2}\n{"a": 3}', encoding="utf-8")
+        assert _count_total_convs(self._Unsized(), None, str(src)) == 3
+
+    def test_unreadable_source_returns_zero(self, tmp_path):
+        """An unreadable source yields 0, degrading the bar to indeterminate."""
+        missing = str(tmp_path / "nope.jsonl")
+        assert _count_total_convs(self._Unsized(), None, missing) == 0
