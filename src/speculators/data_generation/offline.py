@@ -86,7 +86,7 @@ def find_corrupt_hidden_state_indices(
                 pass
         except FileNotFoundError:
             continue
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             corrupt[idx] = str(e) or type(e).__name__
     return corrupt
 
