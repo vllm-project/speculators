@@ -1,9 +1,17 @@
 """Smoke tests for the speculators CLI."""
 
+import json
+
 import click
 from typer.testing import CliRunner
 
 from speculators.cli import app
+from speculators.cli.regenerate_responses import (
+    _count_total_convs,
+    _cumulative_counts,
+    _load_error_ids,
+    load_seen,
+)
 
 # Rich uses COLUMNS when rendering help, so keep assertions independent of the
 # terminal width provided by the environment running the tests.
@@ -216,3 +224,256 @@ class TestTrainCommand:
         result = runner.invoke(app, ["--help"])
         assert result.exit_code == 0
         assert "train" in unstyled_output(result)
+
+
+class TestLoadSeen:
+    """Unit tests for the resume-seen scanner (RFC1 cumulative counters)."""
+
+    def test_missing_file_returns_empty_sets(self, tmp_path):
+        """A missing output file yields two empty sets."""
+        seen, truncated = load_seen(str(tmp_path / "missing.jsonl"))
+        assert seen == set()
+        assert truncated == set()
+
+    def test_collects_primary_ids_and_truncations(self, tmp_path):
+        """primary_id keys are collected; length rows mark truncation."""
+        outfile = tmp_path / "out.jsonl"
+        rows = [
+            {
+                "id": "c1_gen1",
+                "primary_id": "c1",
+                "metadata": {"finish_reason": "stop"},
+            },
+            {
+                "id": "c2_gen1",
+                "primary_id": "c2",
+                "metadata": {"finish_reason": "length"},
+            },
+        ]
+        outfile.write_text(
+            "".join(json.dumps(row) + "\n" for row in rows), encoding="utf-8"
+        )
+        seen, truncated = load_seen(str(outfile))
+        assert seen == {"c1", "c2"}
+        assert truncated == {"c2"}
+
+    def test_multi_row_conversation_counts_once(self, tmp_path):
+        """Rows sharing one primary_id count once in both sets."""
+        # A multi-turn conversation fans out to multiple rows sharing one
+        # primary_id; both the seen set and the truncation set deduplicate it.
+        outfile = tmp_path / "out.jsonl"
+        rows = [
+            {
+                "id": "c1_gen1",
+                "primary_id": "c1",
+                "metadata": {"finish_reason": "length"},
+            },
+            {
+                "id": "c1_gen2",
+                "primary_id": "c1",
+                "metadata": {"finish_reason": "length"},
+            },
+            {
+                "id": "c1_gen3",
+                "primary_id": "c1",
+                "metadata": {"finish_reason": "stop"},
+            },
+        ]
+        outfile.write_text(
+            "".join(json.dumps(row) + "\n" for row in rows), encoding="utf-8"
+        )
+        seen, truncated = load_seen(str(outfile))
+        assert seen == {"c1"}
+        assert truncated == {"c1"}
+
+    def test_legacy_rows_fall_back_to_top_level_id(self, tmp_path):
+        """Rows without primary_id resume on the legacy top-level id."""
+        # Output files written before the fan-out carry only a top-level "id"
+        outfile = tmp_path / "out.jsonl"
+        outfile.write_text(
+            json.dumps({"id": "legacy1", "metadata": {}}) + "\n", encoding="utf-8"
+        )
+        seen, truncated = load_seen(str(outfile))
+        assert seen == {"legacy1"}
+        assert truncated == set()
+
+    def test_escaped_payload_text_cannot_spoof_ids(self, tmp_path):
+        """Payload text cannot inject ids through the fast-path regexes."""
+        # The regex fast path must not be confused by escaped quotes inside
+        # row payloads; only the real top-level keys are picked up.
+        outfile = tmp_path / "out.jsonl"
+        row = {
+            "id": "c1_gen1",
+            "primary_id": "c1",
+            "text": 'some text with a nested {"id": "spoofed"} inside',
+            "metadata": {"finish_reason": "stop"},
+        }
+        outfile.write_text(json.dumps(row) + "\n", encoding="utf-8")
+        seen, truncated = load_seen(str(outfile))
+        assert seen == {"c1"}
+        assert truncated == set()
+
+
+class TestLoadErrorIds:
+    """Unit tests for the cumulative error-id collector (RFC1)."""
+
+    def test_missing_file_returns_empty_set(self, tmp_path):
+        """A missing errors file yields an empty set."""
+        assert _load_error_ids(str(tmp_path / "missing.errors.jsonl")) == set()
+
+    def test_dedups_failures_repeated_across_sessions(self, tmp_path):
+        """Failures repeated across sessions deduplicate to one id."""
+        # The errors file appends one row per failed attempt, so a
+        # conversation failing in several sessions appears multiple times.
+        errorfile = tmp_path / "out.errors.jsonl"
+        rows = [
+            {"id": "conv1", "metadata": {"error": "HTTP 400 ..."}},
+            {"id": "conv1", "metadata": {"error": "HTTP 400 ..."}},
+            {"id": "conv2", "metadata": {"error": "timeout"}},
+        ]
+        errorfile.write_text(
+            "".join(json.dumps(row) + "\n" for row in rows), encoding="utf-8"
+        )
+        assert _load_error_ids(str(errorfile)) == {"conv1", "conv2"}
+
+    def test_ignores_rows_without_id(self, tmp_path):
+        """Error rows without an id contribute nothing."""
+        errorfile = tmp_path / "out.errors.jsonl"
+        errorfile.write_text(
+            json.dumps({"metadata": {"error": "no id here"}}) + "\n",
+            encoding="utf-8",
+        )
+        assert _load_error_ids(str(errorfile)) == set()
+
+
+class TestCumulativeCounts:
+    """Unit tests for the cumulative ok/err/trunc postfix math (RFC1)."""
+
+    @staticmethod
+    def _stats(**overrides):
+        """Build a worker stats dict with zeroed counters and empty id sets."""
+        stats = {
+            "ok": 0,
+            "errors": 0,
+            "truncated": 0,
+            "resumed_skipped": 0,
+            "seen_ids": set(),
+            "ok_ids": set(),
+            "trunc_ids": set(),
+            "error_ids": set(),
+        }
+        stats.update(overrides)
+        return stats
+
+    def test_no_history_matches_session_counters(self):
+        """With no history, cumulative counts equal the session scalars."""
+        # Runtime invariant: the scalar counters and the id sets stay in sync
+        # (workers update both), so counts derive from the sets alone.
+        counts = _cumulative_counts(
+            self._stats(
+                ok=5,
+                errors=1,
+                truncated=2,
+                ok_ids={"c1", "c2", "c3", "c4", "c5"},
+                error_ids={"e1"},
+                trunc_ids={"t1", "t2"},
+            )
+        )
+        assert counts == {"ok": 5, "err": 1, "trunc": 2}
+
+    def test_resumed_history_is_included(self):
+        """Historical ids pre-seed the cumulative err/trunc counters."""
+        # trunc_ids/error_ids start pre-populated with historical ids
+        counts = _cumulative_counts(
+            self._stats(
+                resumed_skipped=100,
+                ok=3,
+                truncated=1,
+                trunc_ids={"t1"},
+                error_ids={"e1"},
+            )
+        )
+        assert counts == {"ok": 103, "err": 1, "trunc": 1}
+
+    def test_errors_exclude_retried_successes(self):
+        """Ids that failed then succeeded count once, under ok."""
+        # e1 failed in a previous session and succeeded in this one (ok_ids);
+        # e2/e3 failed this session only. err must not double-count e1.
+        counts = _cumulative_counts(
+            self._stats(
+                ok=2,
+                ok_ids={"e1"},
+                error_ids={"e1", "e2", "e3"},
+            )
+        )
+        assert counts == {"ok": 2, "err": 2, "trunc": 0}
+
+    def test_errors_exclude_conversations_completed_before_session(self):
+        """Failures already completed before this session are not errors."""
+        # e0 failed historically and completed before this session (seen_ids)
+        counts = _cumulative_counts(
+            self._stats(resumed_skipped=7, error_ids={"e0"}, seen_ids={"e0"})
+        )
+        assert counts == {"ok": 7, "err": 0, "trunc": 0}
+
+    def test_trunc_union_dedups_across_sessions(self):
+        """Truncation in any session counts the conversation once."""
+        # conv t1 truncated in a previous session and again in this session
+        counts = _cumulative_counts(self._stats(trunc_ids={"t1", "t2"}, truncated=2))
+        assert counts == {"ok": 0, "err": 0, "trunc": 2}
+
+
+class TestCountTotalConvs:
+    """Unit tests for the filter-aware progress total (RFC1 filter commit)."""
+
+    class _Sized:
+        """Minimal dataset that reports a size via len()."""
+
+        def __len__(self):
+            """Return the fake dataset size."""
+            return 7
+
+    class _Unsized:
+        """Minimal streaming dataset: iterable but no len()."""
+
+        # IterableDataset-like: iterable but no len()
+        def __iter__(self):
+            """Yield nothing; only the missing len() matters."""
+            return iter(())
+
+    def test_no_filter_uses_dataset_len(self):
+        """Without a filter the total is the dataset len()."""
+        assert _count_total_convs(self._Sized(), None, "unused.jsonl") == 7
+
+    def test_filter_counts_only_matching_rows(self):
+        """Only rows whose language matches the filter are counted."""
+        rows = [
+            {"language": "en"},
+            {"language": "zh"},
+            {"language": "en"},
+            {"language": "EN"},  # match is exact, not case-insensitive
+            {"question": "row without a language field"},
+        ]
+        assert _count_total_convs(rows, "en", "unused.jsonl") == 2
+
+    def test_filter_takes_precedence_over_dataset_len(self):
+        """A filter counts matching rows even when the dataset has a len()."""
+        rows = [{"language": "zh"}, {"language": "zh"}]
+        assert _count_total_convs(rows, "zh", "unused.jsonl") == 2
+
+    def test_streaming_dataset_falls_back_to_source_lines(self, tmp_path):
+        """Datasets without len() count lines in the source file."""
+        src = tmp_path / "data.jsonl"
+        src.write_text('{"a": 1}\n{"a": 2}\n{"a": 3}\n', encoding="utf-8")
+        assert _count_total_convs(self._Unsized(), None, str(src)) == 3
+
+    def test_streaming_fallback_counts_final_unterminated_line(self, tmp_path):
+        """A final line without a trailing newline still counts as one row."""
+        src = tmp_path / "data.jsonl"
+        src.write_text('{"a": 1}\n{"a": 2}\n{"a": 3}', encoding="utf-8")
+        assert _count_total_convs(self._Unsized(), None, str(src)) == 3
+
+    def test_unreadable_source_returns_zero(self, tmp_path):
+        """An unreadable source yields 0, degrading the bar to indeterminate."""
+        missing = str(tmp_path / "nope.jsonl")
+        assert _count_total_convs(self._Unsized(), None, missing) == 0

@@ -200,7 +200,7 @@ def _primary_identifier(row: dict[str, Any]) -> str:
     return _content_hash(row)
 
 
-def load_seen(path: str) -> set[str]:
+def load_seen(path: str) -> tuple[set[str], set[str]]:
     """Load previously completed conversation ids from the output file.
 
     A conversation fans out to one row per target generation -- a tool call or a
@@ -212,13 +212,36 @@ def load_seen(path: str) -> set[str]:
 
     ``id`` is the fallback for output files written before the fan-out, where the
     top-level ``id`` *was* the primary identifier.
+
+    Returns ``(seen, truncated_seen)``; ``truncated_seen`` holds the ids of
+    conversations with at least one ``finish_reason=length`` row, used to
+    report cumulative truncation across resumes.
     """
     seen: set[str] = set()
+    truncated_seen: set[str] = set()
     if not Path(path).is_file():
-        return seen
+        return seen, truncated_seen
 
+    # Fast path: rows are machine-written with top-level string keys, so a
+    # regex scan avoids parsing the multi-KB payloads (input_ids/text) on
+    # every resume. The top-level key always precedes any nested content,
+    # and escaped quotes inside strings cannot match the pattern. Falls back
+    # to json.loads only when the fast path finds nothing.
+    primary_re = re.compile(r'"primary_id":\s*"([^"]*)"')
+    id_re = re.compile(r'"id":\s*"([^"]*)"')
+    trunc_re = re.compile(r'"finish_reason":\s*"length"')
     with Path(path).open(encoding="utf-8") as f:
         for line in f:
+            match = primary_re.search(line)
+            key = match.group(1) if match is not None else None
+            if not key:
+                match = id_re.search(line)
+                key = match.group(1) if match is not None else None
+            if key:
+                seen.add(key)
+                if trunc_re.search(line) is not None:
+                    truncated_seen.add(key)
+                continue
             try:
                 obj = json.loads(line)
             except json.JSONDecodeError:
@@ -228,7 +251,32 @@ def load_seen(path: str) -> set[str]:
                 key = obj.get("id")
             if _is_present(key):
                 seen.add(str(key))
-    return seen
+                metadata = obj.get("metadata")
+                if (
+                    isinstance(metadata, dict)
+                    and metadata.get("finish_reason") == "length"
+                ):
+                    truncated_seen.add(str(key))
+    return seen, truncated_seen
+
+
+def _load_error_ids(path: str) -> set[str]:
+    """Collect unique failed conversation ids from an errors JSONL file.
+
+    The file accumulates one row per failed attempt across sessions, so ids
+    are deduplicated here; callers subtract ids that later succeeded to keep
+    the cumulative error display consistent.
+    """
+    ids: set[str] = set()
+    if not Path(path).is_file():
+        return ids
+    id_re = re.compile(r'"id":\s*"([^"]*)"')
+    with Path(path).open(encoding="utf-8") as f:
+        for line in f:
+            match = id_re.search(line)
+            if match is not None and match.group(1):
+                ids.add(match.group(1))
+    return ids
 
 
 async def detect_model(endpoint: str) -> str:
@@ -523,13 +571,68 @@ async def regenerate_conversation(
     return truncated
 
 
+def _cumulative_counts(stats: dict[str, Any]) -> dict[str, int]:
+    """Cumulative ok/err/trunc counters for the progress bar postfix.
+
+    History is inherited at startup: ``trunc_ids``/``error_ids`` start
+    pre-populated with ids recovered from the output/error files, and workers
+    add session ids into the same sets, so lengths are already deduplicated
+    across sessions. Error ids that later succeeded (present in
+    ``seen_ids``/``ok_ids``) are subtracted so ok + err + remaining == total.
+    """
+    return {
+        "ok": stats["resumed_skipped"] + stats["ok"],
+        "err": len((stats["error_ids"] - stats["seen_ids"]) - stats["ok_ids"]),
+        "trunc": len(stats["trunc_ids"]),
+    }
+
+
+def _count_total_convs(
+    hf_dataset: Any, language_filter: str | None, hf_path: str
+) -> int:
+    """Total conversations the progress bar counts against.
+
+    With ``language_filter`` the dataset is scanned once up front so the
+    total (and therefore 100%) only covers rows that pass the filter; the
+    main loop re-streams the dataset afterwards. The predicate must stay in
+    sync with the main loop's skip check. Without a filter, ``len()`` is
+    used; streaming IterableDatasets have no ``len()``, so fall back to
+    counting lines in the source file, including a final unterminated line.
+    Returns 0 when even the file cannot be read, which degrades the progress
+    bar to an indeterminate one.
+    """
+    if language_filter:
+        return sum(1 for row in hf_dataset if row.get("language") == language_filter)
+    try:
+        return len(hf_dataset)
+    except TypeError:
+        try:
+            with Path(hf_path).open("rb") as src:
+                newlines = 0
+                tail_unterminated = False
+                for chunk in iter(lambda: src.read(1 << 24), b""):
+                    newlines += chunk.count(b"\n")
+                    tail_unterminated = not chunk.endswith(b"\n")
+                return newlines + (1 if tail_unterminated else 0)
+        except OSError:
+            return 0
+
+
 def _log_summary(stats: dict[str, Any]) -> None:
+    """Log the end-of-run pipeline summary.
+
+    Reports elapsed time and conversation counts (ok / errors / truncated),
+    appends the resumed/skipped carry-over when a resume happened, and adds
+    request/token throughput when any requests were made.
+    """
     elapsed = time.perf_counter() - stats["start_time"]
     n_convs = stats["ok"] + stats["errors"]
+    resumed = stats.get("resumed_skipped", 0)
     typer.echo(
         f"\nPipeline complete in {elapsed:.1f}s: {n_convs} conversations "
         f"({stats['ok']} ok, {stats['errors']} errors, "
         f"{stats['truncated']} truncated)"
+        + (f", resumed/skipped: {resumed}" if resumed else "")
     )
     if stats["requests"] > 0:
         rps = stats["requests"] / elapsed if elapsed > 0 else 0
@@ -629,10 +732,12 @@ async def _worker(
             out_fh.flush()
             if samples:
                 stats["ok"] += 1
+                stats["ok_ids"].add(conv_id)
             if truncated or any(
                 s.get("metadata", {}).get("finish_reason") == "length" for s in samples
             ):
                 stats["truncated"] += 1
+                stats["trunc_ids"].add(conv_id)
         except Exception as e:  # noqa: BLE001
             # Failures go to a separate error file, not the training output.
             error_output = {
@@ -647,13 +752,10 @@ async def _worker(
             err_fh.write(json.dumps(error_output, ensure_ascii=False) + "\n")
             err_fh.flush()
             stats["errors"] += 1
+            stats["error_ids"].add(conv_id)
         finally:
             elapsed = time.perf_counter() - stats["start_time"]
-            postfix = {
-                "ok": stats["ok"],
-                "err": stats["errors"],
-                "trunc": stats["truncated"],
-            }
+            postfix = _cumulative_counts(stats)
             if elapsed > 0 and stats["requests"] > 0:
                 postfix["rps"] = f"{stats['requests'] / elapsed:.1f}"
                 postfix["tps"] = f"{stats['completion_tokens'] / elapsed:.0f}"
@@ -747,7 +849,24 @@ async def _run(  # noqa: C901
     typer.echo(f"Error file: {error_outfile}")
     typer.echo()
 
-    seen_ids = load_seen(outfile) if resume else set()
+    seen_ids, hist_trunc_ids = load_seen(outfile) if resume else (set(), set())
+    hist_error_ids = _load_error_ids(error_outfile) if resume else set()
+
+    total_convs = _count_total_convs(
+        hf_dataset, language_filter, dataset_config.hf_path
+    )
+    if resume:
+        # A previous run may have completed more conversations than the
+        # current source accounts for (e.g. the source file changed between
+        # runs); clamp so done/total and the bar position never exceed total.
+        total_convs = max(total_convs, len(seen_ids)) if total_convs else 0
+        done = len(seen_ids)
+        pct = f"{done / total_convs:.1%}" if total_convs else "0.0%"
+        typer.echo(
+            f"Resume: {done} done / {total_convs} total ({pct}), "
+            "continuing with remaining conversations"
+            + (f", --max-requests budget {limit} for this run" if limit else "")
+        )
 
     queue: asyncio.Queue = asyncio.Queue(maxsize=concurrency * 4)
 
@@ -769,7 +888,8 @@ async def _run(  # noqa: C901
             Path(outfile).open("a", encoding="utf-8") as output_file,  # noqa: ASYNC230
             Path(error_outfile).open("a", encoding="utf-8") as error_file,  # noqa: ASYNC230
             tqdm(
-                total=limit,
+                total=total_convs or None,
+                initial=len(seen_ids) if resume else 0,
                 desc="Generating responses",
                 unit="sample",
                 dynamic_ncols=True,
@@ -782,6 +902,14 @@ async def _run(  # noqa: C901
                 "requests": 0,
                 "completion_tokens": 0,
                 "total_request_s": 0.0,
+                "resumed_skipped": len(seen_ids) if resume else 0,
+                # trunc_ids/error_ids start pre-populated with the historical
+                # sets (freshly returned by load_seen/_load_error_ids and safe
+                # to own), so the postfix counters stay O(1) per update.
+                "seen_ids": seen_ids if resume else set(),
+                "ok_ids": set(),
+                "trunc_ids": hist_trunc_ids,
+                "error_ids": hist_error_ids,
                 "start_time": time.perf_counter(),
             }
             workers = [
@@ -845,6 +973,7 @@ async def _run(  # noqa: C901
                     )
                     error_file.flush()
                     stats["errors"] += 1
+                    stats["error_ids"].add(primary_id)
                     progress.update(1)
                     continue
 
