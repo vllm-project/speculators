@@ -20,8 +20,9 @@
 #   port and GPU to run a second copy of this script on the same host).
 #
 # Output (in $OUT_DIR, default ./qwen3_8_27b_dspark_<timestamp>):
-#   <config>_<subset>/            raw GuideLLM JSON per point, acceptance
-#                                 sidecars, bench_command.txt (provenance)
+#   <config>_<subset>/            raw GuideLLM JSON per point, server-metrics
+#                                 sidecars, bench_command.txt (provenance, one
+#                                 block per collect call)
 #   <config>_<subset>.csv         one row per point and repeat
 #   <subset>.png                  the chart, all configurations
 #   serve_<config>.log            vLLM server logs and the exact serve command
@@ -141,15 +142,33 @@ start_server mtp --speculative-config \
 for subset in $SUBSETS; do sweep mtp "$subset"; done
 cleanup
 
-# One chart per dataset, all configurations.
+# One chart per dataset, with every configuration that produced a CSV. A sweep
+# whose points all failed has no CSV; it is left off the chart and listed below.
+declare -A SERIES_NAME=(
+    [baseline]="${TARGET_MODEL}, no speculator"
+    [dspark]="+ ${SPECULATOR} (${SPEC_TOKENS} draft tokens)"
+    [mtp]="+ MTP head (${MTP_SPEC_TOKENS} draft tokens)"
+)
+declare -A SERIES_COLOR=([baseline]="#7a8c3f" [dspark]="#b52513" [mtp]="#2c6e9b")
 for subset in $SUBSETS; do
-    python "$BENCH" plot \
-        --series "$OUT_DIR/baseline_${subset}.csv:${TARGET_MODEL}, no speculator:#7a8c3f" \
-        --series "$OUT_DIR/dspark_${subset}.csv:+ ${SPECULATOR} (${SPEC_TOKENS} draft tokens):#b52513" \
-        --series "$OUT_DIR/mtp_${subset}.csv:+ MTP head (${MTP_SPEC_TOKENS} draft tokens):#2c6e9b" \
+    series=()
+    for config in baseline dspark mtp; do
+        csv="$OUT_DIR/${config}_${subset}.csv"
+        if [[ -s "$csv" ]]; then
+            series+=(--series "${csv}:${SERIES_NAME[$config]}:${SERIES_COLOR[$config]}")
+        else
+            echo "WARNING: no CSV for ${config}/${subset}; it is left off the chart"
+        fi
+    done
+    if (( ${#series[@]} == 0 )); then
+        echo "WARNING: no results for ${subset}; no chart"
+        continue
+    fi
+    python "$BENCH" plot "${series[@]}" \
         --title "Output Throughput vs. Interactivity: ${subset}" --label-format "N={streams:.0f}" \
         --subtitle "${TARGET_MODEL} · ${DATASET} ${subset} · max_tokens ${MAX_TOKENS} · closed loop, N = ${STREAMS_SHORT},${STREAMS_LONG} · ${REPEATS} run(s) per point" \
-        --out "$OUT_DIR/${subset}.png"
+        --out "$OUT_DIR/${subset}.png" \
+        || echo "WARNING: could not draw $OUT_DIR/${subset}.png"
 done
 
 echo ""

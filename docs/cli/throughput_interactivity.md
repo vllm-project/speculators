@@ -22,7 +22,7 @@ python scripts/evaluate/throughput_interactivity.py plot --series baseline.csv:'
 
 ## `collect`
 
-Runs one GuideLLM benchmark per point and repeat, snapshots the server's `/metrics` around each run for speculative-decoding acceptance and prefix-cache hits, then parses and validates the directory.
+Runs one GuideLLM benchmark per point and repeat, samples the server's `/metrics` during each run for speculative-decoding acceptance, prefix-cache hits and the scheduler's running and waiting counts, then parses and validates the directory.
 
 ### Server
 
@@ -41,11 +41,11 @@ Give `--streams`, `--rates`, or both.
 - **`--synchronous` / `--no-synchronous`** Also run a single-stream point (`sync`). On by default only when no `--streams` are given, since `--streams 1` is the same point.
 - **`--repeats`** (int, default: `3`) Runs per point. The chart draws the mean; `validate` reports the spread.
 - **`--max-seconds`** (float, default: `100`) Measurement window per point.
-- **`--warmup-seconds`** (float, default: `30`) Warmup per point, excluded from every number.
+- **`--warmup-seconds`** (float, default: `30`) Warmup per point, excluded from every number. Give 0 or at least 1: GuideLLM reads a value below 1 as a fraction of the run, so the script refuses it.
 
 ### Data
 
-Give one data source per run: a dataset subset, random text, or a raw GuideLLM spec. The script exits if flags from two sources are combined.
+Give one data source per run: a dataset subset or a raw GuideLLM spec. The script exits if both are given. Random text (GuideLLM's synthetic data) is not offered: a drafter has nothing to predict in it, and GuideLLM would replay the same seeded prompts on every run.
 
 **A dataset subset** (real prompts, sent through `/v1/chat/completions`):
 
@@ -54,25 +54,21 @@ Give one data source per run: a dataset subset, random text, or a raw GuideLLM s
 - **`--prompt-column`** (str, default: `prompt`) Column holding the prompt.
 - **`--dataset-repeat`** (int, default: `0`) Repeat the subset this many times; `0` picks enough rows for 20 requests per stream and at least 5,000 requests. GuideLLM ends a run when its dataset runs out.
 - **`--max-tokens`** (int) `max_tokens` per request. Set it with a dataset.
-- **`--ignore-eos`** Force every output to `--max-tokens`.
-
-**Random text** (lengths forced, prefix caching defeated; not meaningful for a speculator):
-
-- **`--prompt-tokens`**, **`--output-tokens`** (int) Target prompt and output lengths.
-- **`--range-ratio`** (float, default: `0.8`) Each request's lengths drawn uniformly from `ratio × L` to `L`. `1` gives fixed lengths, which make closed-loop streams move in lockstep (finish and restart together).
+- **`--ignore-eos`** Force every output to `--max-tokens`. Every output then has the same length, which `validate` check 6 flags in closed loop.
 
 **A raw GuideLLM spec** (anything GuideLLM accepts, passed through unchanged):
 
-- **`--data`** (str) The data spec, e.g. `kind=synthetic_text,prompt_tokens=1000,output_tokens=1000`.
+- **`--data`** (str) The data spec, e.g. `kind=json_file,path=prompts.jsonl,load_kwargs.split=train` for a prompts file you prepared yourself.
 - **`--data-column-mapper`** (str) Column mapper spec. Also usable with `--dataset`, where it defaults to `kind=generative_column_mapper,column_mappings.text_column=<prompt column>`.
 
 ### Output and control
 
-- **`--out-dir`** (str, required) Directory for the raw results: `<point>_r<repeat>.json`, `<point>_r<repeat>.metrics.json`, `_data/` for materialized datasets, and `bench_command.txt`.
+- **`--out-dir`** (str, required) Directory for the raw results: `<point>_r<repeat>.json`, `<point>_r<repeat>.metrics.json` (the `/metrics` samples around the window, the acceptance and cache-hit deltas, and the gauge averages), `_data/` for materialized datasets, and `bench_command.txt`, which gets one block appended per invocation.
 - **`--label`** (str, required) Series name written into the CSV's `model` column.
 - **`--csv`** (str, default: `<out-dir>/<label>.csv`) Where to write the CSV.
-- **`--metrics-url`** (str, default: `<target>/metrics`) Prometheus endpoint for acceptance counters.
-- **`--no-metrics`** Do not record acceptance.
+- **`--metrics-url`** (str, default: `<target>/metrics`) Prometheus endpoint for the acceptance counters and scheduler gauges.
+- **`--metrics-interval`** (float, default: `2`) Seconds between `/metrics` samples during a run.
+- **`--no-metrics`** Do not sample `/metrics`.
 - **`--guidellm-bin`** (str, default: `guidellm`) GuideLLM executable.
 - **`--guidellm-arg`** (str, repeatable) Extra argument appended to every GuideLLM command.
 - **`--dry-run`** Print the GuideLLM commands and exit. Do this first.
@@ -85,7 +81,7 @@ Give one data source per run: a dataset subset, random text, or a raw GuideLLM s
 python scripts/evaluate/throughput_interactivity.py parse <json_dir> --label <name> --csv <out.csv>
 ```
 
-Reads every `*.json` under `json_dir`, one row per benchmark, named from `<point>_r<N>.json`, and renames synchronous and concurrent benchmarks `sync` and `conc<N>` whatever the file is called. Acceptance sidecars are merged in when present. Prints the validation report.
+Reads every `*.json` under `json_dir`, one row per benchmark, named from `<point>_r<N>.json`, and renames synchronous and concurrent benchmarks `sync` and `conc<N>` whatever the file is called. Server-metrics sidecars are merged in when present. Prints the validation report.
 
 ## `validate`
 
@@ -109,28 +105,32 @@ Prints one row per point, averaged over repeats, then the warnings listed in the
 
 ## CSV columns
 
-| Column                                                                                      | Meaning                                                                                                                                                                                               |
-| ------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `model`, `point`, `offered_rps`, `offered_concurrency`, `repeat`, `source_json`, `strategy` | Identifiers. `point` is `sync`, `conc<N>` or `rate<r>`; `offered_concurrency` is N (1 for `sync`).                                                                                                    |
-| `measured_duration_s`                                                                       | Measurement window length.                                                                                                                                                                            |
-| `successful_requests`, `errored_requests`, `incomplete_requests`                            | Sizes of GuideLLM's three request lists.                                                                                                                                                              |
-| `started_requests`, `achieved_rps`                                                          | Requests started inside the window, and that count per second.                                                                                                                                        |
-| `completed_rps`                                                                             | Requests finished inside the window, per second.                                                                                                                                                      |
-| `aggregate_output_tps`                                                                      | Output tokens generated inside the window, per second. The y axis.                                                                                                                                    |
-| `mean_active_concurrency`                                                                   | In-flight time inside the window divided by the window.                                                                                                                                               |
-| `interactivity_tps_user`                                                                    | `aggregate_output_tps / mean_active_concurrency` (Little's law; `plot --x little`).                                                                                                                   |
-| `mean_itl_ms`, `interactivity_itl_tps_user`                                                 | Mean inter-token latency of successful requests, and `1000 / mean_itl_ms`. The x axis.                                                                                                                |
-| `mean_output_tokens`, `mean_prompt_tokens`, `mean_cached_tokens`                            | Means over successful requests; cached = prompt tokens GuideLLM reports as served from the prefix cache, which its HTTP backend never does (see `prefix_cache_hit_rate`).                             |
-| `prefix_cache_hit_rate`                                                                     | Prompt tokens the server served from its prefix cache over the run, as a share of those it looked up: `vllm:prefix_cache_hits / vllm:prefix_cache_queries` from `/metrics`. Empty without `/metrics`. |
-| `mean_output_tokens_per_iteration`                                                          | Output tokens per streamed chunk: about 1 without speculative decoding, the accepted length plus one with it.                                                                                         |
-| `median_ttft_ms`, `p99_ttft_ms`, `median_itl_ms`                                            | Over successful requests.                                                                                                                                                                             |
-| `arrival_burstiness`                                                                        | Coefficient of variation of request starts per second inside the window; above 2 means lockstep waves.                                                                                                |
-| `acceptance_length`, `num_drafts`, `num_accepted_tokens`                                    | From the server's speculative-decoding counters over the run: `1 + accepted / drafts`, as in `evaluate.py`. Empty without a speculator or without `/metrics`.                                         |
-| `stop_reason`                                                                               | Why GuideLLM stopped, normally `max_duration`.                                                                                                                                                        |
+| Column                                                                                      | Meaning                                                                                                                                                                                                                                                      |
+| ------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `model`, `point`, `offered_rps`, `offered_concurrency`, `repeat`, `source_json`, `strategy` | Identifiers. `point` is `sync`, `conc<N>` or `rate<r>`; `offered_concurrency` is N (1 for `sync`).                                                                                                                                                           |
+| `measured_duration_s`                                                                       | Measurement window length.                                                                                                                                                                                                                                   |
+| `successful_requests`, `errored_requests`, `incomplete_requests`                            | Sizes of GuideLLM's three request lists, warmup included.                                                                                                                                                                                                    |
+| `measured_requests`                                                                         | Successful requests that completed inside the window; every per-request statistic below is over these.                                                                                                                                                       |
+| `started_requests`, `achieved_rps`                                                          | Requests started inside the window, and that count per second.                                                                                                                                                                                               |
+| `completed_rps`                                                                             | Requests finished inside the window, per second.                                                                                                                                                                                                             |
+| `aggregate_output_tps`                                                                      | Output tokens generated inside the window, per second. The y axis.                                                                                                                                                                                           |
+| `mean_active_concurrency`                                                                   | In-flight time inside the window divided by the window.                                                                                                                                                                                                      |
+| `interactivity_tps_user`                                                                    | `aggregate_output_tps / mean_active_concurrency` (Little's law; `plot --x little`).                                                                                                                                                                          |
+| `mean_itl_ms`, `interactivity_itl_tps_user`                                                 | Mean inter-token latency of the requests that completed inside the window, and `1000 / mean_itl_ms`. The x axis.                                                                                                                                             |
+| `mean_output_tokens`, `mean_prompt_tokens`, `mean_cached_tokens`                            | Means over the requests that completed inside the window; cached = prompt tokens GuideLLM reports as served from the prefix cache, which its HTTP backend never does (see `prefix_cache_hit_rate`).                                                          |
+| `prefix_cache_hit_rate`                                                                     | Prompt tokens the server served from its prefix cache during the window, as a share of those it looked up: `vllm:prefix_cache_hits / vllm:prefix_cache_queries` between the `/metrics` samples nearest the window's start and end. Empty without `/metrics`. |
+| `mean_output_tokens_per_iteration`                                                          | Output tokens per streamed chunk: about 1 without speculative decoding, the accepted length plus one with it.                                                                                                                                                |
+| `median_ttft_ms`, `p99_ttft_ms`, `median_itl_ms`                                            | Over the requests that completed inside the window.                                                                                                                                                                                                          |
+| `arrival_burstiness`                                                                        | Coefficient of variation of request starts per second inside the window; above 2 means lockstep waves.                                                                                                                                                       |
+| `acceptance_length`, `num_drafts`, `num_accepted_tokens`                                    | From the server's speculative-decoding counters between the `/metrics` samples nearest the window's start and end: `1 + accepted / drafts`, as in `evaluate.py`. Empty without a speculator or without `/metrics`.                                           |
+| `mean_running_requests`, `mean_waiting_requests`, `mean_kv_cache_usage`                     | vLLM's `num_requests_running`, `num_requests_waiting` and `kv_cache_usage_perc` gauges averaged over the samples inside the window. Check 8 uses the waiting count to tell a server queue from a slow client. Empty without `/metrics`.                      |
+| `stop_reason`                                                                               | Why GuideLLM stopped, normally `max_duration`.                                                                                                                                                                                                               |
 
 ## Measurement rules
 
 - Everything is counted inside the measurement window `[measure_start_time, measure_end_time]` of GuideLLM's scheduler metrics. Output tokens come from every request that overlaps the window, successful or incomplete, prorated over `[first token, last token]`. In-flight time is each request's lifetime clipped to the window, errored requests included.
+- Per-request statistics (ITL, TTFT, output and prompt lengths, tokens per iteration) are over the requests that completed inside the window. GuideLLM's `successful` list also holds requests that finished during warmup, a third of the list at high N.
+- The server's counters are differenced between the `/metrics` samples nearest the window's start and end (the sampling interval bounds the error), and the gauges are averaged over the samples inside it. The whole-run difference is kept in the sidecar under `whole_run`.
 - `achieved_rps` counts requests started inside the window, not GuideLLM's `requests_made`, which also counts requests that were queued but never sent.
 - The synchronous point measures about 0.9995 concurrent, not 1.0; do not filter on `>= 1`.
 - With a dataset the subset is repeated and shuffled before the run, never streamed once. Serve with `--no-enable-prefix-caching`, or the repeats are prefilled from cache. GuideLLM's HTTP backend never fills `mean_cached_tokens`; check 7 uses `prefix_cache_hit_rate` from the server's `/metrics` counters instead.
