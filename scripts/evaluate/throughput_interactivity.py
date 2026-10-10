@@ -13,9 +13,33 @@ GuideLLM (called as a shell command by `collect`) and Pillow (`plot`).
     pip install "guidellm>=0.8.0" pillow
 
 
+THE PROCEDURE
+-------------
+Closed loop, as InferenceX: N requests are kept in flight at all times, each
+stream sending its next request the moment the previous one completes, for every
+N in --streams (1,2,4,...,128). Concurrency is the knob, the server is never
+over-queued, and the sweep can go as deep into saturation as max-num-seqs allows.
+
+Real prompts: a subset of RedHatAI/speculator_benchmarks (or any local jsonl),
+fetched once, repeated enough times for the sweep (GuideLLM stops when a dataset
+runs out) and shuffled with a fixed seed into <out-dir>/_data. Sent through
+/v1/chat/completions with --max-tokens and the sampling fields in --extra-body.
+Random text is deliberately not offered: a drafter has nothing to predict in it.
+
+Every point runs for --warmup-seconds plus --max-seconds, and only the window
+after the warmup counts. During every run the server's /metrics is sampled for
+the speculative-decoding acceptance and the scheduler's running and waiting
+counts.
+
+Prefix caching must be off on the server (--no-enable-prefix-caching): the
+prompts repeat, and cached prefill would make every number a cached-workload
+number. `collect` reads the setting from vLLM's /metrics and refuses to start
+while it is on, and fails any point during which the prefix-cache counters moved.
+
+
 WHAT THE CHART SHOWS
 --------------------
-One point per load level. For each point, over GuideLLM's measurement window
+One point per N. For each point, over GuideLLM's measurement window
 [scheduler_metrics.measure_start_time, measure_end_time]:
 
     aggregate_output_tps       = output tokens generated in the window / window
@@ -27,7 +51,6 @@ One point per load level. For each point, over GuideLLM's measurement window
                                  window) / window
     interactivity_tps_user     = aggregate_output_tps / mean_active_concurrency
                                  (x axis, Little's law; `plot --x little`)
-    achieved_rps               = requests started in the window / window
     completed_rps              = requests completed in the window / window
     acceptance_length          = 1 + accepted draft tokens / drafts, from the
                                  server's /metrics counters sampled at the start
@@ -53,40 +76,7 @@ inside the window counts, so requests that started during warmup or were cut off
 at the end are neither over- nor under-counted. Per-request statistics (ITL,
 TTFT, output length) are taken over the requests that completed inside the
 window; GuideLLM's own request lists also hold the ones that finished during
-warmup. The synchronous point measures about 0.9995 concurrent, not 1.0; do not
-filter on >= 1.
-
-
-TWO WAYS TO LOAD THE SERVER
----------------------------
---streams N,N,...   closed loop (what InferenceX does): N requests in flight at
-                    all times; each stream sends its next request the moment the
-                    previous one completes. Concurrency is the knob. The server
-                    is never over-queued, so the sweep can go as deep into
-                    saturation as max-num-seqs allows. Points: conc<N>.
---rates r,r,...     open loop: requests arrive every 1/r seconds whatever the
-                    server does. Concurrency is an outcome (r x latency), and
-                    past capacity the queue grows without bound. Points: rate<r>.
-
-Use --streams to reproduce an InferenceX-style curve (N doubling from 1). Use
---rates when the question is "what arrival rate can this server absorb".
-
-
-DATA
-----
---dataset ID|DIR --subset NAME [--prompt-column prompt] [--dataset-repeat K]
-                    real prompts, e.g. RedHatAI/speculator_benchmarks with
-                    --subset HumanEval. The jsonl is fetched once, repeated K
-                    times (default: enough for the sweep) and shuffled into
-                    <out-dir>/_data, because GuideLLM stops when a dataset runs
-                    out. Sent through /v1/chat/completions. Set --max-tokens; add
-                    --ignore-eos to force that length (every output then has the
-                    same length; see rule 6).
---data SPEC         any raw GuideLLM data spec, passed through unchanged.
-
-Random text (GuideLLM's synthetic_text) is deliberately not offered: a drafter
-has nothing to predict in it, so it says nothing about a speculator, and
-GuideLLM would replay the same seeded prompts to the server on every run.
+warmup.
 
 
 USAGE
@@ -94,9 +84,8 @@ USAGE
     # 1. one sweep per server (run again with the other server for a comparison)
     python throughput_interactivity.py collect \\
         --target http://localhost:8010 --model Qwen/Qwen3.8-27B \\
-        --tokenizer Qwen/Qwen3.8-27B \\
-        --dataset RedHatAI/speculator_benchmarks --subset HumanEval \\
-        --max-tokens 1024 --streams 1,2,4,8,16,32,64,128 --repeats 1 \\
+        --subset HumanEval --max-tokens 1024 \\
+        --streams 1,2,4,8,16,32,64,128 --repeats 1 \\
         --max-seconds 90 --warmup-seconds 30 \\
         --out-dir runs/baseline_humaneval --label baseline
 
@@ -120,26 +109,16 @@ READ THIS BEFORE QUOTING A NUMBER OFF THE CHART
 `validate` checks all of these; each one silently produced a wrong chart at
 least once.
 
-1. Open loop: achieved rate must track offered rate.
-2. Open loop: a plateau is usually a concurrency cap, not capacity.
-3. A benchmark that ends on `requests_exhausted` ran out of dataset.
-4. Steady state: tokens generated in the window per completed request should
+1. A benchmark that ends on `requests_exhausted` ran out of dataset.
+2. Steady state: tokens generated in the window per completed request should
    match the mean output length; a gap means the window was too short.
-5. Repeats that disagree by more than 5% in throughput: differences smaller
+3. Repeats that disagree by more than 5% in throughput: differences smaller
    than that are noise.
-6. Closed loop, fixed lengths: lockstep waves. `arrival_burstiness` above 2
-   means the streams are synchronized, which overstates throughput and
-   interactivity; --ignore-eos causes it, since every output then has the
-   same length.
-7. Datasets: a small subset repeated many times is served partly from the
-   prefix cache (`prefix_cache_hit_rate`, from the server's /metrics counters;
-   GuideLLM's HTTP backend never fills `mean_cached_tokens`). Serve with
-   --no-enable-prefix-caching for a clean number.
-8. Closed loop past what the server can hold: when N streams exceed
-   max-num-seqs, or the KV cache is full, the extra requests wait inside the
-   server, so TTFT jumps while ITL does not. vLLM's waiting gauge, sampled
-   during the window (`mean_waiting_requests`), confirms that the queue is in
-   the server and not in the client.
+4. Past what the server can hold: when N streams exceed max-num-seqs, or the KV
+   cache is full, the extra requests wait inside the server, so TTFT jumps while
+   ITL does not. vLLM's waiting gauge, sampled during the window
+   (`mean_waiting_requests`), confirms that the queue is in the server and not
+   in the client.
 """
 
 from __future__ import annotations
@@ -172,19 +151,11 @@ except ImportError:  # only `plot` needs it
     Image = ImageDraw = ImageFont = None  # type: ignore[assignment]
 
 # Thresholds used by `validate`.
-RATE_DRIFT_TOLERANCE = 0.05  # achieved/offered may differ from 1 by this much
-RATE_KEPT_UP = 0.9  # a point "kept up" when achieved/offered is above this
-RATE_SATURATED_FACTOR = 1.5  # ignore points whose achieved rate exceeds offered by more
-PLATEAU_FRACTION = 0.97  # points within this fraction of the top concurrency share it
 STEADY_STATE_TOLERANCE = 0.10  # tokens per completed request vs mean output length
 REPEAT_SPREAD_LIMIT = 0.05  # max relative spread of throughput across repeats
-LOCKSTEP_BURSTINESS = 2.0  # coefficient of variation of starts per second
-LOCKSTEP_MIN_RPS = 1.0  # the burstiness check needs at least this many starts/s
-CACHE_HIT_FRACTION = 0.05  # cached prompt tokens / prompt tokens
-QUEUE_TTFT_MS = 1000.0  # a closed-loop point queues inside the server above this
+QUEUE_TTFT_MS = 1000.0  # a point queues inside the server above this
 QUEUE_TTFT_FACTOR = 10.0  # ... or above this multiple of the lowest TTFT
 QUEUE_WAITING_MIN = 0.5  # mean requests waiting inside vLLM that count as a queue
-SYNC_CONCURRENCY = 1.0
 
 # ---------------------------------------------------------------------------
 # parse: GuideLLM JSON -> tidy rows
@@ -193,18 +164,14 @@ SYNC_CONCURRENCY = 1.0
 CSV_COLUMNS = [
     "model",
     "point",
-    "offered_rps",
-    "offered_concurrency",
+    "streams",
     "repeat",
     "source_json",
-    "strategy",
     "measured_duration_s",
     "successful_requests",
     "errored_requests",
     "incomplete_requests",
     "measured_requests",
-    "started_requests",
-    "achieved_rps",
     "completed_rps",
     "aggregate_output_tps",
     "mean_active_concurrency",
@@ -213,13 +180,10 @@ CSV_COLUMNS = [
     "interactivity_itl_tps_user",
     "mean_output_tokens",
     "mean_prompt_tokens",
-    "mean_cached_tokens",
-    "prefix_cache_hit_rate",
     "mean_output_tokens_per_iteration",
     "median_ttft_ms",
     "p99_ttft_ms",
     "median_itl_ms",
-    "arrival_burstiness",
     "acceptance_length",
     "num_drafts",
     "num_accepted_tokens",
@@ -282,29 +246,12 @@ def _window_tokens(requests: list, start: float, end: float) -> float:
     return total
 
 
-def _arrival_burstiness(requests: list, start: float, end: float) -> float:
-    """Coefficient of variation of request starts per 1 s bin inside the window.
-
-    About 0.1 for a constant-rate generator, 1/sqrt(mean) for Poisson arrivals,
-    and above 2 when closed-loop streams with identical lengths finish and
-    restart together (lockstep waves; see rule 6).
-    """
-    bins = int(end - start)
-    if bins < 2:  # noqa: PLR2004
-        return float("nan")
-    counts = [0] * bins
-    for r in requests:
-        t = r["request_start_time"]
-        if start <= t < end:
-            counts[min(int(t - start), bins - 1)] += 1
-    mean_count = statistics.fmean(counts)
-    if mean_count <= 0:
-        return float("nan")
-    return statistics.pstdev(counts) / mean_count
-
-
 def summarize_benchmark(benchmark: dict) -> dict:
-    """Reduce one GuideLLM benchmark object to the metrics the chart needs."""
+    """Reduce one GuideLLM closed-loop benchmark to the metrics the chart needs."""
+    strategy = benchmark["config"]["strategy"]
+    streams = strategy.get("streams")
+    if strategy.get("type_") != "concurrent" or not streams:
+        raise ValueError("not a closed-loop (concurrent) benchmark")
     requests = benchmark["requests"]
     successful = requests["successful"] or []
     incomplete = requests.get("incomplete") or []
@@ -324,7 +271,6 @@ def summarize_benchmark(benchmark: dict) -> dict:
         _overlap(r["request_start_time"], r["request_end_time"], start, end)
         for r in every
     )
-    started = sum(1 for r in every if start <= r["request_start_time"] < end)
     # Per-request statistics come from the requests that completed inside the
     # window: GuideLLM's `successful` list also holds the ones that finished
     # during warmup, a third of the list at high N.
@@ -333,9 +279,9 @@ def summarize_benchmark(benchmark: dict) -> dict:
 
     aggregate_tps = window_tokens / window
     concurrency = in_flight / window
-    strategy = benchmark["config"]["strategy"]
-    state = benchmark.get("scheduler_state", {})
-    constraints = state.get("end_processing_constraints", {})
+    constraints = benchmark.get("scheduler_state", {}).get(
+        "end_processing_constraints", {}
+    )
     output_tokens = sum(r["output_tokens"] or 0 for r in measured)
     itls = [r.get("inter_token_latency_ms") for r in measured]
     itls = [v for v in itls if v]
@@ -350,15 +296,10 @@ def summarize_benchmark(benchmark: dict) -> dict:
         iterations = timings.get("token_iterations")
         if iterations and (r.get("output_tokens") or 0) > 0:
             per_iteration.append(r["output_tokens"] / iterations)
-    cached = [r.get("cached_tokens") for r in measured]
-    streams = strategy.get("streams")
-    if strategy.get("type_") == "synchronous":
-        streams = 1
 
     return {
-        "strategy": strategy.get("type_", ""),
-        "offered_rps": strategy.get("rate"),
-        "offered_concurrency": streams,
+        "point": f"conc{streams:g}",
+        "streams": streams,
         "measured_duration_s": window,
         "successful_requests": len(successful),
         # list sizes, not scheduler_metrics.requests_made, which in GuideLLM 0.8
@@ -366,8 +307,6 @@ def summarize_benchmark(benchmark: dict) -> dict:
         "errored_requests": len(errored),
         "incomplete_requests": len(incomplete),
         "measured_requests": completed,
-        "started_requests": started,
-        "achieved_rps": started / window,
         "completed_rps": completed / window,
         "aggregate_output_tps": aggregate_tps,
         "mean_active_concurrency": concurrency,
@@ -380,12 +319,10 @@ def summarize_benchmark(benchmark: dict) -> dict:
         ),
         "mean_output_tokens": output_tokens / completed if completed else float("nan"),
         "mean_prompt_tokens": _mean([r.get("prompt_tokens") for r in measured]),
-        "mean_cached_tokens": _mean(cached),
         "mean_output_tokens_per_iteration": _mean(per_iteration),
         "median_ttft_ms": _median(ttfts),
         "p99_ttft_ms": _percentile(ttfts, 0.99),
         "median_itl_ms": _median([r.get("inter_token_latency_ms") for r in measured]),
-        "arrival_burstiness": _arrival_burstiness(every, start, end),
         "stop_reason": ",".join(constraints.keys()),
     }
 
@@ -394,7 +331,6 @@ SIDECAR_COLUMNS = (
     "acceptance_length",
     "num_drafts",
     "num_accepted_tokens",
-    "prefix_cache_hit_rate",
     "mean_running_requests",
     "mean_waiting_requests",
     "mean_kv_cache_usage",
@@ -428,58 +364,42 @@ def read_acceptance(json_path: Path) -> dict:
         "acceptance_length": delta.get("acceptance_length", float("nan")),
         "num_drafts": delta.get("num_drafts", float("nan")),
         "num_accepted_tokens": delta.get("num_accepted_tokens", float("nan")),
-        "prefix_cache_hit_rate": delta.get("prefix_cache_hit_rate", float("nan")),
         "mean_running_requests": gauge_mean("num_requests_running"),
         "mean_waiting_requests": gauge_mean("num_requests_waiting"),
         "mean_kv_cache_usage": gauge_mean("kv_cache_usage_perc"),
     }
 
 
-def _point_and_repeat(stem: str) -> tuple[str, int]:
-    """`<point>_r<N>` -> (point, N); anything else -> (stem, 1)."""
-    if "_r" in stem:
-        head, _, tail = stem.rpartition("_r")
-        if tail.isdigit():
-            return head, int(tail)
-    return stem, 1
+def _repeat_of(stem: str) -> int:
+    """`<point>_r<N>` -> N; anything else -> 1."""
+    _, _, tail = stem.rpartition("_r")
+    return int(tail) if tail.isdigit() else 1
 
 
 def parse_dir(json_dir: Path, label: str) -> list[dict]:
     """Summarize every GuideLLM benchmark in every `*.json` under `json_dir`.
 
-    The point name and repeat come from file names of the form `<point>_r<N>.json`
-    (what `collect` writes). A synchronous benchmark is renamed `sync` and a
-    concurrent one `conc<N>` whatever the file is called.
+    Points are named `conc<N>` from the benchmark's own strategy; the repeat comes
+    from file names of the form `<point>_r<N>.json` (what `collect` writes).
     """
     rows = []
     for path in sorted(json_dir.rglob("*.json")):
         if path.name.endswith(METRICS_SUFFIX):
             continue
-        point, repeat = _point_and_repeat(path.stem)
         try:
             payload = json.loads(path.read_text())
         except json.JSONDecodeError as exc:
             print(f"  skip {path.name}: {exc}", file=sys.stderr)
             continue
-        benchmarks = payload.get("benchmarks") or []
-        for index, benchmark in enumerate(benchmarks):
+        for index, benchmark in enumerate(payload.get("benchmarks") or []):
             try:
                 summary = summarize_benchmark(benchmark)
             except (KeyError, ValueError) as exc:
                 print(f"  skip {path.name}[{index}]: {exc}", file=sys.stderr)
                 continue
-            name = point if len(benchmarks) == 1 else f"{point}#{index}"
-            if len(benchmarks) == 1:
-                if summary["strategy"] == "synchronous":
-                    name = "sync"
-                elif (
-                    summary["strategy"] == "concurrent"
-                    and summary["offered_concurrency"]
-                ):
-                    name = f"conc{summary['offered_concurrency']:g}"
             summary.update(read_acceptance(path))
             summary.update(
-                model=label, point=name, repeat=repeat, source_json=path.name
+                model=label, repeat=_repeat_of(path.stem), source_json=path.name
             )
             rows.append(summary)
     return rows
@@ -494,28 +414,25 @@ def write_csv(rows: list[dict], out: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# server metrics: speculative decoding acceptance from vLLM's /metrics
+# server metrics: acceptance and scheduler gauges from vLLM's /metrics
 # ---------------------------------------------------------------------------
 
+METRICS_INTERVAL_S = 2.0  # seconds between /metrics samples during a run
 SPEC_PREFIX = "vllm:spec_decode_"
-# Prompt tokens looked up in, and served from, the server's prefix cache (older
-# vLLM names them gpu_prefix_cache_*; the external_* variants are a KV connector's).
-PREFIX_CACHE_COUNTERS = {
-    "prefix_cache_queries": (
-        "vllm:prefix_cache_queries",
-        "vllm:gpu_prefix_cache_queries",
-    ),
-    "prefix_cache_hits": ("vllm:prefix_cache_hits", "vllm:gpu_prefix_cache_hits"),
-}
+# Prompt tokens looked up in the server's prefix cache: any movement means prefix
+# caching is on (older vLLM names it gpu_prefix_cache_queries).
+PREFIX_CACHE_QUERIES = ("vllm:prefix_cache_queries", "vllm:gpu_prefix_cache_queries")
 # Scheduler gauges sampled during a run (older vLLM names the cache one gpu_*).
 GAUGES = {
     "num_requests_running": ("vllm:num_requests_running",),
     "num_requests_waiting": ("vllm:num_requests_waiting",),
     "kv_cache_usage_perc": ("vllm:kv_cache_usage_perc", "vllm:gpu_cache_usage_perc"),
 }
-NAMED_SERIES = {**PREFIX_CACHE_COUNTERS, **GAUGES}
+NAMED_SERIES = {"prefix_cache_queries": PREFIX_CACHE_QUERIES, **GAUGES}
 _RE_METRIC = re.compile(r"^([a-zA-Z_:][a-zA-Z0-9_:]*)(?:\{([^}]*)\})?\s+([0-9.eE+-]+)$")
 _RE_POSITION = re.compile(r'position="(\d+)"')
+_RE_CACHE_CONFIG = re.compile(r"^vllm:cache_config_info\{([^}]*)\}")
+_RE_PREFIX_CACHING = re.compile(r'enable_prefix_caching="([^"]*)"')
 
 
 def fetch_text(url: str, timeout: float = 30.0) -> str | None:
@@ -527,14 +444,15 @@ def fetch_text(url: str, timeout: float = 30.0) -> str | None:
 
 
 def spec_decode_counters(text: str) -> dict:
-    """Sum vLLM's speculative-decoding and prefix-cache counters over engines.
+    """Sum vLLM's speculative-decoding counters and scheduler gauges over engines.
 
     Reads `vllm:spec_decode_num_drafts`, `..._num_draft_tokens`,
     `..._num_accepted_tokens` and `..._num_accepted_tokens_per_pos` (with or
     without the `_total` suffix) and returns the sums plus the per-position list,
-    `vllm:prefix_cache_queries` / `vllm:prefix_cache_hits`, and the scheduler
-    gauges in GAUGES (None when the server does not export them). The
-    `<counter>_created` timestamps prometheus_client adds are skipped.
+    `vllm:prefix_cache_queries` (which must stay at 0, see
+    `prefix_caching_enabled`), and the gauges in GAUGES (None when the server
+    does not export them). The `<counter>_created` timestamps prometheus_client
+    adds are skipped.
     """
     sums: dict[str, float] = defaultdict(float)
     per_position: dict[int, float] = defaultdict(float)
@@ -570,17 +488,33 @@ def spec_decode_counters(text: str) -> dict:
         "num_accepted_tokens": sums.get("num_accepted_tokens", 0.0),
         "accepted_per_position": positions,
         "prefix_cache_queries": sums.get("prefix_cache_queries", 0.0),
-        "prefix_cache_hits": sums.get("prefix_cache_hits", 0.0),
         **{key: sums.get(key) for key in GAUGES},
     }
 
 
+def prefix_caching_enabled(text: str) -> bool | None:
+    """Whether the vLLM server behind this /metrics page has prefix caching on.
+
+    Read from the `enable_prefix_caching` label of `vllm:cache_config_info`; if the
+    server does not export it, from whether the prefix-cache counters have ever
+    moved. None when neither is there (not a vLLM server).
+    """
+    for raw_line in text.splitlines():
+        match = _RE_CACHE_CONFIG.match(raw_line.strip())
+        if match:
+            flag = _RE_PREFIX_CACHING.search(match.group(1))
+            if flag:
+                return flag.group(1).strip().lower() == "true"
+    if spec_decode_counters(text)["prefix_cache_queries"] > 0:
+        return True
+    return None
+
+
 def acceptance_delta(before: dict, after: dict) -> dict:
-    """Acceptance and cache hits over one run, from two snapshots of the counters."""
+    """Acceptance over one run, from two snapshots of the counters."""
     queries = after.get("prefix_cache_queries", 0.0) - before.get(
         "prefix_cache_queries", 0.0
     )
-    hits = after.get("prefix_cache_hits", 0.0) - before.get("prefix_cache_hits", 0.0)
     drafts = after["num_drafts"] - before["num_drafts"]
     draft_tokens = after["num_draft_tokens"] - before["num_draft_tokens"]
     accepted = after["num_accepted_tokens"] - before["num_accepted_tokens"]
@@ -602,10 +536,8 @@ def acceptance_delta(before: dict, after: dict) -> dict:
         "acceptance_at_position": (
             [count / drafts for count in per_position] if drafts > 0 else []
         ),
+        # prompt tokens looked up in the prefix cache: above 0 means it was on
         "prefix_cache_queries": queries,
-        "prefix_cache_hits": hits,
-        # prompt tokens served from the prefix cache, as a share of those looked up
-        "prefix_cache_hit_rate": hits / queries if queries > 0 else None,
     }
 
 
@@ -615,10 +547,10 @@ def window_metrics(
     """What `collect` stores in a run's `.metrics.json`, from timed /metrics samples.
 
     Counters are differenced between the samples nearest the measurement window's
-    start and end, so warmup and GuideLLM's startup are not in the acceptance or
-    cache-hit numbers (the whole-run difference is kept under `whole_run`). The
-    gauges are averaged over the samples inside the window. Without a window the
-    whole run is used.
+    start and end, so warmup and GuideLLM's startup are not in the acceptance
+    numbers (the whole-run difference is kept under `whole_run`). The gauges are
+    averaged over the samples inside the window. Without a window the whole run
+    is used.
     """
     if not samples:
         return None
@@ -668,7 +600,7 @@ def window_metrics(
 class MetricsSampler:
     """Poll a /metrics endpoint from a thread while a GuideLLM run is in progress."""
 
-    def __init__(self, url: str, interval: float):
+    def __init__(self, url: str, interval: float = METRICS_INTERVAL_S):
         self.url = url
         self.interval = interval
         self.samples: list[tuple[float, dict]] = []
@@ -705,30 +637,48 @@ def _measurement_window(json_path: Path) -> tuple[float | None, float | None]:
         return None, None
 
 
+def refuse_prefix_caching(metrics_url: str) -> None:
+    """Exit unless the vLLM server behind `metrics_url` says prefix caching is off."""
+    text = fetch_text(metrics_url, timeout=10)
+    if text is None:
+        raise SystemExit(
+            f"no /metrics at {metrics_url}: this benchmark needs vLLM's metrics "
+            "(acceptance counters, and the check that prefix caching is off)"
+        )
+    enabled = prefix_caching_enabled(text)
+    if enabled is None:
+        raise SystemExit(
+            f"{metrics_url} does not report enable_prefix_caching; is this a vLLM "
+            "server?"
+        )
+    if enabled:
+        raise SystemExit(
+            f"{metrics_url} reports prefix caching enabled. The prompts repeat, so "
+            "cached prefill would make every number a cached-workload number; serve "
+            "with --no-enable-prefix-caching."
+        )
+
+
 # ---------------------------------------------------------------------------
 # collect: drive GuideLLM
 # ---------------------------------------------------------------------------
 
-DEFAULT_COLUMN_MAPPER = (
-    "kind=generative_column_mapper,column_mappings.text_column={column}"
-)
+DEFAULT_DATASET = "RedHatAI/speculator_benchmarks"
 HF_RESOLVE = "https://huggingface.co/datasets/{dataset}/resolve/main/{subset}.jsonl"
 MIN_DATASET_REQUESTS = 5000
 REQUESTS_PER_STREAM = 20
+COLUMN_MAPPER = "kind=generative_column_mapper,column_mappings.text_column=prompt"
 
 
-def _dataset_rows(dataset: str, subset: str | None) -> list:
+def _dataset_rows(dataset: str, subset: str) -> list:
     """Rows of `<subset>.jsonl` from a local file or directory, or a HF dataset id."""
     local = Path(dataset)
-    candidates = [local / f"{subset}.jsonl", local] if subset else [local]
-    for candidate in candidates:
+    for candidate in (local / f"{subset}.jsonl", local):
         if candidate.is_file():
             lines = candidate.read_text().splitlines()
             return [json.loads(line) for line in lines if line.strip()]
     if local.exists():
         raise FileNotFoundError(f"{dataset}: no {subset}.jsonl inside, and not a file")
-    if not subset:
-        raise ValueError("--subset is required with a Hugging Face dataset id")
     url = HF_RESOLVE.format(dataset=dataset, subset=subset)
     with urllib.request.urlopen(url, timeout=120) as response:  # noqa: S310
         text = response.read().decode("utf-8")
@@ -754,14 +704,11 @@ def materialize_dataset(args: argparse.Namespace, out_dir: Path) -> Path:
         )
     repeat = args.dataset_repeat
     if repeat <= 0:
-        target = max(
-            MIN_DATASET_REQUESTS, REQUESTS_PER_STREAM * max(args.streams or [0])
-        )
+        target = max(MIN_DATASET_REQUESTS, REQUESTS_PER_STREAM * max(args.streams))
         repeat = max(1, math.ceil(target / len(rows)))
     prompts = [{"prompt": r[args.prompt_column]} for r in rows] * repeat
     random.Random(0).shuffle(prompts)
-    stem = Path(args.subset or args.dataset).stem
-    path = out_dir / "_data" / f"{stem}_x{repeat}.jsonl"
+    path = out_dir / "_data" / f"{Path(args.subset).stem}_x{repeat}.jsonl"
     path.parent.mkdir(parents=True, exist_ok=True)
     if not path.exists() or args.overwrite:
         with path.open("w") as handle:
@@ -769,23 +716,6 @@ def materialize_dataset(args: argparse.Namespace, out_dir: Path) -> Path:
                 handle.write(json.dumps(row) + "\n")
     print(f"dataset: {len(rows)} rows x {repeat} = {len(prompts)} prompts -> {path}")
     return path
-
-
-def build_data_args(args: argparse.Namespace, out_dir: Path) -> list[str]:
-    """The `--data` (and `--data-column-mapper`) arguments for GuideLLM."""
-    if bool(args.data) == bool(args.dataset):
-        raise SystemExit("choose exactly one of --dataset or --data")
-    mapper = args.data_column_mapper
-    if args.data:
-        spec = args.data
-    else:
-        path = materialize_dataset(args, out_dir)
-        spec = f"kind=json_file,path={path},load_kwargs.split=train"
-        mapper = mapper or DEFAULT_COLUMN_MAPPER.format(column="prompt")
-    text = ["--data", spec]
-    if mapper:
-        text += ["--data-column-mapper", mapper]
-    return text
 
 
 def normalize_target(target: str) -> str:
@@ -798,19 +728,15 @@ def normalize_target(target: str) -> str:
 
 def build_backend(args: argparse.Namespace) -> str:
     """GuideLLM backend spec as JSON, so nested `extras` survive."""
-    default_format = "/v1/chat/completions" if args.dataset else "/v1/completions"
     backend: dict[str, Any] = {
         "kind": "openai_http",
         "target": args.target,
         "model": args.model,
-        "request_format": args.request_format or default_format,
+        "request_format": "/v1/chat/completions",
+        "max_tokens": args.max_tokens,
     }
-    if args.max_tokens:
-        backend["max_tokens"] = args.max_tokens
     body: dict[str, Any] = {}
-    if args.ignore_eos:
-        body["ignore_eos"] = True
-    for item in args.extra_body or []:
+    for item in args.extra_body:
         key, sep, value = item.partition("=")
         if not sep or not key:
             raise SystemExit(f"--extra-body expects KEY=JSON, got {item!r}")
@@ -856,7 +782,7 @@ def write_provenance(out_dir: Path, args: argparse.Namespace) -> None:
         except importlib.metadata.PackageNotFoundError:
             lines.append(f"{package}: not installed")
     for name, path in (("server_version", "/version"), ("server_models", "/v1/models")):
-        text = fetch_text(args.target.rstrip("/") + path, timeout=10)
+        text = fetch_text(args.target + path, timeout=10)
         lines.append(f"{name}: {' '.join(text.split()) if text else 'unavailable'}")
     path = out_dir / "bench_command.txt"
     existing = path.read_text() if path.exists() else ""
@@ -864,70 +790,47 @@ def write_provenance(out_dir: Path, args: argparse.Namespace) -> None:
     path.write_text(existing + separator + "\n".join(lines) + "\n")
 
 
-def _points(args: argparse.Namespace) -> list[tuple[str, str]]:
-    warmup = f",warmup={args.warmup_seconds:g}" if args.warmup_seconds else ""
-    points: list[tuple[str, str]] = []
-    synchronous = args.synchronous
-    if synchronous is None:  # closed-loop sweeps include streams=1, the same point
-        synchronous = not args.streams
-    if synchronous:
-        points.append(("sync", f"kind=synchronous{warmup}"))
-    for streams in args.streams or []:
-        points.append(
-            (f"conc{streams:g}", f"kind=concurrent,streams={streams:g}{warmup}")
-        )
-    for rate in args.rates or []:
-        points.append((f"rate{rate:g}", f"kind=constant,rate={rate:g}{warmup}"))
-    if not points:
-        raise SystemExit(
-            "nothing to run: give --streams and/or --rates (or --synchronous)"
-        )
-    return points
-
-
 def collect(args: argparse.Namespace) -> int:  # noqa: C901
-    """Run one GuideLLM invocation per (point, repeat).
+    """Run one GuideLLM invocation per (N, repeat).
 
-    Points are `sync`, `conc<N>` for each --streams value (closed loop) and
-    `rate<r>` for each --rates value (open loop). Existing JSONs are skipped unless
-    --overwrite, so a sweep can be resumed or extended into the same directory.
-    During every run the server's /metrics is sampled every --metrics-interval
-    seconds; the acceptance and prefix-cache hit rate between the samples nearest
-    the measurement window's start and end, and the scheduler gauges averaged over
-    the window, are stored in `<point>_r<N>.metrics.json` (see `window_metrics`).
+    Points are `conc<N>` for each --streams value. Existing JSONs are skipped
+    unless --overwrite, so a sweep can be resumed or extended into the same
+    directory. The server must have prefix caching off: `collect` reads the
+    setting from /metrics before starting and refuses to run while it is on.
+    During every run /metrics is sampled; the acceptance between the samples
+    nearest the measurement window's start and end, and the scheduler gauges
+    averaged over the window, are stored in `<point>_r<N>.metrics.json` (see
+    `window_metrics`).
     """
     guidellm = shutil.which(args.guidellm_bin)
     if guidellm is None and not args.dry_run:
         raise SystemExit(
             f"{args.guidellm_bin!r} not found on PATH; pip install guidellm"
         )
-    target = normalize_target(args.target)
-    if target != args.target:
-        print(f"target {args.target!r} normalized to {target!r}")
-        args.target = target
+    if any(n <= 0 for n in args.streams):
+        raise SystemExit("--streams must be positive")
     if 0 < args.warmup_seconds < 1:
         raise SystemExit(
             "--warmup-seconds must be 0 or at least 1: GuideLLM reads a value "
             "below 1 as a fraction of the run"
         )
-    if args.max_seconds <= 0 or args.metrics_interval <= 0:
-        raise SystemExit("--max-seconds and --metrics-interval must be positive")
+    if args.max_seconds <= 0:
+        raise SystemExit("--max-seconds must be positive")
+    args.target = normalize_target(args.target)
+    metrics_url = args.target + "/metrics"
     out_dir = Path(args.out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
-    points = _points(args)
-    data_args = build_data_args(args, out_dir)
+    data_path = materialize_dataset(args, out_dir)
     backend = build_backend(args)
-    total_seconds = args.max_seconds + (args.warmup_seconds or 0)
-    metrics_url = (
-        None
-        if args.no_metrics
-        else (args.metrics_url or args.target.rstrip("/") + "/metrics")
-    )
+    total_seconds = args.max_seconds + args.warmup_seconds
+    warmup = f",warmup={args.warmup_seconds:g}" if args.warmup_seconds else ""
     if not args.dry_run:
+        refuse_prefix_caching(metrics_url)
         write_provenance(out_dir, args)
 
     failures = 0
-    for point, profile in points:
+    for streams in args.streams:
+        point = f"conc{streams:g}"
         for repeat in range(1, args.repeats + 1):
             target_json = out_dir / f"{point}_r{repeat}.json"
             if target_json.exists() and not args.overwrite:
@@ -940,9 +843,12 @@ def collect(args: argparse.Namespace) -> int:  # noqa: C901
                 backend,
                 "--tokenizer",
                 f"kind=hf_auto,model={args.tokenizer or args.model}",
-                *data_args,
+                "--data",
+                f"kind=json_file,path={data_path},load_kwargs.split=train",
+                "--data-column-mapper",
+                COLUMN_MAPPER,
                 "--profile",
-                profile,
+                f"kind=concurrent,streams={streams:g}{warmup}",
                 "--constraint",
                 f"kind=max_duration,seconds={total_seconds:g}",
                 "--metrics",
@@ -950,7 +856,6 @@ def collect(args: argparse.Namespace) -> int:  # noqa: C901
                 "--output",
                 f"kind=json,path={target_json}",
                 "--disable-console-interactive",
-                *args.guidellm_arg,
             ]
             print(f"\n=== {point} repeat {repeat}\n{shlex.join(command)}", flush=True)
             if args.dry_run:
@@ -959,13 +864,9 @@ def collect(args: argparse.Namespace) -> int:  # noqa: C901
             # unreachable this time; the JSON is rewritten by GuideLLM anyway.
             sidecar = target_json.with_name(target_json.stem + METRICS_SUFFIX)
             sidecar.unlink(missing_ok=True)
-            sampler = (
-                MetricsSampler(metrics_url, args.metrics_interval).start()
-                if metrics_url
-                else None
-            )
+            sampler = MetricsSampler(metrics_url).start()
             result = subprocess.run(command, check=False)  # noqa: S603
-            samples = sampler.stop() if sampler else []
+            samples = sampler.stop()
             if result.returncode != 0:
                 failures += 1
                 print(
@@ -976,15 +877,21 @@ def collect(args: argparse.Namespace) -> int:  # noqa: C901
                     return result.returncode
                 continue
             metrics = window_metrics(samples, *_measurement_window(target_json))
-            if metrics is not None:
-                metrics = {
-                    "metrics_url": metrics_url,
-                    "sample_interval_s": args.metrics_interval,
-                    **metrics,
-                }
-                sidecar.write_text(json.dumps(metrics, indent=1))
-            elif metrics_url:
+            if metrics is None:
                 print(f"(no /metrics at {metrics_url}; acceptance not recorded)")
+                continue
+            metrics = {"metrics_url": metrics_url, **metrics}
+            sidecar.write_text(json.dumps(metrics, indent=1))
+            if metrics["whole_run"]["delta"]["prefix_cache_queries"] > 0:
+                failures += 1
+                print(
+                    f"!! {point} r{repeat}: the server's prefix-cache counters moved "
+                    "during the run, so prefix caching is on; serve with "
+                    "--no-enable-prefix-caching and re-run this point",
+                    file=sys.stderr,
+                )
+                if not args.keep_going:
+                    return 1
 
     if args.dry_run:
         print("\n(dry run, nothing executed)")
@@ -1010,40 +917,13 @@ def collect(args: argparse.Namespace) -> int:  # noqa: C901
 # validate
 # ---------------------------------------------------------------------------
 
-COLUMN_ALIASES = {
-    "aggregate_output_tps": [
-        "aggregate_output_tps",
-        "output_throughput_tok_s",
-        "output_tps",
-    ],
-    "interactivity_itl_tps_user": ["interactivity_itl_tps_user", "interactivity_itl"],
-    "interactivity_tps_user": [
-        "interactivity_tps_user",
-        "interactivity_tok_s_per_active_request",
-        "interactivity",
-    ],
-    "mean_active_concurrency": [
-        "mean_active_concurrency",
-        "mean_active_successful_concurrency",
-        "concurrency",
-    ],
-    "offered_concurrency": ["offered_concurrency", "streams"],
-    "completed_rps": ["completed_rps", "achieved_rps"],
-}
-
-
-def _pick(row: dict, canonical: str) -> Any:
-    for name in COLUMN_ALIASES.get(canonical, [canonical]):
-        if name in row and row[name] not in ("", None):
-            return row[name]
-    return None
-
 
 def _as_float(value: Any) -> float | None:
     try:
-        return float(value)
+        number = float(value)
     except (TypeError, ValueError):
         return None
+    return None if math.isnan(number) else number
 
 
 def load_rows(path: Path) -> list[dict]:
@@ -1051,26 +931,9 @@ def load_rows(path: Path) -> list[dict]:
         return [r for r in csv.DictReader(handle) if any(v for v in r.values())]
 
 
-def _point_name(row: dict) -> str:
-    """Stable name for one load level: `sync`, `conc<N>` or `rate<r>`."""
-    raw = str(_pick(row, "point") or "")
-    strategy = str(_pick(row, "strategy") or "")
-    offered = _as_float(_pick(row, "offered_rps"))
-    streams = _as_float(_pick(row, "offered_concurrency"))
-    if "sync" in raw.lower() or strategy == "synchronous":
-        return "sync"
-    if raw.startswith("conc"):
-        return raw
-    if strategy == "concurrent" and streams:
-        return f"conc{streams:g}"
-    if not offered:  # e.g. a GuideLLM throughput profile: keep it apart from sync
-        return raw or strategy or "unknown"
-    return f"rate{offered:g}"
-
-
 def _group_mean(group: list[dict], field: str) -> float | None:
-    values = [_as_float(_pick(r, field)) for r in group]
-    values = [v for v in values if v is not None and not math.isnan(v)]
+    values = [_as_float(r.get(field)) for r in group]
+    values = [v for v in values if v is not None]
     return statistics.fmean(values) if values else None
 
 
@@ -1078,27 +941,15 @@ AGGREGATE_FIELDS = {
     "x_itl": "interactivity_itl_tps_user",
     "x_little": "interactivity_tps_user",
     "y": "aggregate_output_tps",
-    "rps": "achieved_rps",
     "completed_rps": "completed_rps",
-    "offered": "offered_rps",
-    "streams": "offered_concurrency",
+    "streams": "streams",
     "conc": "mean_active_concurrency",
-    "itl": "median_itl_ms",
     "itl_mean": "mean_itl_ms",
     "ttft": "median_ttft_ms",
-    "ttft_p99": "p99_ttft_ms",
     "tokens": "mean_output_tokens",
-    "prompt_tokens": "mean_prompt_tokens",
-    "cached": "mean_cached_tokens",
-    "cache_hit": "prefix_cache_hit_rate",
-    "per_iteration": "mean_output_tokens_per_iteration",
-    "burst": "arrival_burstiness",
     "acceptance": "acceptance_length",
     "running": "mean_running_requests",
     "waiting": "mean_waiting_requests",
-    "kv_usage": "mean_kv_cache_usage",
-    "incomplete": "incomplete_requests",
-    "successful": "successful_requests",
 }
 
 
@@ -1106,11 +957,11 @@ def aggregate_points(rows: list[dict]) -> list[dict]:
     """Average repeats of the same point; carry the per-repeat spread."""
     groups: dict[str, list[dict]] = defaultdict(list)
     for row in rows:
-        groups[_point_name(row)].append(row)
+        groups[row["point"]].append(row)
 
     points = []
     for name, group in groups.items():
-        throughputs = [_as_float(_pick(r, "aggregate_output_tps")) for r in group]
+        throughputs = [_as_float(r.get("aggregate_output_tps")) for r in group]
         throughputs = [t for t in throughputs if t is not None]
         spread = (
             (max(throughputs) - min(throughputs)) / statistics.fmean(throughputs)
@@ -1124,13 +975,10 @@ def aggregate_points(rows: list[dict]) -> list[dict]:
             point=name,
             repeats=len(group),
             spread=spread,
-            x=point["x_itl"] if point["x_itl"] is not None else point["x_little"],
-            stop_reason=_pick(group[0], "stop_reason") or "",
-            synchronous=name.startswith("sync"),
-            closed_loop=name.startswith("conc"),
+            stop_reason=group[0].get("stop_reason") or "",
         )
         points.append(point)
-    points.sort(key=lambda p: (p["conc"] is None, p["conc"] or 0.0))
+    points.sort(key=lambda p: p["streams"] or 0.0)
     return points
 
 
@@ -1141,9 +989,7 @@ def _fmt(value: float | None, spec: str) -> str:
 def _print_table(points: list[dict]) -> None:
     header = (
         "point",
-        "offered",
-        "achieved",
-        "ratio",
+        "N",
         "tok/s",
         "conc",
         "1/itl",
@@ -1152,39 +998,22 @@ def _print_table(points: list[dict]) -> None:
         "ttft_ms",
         "waiting",
         "accept",
-        "burst",
         "spread",
     )
-    layout = (
-        "{:>9} {:>8} {:>8} {:>6} {:>7} {:>7} {:>7} {:>7} {:>7} {:>8} {:>7} {:>6} "
-        "{:>6} {:>6}"
-    )
+    layout = "{:>8} {:>5} {:>7} {:>7} {:>7} {:>7} {:>7} {:>8} {:>7} {:>6} {:>6}"
     print(
-        "\nper point, mean over repeats: offered = N streams or req/s; achieved = "
-        "started req/s; tok/s = output throughput; conc = mean requests in flight; "
-        "1/itl = 1000 / mean ITL (tok/s per user, the x axis); little = throughput / "
-        "conc; waiting = mean requests queued inside vLLM; accept = acceptance "
-        "length; burst = cv of request starts per second; spread = throughput range "
-        "across repeats"
+        "\nper point, mean over repeats: N = streams; tok/s = output throughput; "
+        "conc = mean requests in flight; 1/itl = 1000 / mean ITL (tok/s per user, "
+        "the x axis); little = throughput / conc; waiting = mean requests queued "
+        "inside vLLM; accept = acceptance length; spread = throughput range across "
+        "repeats"
     )
     print(layout.format(*header))
     for p in points:
-        open_loop = not p["synchronous"] and not p["closed_loop"]
-        ratio = (
-            p["rps"] / p["offered"] if open_loop and p["rps"] and p["offered"] else None
-        )
-        if p["synchronous"]:
-            offered = "sync"
-        elif p["closed_loop"]:
-            offered = f"N={p['streams']:.0f}" if p["streams"] else "N=?"
-        else:
-            offered = _fmt(p["offered"], ".2f")
         print(
             layout.format(
                 p["point"],
-                offered,
-                _fmt(p["rps"], ".2f"),
-                _fmt(ratio, ".3f"),
+                _fmt(p["streams"], ".0f"),
                 _fmt(p["y"], ".0f"),
                 _fmt(p["conc"], ".1f"),
                 _fmt(p["x_itl"], ".1f"),
@@ -1193,21 +1022,9 @@ def _print_table(points: list[dict]) -> None:
                 _fmt(p["ttft"], ".0f"),
                 _fmt(p["waiting"], ".1f"),
                 _fmt(p["acceptance"], ".2f"),
-                _fmt(p["burst"], ".2f"),
                 f"{100 * p['spread']:.1f}%",
             )
         )
-
-
-def _prefix_cache_share(point: dict) -> float | None:
-    """Share of prompt tokens served from the prefix cache: the server's counters
-    (`prefix_cache_hit_rate`), else GuideLLM's `cached_tokens` when a backend
-    reports them (its HTTP backend does not)."""
-    if point["cache_hit"] is not None:
-        return point["cache_hit"]
-    if point["cached"] and point["prompt_tokens"]:
-        return point["cached"] / point["prompt_tokens"]
-    return None
 
 
 def _queue_label(p: dict) -> str:
@@ -1220,56 +1037,19 @@ def _queue_label(p: dict) -> str:
 def validate_rows(rows: list[dict]) -> list[str]:  # noqa: C901
     points = aggregate_points(rows)
     warnings: list[str] = []
-    open_loop = [p for p in points if not p["synchronous"] and not p["closed_loop"]]
-    closed_loop = [p for p in points if p["closed_loop"]]
     _print_table(points)
 
-    # 1. open loop: offered vs achieved
-    ratios = [
-        (p["point"], p["rps"] / p["offered"])
-        for p in open_loop
-        if p["rps"]
-        and p["offered"]
-        and p["rps"] <= p["offered"] * RATE_SATURATED_FACTOR
-    ]
-    kept_up = [r for _, r in ratios if r > RATE_KEPT_UP]
-    if kept_up:
-        drift = statistics.fmean(kept_up)
-        if abs(drift - 1.0) > RATE_DRIFT_TOLERANCE:
-            warnings.append(
-                f"offered rate looks mis-scaled: achieved/offered averages {drift:.3f} "
-                "on the points below capacity. The generator is not sending its "
-                "nominal rate, so per-rate comparisons with another sweep are invalid."
-            )
-
-    # 2. open loop: concurrency cap / plateau (closed loop pins concurrency to N)
-    if len(open_loop) >= 2:  # noqa: PLR2004
-        top = max(p["conc"] or 0 for p in open_loop)
-        at_cap = [
-            p for p in open_loop if p["conc"] and p["conc"] > PLATEAU_FRACTION * top
-        ]
-        if len(at_cap) >= 2:  # noqa: PLR2004
-            names = ", ".join(p["point"] for p in at_cap)
-            warnings.append(
-                f"{len(at_cap)} points sit at the same concurrency (~{top:.0f}): "
-                f"{names}. "
-                "That plateau is a concurrency cap, so peak throughput here is "
-                "cap/latency, not capacity. Raise the client's max concurrency and "
-                "the server's max-num-seqs and re-run the top points."
-            )
-
-    # 3. dataset exhaustion
+    # 1. dataset exhaustion
     exhausted = [p["point"] for p in points if "requests_exhausted" in p["stop_reason"]]
     if exhausted:
         shown = ", ".join(exhausted[:4]) + ("..." if len(exhausted) > 4 else "")  # noqa: PLR2004
         warnings.append(
             f"{len(exhausted)} points ended on requests_exhausted ({shown}): the sweep "
             "ran out of dataset, so its concurrency is bounded by dataset size, not "
-            "the server. With --dataset, set --dataset-repeat above the automatic "
-            "choice."
+            "the server. Set --dataset-repeat above the automatic choice."
         )
 
-    # 4. steady state: tokens in the window per completed request vs output length
+    # 2. steady state: tokens in the window per completed request vs output length
     for p in points:
         if p["y"] and p["completed_rps"] and p["tokens"]:
             accounted = p["y"] / p["completed_rps"]
@@ -1282,7 +1062,7 @@ def validate_rows(rows: list[dict]) -> list[str]:  # noqa: C901
                 )
                 break
 
-    # 5. repeat noise
+    # 3. repeat noise
     noisy = [
         p for p in points if p["repeats"] > 1 and p["spread"] > REPEAT_SPREAD_LIMIT
     ]
@@ -1295,46 +1075,13 @@ def validate_rows(rows: list[dict]) -> list[str]:  # noqa: C901
             "differences smaller than that as noise."
         )
 
-    # 6. lockstep waves: requests start in bursts instead of spread over the window
-    waves = [
-        p
-        for p in points
-        if p["burst"]
-        and p["burst"] > LOCKSTEP_BURSTINESS
-        and (p["rps"] or 0) >= LOCKSTEP_MIN_RPS
-    ]
-    if waves:
-        names = ", ".join(f"{p['point']} (cv {p['burst']:.1f})" for p in waves[:5])
-        warnings.append(
-            f"{len(waves)} points start their requests in synchronized waves: {names}. "
-            "Streams with identical lengths finish together, prefill in one burst and "
-            "then decode with no prefill in the batch, which overstates throughput and "
-            "interactivity. Drop --ignore-eos, which gives every output the same "
-            "length, or use prompts whose outputs vary in length."
-        )
-
-    # 7. prefix cache hits on repeated prompts
-    cached = [
-        (p, share)
-        for p in points
-        if (share := _prefix_cache_share(p)) is not None and share > CACHE_HIT_FRACTION
-    ]
-    if cached:
-        worst, share = max(cached, key=lambda item: item[1])
-        warnings.append(
-            f"{len(cached)} points were served partly from the prefix cache (up to "
-            f"{100 * share:.0f}% of prompt tokens at {worst['point']}). Prefill work "
-            "is smaller than the prompt length suggests; serve with "
-            "--no-enable-prefix-caching or report these as cached-workload numbers."
-        )
-
-    # 8. closed loop past what the server can hold: queueing shows up as TTFT.
-    # vLLM's waiting gauge, sampled during the window, says whether the queue is
-    # inside the server; a starved API server or client raises TTFT the same way.
+    # 4. past what the server can hold: queueing shows up as TTFT. vLLM's waiting
+    # gauge, sampled during the window, says whether the queue is inside the
+    # server; a starved API server or client raises TTFT the same way.
     ttfts = [p["ttft"] for p in points if p["ttft"]]
-    if closed_loop and ttfts:
+    if ttfts:
         floor = max(QUEUE_TTFT_MS, QUEUE_TTFT_FACTOR * min(ttfts))
-        queued = [p for p in closed_loop if p["ttft"] and p["ttft"] > floor]
+        queued = [p for p in points if p["ttft"] and p["ttft"] > floor]
         in_server = [
             p
             for p in queued
@@ -1344,7 +1091,7 @@ def validate_rows(rows: list[dict]) -> list[str]:  # noqa: C901
         if in_server:
             names = ", ".join(_queue_label(p) for p in in_server[:4])
             warnings.append(
-                f"{len(in_server)} closed-loop points have a median TTFT above "
+                f"{len(in_server)} points have a median TTFT above "
                 f"{floor / 1000:.1f} s: {names}. More streams than the server can "
                 "hold at once wait inside it (a batch cap, or a full KV cache), so "
                 "these points measure queueing plus decode. Raise max-num-seqs, free "
@@ -1353,7 +1100,7 @@ def validate_rows(rows: list[dict]) -> list[str]:  # noqa: C901
         if elsewhere:
             names = ", ".join(_queue_label(p) for p in elsewhere[:4])
             warnings.append(
-                f"{len(elsewhere)} closed-loop points have a median TTFT above "
+                f"{len(elsewhere)} points have a median TTFT above "
                 f"{floor / 1000:.1f} s while vLLM reports no waiting requests: "
                 f"{names}. The delay is outside the scheduler: a starved API server, "
                 "the GuideLLM client, or the network. Check the host's load before "
@@ -1421,7 +1168,11 @@ LABEL_OFFSETS = [
 LABEL_HEIGHT = 24
 AXIS_TICKS = 7
 THOUSAND = 1000
-RATE_LABEL_DECIMALS = 10
+YLABEL = "Output Token Throughput (tok/s)"
+XLABELS = {
+    "itl": "Interactivity (tok/s/user, 1 / mean inter-token latency)",
+    "little": "Interactivity (tok/s/user, throughput / requests in flight)",
+}
 
 
 def _font(kind: str, size: int) -> Any:
@@ -1485,21 +1236,6 @@ def _boxes_overlap(a: tuple, b: tuple) -> bool:
     return not (a[2] < b[0] or b[2] < a[0] or a[3] < b[1] or b[3] < a[1])
 
 
-def _point_label(point: dict, label_format: str) -> str:
-    rps, conc = point["rps"] or 0.0, point["conc"] or 0.0
-    streams = point["streams"] or 0.0
-    if point["synchronous"]:
-        return "single stream"
-    if label_format != "auto":
-        return label_format.format(rps=rps, conc=conc, streams=streams)
-    if point["closed_loop"]:
-        return f"{streams:.0f} concurrent"
-    # two decimals under 1 req/s and one under 10, so 0.25 does not read as 0.2
-    if rps < 1:
-        return f"{rps:.2f}".rstrip("0").rstrip(".") + " req/s"
-    return f"{rps:.1f} req/s" if rps < RATE_LABEL_DECIMALS else f"{rps:.0f} req/s"
-
-
 def _load_series(args: argparse.Namespace) -> list[dict]:
     series = []
     for spec in args.series:
@@ -1520,25 +1256,12 @@ def _load_series(args: argparse.Namespace) -> list[dict]:
         points = aggregate_points(load_rows(path))
         for p in points:
             p["x"] = p["x_itl"] if args.x == "itl" else p["x_little"]
-        missing = [p["point"] for p in points if not p["x"] and p["y"]]
-        if missing and args.x == "itl":
-            print(
-                f"{path}: no mean_itl_ms for {', '.join(missing[:4])}; re-parse the "
-                "JSONs or use --x little",
-                file=sys.stderr,
-            )
         points = [p for p in points if p["x"] and p["y"]]
-        if args.max_concurrency is not None:
-            points = [p for p in points if (p["conc"] or 0) <= args.max_concurrency]
-        if args.min_concurrency is not None:
-            points = [p for p in points if (p["conc"] or 0) >= args.min_concurrency]
-        drop = set(args.drop or [])
-        points = [p for p in points if p["point"] not in drop]
         if not points:
-            raise SystemExit(f"no points left for {path}")
-        # draw the line in load order (concurrency), not by throughput: past
-        # saturation throughput can fall while concurrency keeps growing
-        points.sort(key=lambda p: p["conc"] or 0.0)
+            raise SystemExit(f"no points with an x and y value in {path}")
+        # draw the line in load order (N), not by throughput: past saturation
+        # throughput can fall while N keeps growing
+        points.sort(key=lambda p: p["streams"] or 0.0)
         series.append({"name": name, "color": color, "points": points})
     return series
 
@@ -1570,11 +1293,6 @@ def plot(args: argparse.Namespace) -> int:  # noqa: C901
     def sy(value: float) -> float:
         return bottom - value / y_max * (bottom - top)
 
-    xlabel = args.xlabel or (
-        "Interactivity (tok/s/user, 1 / mean inter-token latency)"
-        if args.x == "itl"
-        else "Interactivity (tok/s/user, throughput / requests in flight)"
-    )
     draw.text((112, 48), args.title, font=f_title, fill=INK)
     if args.subtitle:
         draw.text((112, 112), args.subtitle, font=f_sub, fill=MUTED)
@@ -1596,12 +1314,13 @@ def plot(args: argparse.Namespace) -> int:  # noqa: C901
     draw.line((left, top, left, bottom), fill=AXIS, width=2)
     draw.line((left, bottom, right, bottom), fill=AXIS, width=2)
 
+    xlabel = XLABELS[args.x]
     draw.text(
         ((CANVAS[0] - tw(xlabel, f_axis)) / 2, 1090), xlabel, font=f_axis, fill=INK
     )
-    box = draw.textbbox((0, 0), args.ylabel, font=f_axis)
+    box = draw.textbbox((0, 0), YLABEL, font=f_axis)
     layer = Image.new("RGBA", (box[2] + 8, box[3] + 8), (0, 0, 0, 0))
-    ImageDraw.Draw(layer).text((4, 0), args.ylabel, font=f_axis, fill=INK)
+    ImageDraw.Draw(layer).text((4, 0), YLABEL, font=f_axis, fill=INK)
     layer = layer.rotate(90, expand=True)
     image.paste(layer, (48, int((top + bottom - layer.height) / 2)), layer)
     draw = ImageDraw.Draw(image)
@@ -1611,7 +1330,7 @@ def plot(args: argparse.Namespace) -> int:  # noqa: C901
 
     legend_rows = [(e["name"], e["color"]) for e in series]
     legend_box = None
-    if len(series) > 1 or args.force_legend:
+    if len(series) > 1:
         width = 78 + max(tw(t, f_legend) for t, _ in legend_rows) + 30
         height = 22 + 40 * len(legend_rows)
         lx, ly = right - width - 24, top + 20
@@ -1622,11 +1341,9 @@ def plot(args: argparse.Namespace) -> int:  # noqa: C901
     obstacles = _segments([e["coords"] for e in series])
     markers = [c for e in series for c in e["coords"]]
     placed: list[tuple] = [legend_box] if legend_box else []
-    for index, entry in enumerate(series):
-        if args.label_first_only and index > 0:
-            continue
+    for entry in series:
         for point, (mx, my) in zip(entry["points"], entry["coords"], strict=True):
-            text = _point_label(point, args.label_format)
+            text = f"N={point['streams']:.0f}"
             width = tw(text, f_label)
             best, best_cost = None, None
             for slot, (dx, dy) in enumerate(LABEL_OFFSETS):
@@ -1708,8 +1425,8 @@ def run_validate(args: argparse.Namespace) -> int:
     return 0
 
 
-def _comma_list(cast: type) -> Any:
-    return lambda text: [cast(x) for x in text.split(",")]
+def _int_list(text: str) -> list[int]:
+    return [int(x) for x in text.split(",")]
 
 
 def _add_collect_parser(sub: Any) -> None:
@@ -1717,8 +1434,8 @@ def _add_collect_parser(sub: Any) -> None:
     c.add_argument(
         "--target",
         required=True,
-        help="server base URL without /v1, e.g. http://127.0.0.1:8000 (a trailing /v1 "
-        "is removed)",
+        help="vLLM server base URL without /v1, e.g. http://127.0.0.1:8000 (a "
+        "trailing /v1 is removed); /metrics must be served there too",
     )
     c.add_argument(
         "--model",
@@ -1729,12 +1446,6 @@ def _add_collect_parser(sub: Any) -> None:
         "--tokenizer", default="", help="tokenizer path or HF id (default: --model)"
     )
     c.add_argument(
-        "--request-format",
-        default=None,
-        help="/v1/completions (default), or /v1/chat/completions (default with "
-        "--dataset)",
-    )
-    c.add_argument(
         "--extra-body",
         action="append",
         default=[],
@@ -1743,30 +1454,15 @@ def _add_collect_parser(sub: Any) -> None:
         "for greedy decoding or top_p=0.95; without it the server's sampling defaults "
         "apply (vLLM takes them from the model's generation_config.json)",
     )
-    load = c.add_argument_group("load (give --streams, --rates, or both)")
+    load = c.add_argument_group("load (closed loop, InferenceX style)")
     load.add_argument(
         "--streams",
-        type=_comma_list(int),
-        default=None,
-        help="closed loop, InferenceX style: requests kept in flight at all times; one "
-        "point per value, e.g. 1,2,4,8,16",
+        type=_int_list,
+        required=True,
+        help="requests kept in flight at all times; one point per value, e.g. "
+        "1,2,4,8,16,32,64,128",
     )
-    load.add_argument(
-        "--rates",
-        type=_comma_list(float),
-        default=None,
-        help="open loop: constant arrival rates in requests per second; one point per "
-        "value, e.g. 0.5,1,2,4",
-    )
-    load.add_argument(
-        "--synchronous",
-        action="store_true",
-        default=None,
-        help="also run a single-stream point named sync (on by default only when no "
-        "--streams are given, since --streams 1 is the same point)",
-    )
-    load.add_argument("--no-synchronous", dest="synchronous", action="store_false")
-    load.add_argument("--repeats", type=int, default=3)
+    load.add_argument("--repeats", type=int, default=3, help="runs per point")
     load.add_argument(
         "--max-seconds",
         type=float,
@@ -1780,14 +1476,16 @@ def _add_collect_parser(sub: Any) -> None:
         help="warmup per point, in seconds (0, or at least 1), excluded from every "
         "number",
     )
-    data = c.add_argument_group("data (choose one: a dataset or a raw spec)")
+    data = c.add_argument_group("data (real prompts through /v1/chat/completions)")
     data.add_argument(
         "--dataset",
-        default=None,
-        help="HF dataset id (e.g. RedHatAI/speculator_benchmarks) or a local dir/jsonl",
+        default=DEFAULT_DATASET,
+        help=f"HF dataset id, or a local dir/jsonl (default: {DEFAULT_DATASET})",
     )
     data.add_argument(
-        "--subset", default=None, help="file name without .jsonl, e.g. HumanEval"
+        "--subset",
+        required=True,
+        help="file name without .jsonl, e.g. HumanEval or math_reasoning",
     )
     data.add_argument(
         "--prompt-column", default="prompt", help="dataset column with the prompt"
@@ -1801,22 +1499,8 @@ def _add_collect_parser(sub: Any) -> None:
     data.add_argument(
         "--max-tokens",
         type=int,
-        default=None,
-        help="max_tokens sent with every request; set it with --dataset",
-    )
-    data.add_argument(
-        "--ignore-eos",
-        action="store_true",
-        help="generate exactly --max-tokens tokens per request (ignores end of "
-        "text; every output then has the same length, see validate's check 6)",
-    )
-    data.add_argument(
-        "--data", default=None, help="raw GuideLLM data spec, passed through"
-    )
-    data.add_argument(
-        "--data-column-mapper",
-        default=None,
-        help="raw GuideLLM column mapper (default with --dataset: text_column=prompt)",
+        required=True,
+        help="max_tokens sent with every request, e.g. 1024",
     )
     c.add_argument("--out-dir", required=True)
     c.add_argument(
@@ -1826,29 +1510,11 @@ def _add_collect_parser(sub: Any) -> None:
         "(e.g. baseline, dspark)",
     )
     c.add_argument("--csv", default="", help="default: <out-dir>/<label>.csv")
-    c.add_argument("--metrics-url", default=None, help="default: <target>/metrics")
-    c.add_argument(
-        "--no-metrics",
-        action="store_true",
-        help="do not sample /metrics (acceptance, cache hits, running/waiting)",
-    )
-    c.add_argument(
-        "--metrics-interval",
-        type=float,
-        default=2.0,
-        help="seconds between /metrics samples during a run",
-    )
     c.add_argument("--guidellm-bin", default="guidellm", help="GuideLLM executable")
-    c.add_argument(
-        "--guidellm-arg",
-        action="append",
-        default=[],
-        help="extra argument appended to every GuideLLM command (repeatable)",
-    )
     c.add_argument(
         "--dry-run", action="store_true", help="print commands only; do this first"
     )
-    c.add_argument("--overwrite", action="store_true")
+    c.add_argument("--overwrite", action="store_true", help="re-run existing points")
     c.add_argument(
         "--keep-going",
         action="store_true",
@@ -1877,33 +1543,7 @@ def _add_plot_parser(sub: Any) -> None:
         default="itl",
         help="x axis: 1000/mean ITL (InferenceX, default) or throughput/in-flight",
     )
-    g.add_argument("--xlabel", default="", help="default depends on --x")
-    g.add_argument("--ylabel", default="Output Token Throughput (tok/s)")
     g.add_argument("--note", default="", help="one grey line under the x-axis label")
-    g.add_argument(
-        "--label-format",
-        default="auto",
-        help="'auto', or a format string over {rps}, {conc} and {streams}",
-    )
-    g.add_argument(
-        "--max-concurrency",
-        type=float,
-        default=None,
-        help="drop points whose mean concurrency is above this",
-    )
-    g.add_argument(
-        "--min-concurrency",
-        type=float,
-        default=None,
-        help="drop points whose mean concurrency is below this (sync is ~0.9995)",
-    )
-    g.add_argument("--drop", action="append", help="drop a point by name, repeatable")
-    g.add_argument("--force-legend", action="store_true")
-    g.add_argument(
-        "--label-first-only",
-        action="store_true",
-        help="label only the first series' points (for curves that overlap)",
-    )
     g.set_defaults(func=plot)
 
 

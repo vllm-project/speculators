@@ -165,7 +165,7 @@ for subset in $SUBSETS; do
         continue
     fi
     python "$BENCH" plot "${series[@]}" \
-        --title "Output Throughput vs. Interactivity: ${subset}" --label-format "N={streams:.0f}" \
+        --title "Output Throughput vs. Interactivity: ${subset}" \
         --subtitle "${TARGET_MODEL} · ${DATASET} ${subset} · max_tokens ${MAX_TOKENS} · closed loop, N = ${STREAMS_SHORT},${STREAMS_LONG} · ${REPEATS} run(s) per point" \
         --out "$OUT_DIR/${subset}.png" \
         || echo "WARNING: could not draw $OUT_DIR/${subset}.png"
