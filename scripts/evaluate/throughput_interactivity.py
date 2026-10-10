@@ -1,124 +1,35 @@
 #!/usr/bin/env python3
 """Throughput vs. interactivity benchmark for a vLLM server (InferenceX style).
 
-Measures how many output tokens a server produces per second at increasing load,
-and how fast each user's stream is at that load, and draws both on one chart: the
-chart SemiAnalysis publishes on InferenceX (https://inferencex.semianalysis.com).
-Run it once without a speculator and once with one, and the two curves show what
-speculative decoding buys at every concurrency.
+Output tokens per second for the GPU against tokens per second for each user, at
+N = 1, 2, 4, ... requests kept in flight (closed loop, as InferenceX), on real
+prompts. Run it once without a speculator and once with one, and the two curves
+show what speculative decoding buys at every concurrency.
 
-Self-contained helper: one file, Python 3.10+, standard library only except
-GuideLLM (called as a shell command by `collect`) and Pillow (`plot`).
+    pip install "guidellm>=0.8.0" matplotlib
 
-    pip install "guidellm>=0.8.0" pillow
+`collect` runs the sweep with GuideLLM and samples the server's /metrics for
+acceptance and queueing, `parse` turns the raw JSONs into a CSV, `validate`
+checks the sweep for the usual ways a benchmark lies, and `plot` draws the chart.
+The server must be vLLM with prefix caching off; `collect` refuses to start
+otherwise, since the prompts repeat.
 
-
-THE PROCEDURE
--------------
-Closed loop, as InferenceX: N requests are kept in flight at all times, each
-stream sending its next request the moment the previous one completes, for every
-N in --streams (1,2,4,...,128). Concurrency is the knob, the server is never
-over-queued, and the sweep can go as deep into saturation as max-num-seqs allows.
-
-Real prompts: a subset of RedHatAI/speculator_benchmarks (or any local jsonl),
-fetched once, repeated enough times for the sweep (GuideLLM stops when a dataset
-runs out) and shuffled with a fixed seed into <out-dir>/_data. Sent through
-/v1/chat/completions with --max-tokens and the sampling fields in --extra-body.
-Random text is deliberately not offered: a drafter has nothing to predict in it.
-
-Every point runs for --warmup-seconds plus --max-seconds, and only the window
-after the warmup counts. During every run the server's /metrics is sampled for
-the speculative-decoding acceptance and the scheduler's running and waiting
-counts.
-
-Prefix caching must be off on the server (--no-enable-prefix-caching): the
-prompts repeat, and cached prefill would make every number a cached-workload
-number. `collect` reads the setting from vLLM's /metrics and refuses to start
-while it is on, and fails any point during which the prefix-cache counters moved.
-
-
-WHAT THE CHART SHOWS
---------------------
-One point per N. For each point, over GuideLLM's measurement window
-[scheduler_metrics.measure_start_time, measure_end_time]:
+Per point, over GuideLLM's measurement window (warmup excluded):
 
     aggregate_output_tps       = output tokens generated in the window / window
-                                 (y axis)
-    mean_itl_ms                = mean over requests completed in the window of
-                                 (last token - first token) / (output tokens - 1)
-    interactivity_itl_tps_user = 1000 / mean_itl_ms   (x axis, InferenceX)
-    mean_active_concurrency    = sum(per-request time in flight, clipped to the
-                                 window) / window
-    interactivity_tps_user     = aggregate_output_tps / mean_active_concurrency
-                                 (x axis, Little's law; `plot --x little`)
-    completed_rps              = requests completed in the window / window
-    acceptance_length          = 1 + accepted draft tokens / drafts, from the
-                                 server's /metrics counters sampled at the start
-                                 and end of the window (speculators only)
-    mean_waiting_requests      = requests queued inside the server: vLLM's
-                                 num_requests_waiting gauge, averaged over the
-                                 window
+                                 (y axis; every overlapping request, prorated)
+    interactivity_itl_tps_user = 1000 / mean inter-token latency of the requests
+                                 completed in the window (x axis, InferenceX)
+    interactivity_tps_user     = aggregate_output_tps / mean requests in flight
+                                 (Little's law; `plot --x little`)
+    acceptance_length          = 1 + accepted draft tokens / drafts, from vLLM's
+                                 counters sampled at the window's edges
+    mean_waiting_requests      = vLLM's num_requests_waiting gauge, averaged over
+                                 the window
 
-The default x axis is the InferenceX definition: 1000 / mean inter-token latency,
-the decode speed one user sees once tokens are flowing. GuideLLM's
-`inter_token_latency_ms` is the same formula as InferenceX's TPOT,
-(end-to-end - TTFT) / (tokens - 1), so the curves are comparable with the
-InferenceX dashboard. With speculative decoding, a step emits several tokens, so
-ITL per token drops while the step time rises; that is the effect to measure.
-The Little's-law column divides tokens by the whole time a request was in flight,
-so queue wait and TTFT count against the user. Below capacity the two agree
-within a few percent; past capacity only the Little's-law one drops.
-
-Tokens and in-flight time are counted over every request that overlaps the
-window, successful or still in flight when the run stopped. A request's output
-tokens are spread evenly between its first and last token and only the part
-inside the window counts, so requests that started during warmup or were cut off
-at the end are neither over- nor under-counted. Per-request statistics (ITL,
-TTFT, output length) are taken over the requests that completed inside the
-window; GuideLLM's own request lists also hold the ones that finished during
-warmup.
-
-
-USAGE
------
-    # 1. one sweep per server (run again with the other server for a comparison)
-    python throughput_interactivity.py collect \\
-        --target http://localhost:8010 --model Qwen/Qwen3.8-27B \\
-        --subset HumanEval --max-tokens 1024 \\
-        --streams 1,2,4,8,16,32,64,128 --repeats 1 \\
-        --max-seconds 90 --warmup-seconds 30 \\
-        --out-dir runs/baseline_humaneval --label baseline
-
-    # 2. (or skip step 1) turn existing GuideLLM JSONs into a tidy CSV
-    python throughput_interactivity.py parse runs/baseline_humaneval \\
-        --label baseline --csv baseline_humaneval.csv
-
-    # 3. sanity-check the sweep before you believe it
-    python throughput_interactivity.py validate baseline_humaneval.csv
-
-    # 4. plot one or more CSVs
-    python throughput_interactivity.py plot \\
-        --series baseline_humaneval.csv:'no speculator':'#7a8c3f' \\
-        --series dspark_humaneval.csv:'dspark':'#b52513' \\
-        --title 'Qwen3.8-27B, HumanEval' --subtitle '1x B200, vLLM ...' \\
-        --out humaneval.png
-
-
-READ THIS BEFORE QUOTING A NUMBER OFF THE CHART
------------------------------------------------
-`validate` checks all of these; each one silently produced a wrong chart at
-least once.
-
-1. A benchmark that ends on `requests_exhausted` ran out of dataset.
-2. Steady state: tokens generated in the window per completed request should
-   match the mean output length; a gap means the window was too short.
-3. Repeats that disagree by more than 5% in throughput: differences smaller
-   than that are noise.
-4. Past what the server can hold: when N streams exceed max-num-seqs, or the KV
-   cache is full, the extra requests wait inside the server, so TTFT jumps while
-   ITL does not. vLLM's waiting gauge, sampled during the window
-   (`mean_waiting_requests`), confirms that the queue is in the server and not
-   in the client.
+What the chart means, every option, the CSV columns and the validation checks:
+docs/user_guide/tutorials/throughput_interactivity.md and
+docs/cli/throughput_interactivity.md.
 """
 
 from __future__ import annotations
@@ -146,9 +57,10 @@ from pathlib import Path
 from typing import Any
 
 try:
-    from PIL import Image, ImageDraw, ImageFont
+    import matplotlib.pyplot as plt
+    from matplotlib.transforms import Bbox
 except ImportError:  # only `plot` needs it
-    Image = ImageDraw = ImageFont = None  # type: ignore[assignment]
+    plt = Bbox = None  # type: ignore[assignment]
 
 # Thresholds used by `validate`.
 STEADY_STATE_TOLERANCE = 0.10  # tokens per completed request vs mean output length
@@ -219,16 +131,8 @@ def _overlap(a: float, b: float, start: float, end: float) -> float:
 
 def _token_span(request: dict) -> tuple[float, float]:
     """Time span over which a request produced its output tokens."""
-    timings = (request.get("info") or {}).get("timings") or {}
-    first = timings.get("first_token_iteration") or timings.get(
-        "first_output_token_iteration"
-    )
-    last = timings.get("last_token_iteration")
-    if first is None or last is None:  # older GuideLLM: approximate with TTFT
-        ttft = request.get("time_to_first_token_ms") or 0.0
-        first = request["request_start_time"] + ttft / 1000.0
-        last = request["request_end_time"]
-    return first, last
+    timings = request["info"]["timings"]
+    return timings["first_token_iteration"], timings["last_token_iteration"]
 
 
 def _window_tokens(requests: list, start: float, end: float) -> float:
@@ -290,12 +194,11 @@ def summarize_benchmark(benchmark: dict) -> dict:
     # Output tokens per streamed chunk: ~1 without speculative decoding, the
     # accepted length + 1 with it (vLLM streams every token a step produced at
     # once). A client-side cross-check for the server's acceptance counters.
-    per_iteration = []
-    for r in measured:
-        timings = (r.get("info") or {}).get("timings") or {}
-        iterations = timings.get("token_iterations")
-        if iterations and (r.get("output_tokens") or 0) > 0:
-            per_iteration.append(r["output_tokens"] / iterations)
+    per_iteration = [
+        r["output_tokens"] / r["info"]["timings"]["token_iterations"]
+        for r in measured
+        if r["info"]["timings"]["token_iterations"] and r["output_tokens"]
+    ]
 
     return {
         "point": f"conc{streams:g}",
@@ -340,25 +243,14 @@ SIDECAR_COLUMNS = (
 def read_acceptance(json_path: Path) -> dict:
     """Server metrics `collect` stored next to a run, if any (see `window_metrics`)."""
     sidecar = json_path.with_name(json_path.stem + METRICS_SUFFIX)
-    empty = dict.fromkeys(SIDECAR_COLUMNS, float("nan"))
     if not sidecar.is_file():
-        return empty
-    try:
-        payload = json.loads(sidecar.read_text())
-    except json.JSONDecodeError:
-        return empty
-    if not isinstance(payload, dict):
-        return empty
-    delta = payload.get("delta")
-    delta = delta if isinstance(delta, dict) else {}
-    gauges = payload.get("gauges")
-    gauges = gauges if isinstance(gauges, dict) else {}
+        return dict.fromkeys(SIDECAR_COLUMNS, float("nan"))
+    payload = json.loads(sidecar.read_text())
+    delta = payload.get("delta") or {}
+    gauges = payload.get("gauges") or {}
 
     def gauge_mean(name: str) -> float:
-        stats = gauges.get(name)
-        if not isinstance(stats, dict):
-            return float("nan")
-        return stats.get("mean", float("nan"))
+        return (gauges.get(name) or {}).get("mean", float("nan"))
 
     return {
         "acceptance_length": delta.get("acceptance_length", float("nan")),
@@ -790,23 +682,42 @@ def write_provenance(out_dir: Path, args: argparse.Namespace) -> None:
     path.write_text(existing + separator + "\n".join(lines) + "\n")
 
 
-def collect(args: argparse.Namespace) -> int:  # noqa: C901
-    """Run one GuideLLM invocation per (N, repeat).
+def _run_point(command: list[str], target_json: Path, metrics_url: str) -> bool:
+    """Run one GuideLLM invocation with /metrics sampled, and write its sidecar.
 
-    Points are `conc<N>` for each --streams value. Existing JSONs are skipped
-    unless --overwrite, so a sweep can be resumed or extended into the same
-    directory. The server must have prefix caching off: `collect` reads the
-    setting from /metrics before starting and refuses to run while it is on.
-    During every run /metrics is sampled; the acceptance between the samples
-    nearest the measurement window's start and end, and the scheduler gauges
-    averaged over the window, are stored in `<point>_r<N>.metrics.json` (see
-    `window_metrics`).
+    False when GuideLLM failed, or the server's prefix-cache counters moved during
+    the run (prefix caching is on after all). See `window_metrics` for the sidecar.
     """
-    guidellm = shutil.which(args.guidellm_bin)
-    if guidellm is None and not args.dry_run:
-        raise SystemExit(
-            f"{args.guidellm_bin!r} not found on PATH; pip install guidellm"
+    sidecar = target_json.with_name(target_json.stem + METRICS_SUFFIX)
+    sidecar.unlink(missing_ok=True)  # never merge an earlier run's metrics
+    sampler = MetricsSampler(metrics_url).start()
+    returncode = subprocess.run(command, check=False).returncode  # noqa: S603
+    samples = sampler.stop()
+    if returncode != 0:
+        print(
+            f"!! guidellm exited with {returncode}: {target_json.name}", file=sys.stderr
         )
+        return False
+    metrics = window_metrics(samples, *_measurement_window(target_json))
+    if metrics is None:
+        print(
+            f"!! no /metrics at {metrics_url} during {target_json.name}",
+            file=sys.stderr,
+        )
+        return False
+    sidecar.write_text(json.dumps({"metrics_url": metrics_url, **metrics}, indent=1))
+    if metrics["whole_run"]["delta"]["prefix_cache_queries"] > 0:
+        print(
+            f"!! {target_json.name}: the server's prefix-cache counters moved during "
+            "the run, so prefix caching is on; serve with --no-enable-prefix-caching "
+            "and re-run this point",
+            file=sys.stderr,
+        )
+        return False
+    return True
+
+
+def _check_collect_args(args: argparse.Namespace) -> None:
     if any(n <= 0 for n in args.streams):
         raise SystemExit("--streams must be positive")
     if 0 < args.warmup_seconds < 1:
@@ -816,87 +727,9 @@ def collect(args: argparse.Namespace) -> int:  # noqa: C901
         )
     if args.max_seconds <= 0:
         raise SystemExit("--max-seconds must be positive")
-    args.target = normalize_target(args.target)
-    metrics_url = args.target + "/metrics"
-    out_dir = Path(args.out_dir)
-    out_dir.mkdir(parents=True, exist_ok=True)
-    data_path = materialize_dataset(args, out_dir)
-    backend = build_backend(args)
-    total_seconds = args.max_seconds + args.warmup_seconds
-    warmup = f",warmup={args.warmup_seconds:g}" if args.warmup_seconds else ""
-    if not args.dry_run:
-        refuse_prefix_caching(metrics_url)
-        write_provenance(out_dir, args)
 
-    failures = 0
-    for streams in args.streams:
-        point = f"conc{streams:g}"
-        for repeat in range(1, args.repeats + 1):
-            target_json = out_dir / f"{point}_r{repeat}.json"
-            if target_json.exists() and not args.overwrite:
-                print(f"exists, skipping: {target_json.name}")
-                continue
-            command = [
-                guidellm or args.guidellm_bin,
-                "run",
-                "--backend",
-                backend,
-                "--tokenizer",
-                f"kind=hf_auto,model={args.tokenizer or args.model}",
-                "--data",
-                f"kind=json_file,path={data_path},load_kwargs.split=train",
-                "--data-column-mapper",
-                COLUMN_MAPPER,
-                "--profile",
-                f"kind=concurrent,streams={streams:g}{warmup}",
-                "--constraint",
-                f"kind=max_duration,seconds={total_seconds:g}",
-                "--metrics",
-                "kind=generative,sample_size=0",
-                "--output",
-                f"kind=json,path={target_json}",
-                "--disable-console-interactive",
-            ]
-            print(f"\n=== {point} repeat {repeat}\n{shlex.join(command)}", flush=True)
-            if args.dry_run:
-                continue
-            # A stale sidecar would be merged into the new row if /metrics is
-            # unreachable this time; the JSON is rewritten by GuideLLM anyway.
-            sidecar = target_json.with_name(target_json.stem + METRICS_SUFFIX)
-            sidecar.unlink(missing_ok=True)
-            sampler = MetricsSampler(metrics_url).start()
-            result = subprocess.run(command, check=False)  # noqa: S603
-            samples = sampler.stop()
-            if result.returncode != 0:
-                failures += 1
-                print(
-                    f"!! exit {result.returncode} for {point} r{repeat}",
-                    file=sys.stderr,
-                )
-                if not args.keep_going:
-                    return result.returncode
-                continue
-            metrics = window_metrics(samples, *_measurement_window(target_json))
-            if metrics is None:
-                print(f"(no /metrics at {metrics_url}; acceptance not recorded)")
-                continue
-            metrics = {"metrics_url": metrics_url, **metrics}
-            sidecar.write_text(json.dumps(metrics, indent=1))
-            if metrics["whole_run"]["delta"]["prefix_cache_queries"] > 0:
-                failures += 1
-                print(
-                    f"!! {point} r{repeat}: the server's prefix-cache counters moved "
-                    "during the run, so prefix caching is on; serve with "
-                    "--no-enable-prefix-caching and re-run this point",
-                    file=sys.stderr,
-                )
-                if not args.keep_going:
-                    return 1
 
-    if args.dry_run:
-        print("\n(dry run, nothing executed)")
-        return 0
-
+def _write_results(out_dir: Path, args: argparse.Namespace, failures: int) -> int:
     rows = parse_dir(out_dir, args.label)
     if not rows:
         print("no benchmarks parsed", file=sys.stderr)
@@ -911,6 +744,75 @@ def collect(args: argparse.Namespace) -> int:  # noqa: C901
             file=sys.stderr,
         )
     return 1 if failures else 0
+
+
+def collect(args: argparse.Namespace) -> int:
+    """Run one GuideLLM invocation per (N, repeat), then parse and validate.
+
+    Existing JSONs are skipped unless --overwrite, so a sweep can be resumed or
+    extended into the same directory. The server must have prefix caching off:
+    `collect` reads the setting from /metrics before starting and refuses to run
+    while it is on.
+    """
+    _check_collect_args(args)
+    guidellm = shutil.which(args.guidellm_bin)
+    if guidellm is None and not args.dry_run:
+        raise SystemExit(
+            f"{args.guidellm_bin!r} not found on PATH; pip install guidellm"
+        )
+    args.target = normalize_target(args.target)
+    metrics_url = args.target + "/metrics"
+    out_dir = Path(args.out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    data_path = materialize_dataset(args, out_dir)
+    if not args.dry_run:
+        refuse_prefix_caching(metrics_url)
+        write_provenance(out_dir, args)
+    base_command = [
+        guidellm or args.guidellm_bin,
+        "run",
+        "--backend",
+        build_backend(args),
+        "--tokenizer",
+        f"kind=hf_auto,model={args.tokenizer or args.model}",
+        "--data",
+        f"kind=json_file,path={data_path},load_kwargs.split=train",
+        "--data-column-mapper",
+        COLUMN_MAPPER,
+        "--constraint",
+        f"kind=max_duration,seconds={args.max_seconds + args.warmup_seconds:g}",
+        "--metrics",
+        "kind=generative,sample_size=0",
+        "--disable-console-interactive",
+    ]
+    warmup = f",warmup={args.warmup_seconds:g}" if args.warmup_seconds else ""
+
+    failures = 0
+    for streams in args.streams:
+        for repeat in range(1, args.repeats + 1):
+            target_json = out_dir / f"conc{streams:g}_r{repeat}.json"
+            if target_json.exists() and not args.overwrite:
+                print(f"exists, skipping: {target_json.name}")
+                continue
+            command = [
+                *base_command,
+                "--profile",
+                f"kind=concurrent,streams={streams:g}{warmup}",
+                "--output",
+                f"kind=json,path={target_json}",
+            ]
+            print(f"\n=== {target_json.stem}\n{shlex.join(command)}", flush=True)
+            if args.dry_run:
+                continue
+            if not _run_point(command, target_json, metrics_url):
+                failures += 1
+                if not args.keep_going:
+                    return 1
+
+    if args.dry_run:
+        print("\n(dry run, nothing executed)")
+        return 0
+    return _write_results(out_dir, args, failures)
 
 
 # ---------------------------------------------------------------------------
@@ -1034,79 +936,89 @@ def _queue_label(p: dict) -> str:
     return text + ")"
 
 
-def validate_rows(rows: list[dict]) -> list[str]:  # noqa: C901
-    points = aggregate_points(rows)
-    warnings: list[str] = []
-    _print_table(points)
-
-    # 1. dataset exhaustion
+def _check_exhausted(points: list[dict]) -> list[str]:
     exhausted = [p["point"] for p in points if "requests_exhausted" in p["stop_reason"]]
-    if exhausted:
-        shown = ", ".join(exhausted[:4]) + ("..." if len(exhausted) > 4 else "")  # noqa: PLR2004
-        warnings.append(
-            f"{len(exhausted)} points ended on requests_exhausted ({shown}): the sweep "
-            "ran out of dataset, so its concurrency is bounded by dataset size, not "
-            "the server. Set --dataset-repeat above the automatic choice."
-        )
+    if not exhausted:
+        return []
+    return [
+        f"{len(exhausted)} points ended on requests_exhausted "
+        f"({', '.join(exhausted)}): the sweep ran out of dataset, so its concurrency "
+        "is bounded by dataset size, not the server. Set --dataset-repeat above the "
+        "automatic choice."
+    ]
 
-    # 2. steady state: tokens in the window per completed request vs output length
+
+def _check_steady_state(points: list[dict]) -> list[str]:
+    """Tokens generated in the window per completed request vs the output length."""
     for p in points:
-        if p["y"] and p["completed_rps"] and p["tokens"]:
-            accounted = p["y"] / p["completed_rps"]
-            if abs(accounted - p["tokens"]) > STEADY_STATE_TOLERANCE * p["tokens"]:
-                warnings.append(
-                    f"{p['point']}: the window holds {accounted:.0f} generated tokens "
-                    f"per completed request but requests average {p['tokens']:.0f}; "
-                    "the run did not reach steady state within the window. Lengthen "
-                    "--max-seconds and --warmup-seconds."
-                )
-                break
+        if not (p["y"] and p["completed_rps"] and p["tokens"]):
+            continue
+        accounted = p["y"] / p["completed_rps"]
+        if abs(accounted - p["tokens"]) > STEADY_STATE_TOLERANCE * p["tokens"]:
+            return [
+                f"{p['point']}: the window holds {accounted:.0f} generated tokens per "
+                f"completed request but requests average {p['tokens']:.0f}; the run "
+                "did not reach steady state within the window. Lengthen --max-seconds "
+                "and --warmup-seconds."
+            ]
+    return []
 
-    # 3. repeat noise
+
+def _check_repeat_noise(points: list[dict]) -> list[str]:
     noisy = [
         p for p in points if p["repeats"] > 1 and p["spread"] > REPEAT_SPREAD_LIMIT
     ]
-    if noisy:
-        worst = max(noisy, key=lambda p: p["spread"])
-        warnings.append(
-            f"{len(noisy)} points vary more than {100 * REPEAT_SPREAD_LIMIT:.0f}% "
-            "across "
-            f"repeats (worst {worst['spread'] * 100:.1f}% at {worst['point']}): treat "
-            "differences smaller than that as noise."
-        )
+    if not noisy:
+        return []
+    worst = max(noisy, key=lambda p: p["spread"])
+    return [
+        f"{len(noisy)} points vary more than {100 * REPEAT_SPREAD_LIMIT:.0f}% across "
+        f"repeats (worst {worst['spread'] * 100:.1f}% at {worst['point']}): treat "
+        "differences smaller than that as noise."
+    ]
 
-    # 4. past what the server can hold: queueing shows up as TTFT. vLLM's waiting
-    # gauge, sampled during the window, says whether the queue is inside the
-    # server; a starved API server or client raises TTFT the same way.
+
+def _check_queueing(points: list[dict]) -> list[str]:
+    """Past what the server can hold, queueing shows up as TTFT. vLLM's waiting
+    gauge says whether the queue is inside the server; a starved API server or
+    client raises TTFT the same way."""
     ttfts = [p["ttft"] for p in points if p["ttft"]]
-    if ttfts:
-        floor = max(QUEUE_TTFT_MS, QUEUE_TTFT_FACTOR * min(ttfts))
-        queued = [p for p in points if p["ttft"] and p["ttft"] > floor]
-        in_server = [
-            p
-            for p in queued
-            if p["waiting"] is None or p["waiting"] >= QUEUE_WAITING_MIN
-        ]
-        elsewhere = [p for p in queued if p not in in_server]
-        if in_server:
-            names = ", ".join(_queue_label(p) for p in in_server[:4])
-            warnings.append(
-                f"{len(in_server)} points have a median TTFT above "
-                f"{floor / 1000:.1f} s: {names}. More streams than the server can "
-                "hold at once wait inside it (a batch cap, or a full KV cache), so "
-                "these points measure queueing plus decode. Raise max-num-seqs, free "
-                "KV cache memory, or stop the sweep below this N."
-            )
-        if elsewhere:
-            names = ", ".join(_queue_label(p) for p in elsewhere[:4])
-            warnings.append(
-                f"{len(elsewhere)} points have a median TTFT above "
-                f"{floor / 1000:.1f} s while vLLM reports no waiting requests: "
-                f"{names}. The delay is outside the scheduler: a starved API server, "
-                "the GuideLLM client, or the network. Check the host's load before "
-                "blaming the server."
-            )
+    if not ttfts:
+        return []
+    floor = max(QUEUE_TTFT_MS, QUEUE_TTFT_FACTOR * min(ttfts))
+    queued = [p for p in points if p["ttft"] and p["ttft"] > floor]
+    in_server = [
+        p for p in queued if p["waiting"] is None or p["waiting"] >= QUEUE_WAITING_MIN
+    ]
+    elsewhere = [p for p in queued if p not in in_server]
+    warnings = []
+    if in_server:
+        names = ", ".join(_queue_label(p) for p in in_server)
+        warnings.append(
+            f"{len(in_server)} points have a median TTFT above {floor / 1000:.1f} s: "
+            f"{names}. More streams than the server can hold at once wait inside it "
+            "(a batch cap, or a full KV cache), so these points measure queueing plus "
+            "decode. Raise max-num-seqs, free KV cache memory, or stop the sweep below "
+            "this N."
+        )
+    if elsewhere:
+        names = ", ".join(_queue_label(p) for p in elsewhere)
+        warnings.append(
+            f"{len(elsewhere)} points have a median TTFT above {floor / 1000:.1f} s "
+            f"while vLLM reports no waiting requests: {names}. The delay is outside "
+            "the scheduler: a starved API server, the GuideLLM client, or the "
+            "network. Check the host's load before blaming the server."
+        )
+    return warnings
 
+
+CHECKS = (_check_exhausted, _check_steady_state, _check_repeat_noise, _check_queueing)
+
+
+def validate_rows(rows: list[dict]) -> list[str]:
+    points = aggregate_points(rows)
+    _print_table(points)
+    warnings = [warning for check in CHECKS for warning in check(points)]
     print()
     for warning in warnings:
         print(f"WARNING: {warning}\n")
@@ -1119,121 +1031,25 @@ def validate_rows(rows: list[dict]) -> list[str]:  # noqa: C901
 # plot
 # ---------------------------------------------------------------------------
 
-BG, GRID, AXIS = "#f2f2f2", "#cfdae2", "#888888"
-INK, MUTED = "#181818", "#666666"
 PALETTE = ["#b52513", "#2c6e9b", "#7a8c3f", "#b8b1a8", "#8a5a9e"]
-CANVAS = (2160, 1216)
-PLOT = (175, 230, 2010, 1030)  # left, top, right, bottom
-FONT_CANDIDATES = {
-    "regular": [
-        "/System/Library/Fonts/Supplemental/Arial.ttf",
-        "/Library/Fonts/Arial.ttf",
-        "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
-        "/usr/share/fonts/truetype/liberation2/LiberationSans-Regular.ttf",
-        "/usr/share/fonts/liberation-sans/LiberationSans-Regular.ttf",
-        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
-        "/usr/share/fonts/dejavu-sans-fonts/DejaVuSans.ttf",
-        "C:/Windows/Fonts/arial.ttf",
-    ],
-    "bold": [
-        "/System/Library/Fonts/Supplemental/Arial Bold.ttf",
-        "/Library/Fonts/Arial Bold.ttf",
-        "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf",
-        "/usr/share/fonts/truetype/liberation2/LiberationSans-Bold.ttf",
-        "/usr/share/fonts/liberation-sans/LiberationSans-Bold.ttf",
-        "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
-        "/usr/share/fonts/dejavu-sans-fonts/DejaVuSans-Bold.ttf",
-        "C:/Windows/Fonts/arialbd.ttf",
-    ],
-}
-# label slots tried around each marker, nearest first
-LABEL_OFFSETS = [
-    (24, -30),
-    (24, 0),
-    (24, 30),
-    (-24, -30),
-    (-24, 0),
-    (-24, 30),
-    (24, -60),
-    (-24, -60),
-    (24, 60),
-    (-24, 60),
-    (24, -90),
-    (-24, -90),
-    (60, -30),
-    (-60, -30),
-    (60, 30),
-    (-60, 30),
-]
-LABEL_HEIGHT = 24
-AXIS_TICKS = 7
-THOUSAND = 1000
+BG, GRID, INK, MUTED = "#f2f2f2", "#cfdae2", "#181818", "#666666"
 YLABEL = "Output Token Throughput (tok/s)"
 XLABELS = {
     "itl": "Interactivity (tok/s/user, 1 / mean inter-token latency)",
     "little": "Interactivity (tok/s/user, throughput / requests in flight)",
 }
-
-
-def _font(kind: str, size: int) -> Any:
-    for path in FONT_CANDIDATES[kind]:
-        if Path(path).exists():
-            return ImageFont.truetype(path, size)
-    try:  # Pillow >= 10.1 ships a scalable default font
-        return ImageFont.load_default(size=size)
-    except TypeError:
-        return ImageFont.load_default()
-
-
-def _nice_axis_max(value: float, ticks: int = AXIS_TICKS) -> tuple[float, float]:
-    """Round up to a readable tick step, leaving headroom past the last tick."""
-    if value <= 0:
-        return 1.0, 1.0
-    raw = value / ticks
-    magnitude = 10 ** math.floor(math.log10(raw))
-    step = magnitude
-    for multiple in (1, 2, 2.5, 5, 10):
-        step = multiple * magnitude
-        if step >= raw:
-            break
-    tick_max = math.ceil(value / step) * step
-    if tick_max < value * 1.001:
-        tick_max += step
-    return (tick_max - step if tick_max - step >= value else tick_max), step
-
-
-def _format_tick(value: float) -> str:
-    if value == 0:
-        return "0"
-    if value >= THOUSAND:
-        text = f"{value / THOUSAND:.1f}".rstrip("0").rstrip(".")
-        return f"{text}k"
-    return f"{value:.10g}"
-
-
-def _segments(series_coords: list) -> list:
-    out = []
-    for coords in series_coords:
-        out.extend(zip(coords, coords[1:], strict=False))
-    return out
-
-
-def _box_hits_segment(box: tuple, p0: tuple, p1: tuple) -> bool:
-    x0, y0, x1, y1 = box
-    (ax, ay), (bx, by) = p0, p1
-    if max(ax, bx) < x0 or min(ax, bx) > x1 or max(ay, by) < y0 or min(ay, by) > y1:
-        return False
-    steps = max(2, int(max(abs(bx - ax), abs(by - ay)) / 6))
-    for index in range(steps + 1):
-        t = index / steps
-        px, py = ax + (bx - ax) * t, ay + (by - ay) * t
-        if x0 <= px <= x1 and y0 <= py <= y1:
-            return True
-    return False
-
-
-def _boxes_overlap(a: tuple, b: tuple) -> bool:
-    return not (a[2] < b[0] or b[2] < a[0] or a[3] < b[1] or b[3] < a[1])
+# label slots tried around a marker, in points; nearest first
+LABEL_OFFSETS = [
+    (8, 6),
+    (8, -16),
+    (-8, 6),
+    (-8, -16),
+    (8, 22),
+    (-8, 22),
+    (8, -32),
+    (-8, -32),
+]
+MARKER_PX = 8  # markers closer than this sit on top of each other
 
 
 def _load_series(args: argparse.Namespace) -> list[dict]:
@@ -1251,155 +1067,113 @@ def _load_series(args: argparse.Namespace) -> list[dict]:
             raise SystemExit(
                 f"{path}: no such CSV (did every point of its sweep fail?)"
             )
-        name = name or path.stem
-        color = color or PALETTE[len(series) % len(PALETTE)]
         points = aggregate_points(load_rows(path))
         for p in points:
             p["x"] = p["x_itl"] if args.x == "itl" else p["x_little"]
         points = [p for p in points if p["x"] and p["y"]]
         if not points:
             raise SystemExit(f"no points with an x and y value in {path}")
-        # draw the line in load order (N), not by throughput: past saturation
-        # throughput can fall while N keeps growing
-        points.sort(key=lambda p: p["streams"] or 0.0)
-        series.append({"name": name, "color": color, "points": points})
+        series.append(
+            {
+                "name": name or path.stem,
+                "color": color or PALETTE[len(series) % len(PALETTE)],
+                "points": points,  # in N order, from aggregate_points
+            }
+        )
     return series
 
 
-def plot(args: argparse.Namespace) -> int:  # noqa: C901
-    if Image is None:
-        raise SystemExit("plot needs Pillow: pip install pillow")
+def _label_points(ax: Any, points: list[dict], taken: list[Any]) -> None:
+    """Write `N=...` next to each marker, in the first slot that overlaps nothing.
+
+    Markers drawn on top of each other (a saturated server puts N = 32, 64 and
+    128 on one spot) share one label. `taken` holds the boxes already used on the
+    canvas, markers included, and grows with every label placed.
+    """
+    clusters: list[tuple[list[dict], tuple[float, float]]] = []
+    for p in points:
+        px, py = ax.transData.transform((p["x"], p["y"]))
+        if clusters and all(
+            abs(v - w) < MARKER_PX
+            for v, w in zip((px, py), clusters[-1][1], strict=True)
+        ):
+            clusters[-1][0].append(p)
+        else:
+            clusters.append(([p], (px, py)))
+    for _, (px, py) in clusters:
+        taken.append(Bbox.from_extents(px - 7, py - 7, px + 7, py + 7))
+    for cluster, _ in clusters:
+        first, last = cluster[0]["streams"], cluster[-1]["streams"]
+        label = f"N={first:.0f}" if len(cluster) == 1 else f"N={first:.0f}..{last:.0f}"
+        for dx, dy in LABEL_OFFSETS:
+            text = ax.annotate(
+                label,
+                (cluster[0]["x"], cluster[0]["y"]),
+                xytext=(dx, dy),
+                textcoords="offset points",
+                ha="left" if dx > 0 else "right",
+                fontsize=9,
+                fontweight="bold",
+                color=INK,
+            )
+            box = text.get_window_extent()
+            inside = ax.bbox.contains(box.x0, box.y0) and ax.bbox.contains(
+                box.x1, box.y1
+            )
+            if inside and not any(box.overlaps(other) for other in taken):
+                taken.append(box)
+                break
+            text.remove()
+
+
+def plot(args: argparse.Namespace) -> int:
+    if plt is None:
+        raise SystemExit("plot needs matplotlib: pip install matplotlib")
     series = _load_series(args)
     every = [p for s in series for p in s["points"]]
-    x_tick_max, x_step = _nice_axis_max(max(p["x"] for p in every))
-    y_tick_max, y_step = _nice_axis_max(max(p["y"] for p in every))
-    x_max = x_tick_max + x_step * 0.4
-    y_max = y_tick_max + y_step * 0.4
-
-    left, top, right, bottom = PLOT
-    image = Image.new("RGB", CANVAS, BG)
-    draw = ImageDraw.Draw(image)
-    f_title, f_sub = _font("bold", 48), _font("regular", 26)
-    f_axis, f_tick = _font("regular", 25), _font("regular", 22)
-    f_label, f_legend = _font("bold", 19), _font("regular", 24)
-
-    def tw(text: str, font: Any) -> float:
-        box = draw.textbbox((0, 0), text, font=font)
-        return box[2] - box[0]
-
-    def sx(value: float) -> float:
-        return left + value / x_max * (right - left)
-
-    def sy(value: float) -> float:
-        return bottom - value / y_max * (bottom - top)
-
-    draw.text((112, 48), args.title, font=f_title, fill=INK)
-    if args.subtitle:
-        draw.text((112, 112), args.subtitle, font=f_sub, fill=MUTED)
-
-    for index in range(int(round(x_tick_max / x_step)) + 1):
-        value = index * x_step
-        x = sx(value)
-        draw.line((x, top, x, bottom), fill=GRID, width=2)
-        text = _format_tick(value)
-        draw.text(
-            (x - tw(text, f_tick) / 2, bottom + 15), text, font=f_tick, fill=MUTED
-        )
-    for index in range(int(round(y_tick_max / y_step)) + 1):
-        value = index * y_step
-        y = sy(value)
-        draw.line((left, y, right, y), fill=GRID, width=2)
-        text = _format_tick(value)
-        draw.text((left - 18 - tw(text, f_tick), y - 12), text, font=f_tick, fill=MUTED)
-    draw.line((left, top, left, bottom), fill=AXIS, width=2)
-    draw.line((left, bottom, right, bottom), fill=AXIS, width=2)
-
-    xlabel = XLABELS[args.x]
-    draw.text(
-        ((CANVAS[0] - tw(xlabel, f_axis)) / 2, 1090), xlabel, font=f_axis, fill=INK
+    fig, ax = plt.subplots(figsize=(16, 9), dpi=135, facecolor=BG)
+    ax.set_facecolor(BG)
+    ax.set_xlim(0, 1.08 * max(p["x"] for p in every))
+    ax.set_ylim(0, 1.08 * max(p["y"] for p in every))
+    ax.grid(color=GRID, linewidth=1)
+    ax.set_axisbelow(True)
+    ax.spines[["top", "right"]].set_visible(False)
+    ax.yaxis.set_major_formatter(
+        lambda value, _: f"{value / 1000:g}k" if value >= 1000 else f"{value:g}"  # noqa: PLR2004
     )
-    box = draw.textbbox((0, 0), YLABEL, font=f_axis)
-    layer = Image.new("RGBA", (box[2] + 8, box[3] + 8), (0, 0, 0, 0))
-    ImageDraw.Draw(layer).text((4, 0), YLABEL, font=f_axis, fill=INK)
-    layer = layer.rotate(90, expand=True)
-    image.paste(layer, (48, int((top + bottom - layer.height) / 2)), layer)
-    draw = ImageDraw.Draw(image)
-
-    for entry in series:
-        entry["coords"] = [(sx(p["x"]), sy(p["y"])) for p in entry["points"]]
-
-    legend_rows = [(e["name"], e["color"]) for e in series]
-    legend_box = None
-    if len(series) > 1:
-        width = 78 + max(tw(t, f_legend) for t, _ in legend_rows) + 30
-        height = 22 + 40 * len(legend_rows)
-        lx, ly = right - width - 24, top + 20
-        legend_box = (lx, ly, lx + width, ly + height)
-
-    # Automatic label placement: try slots around each marker and keep the first
-    # that hits no curve, marker, placed label, legend or plot edge.
-    obstacles = _segments([e["coords"] for e in series])
-    markers = [c for e in series for c in e["coords"]]
-    placed: list[tuple] = [legend_box] if legend_box else []
-    for entry in series:
-        for point, (mx, my) in zip(entry["points"], entry["coords"], strict=True):
-            text = f"N={point['streams']:.0f}"
-            width = tw(text, f_label)
-            best, best_cost = None, None
-            for slot, (dx, dy) in enumerate(LABEL_OFFSETS):
-                tx = mx + dx if dx > 0 else mx + dx - width
-                ty = my + dy - LABEL_HEIGHT / 2
-                box = (tx - 3, ty - 3, tx + width + 3, ty + LABEL_HEIGHT + 3)
-                if (
-                    box[0] < left + 2
-                    or box[2] > right - 2
-                    or box[1] < top + 2
-                    or box[3] > bottom - 2
-                ):
-                    continue
-                cost = 8 * sum(
-                    1 for p0, p1 in obstacles if _box_hits_segment(box, p0, p1)
-                )
-                cost += 8 * sum(
-                    1
-                    for cx, cy in markers
-                    if box[0] - 8 < cx < box[2] + 8 and box[1] - 8 < cy < box[3] + 8
-                )
-                cost += 8 * sum(1 for other in placed if _boxes_overlap(box, other))
-                cost += slot * 0.1  # prefer earlier (closer) slots
-                if best_cost is None or cost < best_cost:
-                    best, best_cost = (tx, ty, box), cost
-                if cost < 0.9:  # noqa: PLR2004
-                    break
-            if best is None:
-                continue
-            tx, ty, box = best
-            placed.append(box)
-            draw.text((tx, ty), text, font=f_label, fill=INK)
-
-    for entry in series:
-        coords, color = entry["coords"], entry["color"]
-        if len(coords) > 1:
-            draw.line(coords, fill=color, width=6, joint="curve")
-        for x, y in coords:
-            draw.ellipse((x - 7, y - 7, x + 7, y + 7), fill=color, outline=BG, width=2)
-
-    if legend_box:
-        lx, ly, _, _ = legend_box
-        draw.rounded_rectangle(
-            legend_box, radius=5, fill="#ffffff", outline="#d2d2d2", width=2
+    ax.tick_params(colors=MUTED, labelsize=11)
+    for s in series:
+        xs, ys = [p["x"] for p in s["points"]], [p["y"] for p in s["points"]]
+        ax.plot(
+            xs,
+            ys,
+            color=s["color"],
+            linewidth=3,
+            marker="o",
+            markersize=7,
+            label=s["name"],
         )
-        for index, (text, color) in enumerate(legend_rows):
-            cy = ly + 32 + index * 40
-            draw.line((lx + 30, cy, lx + 62, cy), fill=color, width=11)
-            draw.text((lx + 78, cy - 16), text, font=f_legend, fill=INK)
-
+    ax.set_xlabel(XLABELS[args.x], fontsize=12, color=INK)
+    ax.set_ylabel(YLABEL, fontsize=12, color=INK)
+    fig.suptitle(
+        args.title, x=0.05, ha="left", fontsize=22, fontweight="bold", color=INK
+    )
+    if args.subtitle:
+        ax.set_title(
+            args.subtitle, loc="left", fontsize=11, color=MUTED, pad=14, wrap=True
+        )
+    if len(series) > 1:
+        ax.legend(loc="upper right", fontsize=11, facecolor="white", framealpha=1)
     if args.note:
-        draw.text((112, 1145), args.note, font=_font("regular", 21), fill=MUTED)
-
+        fig.text(0.05, 0.015, args.note, fontsize=9, color=MUTED)
+    fig.tight_layout(rect=(0, 0.03, 1, 0.95))
+    taken: list[Any] = []  # labels of later series avoid those of earlier ones
+    for s in series:
+        _label_points(ax, s["points"], taken)
     out = Path(args.out)
     out.parent.mkdir(parents=True, exist_ok=True)
-    image.save(out, optimize=True)
+    fig.savefig(out)
+    plt.close(fig)
     print(f"wrote {out}")
     return 0
 

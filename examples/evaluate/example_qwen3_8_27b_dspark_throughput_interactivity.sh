@@ -12,7 +12,7 @@
 # throughput, the more each user gains from it.
 #
 # Prerequisites:
-#   pip install "guidellm>=0.8.0" pillow     (plus a vLLM that serves the model)
+#   pip install "guidellm>=0.8.0" matplotlib     (plus a vLLM that serves the model)
 #
 # Usage:
 #   CUDA_VISIBLE_DEVICES=0 bash examples/evaluate/example_qwen3_8_27b_dspark_throughput_interactivity.sh
@@ -64,7 +64,7 @@ EXAMPLE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 BENCH="$(cd "$EXAMPLE_DIR/../../scripts/evaluate" && pwd)/throughput_interactivity.py"
 
 if ! command -v guidellm &> /dev/null; then
-    echo "ERROR: guidellm not found. Install it first: pip install 'guidellm>=0.8.0' pillow"
+    echo "ERROR: guidellm not found. Install it first: pip install 'guidellm>=0.8.0' matplotlib"
     exit 1
 fi
 mkdir -p "$OUT_DIR"

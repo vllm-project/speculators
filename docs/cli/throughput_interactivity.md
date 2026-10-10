@@ -2,7 +2,7 @@
 
 Measures output-token throughput against per-user interactivity for a vLLM server, in the way SemiAnalysis's InferenceX does, and draws the result. One file, four subcommands. See the [tutorial](../user_guide/tutorials/throughput_interactivity.md) for what the chart means and a worked example.
 
-Requirements: Python 3.10+, `guidellm>=0.8.0` for `collect`, and `pillow` for `plot`. `parse` and `validate` use the standard library only.
+Requirements: Python 3.10+, `guidellm>=0.8.0` for `collect`, and `matplotlib` for `plot`. `parse` and `validate` use the standard library only.
 
 ## Basic Usage
 

@@ -39,7 +39,7 @@ The server must be vLLM, since the acceptance counters and the prefix-caching ch
 `examples/evaluate/example_qwen3_8_27b_dspark_throughput_interactivity.sh` benchmarks `Qwen/Qwen3.8-27B` alone, with its DSpark speculator [`RedHatAI/Qwen3.8-27B-speculator.dspark`](https://huggingface.co/RedHatAI/Qwen3.8-27B-speculator.dspark) (7 draft tokens), and with its MTP head, the multi-token-prediction head shipped in the checkpoint (2 draft tokens; the head has one layer, so vLLM's own default would be 1, and the vLLM recipe for this model suggests 3, so treat the count as a knob), on the HumanEval and math_reasoning subsets of `RedHatAI/speculator_benchmarks`:
 
 ```bash
-pip install "guidellm>=0.8.0" pillow
+pip install "guidellm>=0.8.0" matplotlib
 CUDA_VISIBLE_DEVICES=0 bash examples/evaluate/example_qwen3_8_27b_dspark_throughput_interactivity.sh
 ```
 
