@@ -43,7 +43,7 @@ __all__ = [
     "mla_kwargs_from_verifier",
 ]
 
-# Serve-side vLLM-Ascend registration name (K3 DSpark uses K3DSparkForCausalLM).
+# Serve-side vLLM-Ascend registration name .
 GLM5_DSPARK_ARCHITECTURE = "Glm5DSparkForCausalLM"
 # Current export name plus the legacy training ``model_type``.
 GLM5_MLA_MODEL_TYPES = frozenset({"glm5_dspark", "glm5"})

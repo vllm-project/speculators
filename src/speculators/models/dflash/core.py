@@ -141,7 +141,7 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
         context_out = config.transformer_layer_config.hidden_size
         context_eps = config.transformer_layer_config.rms_norm_eps
         if is_glm5_mla_config(tl_config):
-            # K3 / vLLM-Ascend export contract: context_proj + context_norm.
+            # vLLM contract: context_proj + context_norm.
             self.context_proj = nn.Linear(context_in, context_out, bias=False)
             self.context_norm = Qwen3RMSNorm(context_out, eps=context_eps)  # type: ignore[arg-type]
         else:
@@ -396,7 +396,7 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
     def _project_context(self, hidden_states: torch.Tensor) -> torch.Tensor:
         """Project concatenated target aux hiddens into draft width.
 
-        GLM-5 MLA drafts export K3 names (``context_proj`` / ``context_norm``);
+        GLM-5 MLA drafts names (``context_proj`` / ``context_norm``);
         Qwen3 GQA drafts keep ``fc`` / ``hidden_norm``.
         """
         if is_glm5_mla_config(self.config.transformer_layer_config):
