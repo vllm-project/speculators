@@ -20,6 +20,12 @@ def _set_shared_memory(monkeypatch, nbytes):
     )
 
 
+@pytest.fixture(autouse=True)
+def _no_env_kernel_options(monkeypatch):
+    """Pin the import-time env override off so device defaults are tested."""
+    monkeypatch.setattr(attention, "_ENV_KERNEL_OPTIONS", None)
+
+
 def test_low_shared_memory_uses_small_backward_tiles(monkeypatch):
     _set_shared_memory(monkeypatch, 101376)
     assert (
