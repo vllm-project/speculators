@@ -42,6 +42,7 @@ def test_finetuning_weight_sanity(tmp_path: Path):
     # at least MIN_CHANGED tensors must have rel_l1 > REL_L1_MIN
     # to ensure weights actually changed.
     LR = "1e-5"
+    MUON_LR = "1e-4"
     REL_L1_MAX = 0.05
     REL_L1_MIN = 1e-4
     MIN_CHANGED = 3
@@ -93,6 +94,8 @@ def test_finetuning_weight_sanity(tmp_path: Path):
             "2",
             "--lr",
             LR,
+            "--muon-lr",
+            MUON_LR,
             "--total-seq-len",
             "2048",
             "--num-workers",

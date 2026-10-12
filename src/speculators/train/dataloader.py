@@ -21,7 +21,6 @@ from speculators.train.distributed import get_dp_rank, get_dp_size
 from speculators.train.distributed_batch_sampler import (
     MultipackDistributedBatchSamplerV2,
 )
-from speculators.train.noise_transforms import AddUniformNoise
 
 logger = logging.getLogger(__name__)
 
@@ -48,6 +47,10 @@ def _limit_worker_threads() -> None:
 def _worker_init_fn(worker_id: int) -> None:  # noqa: ARG001
     torch.set_num_threads(1)
 
+    local_rank = int(os.environ.get("LOCAL_RANK", "0"))
+    if torch.accelerator.is_available():
+        torch.accelerator.set_device_index(local_rank)
+
 
 def _setup_dataloader(
     dataset: BaseDataset,
@@ -58,12 +61,14 @@ def _setup_dataloader(
     prefetch_factor: int | None = 4,
     preprocess: Callable[[BatchType], BatchType] | None = None,
     max_batches: int | None = None,
+    seed: int = 0,
 ) -> DataLoader:
     batch_sampler = MultipackDistributedBatchSamplerV2(
         batch_max_length=total_seq_len,
         lengths=dataset.approx_lengths,
         num_replicas=get_dp_size(),
         rank=get_dp_rank(),
+        seed=seed,
         max_batches=max_batches,
     )
     use_workers = num_workers > 0
@@ -91,11 +96,9 @@ def create_train_val_loaders(
     data_path: str,
     total_seq_len: int,
     hidden_states_dtype: torch.dtype,
-    noise_std: float,
     transfer: HiddenStatesTransfer | None = None,
     vllm_endpoint: str,
     on_missing: Literal["generate", "skip", "warn", "raise"],
-    on_generate: Literal["cache", "delete"],
     verifier_name_or_path: str,
     request_timeout: float | None,
     max_retries: int,
@@ -108,15 +111,19 @@ def create_train_val_loaders(
     preprocess: Callable[[BatchType], BatchType] | None,
     train_data_ratio: float = 0.9,
     max_train_batches: int | None = None,
+    seed: int = 0,
 ) -> tuple[DataLoader, DataLoader]:
     """Create training and validation DataLoaders.
 
     Non-data SP ranks get lightweight loaders with no workers (they receive
     batches via scatter).  Reads DP/SP topology from
     :mod:`speculators.train.distributed`.
+
+    ``seed`` sets the training packing order and must be the same on every
+    rank. Validation keeps a fixed order, so runs with different seeds are
+    validated on the same packed batches.
     """
     _limit_worker_threads()
-    noise_transform = AddUniformNoise(std=noise_std)
 
     if not (0.0 < train_data_ratio < 1.0):
         raise ValueError(f"train_data_ratio must be in (0, 1), got {train_data_ratio}")
@@ -127,8 +134,6 @@ def create_train_val_loaders(
         transfer=transfer,
         vllm_endpoint=vllm_endpoint,
         on_missing=on_missing,
-        on_generate=on_generate,
-        transform=noise_transform,
         train_ratio=train_data_ratio,
         split="train",
         model=verifier_name_or_path,
@@ -144,7 +149,6 @@ def create_train_val_loaders(
         transfer=transfer,
         vllm_endpoint=vllm_endpoint,
         on_missing=on_missing,
-        on_generate=on_generate,
         train_ratio=train_data_ratio,
         split="val",
         model=verifier_name_or_path,
@@ -164,6 +168,7 @@ def create_train_val_loaders(
         prefetch_factor=prefetch_factor,
         preprocess=preprocess,
         max_batches=max_train_batches,
+        seed=seed,
     )
     val_loader = _setup_dataloader(
         val_dataset,

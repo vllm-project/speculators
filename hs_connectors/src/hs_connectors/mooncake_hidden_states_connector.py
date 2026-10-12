@@ -1,10 +1,10 @@
 """Mooncake-backed sibling of vLLM's ``ExampleHiddenStatesConnector``.
 
-Stores the same ``{"hidden_states", "token_ids"}`` payload in a Mooncake store
-keyed by request id instead of safetensors files, so the vLLM target and the
-trainer don't need a shared filesystem. Loaded out-of-tree via
-``kv_connector_module_path``; must be used with the ``extract_hidden_states``
-speculative method.
+Stores the tensor payload as packed bytes in a
+Mooncake object keyed by request id. The versioned transfer manifest is
+returned separately through vLLM, so the vLLM target and trainer don't need a
+shared filesystem. Loaded out-of-tree via ``kv_connector_module_path``; must
+be used with the ``extract_hidden_states`` speculative method.
 """
 
 from __future__ import annotations
@@ -31,10 +31,13 @@ from vllm.logger import init_logger
 from vllm.v1.attention.backend import AttentionMetadata
 from vllm.v1.core.sched.output import SchedulerOutput
 
+from hs_connectors.device import accelerator_module
 from hs_connectors.mooncake_store import (
+    VERSION,
     MooncakeHiddenStatesStore,
     MooncakeStoreConfig,
     assert_finite,
+    packed_layout,
 )
 
 if TYPE_CHECKING:
@@ -57,6 +60,7 @@ class PendingSave:
     mooncake_key: str
     token_ids: torch.Tensor
     block_ids: list[int]
+    transfer_manifest: dict[str, Any]
 
 
 @dataclass
@@ -100,6 +104,39 @@ class MooncakeHiddenStatesConnector(KVConnectorBase_V1, SupportsHMA):
         )
 
     @staticmethod
+    def _get_hidden_state_layout(
+        vllm_config: VllmConfig,
+    ) -> tuple[int, int, torch.dtype]:
+        """Return the logical shape and dtype written by vLLM's extractor.
+
+        ``ExtractHiddenStatesProposer`` creates a buffer with shape
+        ``[tokens, num_hidden_states, hidden_size]`` before passing it to
+        ``CacheOnlyAttentionLayer``. The final scheduler KV-cache group can
+        contain a lossy representative spec for mixed attention groups, so
+        its ``num_heads``/``head_size`` fields are not a reliable description
+        of this payload.
+        """
+        speculative_config = vllm_config.speculative_config
+        if speculative_config is None or speculative_config.draft_model_config is None:
+            raise ValueError(
+                "MooncakeHiddenStatesConnector requires a draft model config"
+            )
+
+        draft_hf_config = speculative_config.draft_model_config.hf_config
+        layer_ids = getattr(draft_hf_config, "eagle_aux_hidden_state_layer_ids", None)
+        if not layer_ids:
+            raise ValueError(
+                "eagle_aux_hidden_state_layer_ids must be set for hidden-state "
+                "extraction"
+            )
+
+        return (
+            len(layer_ids),
+            vllm_config.model_config.get_hidden_size(),
+            vllm_config.model_config.dtype,
+        )
+
+    @staticmethod
     def _get_cache_block_size(
         vllm_config: VllmConfig,
         kv_cache_config: KVCacheConfig | None,
@@ -130,6 +167,11 @@ class MooncakeHiddenStatesConnector(KVConnectorBase_V1, SupportsHMA):
         self._block_size = self._get_cache_block_size(
             vllm_config, kv_cache_config, self._hs_group_idx
         )
+        (
+            self._num_hidden_states,
+            self._hidden_size,
+            self._hidden_state_dtype,
+        ) = self._get_hidden_state_layout(vllm_config)
 
         if (
             self._vllm_config.speculative_config is None
@@ -153,9 +195,10 @@ class MooncakeHiddenStatesConnector(KVConnectorBase_V1, SupportsHMA):
         self._kv_cache: torch.Tensor | None = None
         self._is_tp_rank_zero: bool = True
         self._store_ready: bool = False
-        # Dedicated CUDA stream for DtoH copies so they don't block
+        # Dedicated accelerator stream for DtoH copies so they don't block
         # the default stream (model forward).
-        self._copy_stream: torch.cuda.Stream | None = None
+        self._copy_stream: Any | None = None
+        self._device_module: Any | None = None
         self._num_writer_threads = mooncake_cfg.num_writer_threads
         self._executor: ThreadPoolExecutor | None = None
         self._req_futures: dict[str, Future] = {}
@@ -197,7 +240,13 @@ class MooncakeHiddenStatesConnector(KVConnectorBase_V1, SupportsHMA):
             f"Expected 1 CacheOnlyAttentionLayer, got {len(cache_layers)}"
         )
         self._kv_cache = kv_caches[cache_layers[0]]
-        self._copy_stream = torch.cuda.Stream()
+        self._copy_stream = self._device().Stream()
+
+    def _device(self) -> Any:
+        """Resolve (once) the accelerator module providing streams/events."""
+        if self._device_module is None:
+            self._device_module = accelerator_module()
+        return self._device_module
 
     def _get_executor(self) -> ThreadPoolExecutor:
         if self._executor is None:
@@ -212,9 +261,7 @@ class MooncakeHiddenStatesConnector(KVConnectorBase_V1, SupportsHMA):
             self._store.setup()
             self._store_ready = True
 
-    def _write_sample(
-        self, pending: PendingSave, ready_event: torch.cuda.Event
-    ) -> None:
+    def _write_sample(self, pending: PendingSave, ready_event: Any) -> None:
         assert self._kv_cache is not None
         assert self._copy_stream is not None
 
@@ -235,7 +282,7 @@ class MooncakeHiddenStatesConnector(KVConnectorBase_V1, SupportsHMA):
         num_tokens = pending.token_ids.shape[0]
 
         try:
-            with torch.cuda.stream(copy_stream):
+            with self._device().stream(copy_stream):
                 slot_mapping = slot_mapping.to(self._kv_cache.device, non_blocking=True)
                 hidden_states = extract_from_kv_cache(
                     self._kv_cache,
@@ -243,23 +290,16 @@ class MooncakeHiddenStatesConnector(KVConnectorBase_V1, SupportsHMA):
                     num_tokens,
                 )
                 assert_finite("hidden_states", hidden_states)
-                # Async DtoH copy into pinned host memory.
-                pinned_hs = torch.empty_like(
-                    hidden_states, device="cpu", pin_memory=True
+                # The DtoH copy into the store's registered staging buffer runs
+                # on the copy stream and completes before the put.
+                self._store.put_sample(
+                    pending.transfer_manifest,
+                    {"hidden_states": hidden_states, "token_ids": pending.token_ids},
                 )
-                pinned_hs.copy_(hidden_states, non_blocking=True)
-
-            # Wait for the DtoH copy to complete before handing data to the store.
-            copy_stream.synchronize()
-
-            self._store.put_sample(
-                pending.mooncake_key,
-                {"hidden_states": pinned_hs, "token_ids": pending.token_ids},
-            )
         except Exception as exc:
             try:
                 # Store error marker instead of the sample, so consumer can re-request
-                self._store.put_error(pending.mooncake_key, str(exc))
+                self._store.put_error(pending.transfer_manifest, str(exc))
             except Exception:
                 logger.exception(
                     "Failed to publish Mooncake error marker for %s",
@@ -282,7 +322,7 @@ class MooncakeHiddenStatesConnector(KVConnectorBase_V1, SupportsHMA):
                     # Record an event on the current (default) stream so
                     # the worker thread can wait for the forward pass to
                     # finish writing to the KV cache before reading it.
-                    ready_event = torch.cuda.Event()
+                    ready_event = self._device().Event()
                     ready_event.record()
                     self._req_futures[pending.req_id] = self._get_executor().submit(
                         self._write_sample, pending, ready_event
@@ -349,14 +389,39 @@ class MooncakeHiddenStatesConnector(KVConnectorBase_V1, SupportsHMA):
         else:
             token_ids = torch.tensor([], dtype=torch.long)
 
+        # Produce transfer manifest
+        num_tokens = token_ids.numel()
+        tensor_spec, total_bytes = packed_layout(
+            {
+                "hidden_states": (
+                    [num_tokens, self._num_hidden_states, self._hidden_size],
+                    self._hidden_state_dtype,
+                ),
+                "token_ids": (list(token_ids.shape), token_ids.dtype),
+            }
+        )
+        transfer_manifest = {
+            "handle": mooncake_key,
+            "version": VERSION,
+            "tensors": tensor_spec,
+            "metadata": {
+                "num_tokens": num_tokens,
+                "total_aligned_bytes": total_bytes,
+                "extract_mode": "all"
+                if kv_params.get("include_output_tokens", False)
+                else "prompt_only",
+            },
+        }
+
         self._pending_saves[req_id] = PendingSave(
             req_id=req_id,
             mooncake_key=mooncake_key,
             token_ids=token_ids,
             block_ids=list(block_ids),
+            transfer_manifest=transfer_manifest,
         )
-        # Returning True delays block freeing until get_finished extracts.
-        return True, {"handle": mooncake_key}
+
+        return True, transfer_manifest
 
     def request_finished_all_groups(
         self, request: Request, block_ids: tuple[list[int], ...]

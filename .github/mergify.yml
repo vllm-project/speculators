@@ -78,6 +78,39 @@ pull_request_rules:
         remove:
           - quality-failed
 
+  - name: add dco-failed label
+    conditions:
+      - label != stale
+      - check-failure = @dco/DCO
+      - -label = dco-failed
+      - -closed
+    actions:
+      label:
+        add:
+          - dco-failed
+      comment:
+        message: |
+          The DCO check has failed. Every commit must include a valid
+          `Signed-off-by` trailer matching the commit author.
+
+          To sign off the latest commit, run:
+
+          ```bash
+          git commit --amend --signoff
+          ```
+
+          For multiple unsigned commits, see the [DCO signoff instructions](https://github.com/vllm-project/speculators/blob/main/CONTRIBUTING.md#dco-signoff).
+
+  - name: remove dco-failed label
+    conditions:
+      - label != stale
+      - check-success = @dco/DCO
+      - -closed
+    actions:
+      label:
+        remove:
+          - dco-failed
+
 merge_protections:
   - name: Require approval from approved reviewers list
     description: >-

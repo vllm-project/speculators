@@ -13,13 +13,13 @@ from pathlib import Path
 
 import pytest
 
-from speculators.data_generation.configs import get_coco_dir
+from speculators.data_generation.configs import _normalize_sharegpt4v_coco, get_coco_dir
 from speculators.data_generation.preprocessing import (
     _adapt_conv_for_vllm,
     _normalize_conversation,
-    load_raw_dataset,
 )
 from tests.e2e.smoke.test_offline_training import run_offline_e2e
+from tests.e2e.utils import load_sharegpt4v_coco_fixture
 from tests.utils import requires_cadence
 
 
@@ -50,10 +50,9 @@ def test_offline_regression(
 
         vllm_media_path = coco_dir
 
-        raw_dataset, normalize_fn = load_raw_dataset(dataset)
+        raw_dataset = load_sharegpt4v_coco_fixture()
         raw_dataset = raw_dataset.skip(len(raw_dataset) - len(prompts))
-        if normalize_fn is not None:
-            raw_dataset = raw_dataset.map(normalize_fn, keep_in_memory=True)
+        raw_dataset = raw_dataset.map(_normalize_sharegpt4v_coco, keep_in_memory=True)
 
         raw_convs = raw_dataset["conversations"]
         normalized_convs = [_normalize_conversation(conv) for conv in raw_convs]

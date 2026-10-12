@@ -109,7 +109,11 @@ def compute_metrics(
         bce = binary_cross_entropy_with_logits(
             confidence_logits, c_star, reduction="none"
         )  # [1, T]
-        conf_loss = _masked_decayed_mean(bce, loss_mask, pos_idx, decay_fn)
+        # D-PACE expects token CE, so keep the confidence BCE on fixed decay.
+        confidence_decay_fn = partial(
+            dflash_loss_decay, gamma=gamma, sample_from_anchor=sample_from_anchor
+        )
+        conf_loss = _masked_decayed_mean(bce, loss_mask, pos_idx, confidence_decay_fn)
         loss = loss + confidence_head_alpha * conf_loss
 
         with torch.no_grad():

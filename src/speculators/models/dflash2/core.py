@@ -49,8 +49,14 @@ class DFlash2DraftModel(DFlashDraftModel):
         super().__init__(config=config)
 
         for layer_ in self.layers:
-            assert isinstance(layer_, Qwen3DFlash2DecoderLayer)  # noqa: S101
-            layer_.reset_convolutions()
+            # By capability, so a _make_decoder_layer override still works.
+            reset_convolutions = getattr(layer_, "reset_convolutions", None)
+            if not callable(reset_convolutions):
+                raise TypeError(
+                    f"{type(layer_).__name__} has no reset_convolutions(); a DFlash2 "
+                    "decoder layer must wrap its sublayers in resettable convolutions."
+                )
+            reset_convolutions()
 
         initializer_range = getattr(
             config.transformer_layer_config, "initializer_range", 0.02

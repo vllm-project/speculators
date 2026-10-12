@@ -45,6 +45,7 @@ def test_mooncake_online_smoke(
         data_path,
         max_samples=50,
         seq_length=seq_length,
+        skip_token_freq=False,
     )
 
     mooncake_kwargs = {

@@ -1,6 +1,5 @@
 import json
 import os
-from collections.abc import Callable
 from contextlib import nullcontext
 from pathlib import Path
 from typing import Literal, TypedDict
@@ -8,13 +7,13 @@ from typing import Literal, TypedDict
 import torch
 from datasets import Dataset as HFDataset
 from datasets import concatenate_datasets, load_dataset
+from huggingface_hub import hf_hub_download
 from transformers import (
     AutoProcessor,
     PreTrainedTokenizerBase,
     ProcessorMixin,
 )
 
-from speculators.data_generation.configs import DATASET_CONFIGS
 from speculators.data_generation.logging_utils import PipelineLogger
 from speculators.data_generation.render_client import render_conversation
 from speculators.data_generation.torch_utils import set_default_torch_num_threads
@@ -679,45 +678,81 @@ def _load_hf_dataset(spec: str) -> tuple[HFDataset, None]:
 
     raw_dataset = load_dataset(hf_id, name=subset, split=split)
 
-    if "conversations" not in raw_dataset.column_names:
+    columns = set(raw_dataset.column_names)
+    if "conversations" not in columns and not {"input_ids", "loss_mask"} <= columns:
         raise ValueError(
             f"HuggingFace dataset '{hf_id}' (split '{split}') is not in "
-            f"conversations format: expected a 'conversations' column but found "
-            f"{raw_dataset.column_names}. Pass a dataset already in conversations "
-            f"format, or add a preset to DATASET_CONFIGS with a normalize_fn."
+            "a supported format: expected a conversations format with a "
+            "'conversations' column or a pre-tokenized format with both "
+            f"'input_ids' and 'loss_mask', but found {raw_dataset.column_names}. "
+            "Pass a dataset in one of those formats."
         )
 
     return raw_dataset, None
 
 
+def _load_hf_jsonl_file(spec: str) -> tuple[HFDataset, None]:
+    """Download and load one JSON/JSONL file from a Hugging Face dataset repo.
+
+    The URI form is ``hf://datasets/<org>/<repo>/<path>``. Keeping the
+    download here means the normal prepare-data path still handles rendering,
+    pretokenized pass-through, and output caching uniformly.
+    """
+    match spec.removeprefix("hf://datasets/").split("/", 2):
+        case [organization, dataset, filename] if all(
+            (organization, dataset, filename)
+        ):
+            pass
+        case _:
+            raise ValueError(
+                f"Invalid Hugging Face JSONL URI '{spec}'. Expected "
+                "hf://datasets/<organization>/<dataset>/<file>.jsonl."
+            )
+
+    repo_id = f"{organization}/{dataset}"
+    if not filename.endswith((".json", ".jsonl")):
+        raise ValueError(
+            f"Hugging Face source '{spec}' must point to a .json or .jsonl file."
+        )
+    local_path = hf_hub_download(
+        repo_id=repo_id,
+        filename=filename,
+        repo_type="dataset",
+    )
+    return load_dataset("json", data_files=local_path, split="train"), None
+
+
 def load_raw_dataset(
     train_data_path: str,
-) -> tuple[HFDataset, Callable[[dict], dict] | None]:
+) -> tuple[HFDataset, None]:
     """Load a raw dataset from one of several source types.
 
     Resolution order:
-        1. Local ``.json``/``.jsonl`` file.
-        2. Local directory: recursively load all ``*.json``/``*.jsonl`` files
+        1. ``hf://datasets/<org>/<repo>/<file>.jsonl`` Hugging Face JSONL URI.
+        2. Local ``.json``/``.jsonl`` file.
+        3. Local directory: recursively load all ``*.json``/``*.jsonl`` files
            as a single dataset.
-        3. Named preset from ``DATASET_CONFIGS``.
         4. ``hf:<id>[:<subset>:<split>]`` for an arbitrary HuggingFace dataset.
 
     Args:
-        train_data_path: File path, directory path, preset name, or ``hf:`` spec.
+        train_data_path: File path, directory path, or ``hf:`` spec.
 
     Returns:
-        Tuple of (raw_dataset, normalize_fn). normalize_fn is None for sources
-        already in conversations format.
+        Tuple of (raw_dataset, None).
 
     Raises:
         ValueError: If the source cannot be resolved or a local directory
             contains no ``.json``/``.jsonl`` files.
     """
-    # 1. Local file
+    # 1. Hugging Face dataset repository JSONL file.
+    if train_data_path.startswith("hf://datasets/"):
+        return _load_hf_jsonl_file(train_data_path)
+
+    # 2. Local file
     if train_data_path.endswith((".jsonl", ".json")):
         return load_dataset("json", data_files=train_data_path, split="train"), None
 
-    # 2. Local directory
+    # 3. Local directory
     path = Path(train_data_path)
     if path.is_dir():
         data_files = sorted(
@@ -729,24 +764,16 @@ def load_raw_dataset(
             )
         return load_dataset("json", data_files=data_files, split="train"), None
 
-    # 3. Named preset
-    if train_data_path in DATASET_CONFIGS:
-        config = DATASET_CONFIGS[train_data_path]
-        raw_dataset = load_dataset(
-            config.hf_path, name=config.subset, split=config.split
-        )
-        if config.filter_fn is not None:
-            raw_dataset = raw_dataset.filter(config.filter_fn)
-        return raw_dataset, config.normalize_fn
-
     # 4. Arbitrary HuggingFace dataset
     if train_data_path.startswith("hf:"):
         return _load_hf_dataset(train_data_path)
 
     raise ValueError(
         f"Unsupported dataset: {train_data_path}. Supported: local .json/.jsonl "
-        f"file, local directory of .json/.jsonl files, hf:<id>[:<subset>:<split>], "
-        f"or a preset {list(DATASET_CONFIGS.keys())}."
+        "file, hf://datasets/<org>/<repo>/<file>.jsonl, local directory of "
+        ".json/.jsonl files, or hf:<id>[:<subset>:<split>]. "
+        "Use `speculators regenerate-responses` for raw presets, "
+        "then pass its generated JSONL to prepare-data."
     )
 
 
@@ -786,6 +813,7 @@ def load_and_preprocess_dataset(
     minimum_valid_tokens: int | None = None,
     allow_empty_output: bool = False,
     trust_remote_code: bool = False,
+    skip_token_freq: bool = True,
 ) -> tuple[HFDataset, ProcessorLike]:
     """Load, tokenize, and preprocess a dataset for speculator training.
 
@@ -837,7 +865,7 @@ def load_and_preprocess_dataset(
     processed_datasets = []
     for train_data_path in train_data_paths:
         log.subsection(f"Processing {train_data_path}")
-        raw_dataset, normalize_fn = load_raw_dataset(train_data_path)
+        raw_dataset, _ = load_raw_dataset(train_data_path)
         raw_dataset = raw_dataset.shuffle(seed=seed)
 
         if max_samples is not None and len(raw_dataset) > 3 * max_samples:
@@ -845,13 +873,6 @@ def load_and_preprocess_dataset(
             # This will then be reduced further to max_samples
             # after combining datasets and shuffling
             raw_dataset = raw_dataset.select(range(3 * max_samples))
-
-        if normalize_fn is not None:
-            raw_dataset = raw_dataset.map(
-                normalize_fn,
-                num_proc=build_dataset_num_proc,
-                keep_in_memory=True,  # skip caching
-            )
 
         pretokenized = {"input_ids", "loss_mask"} <= set(raw_dataset.column_names)
         # With a render endpoint the chat template is applied server-side, so a
@@ -894,11 +915,12 @@ def load_and_preprocess_dataset(
             "--allow-empty-output if an empty dataset is intentional."
         )
 
-    log.subsection("Computing token frequency distribution")
-    save_token_frequency_distribution(
-        dataset=combined_dataset,
-        output_path=token_freq_path,
-    )
+    if not skip_token_freq:
+        log.subsection("Computing token frequency distribution")
+        save_token_frequency_distribution(
+            dataset=combined_dataset,
+            output_path=token_freq_path,
+        )
 
     if len(combined_dataset) == 0:
         log.warning("No samples remain after preprocessing; skipping visualization")

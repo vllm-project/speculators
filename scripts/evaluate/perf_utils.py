@@ -557,17 +557,25 @@ def run_guidellm(
     output_path: Path,
     max_tokens: int,
     gen_kwargs: dict | None = None,
+    request_format: str | None = None,
 ) -> None:
-    backend = f"kind=openai_http,target={target},max_tokens={max_tokens}"
-    for k, v in (gen_kwargs or {}).items():
-        backend += f",extras.body.{k}={v}"
-    cmd = ["guidellm", "run", "--backend", backend]
+    # Building the backend as a JSON object to support nested gen_kwargs for guidellm.
+    backend: dict[str, object] = {
+        "kind": "openai_http",
+        "target": target,
+        "max_tokens": max_tokens,
+    }
+    if request_format:
+        backend["request_format"] = request_format
+    if gen_kwargs:
+        backend["extras"] = {"body": gen_kwargs}
+    cmd = ["guidellm", "run", "--backend", json.dumps(backend)]
 
     if subset is not None:
         data = f"kind=huggingface,source={dataset}"
         data += f",load_kwargs.data_files={subset}.jsonl,load_kwargs.split=train"
     else:
-        data = f"kind=json_file,path={dataset}"
+        data = f"kind=json_file,path={dataset},load_kwargs.split=train"
     cmd.extend(["--data", data])
 
     cmd.extend(["--data-column-mapper", data_column_mapper])

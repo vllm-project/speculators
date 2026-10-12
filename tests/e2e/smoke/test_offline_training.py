@@ -191,6 +191,7 @@ def run_offline_e2e(
             max_samples,
             seq_length,
             render_endpoint=f"http://localhost:{port}",
+            skip_token_freq=draft_vocab_size is None,
         )
 
         # Generate hidden states offline

@@ -4,8 +4,12 @@ Verifies that backend-contributed train args survive the full
 ``resolve -> flatten`` and ``dump_yaml -> --config`` pipelines.
 """
 
+import argparse
 import textwrap
 
+import pytest
+
+from hs_connectors import MooncakeBackend
 from speculators.train.config.schema import TrainConfig
 
 
@@ -29,6 +33,7 @@ def test_mooncake_defaults_backfilled_for_selected_backend():
     assert flat["mooncake_master"] == "127.0.0.1:50051"
     assert flat["mooncake_metadata_server"] == "P2PHANDSHAKE"
     assert flat["mooncake_protocol"] == "tcp"
+    assert flat["mooncake_device"] == ""
     assert flat["mooncake_global_segment_gib"] == 4.0
     assert flat["mooncake_local_buffer_gib"] == 2.0
 
@@ -97,6 +102,7 @@ def test_backend_args_in_yaml_roundtrip(tmp_path):
           backend:
             mooncake_master: "10.0.0.1:50051"
             mooncake_protocol: rdma
+            mooncake_device: mlx5_0
         """)
     )
 
@@ -106,8 +112,10 @@ def test_backend_args_in_yaml_roundtrip(tmp_path):
     flat = cfg.flatten()
     assert flat["mooncake_master"] == "10.0.0.1:50051"
     assert flat["mooncake_protocol"] == "rdma"
+    assert flat["mooncake_device"] == "mlx5_0"
     assert cfg.provenance["mooncake_master"] == "yaml"
     assert cfg.provenance["mooncake_protocol"] == "yaml"
+    assert cfg.provenance["mooncake_device"] == "yaml"
 
 
 def test_backend_cli_beats_yaml(tmp_path):
@@ -154,11 +162,14 @@ def test_resolve_with_mooncake_args():
             "mooncake",
             "--mooncake-master",
             "10.0.0.1:50051",
+            "--mooncake-device",
+            "mlx5_0",
         ]
     )
     flat = cfg.flatten()
     assert flat["mooncake_master"] == "10.0.0.1:50051"
     assert flat["mooncake_protocol"] == "tcp"
+    assert flat["mooncake_device"] == "mlx5_0"
 
 
 def test_resolve_file_backend_hidden_states_path():
@@ -183,3 +194,18 @@ def test_from_flat_roundtrip_with_backend_args():
     flat = cfg.flatten()
     cfg2 = TrainConfig.from_flat(flat)
     assert cfg2.flatten()["mooncake_master"] == "10.0.0.1:50051"
+
+
+@pytest.mark.parametrize("device", ["", "mlx5_0"])
+def test_mooncake_device_reaches_producer_and_consumer(monkeypatch, device):
+    monkeypatch.setenv("MOONCAKE_LOCAL_HOSTNAME", "127.0.0.1")
+    parser = argparse.ArgumentParser()
+    MooncakeBackend.add_train_args(parser)
+    MooncakeBackend.add_launch_args(parser)
+    args = parser.parse_args(["--mooncake-device", device])
+
+    transfer = MooncakeBackend.from_train_args(args, "/unused")
+    producer = MooncakeBackend.build_kv_transfer_config(args)
+
+    assert transfer.store.config.device_name == device
+    assert producer["kv_connector_extra_config"]["mooncake"]["device_name"] == device

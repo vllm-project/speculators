@@ -5,7 +5,6 @@ from __future__ import annotations
 import dataclasses
 import fcntl
 import os
-import shutil
 import socket
 import time
 from abc import ABC, abstractmethod
@@ -55,11 +54,10 @@ class HiddenStatesTransfer(ABC):
         """Return a previously cached sample, or ``None``."""
 
     @abstractmethod
-    def get_generated(self, handle: str) -> dict[str, torch.Tensor] | None:
-        """Retrieve a freshly generated sample by its vLLM-returned handle."""
-
-    def cache(self, handle: str, file_idx: int) -> None:  # noqa: B027
-        """Persist a generated sample to the cache location."""
+    def get_generated(
+        self, hs_transfer_params: dict[str, Any]
+    ) -> dict[str, torch.Tensor] | None:
+        """Retrieve a sample using vLLM's complete transfer parameters."""
 
     def delete(self, handle: str) -> None:  # noqa: B027
         """Clean up a generated sample (e.g. delete a temp file)."""
@@ -144,13 +142,13 @@ class FileTransfer(HiddenStatesTransfer):
         path = self.hidden_states_path / f"hs_{file_idx}.safetensors"
         return _load_hs_file(path)
 
-    def get_generated(self, handle: str) -> dict[str, torch.Tensor] | None:
+    def get_generated(
+        self, hs_transfer_params: dict[str, Any]
+    ) -> dict[str, torch.Tensor] | None:
+        handle = hs_transfer_params.get("hidden_states_path") or hs_transfer_params.get(
+            "handle"
+        )
         return _load_hs_file(Path(handle))
-
-    def cache(self, handle: str, file_idx: int) -> None:
-        self.hidden_states_path.mkdir(parents=True, exist_ok=True)
-        target = self.hidden_states_path / f"hs_{file_idx}.safetensors"
-        shutil.move(handle, target)
 
     def delete(self, handle: str) -> None:
         Path(handle).unlink()
@@ -244,8 +242,10 @@ class FP8Transfer(FileTransfer):
     def get_cached(self, file_idx: int) -> dict[str, torch.Tensor] | None:
         return self._dequantize(super().get_cached(file_idx))
 
-    def get_generated(self, handle: str) -> dict[str, torch.Tensor] | None:
-        return self._dequantize(super().get_generated(handle))
+    def get_generated(
+        self, hs_transfer_params: dict[str, Any]
+    ) -> dict[str, torch.Tensor] | None:
+        return self._dequantize(super().get_generated(hs_transfer_params))
 
 
 def _add_argument_if_absent(
@@ -330,8 +330,10 @@ class MooncakeTransfer(HiddenStatesTransfer):
     def get_cached(self, file_idx: int) -> dict[str, torch.Tensor] | None:  # noqa: ARG002
         return None
 
-    def get_generated(self, handle: str) -> dict[str, torch.Tensor] | None:
-        return self.store.get_sample(handle)
+    def get_generated(
+        self, hs_transfer_params: dict[str, Any]
+    ) -> dict[str, torch.Tensor] | None:
+        return self.store.get_sample(hs_transfer_params)
 
     def delete(self, handle: str) -> None:
         self.store.delete_sample(handle)
@@ -366,6 +368,16 @@ class MooncakeBackend(HiddenStatesBackend):
             choices=["tcp", "rdma"],
             default="tcp",
             help="Mooncake transport protocol. Used with backend=mooncake.",
+        )
+        _add_argument_if_absent(
+            parser,
+            "--mooncake-device",
+            type=str,
+            default="",
+            help=(
+                "Mooncake transport device(s), e.g. 'mlx5_0' or 'mlx5_0,mlx5_1' "
+                "for RDMA. Empty lets Mooncake choose. Used with backend=mooncake."
+            ),
         )
         _add_argument_if_absent(
             parser,
@@ -417,6 +429,7 @@ class MooncakeBackend(HiddenStatesBackend):
                 global_segment_size=round(args.mooncake_global_segment_gib * 1024**3),
                 local_buffer_size=round(args.mooncake_local_buffer_gib * 1024**3),
                 protocol=args.mooncake_protocol,
+                device_name=args.mooncake_device,
             )
         )
         return MooncakeTransfer(store)
@@ -434,6 +447,7 @@ class MooncakeBackend(HiddenStatesBackend):
             global_segment_size=round(args.mooncake_global_segment_gib * 1024**3),
             local_buffer_size=round(args.mooncake_local_buffer_gib * 1024**3),
             protocol=args.mooncake_protocol,
+            device_name=args.mooncake_device,
             num_writer_threads=args.mooncake_writer_threads,
         )
 

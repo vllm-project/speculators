@@ -19,3 +19,9 @@ style:
 	ruff format --silent
 	python -m mdformat $(MDFILES)
 	python scripts/sync_provenance.py
+
+# clean up
+clean:
+	@echo "Running clean up"
+	rm -fr build dist src/*.egg-info;
+	find src setup.py | grep -E "(__pycache__|\.pyc|\.pyo|version\.py|version\.txt)" | xargs rm -fr;

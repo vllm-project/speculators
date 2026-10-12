@@ -19,6 +19,9 @@ from typing import Any
 from unittest.mock import patch
 
 import pytest
+from transformers.integrations.heterogeneity.configuration_utils import (
+    AmbiguousGlobalPerLayerAttributeError,
+)
 from transformers.models.llama.configuration_llama import LlamaConfig
 from transformers.models.qwen3.configuration_qwen3 import Qwen3Config
 
@@ -628,3 +631,121 @@ def test_create_layer_config_infers_moe_intermediate_size():
         config = _create_layer_config_for(verifier)
 
     assert config.intermediate_size == 3 * 32
+
+
+# ---------------------------------------------------------------------------
+# Heterogeneous per-layer verifier configs (e.g. Gemma 4)
+# ---------------------------------------------------------------------------
+
+
+_HETERO_PER_LAYER = frozenset({"head_dim", "num_key_value_heads"})
+
+
+class _FakeHeterogeneousConfig:
+    """Stand-in for a transformers heterogeneous config (e.g. Gemma4TextConfig).
+
+    Reading a per-layer attribute (head_dim / num_key_value_heads) off the global
+    config raises Transformers' AmbiguousGlobalPerLayerAttributeError. Per-layer
+    values live in ``per_layer_config``; other attributes are global.
+    """
+
+    def __init__(self, per_layer_config: list[SimpleNamespace], **globals_):
+        """Store global attrs plus a list of per-layer configs."""
+        base = {
+            "vocab_size": 128,
+            "hidden_size": 32,
+            "intermediate_size": 128,
+            "num_attention_heads": 4,
+            "head_dim": 8,
+            "num_key_value_heads": 2,
+            "hidden_act": "silu",
+            "max_position_embeddings": 128,
+            "initializer_range": 0.02,
+            "rms_norm_eps": 1e-6,
+            "is_heterogeneous": True,
+            "per_layer_attributes": set(_HETERO_PER_LAYER),
+            "per_layer_config": per_layer_config,
+            "allow_global_per_layer_attribute_access": False,
+        }
+        base.update(globals_)
+        object.__setattr__(self, "_d", base)
+
+    def __setattr__(self, name, value):
+        if name == "allow_global_per_layer_attribute_access":
+            self._d[name] = value
+        else:
+            object.__setattr__(self, name, value)
+
+    def __getattribute__(self, name):
+        """Raise for per-layer attrs unless global fallback was enabled."""
+        d = object.__getattribute__(self, "__dict__").get("_d", {})
+        if name in _HETERO_PER_LAYER and not d.get(
+            "allow_global_per_layer_attribute_access", False
+        ):
+            raise AmbiguousGlobalPerLayerAttributeError(
+                f"'{name}' is a per-layer attribute and may vary across layers."
+            )
+        if name in d:
+            return d[name]
+        return object.__getattribute__(self, name)
+
+
+def _hetero_verifier(layers: list[tuple[int, int]], **globals_):
+    """Build a fake heterogeneous verifier from (head_dim, num_kv_heads) layers."""
+    layer_globals = {
+        "vocab_size": 128,
+        "hidden_size": 32,
+        "intermediate_size": 128,
+        "num_attention_heads": 4,
+        "hidden_act": "silu",
+        "max_position_embeddings": 128,
+        "initializer_range": 0.02,
+        "rms_norm_eps": 1e-6,
+    }
+    layer_globals.update(
+        {key: globals_[key] for key in layer_globals if key in globals_}
+    )
+    per_layer = [
+        SimpleNamespace(head_dim=hd, num_key_value_heads=nkv, **layer_globals)
+        for hd, nkv in layers
+    ]
+    return _FakeHeterogeneousConfig(per_layer, **globals_)
+
+
+def test_hetero_verifier_uses_global_values_with_warning():
+    """Use global values as the automatic fallback for ambiguous attributes."""
+    # The modal layer differs from the global values; automatic initialization
+    # intentionally uses the global config rather than inspecting layer layouts.
+    verifier = _hetero_verifier(
+        [(8, 2), (8, 2), (8, 2), (16, 1)],
+        head_dim=16,
+        num_key_value_heads=1,
+    )
+
+    with pytest.warns(UserWarning, match="global verifier values") as caught:
+        config = _create_layer_config_for(verifier)
+
+    assert len(caught) == 1
+    assert config.head_dim == 16
+    assert config.num_key_value_heads == 1
+    assert config.num_attention_heads == 4  # global, unambiguous
+    assert config.hidden_size == 32  # global (homogeneous), the real constraint
+
+
+def test_hetero_verifier_does_not_read_global_per_layer_attr():
+    """Sanity-check the fixture raises before global fallback is enabled."""
+    verifier = _hetero_verifier([(8, 2)])
+    with pytest.raises(AmbiguousGlobalPerLayerAttributeError):
+        _ = verifier.head_dim
+    with pytest.raises(AmbiguousGlobalPerLayerAttributeError):
+        _ = verifier.num_key_value_heads
+
+
+def test_hetero_verifier_rejects_inconsistent_geometry():
+    """If global fallback geometry is inconsistent, fail loudly."""
+    verifier = _hetero_verifier(
+        [(8, 3), (8, 3)],
+        num_key_value_heads=3,
+    )
+    with pytest.raises(ValueError, match="Inconsistent draft attention geometry"):
+        _create_layer_config_for(verifier)

@@ -107,6 +107,7 @@ def run_online_e2e(
             max_samples,
             seq_length,
             render_endpoint=f"http://localhost:{port}",
+            skip_token_freq=draft_vocab_size is None,
         )
 
         # Train against live vLLM server

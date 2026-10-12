@@ -195,3 +195,6 @@ hs_connectors/*.manifest
 hs_connectors/*.spec
 hs_connectors/pip-log.txt
 hs_connectors/pip-delete-this-directory.txt
+
+# MRCR rendered-data cache (evaluate.py --dataset openai/mrcr)
+mrcr_data/

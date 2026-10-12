@@ -21,7 +21,7 @@ def test_get_generated_dequantizes_transparently(tmp_path):
     _write_quantized_sample(handle, hidden_states, token_ids)
 
     transfer = FP8Transfer(tmp_path)
-    sample = transfer.get_generated(str(handle))
+    sample = transfer.get_generated({"hidden_states_path": str(handle)})
 
     assert sample is not None
     assert SCALES_KEY not in sample
@@ -35,7 +35,12 @@ def test_get_generated_dequantizes_transparently(tmp_path):
 
 def test_get_generated_missing_file_returns_none(tmp_path):
     transfer = FP8Transfer(tmp_path)
-    assert transfer.get_generated(str(tmp_path / "missing.safetensors")) is None
+    assert (
+        transfer.get_generated(
+            {"hidden_states_path": str(tmp_path / "missing.safetensors")}
+        )
+        is None
+    )
 
 
 def test_get_cached_dequantizes_transparently(tmp_path):
@@ -65,7 +70,7 @@ def test_passthrough_when_scales_absent(tmp_path):
     save_file({"hidden_states": hidden_states, "token_ids": token_ids}, handle)
 
     transfer = FP8Transfer(tmp_path)
-    sample = transfer.get_generated(str(handle))
+    sample = transfer.get_generated({"hidden_states_path": str(handle)})
 
     assert sample is not None
     torch.testing.assert_close(sample["hidden_states"], hidden_states)
@@ -79,7 +84,7 @@ def test_dequantize_dtype_is_configurable(tmp_path):
     _write_quantized_sample(handle, hidden_states, token_ids)
 
     transfer = FP8Transfer(tmp_path, dequantize_dtype=torch.float32)
-    sample = transfer.get_generated(str(handle))
+    sample = transfer.get_generated({"hidden_states_path": str(handle)})
 
     assert sample is not None
     assert sample["hidden_states"].dtype == torch.float32

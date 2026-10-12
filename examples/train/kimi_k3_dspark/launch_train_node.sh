@@ -74,7 +74,6 @@ exec torchrun --standalone --nproc-per-node 4 \
   --mooncake-writer-threads 4 \
   --vllm-endpoint "$vllm_endpoint" \
   --on-missing generate \
-  --on-generate delete \
   --request-timeout 900 \
   --max-retries 5 \
   --generation-validation-retries 2 \

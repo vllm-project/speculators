@@ -100,7 +100,7 @@ async def _worker(  # noqa: C901
         try:
             async with vllm_semaphore:
                 t_vllm = time.perf_counter()
-                hidden_states_path = await generate_hidden_states_async(
+                hidden_states_path, _ = await generate_hidden_states_async(
                     client,
                     model,
                     item,

@@ -18,7 +18,6 @@ from speculators.data_generation.vllm_client import (
     ClientItem,
     generate_hidden_states,
 )
-from speculators.train.noise_transforms import TransformTensors
 from speculators.train.recovery import (
     RECOVERY_METADATA_KEY,
     GenerationRecoveryGuard,
@@ -100,11 +99,9 @@ class BaseDataset(Dataset):
     def __init__(
         self,
         max_len: int,
-        transform: TransformTensors | None = None,
         hidden_states_dtype=torch.bfloat16,
     ):
         self.max_len = max_len
-        self.transform = transform
         self.hidden_states_dtype = hidden_states_dtype
         self.approx_lengths = self._compute_approx_lengths()
 
@@ -144,10 +141,6 @@ class BaseDataset(Dataset):
         #     "position_ids": [seq_len],
         # }
 
-        # Apply transform
-        if self.transform:
-            data = self.transform(data)
-
         return data
 
 
@@ -159,10 +152,8 @@ class ArrowDataset(BaseDataset):
         transfer: HiddenStatesTransfer | None = None,
         vllm_endpoint: str = "http://localhost:8000/v1",
         on_missing: Literal["generate", "skip", "warn", "raise"] = "generate",
-        on_generate: Literal["cache", "delete"] = "delete",
         train_ratio: float = 1.0,
         split: Literal["train", "val"] = "train",
-        transform: TransformTensors | None = None,
         hidden_states_dtype=torch.bfloat16,
         model: str | None = None,
         request_timeout: float | None = DEFAULT_REQUEST_TIMEOUT,
@@ -193,7 +184,6 @@ class ArrowDataset(BaseDataset):
         self.transfer = transfer or FileTransfer(Path(datapath) / "hidden_states")
         self.vllm_endpoint = vllm_endpoint
         self.on_missing = on_missing
-        self.on_generate = on_generate
         self.client: openai.OpenAI | None = None
         self.model = model
         self.request_timeout = request_timeout
@@ -204,7 +194,7 @@ class ArrowDataset(BaseDataset):
         )
 
         # Delay super init so that `_compute_approx_lengths` has required data
-        super().__init__(max_len, transform, hidden_states_dtype)
+        super().__init__(max_len, hidden_states_dtype)
 
     def _map_to_file_idx(self, index: int):
         return index + self.start_file_idx
@@ -236,7 +226,6 @@ class ArrowDataset(BaseDataset):
 
     def _generate_hidden_states_once(
         self,
-        index: int,
         dataset_item: dict,
         client_item: ClientItem,
     ) -> dict[str, torch.Tensor]:
@@ -244,7 +233,7 @@ class ArrowDataset(BaseDataset):
         try:
             if not self.client:
                 self._setup_client()
-            handle = generate_hidden_states(
+            handle, hs_transfer_params = generate_hidden_states(
                 self.client,  # type:ignore[arg-type]
                 self.model,  # type:ignore[arg-type]
                 client_item,
@@ -252,27 +241,23 @@ class ArrowDataset(BaseDataset):
                 max_retries=self.max_retries,
             )
 
-            loaded_hs = self.transfer.get_generated(handle)
+            loaded_hs = self.transfer.get_generated(hs_transfer_params)
             if loaded_hs is None:
                 raise ValueError(f"Failed to load hidden states for handle {handle}")
 
             # Covers token/shape mismatches and non-finite values. The Mooncake
-            # transfer performs manifest/checksum validation first.
+            # transfer performs manifest validation first.
             check_hidden_states(loaded_hs, dataset_item["input_ids"].tolist())
 
-            file_idx = self._map_to_file_idx(index)
-            if self.on_generate == "cache":
-                self.transfer.cache(handle, file_idx)
-            else:
-                try:
-                    self.transfer.delete(handle)
-                except Exception as cleanup_error:  # noqa: BLE001
-                    logger.warning(
-                        "Loaded a valid hidden-state sample but failed to delete "
-                        "handle %s: %s",
-                        handle,
-                        cleanup_error,
-                    )
+            try:
+                self.transfer.delete(handle)
+            except Exception as cleanup_error:  # noqa: BLE001
+                logger.warning(
+                    "Loaded a valid hidden-state sample but failed to delete "
+                    "handle %s: %s",
+                    handle,
+                    cleanup_error,
+                )
             return loaded_hs
         except Exception:
             if handle is not None:
@@ -295,7 +280,6 @@ class ArrowDataset(BaseDataset):
                 client_item = build_client_item(dataset_item)
                 loaded_hs = self.generation_recovery.run(
                     lambda: self._generate_hidden_states_once(
-                        index,
                         dataset_item,
                         client_item,
                     ),

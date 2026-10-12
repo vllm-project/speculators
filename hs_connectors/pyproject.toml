@@ -31,5 +31,5 @@ license-files = ["LICENSE"]
 authors = [ { name = "Red Hat"} ]
 dependencies = [
     "safetensors",
-    "torch",
+    "torch>=2.6",
 ]

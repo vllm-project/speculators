@@ -228,9 +228,6 @@ class DataArgs(_Group):
         description="Fraction of the dataset used for training; the remainder is held "
         "out for validation.",
     )
-    noise_std: float = Field(
-        default=0.05, description="Standard deviation for noise augmentation."
-    )
     hidden_states_dtype: str = Field(
         default="bfloat16",
         description="Data type for dataloader hidden states and autocast compute. "
@@ -283,11 +280,11 @@ class GenerationArgs(_Group):
         "Default 'generate' generates them on demand via the vLLM endpoint; the others "
         "skip the sample, skip with a warning, or raise.",
     )
-    on_generate: Literal["cache", "delete"] = Field(
+    on_generate: Literal["delete"] = Field(
         default="delete",
-        description="Behaviour after generating a hidden state (only if "
-        "--on-missing=generate). 'delete' discards it once loaded; 'cache' stores it "
-        "in the hidden states path, enabling hybrid online/offline training.",
+        description="Deprecated, no effect. Generated hidden states are always "
+        "discarded once loaded. Retained for backwards compatibility with existing "
+        "command lines and will be removed in a future release.",
     )
     request_timeout: float = Field(
         default=DEFAULT_REQUEST_TIMEOUT,
@@ -326,7 +323,8 @@ class LossArgs(_Group):
         default=None,
         description="Loss function specification. A name (kl_div, rkl, jsd, ce, tv, "
         'nla, lk_hybrid) or a JSON dict for a weighted combination, e.g. \'{"ce": 0.1, '
-        '"tv": 0.9}\'. (default: "ce" for dflash, "kl_div" otherwise).',
+        '"tv": 0.9}\'. (default: "ce" for dflash, \'{"ce": 0.1, "tv": 0.9}\' for '
+        'xpress, "kl_div" otherwise).',
     )
     ttt_steps: int = Field(
         default=3,
@@ -356,7 +354,7 @@ class OptimizerArgs(_Group):
         description="Optimizer to use. 'muon' applies Muon to 2D weight matrices and "
         "AdamW to the remaining params (norms, biases, embeddings, lm_head).",
     )
-    lr: float = Field(default=1e-4, description="Learning rate (AdamW / base group).")
+    lr: float = Field(default=1e-3, description="Learning rate (AdamW / base group).")
     weight_decay: float = Field(
         default=0.01,
         description="Weight decay for the AdamW optimizer (and the AdamW group in muon "
@@ -365,7 +363,7 @@ class OptimizerArgs(_Group):
     muon_lr: float | None = Field(
         default=None,
         description="LR for the Muon (2D weights) group. Only used with --optimizer "
-        "muon. Defaults to 10*lr (and --lr defaults to 1e-4).",
+        "muon. Defaults to --lr (and --lr defaults to 1e-3).",
     )
     muon_momentum: float = Field(
         default=0.95, description="Momentum for the Muon group."
@@ -545,6 +543,59 @@ class DSparkArgs(_Group):
     )
 
 
+class XPressArgs(_Group):
+    """XPress-exclusive knobs (causal-refiner head + Jacobi consistency)."""
+
+    xpress_rank: int = Field(
+        default=256,
+        description="XPress: low-rank dim r of the causal-refiner head.",
+    )
+    xpress_mlp_ratio: int = Field(
+        default=2,
+        description="XPress: refiner MLP expansion ratio (hidden = r * ratio). "
+        "The released checkpoints use 2 (r=256 -> hidden 512).",
+    )
+    num_jacobi_passes: int = Field(
+        default=6,
+        description="XPress: inference-time parallel refine passes K (stored in "
+        "the exported config; not used during training).",
+    )
+    consistency_weight: float = Field(
+        default=0.3,
+        description="XPress: weight of the free-running Jacobi consistency term "
+        "(0 disables it).",
+    )
+    consistency_passes: int = Field(
+        default=3,
+        description="XPress: number of free-running rounds the consistency term "
+        "unrolls (round j conditions on round j-1's argmax, stop-grad between "
+        "rounds; losses averaged).",
+    )
+    base_anchor_weight: float = Field(
+        default=0.6,
+        description="XPress: weight of the drafter-anchor loss on the backbone's "
+        "own logits (keeps the co-trained Jacobi seed from decaying).",
+    )
+    ce_from_data: bool = Field(
+        default=False,
+        description="XPress: point the CE loss component at the DATA "
+        "tokens (the target's own continuation from regeneration) instead of the "
+        "teacher-argmax labels. Applies to the teacher-forced, consistency, and "
+        "anchor terms alike. Requires full verifier vocab.",
+    )
+    base_anchor_full_weight: bool = Field(
+        default=False,
+        description="XPress: apply the drafter-anchor with UNDECAYED per-position "
+        "weights (mask only), anchoring deep slots at full strength; the head's "
+        "learning loss keeps its decay. Default False preserves the historical "
+        "recipe, which is validated for z-lab b16 warm starts. Enable for "
+        "deepseek-native (shift) warm starts: with the decayed anchor their "
+        "standalone-drafter accept@6 eroded 0.52 -> 0.20 within 40k steps "
+        "(slot-6 anchor weight is only exp(-6/4)=0.22) while teacher-forced "
+        "greedy metrics kept rising.",
+    )
+
+
 class PEagleArgs(_Group):
     num_depths: int = Field(
         default=8,
@@ -584,9 +635,20 @@ _GROUPS: dict[str, type[_Group]] = {
     "dflash": DFlashArgs,
     "dflash2": DFlash2Args,
     "dspark": DSparkArgs,
+    "xpress": XPressArgs,
     "peagle": PEagleArgs,
     "mtp": MTPArgs,
 }
+
+
+# Unset ``--loss-fn`` / ``--block-size`` resolve per algorithm. XPress's entries are
+# the validated recipe and match the model's own fallback loss; everything absent
+# falls back to the generic default below.
+_DEFAULT_LOSS_FN: dict[str, str] = {
+    "dflash": "ce",
+    "xpress": '{"ce": 0.1, "tv": 0.9}',
+}
+_DEFAULT_BLOCK_SIZE: dict[str, int] = {"dflash": 16, "xpress": 16}
 
 
 class TrainConfig(BaseSettings):
@@ -667,7 +729,7 @@ class TrainConfig(BaseSettings):
     speculator_type: str = Field(
         default="eagle3",
         description="Type of speculator model to train "
-        "(eagle3, dflash, dflash2, dspark, peagle, mtp).",
+        "(eagle3, dflash, dflash2, dspark, xpress, peagle, mtp).",
     )
     dry_run: bool = Field(
         default=False,
@@ -694,6 +756,7 @@ class TrainConfig(BaseSettings):
     dflash: DFlashArgs = Field(default_factory=DFlashArgs)
     dflash2: DFlash2Args = Field(default_factory=DFlash2Args)
     dspark: DSparkArgs = Field(default_factory=DSparkArgs)
+    xpress: XPressArgs = Field(default_factory=XPressArgs)
     peagle: PEagleArgs = Field(default_factory=PEagleArgs)
     mtp: MTPArgs = Field(default_factory=MTPArgs)
 
@@ -702,11 +765,12 @@ class TrainConfig(BaseSettings):
         """Fill defaults that derive from other fields, mirroring the tail of the
         pre-refactor ``parse_args``: unset ``draft_arch`` -> ``llama`` for eagle3 else
         ``qwen3``; unset ``norm_before_fc`` / ``norm_output`` -> ``True`` for eagle3
-        else ``False``; unset ``muon_lr`` -> ``10 * lr``; unset ``num_layers`` -> ``5``
-        for dflash/dspark/dflash2 else ``1``; unset ``per_position_loss_weight`` ->
-        ``dpace`` for dflash else ``fixed-exp-decay``; unset ``loss_fn`` -> ``ce`` for
-        dflash else ``kl_div``; unset ``block_size`` -> ``16`` for dflash else
-        ``8``.
+        else ``False``; unset ``muon_lr`` -> ``lr``; unset ``num_layers`` -> ``5``
+        for dflash/dspark/dflash2/xpress else ``1``; unset
+        ``per_position_loss_weight`` -> ``dpace`` for dflash else
+        ``fixed-exp-decay``; unset ``loss_fn`` -> ``ce`` for dflash,
+        ``{"ce": 0.1, "tv": 0.9}`` for xpress, else ``kl_div``; unset
+        ``block_size`` -> ``16`` for dflash and xpress else ``8``.
 
         The dflash-conditional defaults reflect the recipe from
         https://github.com/vllm-project/speculators/issues/979: this combination
@@ -729,7 +793,12 @@ class TrainConfig(BaseSettings):
         """
         is_eagle3 = self.speculator_type == "eagle3"
         is_dflash = self.speculator_type == "dflash"
-        is_dflash_family = self.speculator_type in {"dflash", "dspark", "dflash2"}
+        is_dflash_family = self.speculator_type in {
+            "dflash",
+            "dspark",
+            "dflash2",
+            "xpress",
+        }
         if self.draft.draft_arch is None:
             self.draft.draft_arch = "llama" if is_eagle3 else "qwen3"
         if self.draft.norm_before_fc is None:
@@ -739,7 +808,7 @@ class TrainConfig(BaseSettings):
         if self.draft.sliding_window_non_causal is None:
             self.draft.sliding_window_non_causal = self.speculator_type == "dflash2"
         if self.optimizer.muon_lr is None:
-            self.optimizer.muon_lr = 10 * self.optimizer.lr
+            self.optimizer.muon_lr = self.optimizer.lr
         if self.draft.num_layers is None:
             self.draft.num_layers = 5 if is_dflash_family else 1
         if self.dflash.per_position_loss_weight is None:
@@ -747,9 +816,9 @@ class TrainConfig(BaseSettings):
                 "dpace" if is_dflash else "fixed-exp-decay"
             )
         if self.loss.loss_fn is None:
-            self.loss.loss_fn = "ce" if is_dflash else "kl_div"
+            self.loss.loss_fn = _DEFAULT_LOSS_FN.get(self.speculator_type, "kl_div")
         if self.dflash.block_size is None:
-            self.dflash.block_size = 16 if is_dflash else 8
+            self.dflash.block_size = _DEFAULT_BLOCK_SIZE.get(self.speculator_type, 8)
         return self
 
     @model_validator(mode="after")

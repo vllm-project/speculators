@@ -68,6 +68,7 @@ WORKERS_PER_API_SERVER = 4
 CPUS_PER_API_SERVER = 4
 MAX_PREPROCESSING_WORKERS = 128
 EFFECTIVE_CPUS_PER_PREPROCESSING_WORKER = 4
+VLLM_SCALE_OUT_VERSION_BOUNDARY = (0, 29, 1)
 
 # The vLLM API-server processes each create their own native thread pools.
 # Keep those pools bounded by default; explicit environment settings still
@@ -115,12 +116,26 @@ def render_throughput_defaults(cpus: int | None = None) -> tuple[int, int]:
     return api_servers, DEFAULT_RENDERER_NUM_WORKERS
 
 
+def _vllm_supports_scale_out_flag() -> bool:
+    """Return whether the installed vLLM accepts ``--enable-scale-out``."""
+    try:
+        from vllm import __version_tuple__  # noqa: PLC0415
+
+        release = tuple(int(part) for part in __version_tuple__[:3])
+    except (ImportError, AttributeError, TypeError, ValueError):
+        return False
+
+    return release > VLLM_SCALE_OUT_VERSION_BOUNDARY
+
+
 def _with_render_defaults(vllm_args: list[str]) -> list[str]:
-    """Prepend high-throughput render defaults, unless no API server is wanted."""
+    """Enable and tune render endpoints, unless no API server is wanted."""
     if "--headless" in vllm_args:
         return vllm_args
     api_servers, renderer_workers = render_throughput_defaults()
+    scale_out_args = ["--enable-scale-out"] if _vllm_supports_scale_out_flag() else []
     return [
+        *scale_out_args,
         "--api-server-count",
         str(api_servers),
         "--renderer-num-workers",
@@ -133,11 +148,6 @@ def _set_render_thread_defaults() -> None:
     """Bound native pools inherited by vLLM's API-server processes."""
     for name, value in DEFAULT_RENDER_THREAD_ENV.items():
         os.environ.setdefault(name, value)
-
-
-def _enable_scale_out_endpoints() -> None:
-    """Enable vLLM's render route while preserving an explicit user setting."""
-    os.environ.setdefault("VLLM_ENABLE_SCALE_OUT_ENDPOINTS", "1")
 
 
 def _add_shared_args(parser: argparse.ArgumentParser) -> None:
@@ -542,7 +552,6 @@ def main():
         # Render tuning applies to the train pipeline only; eval serving skips it.
         if args.subcommand == "train" and "--headless" not in vllm_args:
             _set_render_thread_defaults()
-            _enable_scale_out_endpoints()
         os.execvp(cmd[0], cmd)  # noqa: S606
 
 

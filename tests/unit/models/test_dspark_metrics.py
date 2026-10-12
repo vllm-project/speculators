@@ -2,7 +2,9 @@
 
 from functools import partial
 
+import pytest
 import torch
+from torch.nn.functional import binary_cross_entropy_with_logits
 
 from speculators.losses import resolve_loss_config
 from speculators.losses.eager import tv_loss
@@ -19,7 +21,11 @@ def _ids_to_logits(ids: torch.Tensor, vocab_size: int) -> torch.Tensor:
 
 
 class TestComputeMetrics:
-    def test_empty_loss_mask_keeps_backward_graph_with_zero_gradients(self):
+    @pytest.mark.parametrize("per_position_loss_weight", ["fixed-exp-decay", "dpace"])
+    def test_empty_loss_mask_keeps_backward_graph_with_zero_gradients(
+        self, per_position_loss_weight
+    ):
+        """An empty mask must keep both gradient paths and produce zero loss."""
         logits = torch.randn(1, 8, 16, requires_grad=True)
         targets = torch.randn(1, 8, 16)
         confidence_logits = torch.randn(1, 8, requires_grad=True)
@@ -32,6 +38,7 @@ class TestComputeMetrics:
             loss_mask,
             block_size=2,
             loss_config=_DEFAULT_LOSS,
+            per_position_loss_weight=per_position_loss_weight,
         )
         loss.backward()
 
@@ -158,6 +165,54 @@ class TestComputeMetrics:
             confidence_head_alpha=1.0,
         )
         assert float(loss_conf) > float(loss_no_conf)
+
+    @pytest.mark.parametrize("sample_from_anchor", [False, True])
+    @pytest.mark.parametrize("gamma", [1.0, 4.0])
+    def test_confidence_loss_keeps_fixed_decay(self, seed, sample_from_anchor, gamma):
+        """Drafter weights must not change the confidence loss or its gradients."""
+        logits = torch.randn(1, 8, 16)
+        targets = torch.randn(1, 8, 16)
+        confidence_logits = torch.randn(1, 8, requires_grad=True)
+        loss_mask = torch.tensor([[1, 1, 0, 1, 1, 1, 1, 0]], dtype=torch.float32)
+        if not sample_from_anchor:
+            loss_mask[:, ::4] = 0
+
+        accept_rate = torch.minimum(
+            logits.softmax(dim=-1), targets.softmax(dim=-1)
+        ).sum(dim=-1)
+        bce = binary_cross_entropy_with_logits(
+            confidence_logits, accept_rate, reduction="none"
+        )
+        positions = torch.arange(8) % 4
+        offset = 0 if sample_from_anchor else 1
+        weights = torch.exp(-(positions - offset).clamp_min(0) / gamma)
+        expected_loss = (bce * loss_mask * weights).sum() / loss_mask.sum()
+        confidence_head_alpha = 0.3
+        expected_grad = torch.autograd.grad(
+            confidence_head_alpha * expected_loss, confidence_logits
+        )[0]
+
+        draft_losses = []
+        for mode in ("fixed-exp-decay", "dpace"):
+            loss, metrics = compute_metrics(
+                logits,
+                targets,
+                confidence_logits,
+                loss_mask,
+                block_size=4,
+                loss_config=_DEFAULT_LOSS,
+                gamma=gamma,
+                confidence_head_alpha=confidence_head_alpha,
+                per_position_loss_weight=mode,
+                sample_from_anchor=sample_from_anchor,
+            )
+            torch.testing.assert_close(metrics["confidence_loss_sum"], expected_loss)
+            actual_grad = torch.autograd.grad(loss, confidence_logits)[0]
+            torch.testing.assert_close(actual_grad, expected_grad)
+            draft_losses.append(metrics["ce_loss_sum"])
+
+        # The option must still change the drafter's loss.
+        assert not torch.isclose(draft_losses[0], draft_losses[1])
 
     def test_confidence_cumprod_bias_sign(self):
         # Draft != target so accept rate is ~0; an over-confident head (predicts

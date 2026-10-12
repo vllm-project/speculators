@@ -1,7 +1,7 @@
 #!/bin/bash
 # Offline Eagle3 Training Script
 #
-# Runs the full offline training pipeline: data preparation, vLLM server launch,
+# Runs the full offline training pipeline: response regeneration, data preparation,
 # hidden states generation, and training (with pre-generated hidden states).
 #
 # Usage: Copy this script, modify the configuration variables below, then run:
@@ -17,6 +17,7 @@
 # is learning something. This is a good sanity check when creating a drafter for a new
 # target model.
 
+# Reference timings/results below used the original, unregenerated UltraChat data.
 # Timing (on 2x NVIDIA H100 80GB GPUs, DP=2)
 # Data Preprocessing: 16 seconds
 # vLLM Server Startup: 60 seconds (1 min)
@@ -37,7 +38,8 @@ set -euo pipefail
 
 # ============ Configuration ============
 MODEL="meta-llama/Llama-3.1-8B-Instruct"
-DATASET="ultrachat"                # sharegpt, ultrachat, or path to custom data
+# Output JSONL from response regeneration (Step 0).
+DATASET="./ultrachat_Llama-3.1-8B-Instruct.jsonl"
 OUTPUT_DIR="./output"
 HIDDEN_STATES_DIR="$OUTPUT_DIR/hidden_states"
 VLLM_PORT=8000
@@ -52,6 +54,13 @@ CONCURRENCY=32                    # Parallel requests to vLLM during data genera
 GPUS="0,1"
 NUM_GPUS=2
 # =======================================
+
+# Step 0: Regenerate target responses; the helper starts and stops its server
+bash scripts/response_regeneration/run_all.sh \
+    --model "$MODEL" --dataset ultrachat \
+    --gpus "$GPUS" --dp-size "$NUM_GPUS" --port "$VLLM_PORT" \
+    --limit "$MAX_SAMPLES" --max-tokens "$SEQ_LENGTH" \
+    --outfile "$DATASET" --resume
 
 # Step 1: Launch vLLM server in the background
 # The same server serves two purposes: its render endpoint tokenizes the
@@ -69,9 +78,7 @@ done
 echo "vLLM server ready."
 
 # Step 2: Prepare data
-# The dataset holds natural-language conversations, so prepare-data needs the
-# target model's render endpoint to apply the chat template, tokenize, and
-# derive loss masks.
+# Pretokenized JSONL skips rendering; conversation-only JSONL uses the live server.
 echo "=== Step 2: Preparing data ==="
 speculators prepare-data \
     --model "$MODEL" \
