@@ -1,4 +1,4 @@
-"""Tests for the draft-model initialization sources in ``scripts/train.py``.
+"""Tests for the draft-model initialization sources in ``speculators.train.cli``.
 
 Covers the three mutually exclusive init paths and their guard rails:
 - ``--draft-config``: decoder ``transformer_layer_config`` loaded from a file,
