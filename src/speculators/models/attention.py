@@ -59,11 +59,16 @@ def flex_kernel_options(
         return cast("FlexKernelOptions", dict(_ENV_KERNEL_OPTIONS))
     if device.type != "cuda" or head_dim <= _MAX_DEFAULT_TILE_HEAD_DIM:
         return None
+    if torch.version.hip is not None:
+        # ROCm reports device.type == "cuda", but torch binds
+        # `shared_memory_per_block_optin` only on CUDA builds (it sits inside
+        # `#ifndef USE_ROCM`), so there is nothing to probe here.
+        return None
     props = torch.cuda.get_device_properties(device)
-    # The attribute exists at runtime; torch's stubs only know the
-    # smaller static `shared_memory_per_block`.
-    optin = props.shared_memory_per_block_optin  # type: ignore[attr-defined]
-    if optin < _LOW_SHARED_MEMORY_BYTES:
+    # `getattr` because the property is NVIDIA-only and torch's stubs know
+    # only the smaller static `shared_memory_per_block`.
+    optin = getattr(props, "shared_memory_per_block_optin", None)
+    if optin is not None and optin < _LOW_SHARED_MEMORY_BYTES:
         return cast("FlexKernelOptions", dict(_LOW_SHARED_MEMORY_KERNEL_OPTIONS))
     return None
 

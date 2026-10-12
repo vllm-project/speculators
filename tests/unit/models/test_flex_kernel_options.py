@@ -47,6 +47,27 @@ def test_env_override_wins(monkeypatch):
     assert attention.flex_kernel_options(CUDA, head_dim=256) == {"bwd_BLOCK_M1": 16}
 
 
+def test_rocm_keeps_defaults(monkeypatch):
+    """ROCm reports device.type == 'cuda' but exposes no *_optin property."""
+    monkeypatch.setattr(torch.version, "hip", "6.2.0")
+    monkeypatch.setattr(
+        torch.cuda,
+        "get_device_properties",
+        lambda _device: SimpleNamespace(gcnArchName="gfx942"),
+    )
+    assert attention.flex_kernel_options(CUDA, head_dim=256) is None
+
+
+def test_missing_optin_property_keeps_defaults(monkeypatch):
+    """Any build without the property falls back to inductor defaults."""
+    monkeypatch.setattr(
+        torch.cuda,
+        "get_device_properties",
+        lambda _device: SimpleNamespace(shared_memory_per_block=65536),
+    )
+    assert attention.flex_kernel_options(CUDA, head_dim=256) is None
+
+
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="requires a GPU")
 def test_compiled_backward_head_dim_256():
     seq_len = 1024
