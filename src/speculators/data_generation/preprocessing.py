@@ -1,22 +1,16 @@
 import json
+import logging
 import os
-from contextlib import nullcontext
+from collections.abc import Iterable, Iterator
 from pathlib import Path
-from typing import Literal, TypedDict
 
 import torch
 from datasets import Dataset as HFDataset
-from datasets import concatenate_datasets, load_dataset
+from datasets import Value, concatenate_datasets, load_dataset
 from huggingface_hub import hf_hub_download
-from transformers import (
-    AutoProcessor,
-    PreTrainedTokenizerBase,
-    ProcessorMixin,
-)
 
-from speculators.data_generation.logging_utils import PipelineLogger
+from speculators.data_generation.records import PreparedSample, build_boundary_sample
 from speculators.data_generation.render_client import render_conversation
-from speculators.data_generation.torch_utils import set_default_torch_num_threads
 from speculators.train.vocab_mapping import save_token_frequency_distribution
 
 __all__ = [
@@ -26,7 +20,7 @@ __all__ = [
     "load_raw_dataset",
 ]
 
-log = PipelineLogger(__name__)
+log = logging.getLogger(__name__)
 
 _warned_roles: set[str] = set()
 
@@ -60,45 +54,6 @@ def default_preprocessing_workers(cpus: int | None = None) -> int:
             int(cpus * CPU_BUDGET_FRACTION) // EFFECTIVE_CPUS_PER_PREPROCESSING_WORKER,
         ),
     )
-
-
-ProcessorLike = PreTrainedTokenizerBase | ProcessorMixin
-
-
-def _visualize_sample(preprocessed: HFDataset, processor: ProcessorLike, idx: int = 0):
-    """Visualize a single sample with color-coded trainable regions."""
-    # Get preprocessed sample
-    prep_sample = preprocessed[idx]
-    input_ids = prep_sample["input_ids"].tolist()
-    loss_mask = prep_sample["loss_mask"].tolist()
-
-    log.info(f"SAMPLE #{idx}")
-    log.info("HIGHLIGHTED TEXT (BLUE = trainable, GREY = masked)")
-
-    # Create color-highlighted text
-    blue = "\033[38;5;153m"  # Very light blue text for trainable tokens
-    grey = "\033[90m"  # Grey text for masked tokens
-    reset = "\033[0m"  # Reset color
-
-    output = []
-    prev_state = None
-
-    for i in range(len(input_ids)):
-        is_train = loss_mask[i] == 1
-        token = processor.decode([input_ids[i]])
-        assert isinstance(token, str)
-
-        # Switch colors when state changes
-        if is_train != prev_state:
-            output.append(blue if is_train else grey)
-            prev_state = is_train
-
-        output.append(token)
-
-    output.append(reset)
-    highlighted = "".join(output)
-
-    log.info(highlighted)
 
 
 def _normalize_conversation(
@@ -206,12 +161,6 @@ class BoundaryUnstableError(ValueError):
     """The chat template is not prefix-stable at an assistant turn boundary."""
 
 
-class BoundaryRow(TypedDict):
-    input_ids: list[int]
-    loss_mask: list[int]
-    conv: list[dict]  # prefix through this turn; multimodal rows re-send it
-
-
 def _encode_render(
     conv_prefix: list[dict],
     render_endpoint: str,
@@ -247,7 +196,8 @@ def _render_boundary_rows(
     max_length: int,
     *,
     tools: list[dict] | None = None,
-) -> list[BoundaryRow]:
+    keep_messages: bool = False,
+) -> list[PreparedSample]:
     """Build one training row per assistant turn, masked at its render boundary.
 
     For assistant turn ``j``, the boundary is where the ``conv[:j+1]`` full render
@@ -265,7 +215,7 @@ def _render_boundary_rows(
     Raises:
         BoundaryUnstableError: the renders diverge inside history.
     """
-    rows: list[BoundaryRow] = []
+    rows: list[PreparedSample] = []
 
     for j, turn in enumerate(normalized_conv):
         # j == 0 has no preceding context to bound against; keep it as context only.
@@ -311,11 +261,15 @@ def _render_boundary_rows(
                 )
 
         rows.append(
-            {
-                "input_ids": full_ids,
-                "loss_mask": [0] * boundary + [1] * (len(full_ids) - boundary),
-                "conv": normalized_conv[: j + 1],
-            }
+            build_boundary_sample(
+                full_ids,
+                boundary,
+                messages=(
+                    _adapt_conv_for_vllm(normalized_conv[: j + 1])
+                    if keep_messages
+                    else None
+                ),
+            )
         )
 
     return rows
@@ -350,7 +304,9 @@ def _render_conversation_rows(
     idx: int,
     render_endpoint: str,
     max_length: int,
-) -> list[BoundaryRow] | None:
+    *,
+    keep_messages: bool,
+) -> list[PreparedSample] | None:
     """Render one valid conversation; return ``None`` when it is unusable."""
     if not conv or not isinstance(conv, list):
         return None
@@ -366,6 +322,7 @@ def _render_conversation_rows(
             render_endpoint,
             max_length,
             tools=parsed_tools,
+            keep_messages=keep_messages,
         )
     # One row the render endpoint or boundary derivation can't handle must
     # not kill the run. The failure modes can't be enumerated -- templates
@@ -375,64 +332,58 @@ def _render_conversation_rows(
         return []
 
 
-def _append_row(
-    results: dict[str, list],
-    input_ids: list[int],
-    loss_mask: list[int],
+def _finalize_samples(
+    samples: Iterable[PreparedSample],
     max_length: int,
-    minimum_valid_tokens: int | None,
-) -> Literal["kept", "unsupervised", "filtered"]:
-    """Clip to the window, filter, and tensorize a row into ``results``.
+    minimum_valid_tokens: int | None = None,
+    *,
+    keep_messages: bool = False,
+    rendered: bool = False,
+) -> dict[str, list]:
+    """Validate, truncate, filter, and tensorize every kind of prepared sample.
 
-    Returns "unsupervised" (no supervised tokens in-window), "filtered" (below
-    ``minimum_valid_tokens``), or "kept".
+    Validate the entire row before truncation, including tokens that will be
+    cut off. Only retained rows contribute messages or truncation warnings.
+    Rendered rows may already be truncated by the server at ``max_length``.
     """
-    input_ids = input_ids[:max_length]
-    loss_mask = loss_mask[:max_length]
-    num_valid_tokens = sum(loss_mask)
-    if num_valid_tokens == 0:
-        return "unsupervised"
-    if minimum_valid_tokens is not None and num_valid_tokens < minimum_valid_tokens:
-        return "filtered"
-    results["input_ids"].append(torch.tensor(input_ids, dtype=torch.long))
-    results["loss_mask"].append(torch.tensor(loss_mask, dtype=torch.long))
-    results["seq_len"].append(len(input_ids))
-    return "kept"
-
-
-def _append_boundary_rows(
-    results: dict[str, list],
-    rows: list[BoundaryRow],
-    max_length: int,
-    minimum_valid_tokens: int | None,
-) -> tuple[int, int, int]:
-    """Append rendered rows and return kept, unsupervised, and
-    maybe-truncated counts.
-    """
-    num_kept = 0
+    results: dict[str, list] = {"input_ids": [], "loss_mask": [], "seq_len": []}
+    if keep_messages:
+        results["messages"] = []
     num_unsupervised = 0
     num_maybe_truncated = 0
 
-    for row in rows:
-        # vLLM applies the requested right-side truncation before returning the
-        # render. A row at the limit may therefore have been truncated, but the
-        # render response does not expose the original length.
-        maybe_truncated = len(row["input_ids"]) >= max_length
-        status = _append_row(
-            results,
-            row["input_ids"],
-            row["loss_mask"],
-            max_length,
-            minimum_valid_tokens,
-        )
-        num_unsupervised += status == "unsupervised"
-        num_maybe_truncated += maybe_truncated and status == "kept"
-        if status == "kept":
-            num_kept += 1
-            if "messages" in results:
-                results["messages"].append(_adapt_conv_for_vllm(row["conv"]))
+    for sample in samples:
+        input_ids, loss_mask = sample["input_ids"], sample["loss_mask"]
+        if len(input_ids) != len(loss_mask):
+            raise ValueError(
+                f"Prepared row shape mismatch: "
+                f"input_ids={len(input_ids)}, loss_mask={len(loss_mask)}"
+            )
+        if any(value not in (0, 1) for value in loss_mask):
+            raise ValueError("Prepared row loss_mask must contain only 0 and 1")
 
-    return num_kept, num_unsupervised, num_maybe_truncated
+        original_length = len(input_ids)
+        input_ids = input_ids[:max_length]
+        loss_mask = loss_mask[:max_length]
+        num_valid_tokens = sum(loss_mask)
+        if num_valid_tokens == 0:
+            num_unsupervised += 1
+            continue
+        if minimum_valid_tokens is not None and num_valid_tokens < minimum_valid_tokens:
+            continue
+
+        results["input_ids"].append(torch.tensor(input_ids, dtype=torch.long))
+        results["loss_mask"].append(torch.tensor(loss_mask, dtype=torch.long))
+        results["seq_len"].append(len(input_ids))
+        if keep_messages:
+            results["messages"].append(sample.get("messages", []))
+        # The render endpoint does not report the length before truncation.
+        num_maybe_truncated += original_length > max_length or (
+            rendered and original_length == max_length
+        )
+
+    _warn_seq_length(num_unsupervised, num_maybe_truncated, max_length)
+    return results
 
 
 def _warn_seq_length(
@@ -455,65 +406,18 @@ def _warn_seq_length(
         )
 
 
-def _passthrough_pretokenized(
-    examples: dict, max_length: int, minimum_valid_tokens: int | None = None
-) -> dict[str, list]:
-    """Carry speculator-format ``(input_ids, loss_mask)`` rows through.
-
-    The producer already recorded which target-model tokens are supervised, so
-    these rows only need truncation and filtering.
-    """
-    results: dict[str, list] = {"input_ids": [], "loss_mask": [], "seq_len": []}
-    num_unsupervised = 0
-    num_maybe_truncated = 0
-    for ids, mask in zip(examples["input_ids"], examples["loss_mask"], strict=True):
-        # A per-row length skew survives strict= column pairing; the collator
-        # packs each key independently and would shift the mask silently.
-        if len(ids) != len(mask):
-            raise ValueError(
-                f"Speculator-format row shape mismatch: "
-                f"input_ids={len(ids)}, loss_mask={len(mask)}"
-            )
-        status = _append_row(results, ids, mask, max_length, minimum_valid_tokens)
-        num_unsupervised += status == "unsupervised"
-        # Kept-but-truncated only: a row clipped past its boundary reports as
-        # unsupervised above, and would otherwise be counted twice.
-        num_maybe_truncated += status == "kept" and len(ids) > max_length
-    _warn_seq_length(num_unsupervised, num_maybe_truncated, max_length)
-    return results
-
-
-def _preprocess_batch(
+def _render_conversation_batch(
     examples: dict,
-    is_multimodal: bool,
-    render_endpoint: str | None,
+    render_endpoint: str,
     max_length: int,
-    minimum_valid_tokens: int | None = None,
-) -> dict[str, list]:
-    """Convert on-policy conversations or speculator-format rows for training."""
-
-    # Speculator-format rows already carry their supervision mask; pass them
-    # through instead of re-rendering.
-    if "input_ids" in examples and "loss_mask" in examples:
-        return _passthrough_pretokenized(examples, max_length, minimum_valid_tokens)
-
-    if render_endpoint is None:
-        raise ValueError(
-            "render_endpoint is required to convert natural-language "
-            "conversations to speculator training rows"
-        )
-
-    results: dict[str, list] = {"input_ids": [], "loss_mask": [], "seq_len": []}
+    *,
+    keep_messages: bool,
+) -> Iterator[PreparedSample]:
+    """Yield one conversation at a time, without retaining a batch of renders."""
     conversations: list[list[dict]] = examples.get("conversations", [])
-
-    # MM inputs are extracted via the Chat Completions API, which needs the
-    # original messages -- token ids alone cannot carry the images.
-    if is_multimodal:
-        results["messages"] = []
-
     if not conversations:
         log.warning(f"No conversations key found. Keys: {list(examples.keys())}")
-        return results
+        return
 
     tools_col = examples.get("tools")
     if tools_col is not None and len(tools_col) != len(conversations):
@@ -523,55 +427,83 @@ def _preprocess_batch(
         )
         tools_col = None
 
-    num_unsupervised = 0
-    num_maybe_truncated = 0
     num_convs_in = 0
     num_convs_empty = 0
-
+    num_samples = 0
     for idx, conv in enumerate(conversations):
-        conv_tools = tools_col[idx] if tools_col is not None else None
         rows = _render_conversation_rows(
             conv,
-            conv_tools,
+            tools_col[idx] if tools_col is not None else None,
             idx,
             render_endpoint,
             max_length,
+            keep_messages=keep_messages,
         )
         if rows is None:
             continue
-
         num_convs_in += 1
-        num_kept, row_unsupervised, row_maybe_truncated = _append_boundary_rows(
-            results,
-            rows,
-            max_length,
-            minimum_valid_tokens,
-        )
-        num_unsupervised += row_unsupervised
-        num_maybe_truncated += row_maybe_truncated
-        num_convs_empty += num_kept == 0
+        num_convs_empty += not rows
+        num_samples += len(rows)
+        yield from rows
 
-    _warn_seq_length(
-        num_unsupervised,
-        num_maybe_truncated,
-        max_length,
-    )
     if num_convs_empty:
         log.warning(
-            f"{num_convs_empty}/{num_convs_in} conversations produced no training "
-            f"rows (no assistant turn with context, unstable template, or fully "
-            f"truncated)"
+            f"{num_convs_empty}/{num_convs_in} conversations produced no renderable "
+            f"assistant rows (no assistant turn with context, unstable template, "
+            f"or context filling the training window)"
         )
-    num_rows = len(results["input_ids"])
-    if num_rows > num_convs_in:
-        log.info(f"Per-turn fan-out: {num_convs_in} conversations -> {num_rows} rows")
+    if num_samples > num_convs_in:
+        log.info(
+            f"Per-turn fan-out: {num_convs_in} conversations -> {num_samples} rows"
+        )
 
-    return results
+
+def _read_prepared_batch(examples: dict) -> Iterator[PreparedSample]:
+    """Read training fields, excluding regeneration's conversations and metadata."""
+    messages = examples.get("messages", [None] * len(examples["input_ids"]))
+    for ids, mask, conv in zip(
+        examples["input_ids"], examples["loss_mask"], messages, strict=True
+    ):
+        sample: PreparedSample = {"input_ids": ids, "loss_mask": mask}
+        if conv is not None:
+            sample["messages"] = conv
+        yield sample
+
+
+def _preprocess_batch(
+    examples: dict,
+    render_endpoint: str | None,
+    max_length: int,
+    minimum_valid_tokens: int | None = None,
+    *,
+    keep_messages: bool = False,
+) -> dict[str, list]:
+    """Convert either input representation, then finalize the shared records."""
+    pretokenized = "input_ids" in examples and "loss_mask" in examples
+    if pretokenized:
+        keep_messages = "messages" in examples
+        samples = _read_prepared_batch(examples)
+    else:
+        if render_endpoint is None:
+            raise ValueError(
+                "render_endpoint is required to convert natural-language "
+                "conversations to speculator training rows"
+            )
+        samples = _render_conversation_batch(
+            examples, render_endpoint, max_length, keep_messages=keep_messages
+        )
+
+    return _finalize_samples(
+        samples,
+        max_length,
+        minimum_valid_tokens,
+        keep_messages=keep_messages,
+        rendered=not pretokenized,
+    )
 
 
 def build_speculator_training_dataset(
     dataset: HFDataset,
-    processor: ProcessorLike,
     max_length: int = 2048,
     num_proc: int = 8,
     *,
@@ -590,7 +522,6 @@ def build_speculator_training_dataset(
     Args:
         dataset: On-policy natural-language conversations, or speculator-format
             rows containing ``input_ids`` and ``loss_mask``.
-        processor: Processor, used to detect multimodal inputs and to decode.
         max_length: Maximum sequence length.
         num_proc: Number of worker processes; each renders concurrently.
         render_endpoint: Base URL of a vLLM server. Required unless the dataset
@@ -601,10 +532,6 @@ def build_speculator_training_dataset(
     # These rows carry their supervision mask, so _preprocess_batch passes them
     # through without rendering or boundary derivation.
     pretokenized = {"input_ids", "loss_mask"} <= set(original_cols)
-    # Multimodal rows keep their `messages` so the images survive to hidden-state
-    # extraction. Compute once here rather than pickling the heavyweight processor
-    # into every map worker just to recheck it.
-    is_multimodal = isinstance(processor, ProcessorMixin)
 
     if pretokenized:
         log.info("Speculator-format rows: using their loss mask, skipping render")
@@ -617,23 +544,31 @@ def build_speculator_training_dataset(
     else:
         log.info("Deriving loss masks from vLLM render boundaries")
 
-    # Avoid CPU contention for MM processing:
-    # https://github.com/vllm-project/vllm/pull/31879
-    with set_default_torch_num_threads() if is_multimodal else nullcontext():
-        dataset = dataset.map(
-            lambda examples: _preprocess_batch(
-                examples,
-                is_multimodal,
-                render_endpoint,
-                max_length,
-                minimum_valid_tokens,
-            ),
-            batched=True,
-            num_proc=num_proc,
-            batch_size=1000,
-            remove_columns=original_cols,
-            keep_in_memory=True,  # skip caching
+    # Content parts may carry media, which hidden-state extraction must receive.
+    # Plain text needs only token IDs. Inspect the dataset schema once, rather
+    # than loading a model processor or varying columns between map batches.
+    keep_messages = False
+    if not pretokenized:
+        turns = getattr(dataset.features.get("conversations"), "feature", {})
+        keep_messages = any(
+            field in turns and not isinstance(turns[field], Value)
+            for field in ("content", "value")
         )
+
+    dataset = dataset.map(
+        lambda examples: _preprocess_batch(
+            examples,
+            render_endpoint,
+            max_length,
+            minimum_valid_tokens,
+            keep_messages=keep_messages,
+        ),
+        batched=True,
+        num_proc=num_proc,
+        batch_size=1000,
+        remove_columns=original_cols,
+        keep_in_memory=True,  # skip caching
+    )
 
     dataset.set_format(type="torch")
     return dataset
@@ -777,31 +712,7 @@ def load_raw_dataset(
     )
 
 
-def get_tokenizer(processor: ProcessorLike):
-    if isinstance(processor, ProcessorMixin):
-        return processor.tokenizer  # type: ignore[attr-defined]
-
-    return processor
-
-
-def _resolve_pad_token(processor: ProcessorLike):
-    tokenizer = get_tokenizer(processor)
-    if tokenizer.pad_token is None:
-        tokenizer.pad_token = tokenizer.eos_token
-
-
-def load_processor(target_model_path: str, *, trust_remote_code: bool = False):
-    processor = AutoProcessor.from_pretrained(
-        target_model_path,
-        trust_remote_code=trust_remote_code,
-    )
-    _resolve_pad_token(processor)
-
-    return processor
-
-
 def load_and_preprocess_dataset(
-    target_model_path: str,
     train_data_paths: list[str],
     *,
     seq_length: int,
@@ -812,9 +723,8 @@ def load_and_preprocess_dataset(
     render_endpoint: str | None = None,
     minimum_valid_tokens: int | None = None,
     allow_empty_output: bool = False,
-    trust_remote_code: bool = False,
     skip_token_freq: bool = True,
-) -> tuple[HFDataset, ProcessorLike]:
+) -> HFDataset:
     """Load, tokenize, and preprocess a dataset for speculator training.
 
     Natural-language conversations containing target-model responses are
@@ -824,47 +734,36 @@ def load_and_preprocess_dataset(
     Caching is handled automatically by HuggingFace datasets.
 
     Args:
-        target_model_path: HuggingFace model ID or local path
-        train_data_path: Dataset name or path to JSON/JSONL file
+        train_data_paths: On-policy JSON/JSONL files, directories, or HF sources
         seq_length: Maximum sequence length
         build_dataset_num_proc: Number of processes for dataset building
         seed: Random seed for shuffling
         max_samples: Optional limit on number of samples
         token_freq_path: Path to save token frequency distribution
-        cache_dir: Directory to cache HuggingFace datasets (optional)
         render_endpoint: Base URL of a running vLLM server (e.g.
             ``http://localhost:8000``) used to render conversations. Required
             unless every dataset is already in speculator format.
         minimum_valid_tokens: Number of tokens to consider for a valid sample
         allow_empty_output: If True, allow returning an empty dataset instead of
                           raising when no samples survive preprocessing.
-        trust_remote_code: If True, allows executing code from HF Hub.
 
     Returns:
-        Tuple of (preprocessed_dataset, processor)
+        Preprocessed dataset
     """
     if minimum_valid_tokens is not None and minimum_valid_tokens < 0:
         raise ValueError("minimum_valid_tokens must be >= 0")
-    log.section("Starting dataset preprocessing")
+    log.info("Starting dataset preprocessing")
     if minimum_valid_tokens is not None:
         log.info(
             f"Filtering samples with fewer than {minimum_valid_tokens} valid tokens"
         )
-
-    log.subsection("Loading processor")
-    processor = load_processor(target_model_path, trust_remote_code=trust_remote_code)
-
-    processor_has_chat_template = (
-        hasattr(processor, "apply_chat_template")
-        and getattr(processor, "chat_template", None) is not None
-    )
 
     if render_endpoint is not None:
         log.info(f"Rendering conversations via vLLM endpoint: {render_endpoint}")
 
     processed_datasets = []
     for train_data_path in train_data_paths:
-        log.subsection(f"Processing {train_data_path}")
+        log.info(f"Processing {train_data_path}")
         raw_dataset, _ = load_raw_dataset(train_data_path)
         raw_dataset = raw_dataset.shuffle(seed=seed)
 
@@ -874,26 +773,10 @@ def load_and_preprocess_dataset(
             # after combining datasets and shuffling
             raw_dataset = raw_dataset.select(range(3 * max_samples))
 
-        pretokenized = {"input_ids", "loss_mask"} <= set(raw_dataset.column_names)
-        # With a render endpoint the chat template is applied server-side, so a
-        # local processor without a chat_template attribute is fine.
-        if (
-            not pretokenized
-            and not processor_has_chat_template
-            and render_endpoint is None
-        ):
-            raise ValueError(
-                f"Processor for {target_model_path} does not support chat templates. "
-                "Please use a model with a pre-configured chat template, provide "
-                "pre-tokenized input_ids and loss_mask columns, or pass "
-                "--render-endpoint so vLLM renders conversations server-side."
-            )
-
         log.info(f"Loaded {len(raw_dataset)} samples")
 
         preprocessed_dataset = build_speculator_training_dataset(
             dataset=raw_dataset,
-            processor=processor,
             max_length=seq_length,
             num_proc=build_dataset_num_proc,
             render_endpoint=render_endpoint,
@@ -904,6 +787,7 @@ def load_and_preprocess_dataset(
         processed_datasets.append(preprocessed_dataset)
 
     combined_dataset = concatenate_datasets(processed_datasets)
+    combined_dataset.set_format(type="torch")
     combined_dataset = combined_dataset.shuffle(seed=seed)
     if max_samples is not None and len(combined_dataset) > max_samples:
         combined_dataset = combined_dataset.select(range(max_samples))
@@ -916,18 +800,12 @@ def load_and_preprocess_dataset(
         )
 
     if not skip_token_freq:
-        log.subsection("Computing token frequency distribution")
+        log.info("Computing token frequency distribution")
         save_token_frequency_distribution(
             dataset=combined_dataset,
             output_path=token_freq_path,
         )
 
-    if len(combined_dataset) == 0:
-        log.warning("No samples remain after preprocessing; skipping visualization")
-    else:
-        log.subsection("Visualizing sample")
-        _visualize_sample(combined_dataset, processor, idx=0)
+    log.info("Dataset preprocessing complete")
 
-    log.section("Dataset preprocessing complete")
-
-    return combined_dataset, processor
+    return combined_dataset

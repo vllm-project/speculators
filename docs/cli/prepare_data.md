@@ -7,6 +7,8 @@ Converts on-policy target-model data into the format consumed by speculator trai
 
 For natural-language conversations, `prepare_data.py` asks the target model's vLLM `/render` endpoint to apply the serving chat template, tokenize each assistant turn, and derive its loss mask. Rendering only converts the data's representation: it does not generate responses or turn an arbitrary dataset into on-policy data.
 
+Preparation loads no local model or tokenizer. Prepared token rows need no server; natural-language conversations need only the target model’s render endpoint. The `--model` and `--trust-remote-code` preparation options have been removed.
+
 The output is ready for online training or offline hidden-state generation.
 
 ## Basic Usage
@@ -21,7 +23,6 @@ where the assistant response came from the target model:
 
 ```bash
 speculators prepare-data \
-  --model meta-llama/Llama-3.1-8B-Instruct \
   --data ./on_policy_conversations.jsonl \
   --render-endpoint http://localhost:8000 \
   --output ./training_data \
@@ -30,15 +31,21 @@ speculators prepare-data \
 
 `--render-endpoint` is not needed when every input row already contains `input_ids` and `loss_mask`.
 
+## Prepared Records
+
+Rendered conversations, regenerated responses, and prepared input all use the same training fields:
+
+- `input_ids`: token IDs from the target model's generation or render endpoint.
+- `loss_mask`: one value per token, `0` for context and `1` for supervision.
+- `messages` (optional): messages in the serving API's format, retained when needed to carry media into hidden-state extraction.
+
+Preparation validates equal ID/mask lengths and binary mask values before truncating either field. Invalid values are rejected even if they occur beyond `--seq-length`. It then truncates IDs and masks together, drops rows with no remaining supervision or fewer than `--minimum-valid-tokens`, and saves the retained rows as tensors in an Arrow dataset. Optional messages stay attached to their corresponding rows through filtering.
+
+For example, IDs `[10, 11, 20, 21]` with mask `[0, 0, 1, 1]` become `[10, 11, 20]` and `[0, 0, 1]` at `--seq-length 3`. At length 2, the row is dropped because no supervised tokens remain. A mask containing `2` is invalid at any sequence length.
+
+Regeneration's readable `conversations`, tool definitions, sample identifiers, and metadata are excluded from these training fields. Text-only hidden-state extraction uses the saved token IDs; rows containing media also send their retained messages.
+
 ## Arguments
-
-### Model Arguments
-
-- **`--model`** (str, required) HuggingFace model ID or local path for the target model.
-
-  Example: `meta-llama/Llama-3.1-8B-Instruct`
-
-- **`--trust-remote-code`** (flag) Allow executing code from HF Hub when loading the target model's processor.
 
 ### Data Arguments
 
@@ -78,7 +85,6 @@ speculators prepare-data \
 
 ```bash
 speculators prepare-data \
-  --model meta-llama/Llama-3.1-8B-Instruct \
   --data ./target_responses_part1.jsonl \
   --data ./target_responses_part2.jsonl \
   --render-endpoint http://localhost:8000 \

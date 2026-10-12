@@ -105,7 +105,6 @@ Response Regeneration writes speculator-format rows containing `input_ids` and `
 ```bash
 # in speculators venv
 speculators prepare-data \
-  --model Qwen/Qwen3-8B \
   --data ./target_responses.jsonl \
   --output ./output \
   --max-samples 5000 \
@@ -116,7 +115,6 @@ If your generation pipeline saves natural-language conversations instead, start 
 
 ```bash
 speculators prepare-data \
-  --model Qwen/Qwen3-8B \
   --data ./on_policy_conversations.jsonl \
   --render-endpoint http://localhost:8000 \
   --output ./output \
@@ -128,7 +126,6 @@ The render endpoint applies the serving chat template, tokenizes each turn, and 
 
 **Parameters explained:**
 
-- `--model` - The target model you want to accelerate
 - `--data` - On-policy target-model data, either natural-language `conversations` or speculator-format `input_ids` and `loss_mask`. Can be supplied multiple times to combine datasets.
 - `--render-endpoint` - Target model's vLLM base URL; required only for natural-language conversations.
 - `--output` - Where to save preprocessed data
@@ -146,7 +143,7 @@ output/
 └── token_freq.pt                # Token frequencies for vocab mapping
 ```
 
-**Time:** ~15 seconds to ~2 minutes for 5K samples, depending on dataset and tokenizer.
+**Time:** ~15 seconds to ~2 minutes for 5K samples, depending on dataset and render endpoint.
 
 **Note:** This step sets up the dataset used to train your model and is the same for every algorithm and mode. It's important that any data configuration choices are made at this stage. For example, limiting the data sample length, filtering out samples with limited assistant response tokens, handling multi-turn conversation responses, etc. For more information please see the [prepare-data CLI reference](/cli/prepare_data.md).
 

@@ -51,7 +51,6 @@ def test_render_boundary_masks_against_live_vllm(tmp_path):
     ):
         dataset = build_speculator_training_dataset(
             HFDataset.from_dict({"conversations": [CONVERSATION]}),
-            tokenizer,
             max_length=1024,
             num_proc=1,
             render_endpoint=f"http://localhost:{PORT}",

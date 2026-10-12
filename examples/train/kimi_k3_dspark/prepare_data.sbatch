@@ -18,7 +18,6 @@ set -euo pipefail
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$(cd "$script_dir/../../.." && pwd)"
-model_path="${MODEL_PATH:-/mnt/shared/weights/kimi-k3}"
 source_jsonl="${SOURCE_JSONL:?SOURCE_JSONL is required}"
 data_dir="${DATA_DIR:-$repo_root/runs/kimi_k3_dspark/data}"
 
@@ -27,8 +26,6 @@ export TOKENIZERS_PARALLELISM=false
 
 cd "$repo_root"
 python scripts/prepare_data.py \
-  --model "$model_path" \
-  --trust-remote-code \
   --data "$source_jsonl" \
   --output "$data_dir" \
   --seq-length 8192 \

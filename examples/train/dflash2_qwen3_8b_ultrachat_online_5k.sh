@@ -48,7 +48,6 @@ NUM_TRAIN_GPUS=2
 # packages them -- no --render-endpoint (or running vLLM server) needed here.
 echo "=== Step 1: Preparing data ==="
 speculators prepare-data \
-    --model "$MODEL" \
     --data "$DATASET" \
     --output "$OUTPUT_DIR" \
     --max-samples "$MAX_SAMPLES" \

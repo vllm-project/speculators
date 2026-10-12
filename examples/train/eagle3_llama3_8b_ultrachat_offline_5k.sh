@@ -81,7 +81,6 @@ echo "vLLM server ready."
 # Pretokenized JSONL skips rendering; conversation-only JSONL uses the live server.
 echo "=== Step 2: Preparing data ==="
 speculators prepare-data \
-    --model "$MODEL" \
     --data "$DATASET" \
     --render-endpoint "http://localhost:${VLLM_PORT}" \
     --max-samples "$MAX_SAMPLES" \

@@ -101,7 +101,6 @@ def run_online_e2e(
         # Prepare data: pretokenized HF datasets pass through without
         # rendering; conversation datasets use the render endpoint.
         run_prepare_data(
-            model,
             dataset,
             data_path,
             max_samples,
