@@ -2,10 +2,10 @@
 
 Same pipeline as test_online_training but uses Mooncake for hidden-state
 transfer instead of a shared filesystem:
-  1. Prepare data (scripts/prepare_data.py)
+  1. Prepare data (speculators prepare-data)
   2. Start a Mooncake master process
   3. Launch a vLLM server with --hidden-states-backend mooncake
-  4. Train a draft model against the live server (scripts/train.py)
+  4. Train a draft model against the live server (speculators train)
   5. Validate the trained checkpoint via vLLM inference (run_vllm_engine)
 """
 
