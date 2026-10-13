@@ -719,7 +719,6 @@ def main(cfg: TrainConfig):  # noqa: C901
         data_path=args.data_path,
         total_seq_len=args.total_seq_len,
         hidden_states_dtype=hidden_states_dtype,
-        noise_std=args.noise_std,
         transfer=transfer,
         vllm_endpoint=args.vllm_endpoint,
         on_missing=args.on_missing,

@@ -94,7 +94,7 @@ def with_retries(fn):
 def extract_output(
     response: Completion | ChatCompletion,
     token_ids: list[int],
-) -> str:
+) -> tuple[str, dict[str, Any]]:
     if isinstance(response, Completion):
         prompt_token_ids = getattr(response.choices[0], "prompt_token_ids", None)
     else:
@@ -119,7 +119,7 @@ def extract_output(
         raise InvalidResponseError(
             "Response kv_transfer_params missing both 'hidden_states_path' and 'handle'"
         )
-    return handle
+    return handle, kv_transfer_params
 
 
 class ClientItem(TypedDict):
@@ -193,10 +193,10 @@ async def generate_hidden_states_async(
     client_item: ClientItem,
     *,
     timeout: float | None = DEFAULT_REQUEST_TIMEOUT,
-) -> str:
+) -> tuple[str, dict[str, Any]]:
     """
-    Runs decode w/ max_tokens 1 to generate hidden states and returns path to
-    hidden states file.
+    Runs decode with ``max_tokens=1`` and returns the generation handle together
+    with the complete ``kv_transfer_params`` returned by vLLM.
 
     Args:
         client: The async OpenAI client.
@@ -246,10 +246,10 @@ def generate_hidden_states(
     client_item: ClientItem,
     *,
     timeout: float | None = DEFAULT_REQUEST_TIMEOUT,
-) -> str:
+) -> tuple[str, dict[str, Any]]:
     """
-    Runs decode w/ max_tokens 1 to generate hidden states and returns path to
-    hidden states file.
+    Runs decode with ``max_tokens=1`` and returns the generation handle together
+    with the complete ``kv_transfer_params`` returned by vLLM.
     """
     token_ids = client_item["input_ids"]
     messages = client_item.get("messages")

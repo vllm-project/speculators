@@ -18,6 +18,10 @@ Regenerate dataset responses using your target model for improved drafter alignm
 
 Benchmark and evaluate your trained speculator models.
 
+## [Throughput vs. Interactivity](throughput_interactivity.md)
+
+Measure output-token throughput against per-user speed for a server with one or more speculators, the way InferenceX does, on real prompts.
+
 ## [Serve in vLLM](serve_vllm.md)
 
 Deploy your trained speculator models in vLLM for production inference.
