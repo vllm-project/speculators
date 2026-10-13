@@ -290,3 +290,80 @@ class TestMultimodalVerifier:
         )
         with pytest.raises(ValueError, match="Architecture mismatch"):
             DFlashConverter()._build_config(_source_config(), "some/model", None)
+
+
+_SLIDING = ["sliding_attention"] * 3
+_FULL = ["full_attention"] * 3
+_MIXED = ["full_attention"] + ["sliding_attention"] * 2
+
+
+class TestCausality:
+    """``sliding_window_non_causal`` reproduces the source's per-layer causality."""
+
+    @pytest.mark.parametrize(
+        ("overrides", "layer_types", "expected"),
+        [
+            # No override: sliding layers causal, full layers bidirectional
+            ({}, _SLIDING, False),
+            ({}, _FULL, True),
+            ({}, _MIXED, False),
+            ({"is_causal": None}, _FULL, True),
+            # An override applies to every layer; is_causal wins
+            ({"is_causal": False}, _SLIDING, True),
+            ({"is_causal": False}, _MIXED, True),
+            ({"is_causal": True}, _SLIDING, False),
+            ({"dflash_config": {"causal": False}}, _SLIDING, True),
+            ({"is_causal": False, "dflash_config": {"causal": True}}, _SLIDING, True),
+        ],
+    )
+    @patch("speculators.convert.dflash.converter.PretrainedConfig.get_config_dict")
+    def test_sliding_window_non_causal(
+        self, mock_get_config, overrides, layer_types, expected
+    ):
+        mock_get_config.return_value = (
+            {"hidden_size": 4096, "num_hidden_layers": 36},
+            None,
+        )
+        source = _source_config(
+            num_hidden_layers=3, layer_types=layer_types, sliding_window=8
+        )
+        overrides = dict(overrides)
+        if "dflash_config" in overrides:
+            source["dflash_config"].update(overrides.pop("dflash_config"))
+        source.update(overrides)
+        config = DFlashConverter()._build_config(source, "Qwen/Qwen3-8B", None)
+        assert config.sliding_window_non_causal is expected
+        assert not hasattr(config.transformer_layer_config, "is_causal")
+
+    @pytest.mark.parametrize(
+        ("overrides", "layer_types", "warns"),
+        [
+            ({}, _MIXED, True),
+            ({}, _SLIDING, False),
+            ({"is_causal": False}, _MIXED, False),
+        ],
+    )
+    @patch("speculators.convert.dflash.converter.logger")
+    @patch("speculators.convert.dflash.converter.PretrainedConfig.get_config_dict")
+    def test_warns_on_mixed_causality(
+        self, mock_get_config, mock_logger, overrides, layer_types, warns
+    ):
+        mock_get_config.return_value = (
+            {"hidden_size": 4096, "num_hidden_layers": 36},
+            None,
+        )
+        source = _source_config(
+            num_hidden_layers=3, layer_types=layer_types, sliding_window=8, **overrides
+        )
+        DFlashConverter()._build_config(source, "Qwen/Qwen3-8B", None)
+        assert mock_logger.warning.called is warns
+
+    @patch("speculators.convert.dflash.converter.PretrainedConfig.get_config_dict")
+    def test_causal_full_attention_raises(self, mock_get_config):
+        mock_get_config.return_value = (
+            {"hidden_size": 4096, "num_hidden_layers": 36},
+            None,
+        )
+        source = _source_config(num_hidden_layers=3, layer_types=_MIXED, is_causal=True)
+        with pytest.raises(ValueError, match="full-attention draft layers causal"):
+            DFlashConverter()._build_config(source, "Qwen/Qwen3-8B", None)

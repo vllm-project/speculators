@@ -27,9 +27,17 @@ from speculators.proposals.greedy import GreedyTokenProposalConfig
 
 __all__ = ["DFlashConverter"]
 
-# config.json keys that are not part of the draft transformer (Qwen3) config
+# config.json keys that are not part of the draft transformer (Qwen3) config.
+# ``is_causal`` is mapped to ``sliding_window_non_causal`` instead.
 _NON_TRANSFORMER_KEYS = frozenset(
-    {"architectures", "auto_map", "block_size", "dflash_config", "num_target_layers"}
+    {
+        "architectures",
+        "auto_map",
+        "block_size",
+        "dflash_config",
+        "num_target_layers",
+        "is_causal",
+    }
 )
 
 # state dict keys that are filled from the verifier (not the source checkpoint), so
@@ -149,8 +157,60 @@ class DFlashConverter:
             block_size=block_size,
             aux_hidden_state_layer_ids=aux_hidden_state_layer_ids,
             mask_token_id=dflash.get("mask_token_id"),
+            sliding_window_non_causal=self._sliding_window_non_causal(
+                source_config, transformer_config
+            ),
             speculators_config=speculators_config,
         )
+
+    def _layer_causality(
+        self, source_config: dict, transformer_config: dict
+    ) -> tuple[list[str], list[bool]]:
+        """Resolve each draft layer's causality as vLLM serves the source checkpoint.
+
+        Mirrors ``qwen3_dflash._dflash_layer_causal``: a top-level ``is_causal``,
+        then ``dflash_config.causal``, then sliding layers causal and full-attention
+        layers bidirectional.
+        """
+        override = source_config.get("is_causal")
+        if override is None:
+            override = source_config.get("dflash_config", {}).get("causal")
+        layer_types = DFlashSpeculatorConfig.validate_transformer_config(
+            dict(transformer_config)
+        ).layer_types
+        causal = [
+            bool(override) if override is not None else lt == "sliding_attention"
+            for lt in layer_types
+        ]
+        return layer_types, causal
+
+    def _sliding_window_non_causal(
+        self, source_config: dict, transformer_config: dict
+    ) -> bool:
+        """Map the source's per-layer causality onto ``sliding_window_non_causal``.
+
+        Training always runs full-attention layers bidirectionally, so only sliding
+        layers' causality is configurable.
+        """
+        layer_types, causal = self._layer_causality(source_config, transformer_config)
+        if not any(causal):
+            return True
+        if not all(causal):
+            logger.warning(
+                "Converted head mixes bidirectional full-attention and causal "
+                "sliding layers; vLLM serves it as trained only with "
+                "vllm-project/vllm#61537. Older vLLM serves every layer causally."
+            )
+        if any(
+            c and lt == "full_attention"
+            for c, lt in zip(causal, layer_types, strict=True)
+        ):
+            raise ValueError(
+                "Checkpoint marks full-attention draft layers causal, but "
+                "DFlashDraftModel always runs them bidirectionally "
+                f"(layer_types={layer_types})."
+            )
+        return False
 
     def _remap_weights(
         self,
