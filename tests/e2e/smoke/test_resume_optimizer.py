@@ -19,7 +19,6 @@ from loguru import logger
 
 from tests.conftest import requires_multi_gpu
 from tests.e2e.utils import (
-    SCRIPTS_DIR,
     launch_vllm_server_context,
     run_data_generation_offline,
     run_prepare_data,
