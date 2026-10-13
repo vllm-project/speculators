@@ -22,10 +22,10 @@ class TestSaveTrainCommand:
         assert (save_path / "train_command.txt").exists()
 
     def test_contains_sys_argv(self, tmp_path: Path):
-        with patch.object(sys, "argv", ["scripts/train.py", "--lr", "1e-4"]):
+        with patch.object(sys, "argv", ["speculators", "train", "--lr", "1e-4"]):
             save_train_command(str(tmp_path))
         content = (tmp_path / "train_command.txt").read_text()
-        assert "scripts/train.py --lr 1e-4" in content
+        assert "speculators train --lr 1e-4" in content
 
     def test_header_has_timestamp(self, tmp_path: Path):
         save_train_command(str(tmp_path))

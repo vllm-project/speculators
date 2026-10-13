@@ -1,4 +1,5 @@
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -14,10 +15,12 @@ class TestTrainvLLM:
     and runs the trained model in vLLM.
     """
 
-    def _run_training(self, script_path: str, args_dict: dict):
+    def _run_training(self, args_dict: dict):
         cmd = [
-            "python",
-            script_path,
+            sys.executable,
+            "-m",
+            "speculators",
+            "train",
         ]
 
         for key, value in args_dict.items():
@@ -69,7 +72,7 @@ class TestTrainvLLM:
             "on-missing": "raise",
         }
         # Train draft model for one epoch
-        p = self._run_training("scripts/train.py", training_args)
+        p = self._run_training(training_args)
         p.wait()
 
         stdout, stderr = p.communicate()
