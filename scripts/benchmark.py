@@ -1039,6 +1039,7 @@ _PHASE_COLORS = {
     "bwd_ms": "#FFA15A",
     "clip_ms": "#FECB52",
     "opt_ms": "#EF553B",
+    "other_ms": "#B6B6B6",
 }
 
 _PHASE_LABELS = {
@@ -1048,6 +1049,7 @@ _PHASE_LABELS = {
     "bwd_ms": "Backward",
     "clip_ms": "Grad clip",
     "opt_ms": "Optimizer",
+    "other_ms": "Other",
 }
 
 _MEMORY_MARK_LABELS = {
@@ -1071,6 +1073,25 @@ def _phase_series(per_step) -> list[tuple[str, str, list[float]]]:
     for key, label in _PHASE_LABELS.items():
         if key == "bwd_ms":
             values = [s["bwd_ms"] - s["clip_ms"] for s in per_step]
+        elif key == "other_ms":
+            # The named phases do not tile the step: the trainer times
+            # ``queue_ms`` to the end of the queue wait but starts ``h2d_ms``
+            # at ``pre_h2d``, so the recovery bookkeeping in between belongs to
+            # no phase. Draw it explicitly so the stack sums to ``step_ms``.
+            values = [
+                max(
+                    s["step_ms"]
+                    - (
+                        s["queue_ms"]
+                        + s["h2d_ms"]
+                        + s["fwd_ms"]
+                        + s["bwd_ms"]
+                        + s["opt_ms"]
+                    ),
+                    0.0,
+                )
+                for s in per_step
+            ]
         else:
             values = [s[key] for s in per_step]
         series.append((key, label, values))
@@ -1152,12 +1173,14 @@ def _build_timing_fig(per_step):
 def _timing_sub(per_step) -> str:
     """Key numbers for the timing section: step time, throughput, spread."""
     step_stats = compute_statistics([s["step_ms"] for s in per_step])
-    tps_stats = compute_statistics([s["tokens_per_s"] for s in per_step])
+    # Use the same time-weighted figure the Markdown summary and ``compare``
+    # report. ``mean(tokens_per_s)`` would overweight short, fast steps and
+    # make the HTML headline disagree with every other view of the same run.
+    eff_tps = compute_aggregate_throughput(per_step)["effective_rank0_tokens_per_s"]
     return (
         f"{step_stats['mean']:.1f} ms/step "
         f"[{step_stats['ci95_lower']:.1f}, {step_stats['ci95_upper']:.1f}] · "
-        f"{tps_stats['mean']:.0f} tok/s "
-        f"[{tps_stats['ci95_lower']:.0f}, {tps_stats['ci95_upper']:.0f}] · "
+        f"{eff_tps:.0f} tok/s effective · "
         f"n={step_stats['count']} steps · brackets are 95% CI, "
         "error bars ±1 std"
     )
@@ -1668,6 +1691,7 @@ def report_benchmark(result_path: str, output_path: str | None = None) -> None:
 </details>
 </body></html>"""
 
+    html_path.parent.mkdir(parents=True, exist_ok=True)
     html_path.write_text(html)
     print(f"Report written to {html_path}")
 
