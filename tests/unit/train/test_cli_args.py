@@ -9,6 +9,7 @@ from speculators.losses import eager
 from speculators.models.dflash.core import DFlashDraftModel
 from speculators.models.dspark.core import DSparkDraftModel
 from speculators.models.eagle3.core import Eagle3DraftModel
+from speculators.models.mtp.core import MTPDraftModel
 from speculators.models.peagle.core import PEagleDraftModel
 from speculators.train.config import TrainConfig
 
@@ -151,6 +152,21 @@ def test_eagle3_defaults_to_llama_arch(monkeypatch):
 def test_eagle3_defaults_norm_before_fc_true(monkeypatch):
     args = _parse(monkeypatch, [])
     assert args.norm_before_fc is True
+
+
+@pytest.mark.parametrize(
+    ("extra", "expected"),
+    [([], "fastmtp"), (["--mtp-train-forward", "vllm"], "vllm")],
+)
+def test_mtp_train_forward_reaches_trainer_kwargs(monkeypatch, extra, expected):
+    args = _parse(monkeypatch, ["--speculator-type", "mtp", *extra])
+    train_kw, val_kw = MTPDraftModel.get_trainer_kwargs(**vars(args))
+    assert train_kw["train_forward"] == val_kw["train_forward"] == expected
+
+
+def test_mtp_train_forward_rejects_unknown_value(monkeypatch):
+    with pytest.raises(SystemExit):
+        _parse(monkeypatch, ["--speculator-type", "mtp", "--mtp-train-forward", "x"])
 
 
 def test_eagle3_defaults_norm_output_true(monkeypatch):
