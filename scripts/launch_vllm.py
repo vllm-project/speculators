@@ -91,7 +91,7 @@ def _usable_cpu_count() -> int:
 
 
 def _preprocessing_workers(cpus: int) -> int:
-    """Mirror prepare_data.py's shared render CPU budget."""
+    """Mirror prepare-data's shared render CPU budget."""
     return max(
         1,
         min(

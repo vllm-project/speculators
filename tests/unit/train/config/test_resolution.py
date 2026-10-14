@@ -1,7 +1,7 @@
 """Resolution seam tests plus the example-recipe back-compat suite.
 
 The recipe suite is the central backward-compatibility guard: each real
-``examples/train/*.sh`` recipe's ``train.py`` invocation is extracted (bash does
+``examples/train/*.sh`` recipe's training invocation is extracted (bash does
 the variable expansion and word-splitting, exactly as a user's shell would) and
 run through :meth:`TrainConfig.resolve`; the flags it sets must resolve to their
 expected values in the flat dict. A renamed, dropped, or retyped flag breaks a
@@ -526,7 +526,7 @@ def _train_invocation_args(lines: list[str]) -> str:
 
 
 def _recipe_argv(path: Path) -> list[str]:
-    """Extract the argv a recipe threads into ``train.py`` via a real shell."""
+    """Extract the argv a recipe threads into training via a real shell."""
     lines = path.read_text().splitlines()
     script = (
         "\n".join(_config_block(lines))

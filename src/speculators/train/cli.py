@@ -1,4 +1,4 @@
-"""Training entrypoint — core logic moved from scripts/train.py."""
+"""Training implementation behind the ``speculators train`` command."""
 
 import argparse
 import gc
