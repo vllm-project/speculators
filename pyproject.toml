@@ -57,11 +57,11 @@ keywords = [
 base = [
     "aiohttp",
     "click",
-    "datasets>=4.0.0,<=5.0.1",
+    "datasets>=4.0.0,<=5.1.0",
     "httpx",
     "huggingface-hub",
     "loguru>=0.7.2,<=0.7.3",
-    "numpy>=2.0.0,<=2.4.6",
+    "numpy>=2.0.0,<=2.5.4",
     "openai>=2.0.0",
     "protobuf",
     "psutil",
@@ -69,11 +69,11 @@ base = [
     "pydantic-settings>=2.0.0",
     "rich",
     "safetensors",
-    "torch>=2.9.0,<=2.13.0",
+    "torch>=2.9.0,<=2.14.1",
     "torchaudio",
     "torchvision",
-    "tqdm>=4.66.3,<=4.70.0",
-    "transformers>=5.0.0,<5.17.0",
+    "tqdm>=4.66.3,<=4.70.1",
+    "transformers>=5.0.0,<=5.19.0",
     "typer>=0.12.0",
 ]
 
