@@ -1,6 +1,11 @@
+import asyncio
+import importlib
+import time
+
 import pytest
 import torch
 from safetensors.torch import save_file
+from tqdm import tqdm
 
 from speculators.data_generation.offline import (
     check_hidden_states,
@@ -210,3 +215,169 @@ class TestFindCorruptHiddenStateIndices:
         existing = [i for i in existing if i not in corrupt]
 
         assert get_indices_to_process(3, None, existing, world_size=1, rank=0) == [1]
+
+
+@pytest.mark.asyncio
+async def test_worker_failed_validation_does_not_publish_or_corrupt_resume(
+    tmp_path, monkeypatch
+):
+    gen = importlib.import_module("speculators.cli.generate_offline_data")
+
+    out = tmp_path / "hidden_states"
+    out.mkdir()
+
+    async def fake_server(client, model, item, **kwargs):
+        path = tmp_path / "from_server.safetensors"
+        save_file(
+            {
+                "token_ids": torch.tensor([1, 2, 3]),
+                "hidden_states": torch.full(
+                    (3, 4, 2), float("nan"), dtype=torch.bfloat16
+                ),
+            },
+            path,
+        )
+        return str(path), {}
+
+    monkeypatch.setattr(gen, "generate_hidden_states_async", fake_server)
+
+    queue = asyncio.Queue()
+    queue.put_nowait({"idx": 0, "input_ids": [1, 2, 3]})
+    queue.put_nowait(None)
+    skipped = []
+    stats = {
+        "ok": 0,
+        "errors": 0,
+        "total_vllm_s": 0.0,
+        "total_write_s": 0.0,
+        "start_time": 0.0,
+    }
+    with tqdm(disable=True) as pbar:
+        await gen._worker(
+            client=None,
+            model="m",
+            queue=queue,
+            pbar=pbar,
+            vllm_semaphore=asyncio.Semaphore(1),
+            write_semaphore=asyncio.Semaphore(1),
+            hidden_states_output_dir=out,
+            validate_outputs=True,
+            request_timeout=None,
+            max_retries=0,
+            fail_on_error=False,
+            skipped_indices=skipped,
+            cancel_event=asyncio.Event(),
+            failure_tracker=None,
+            stats=stats,
+        )
+
+    assert skipped == [0]
+    assert list(out.iterdir()) == []
+    assert gen.get_existing_hidden_state_indices(out) == []
+
+
+@pytest.mark.asyncio
+async def test_worker_cancellation_cleans_up_staging_file(tmp_path, monkeypatch):
+    gen = importlib.import_module("speculators.cli.generate_offline_data")
+
+    out = tmp_path / "hidden_states"
+    out.mkdir()
+
+    server_file = tmp_path / "from_server.safetensors"
+    save_file(
+        {
+            "token_ids": torch.tensor([1, 2, 3]),
+            "hidden_states": torch.ones((3, 4, 2), dtype=torch.bfloat16),
+        },
+        server_file,
+    )
+
+    async def fake_server(client, model, item, **kwargs):
+        return str(server_file), {}
+
+    monkeypatch.setattr(gen, "generate_hidden_states_async", fake_server)
+
+    staging_file_created = asyncio.Event()
+
+    def slow_check(loaded, tokens):
+        staging_file_created.set()
+        time.sleep(0.2)
+
+    monkeypatch.setattr(gen, "check_hidden_states", slow_check)
+
+    queue = asyncio.Queue()
+    queue.put_nowait({"idx": 42, "input_ids": [1, 2, 3]})
+    queue.put_nowait(None)
+
+    with tqdm(disable=True) as pbar:
+        worker_task = asyncio.create_task(
+            gen._worker(
+                client=None,
+                model="m",
+                queue=queue,
+                pbar=pbar,
+                vllm_semaphore=asyncio.Semaphore(1),
+                write_semaphore=asyncio.Semaphore(1),
+                hidden_states_output_dir=out,
+                validate_outputs=True,
+                request_timeout=None,
+                max_retries=0,
+                fail_on_error=False,
+                skipped_indices=[],
+                cancel_event=asyncio.Event(),
+                failure_tracker=None,
+                stats={
+                    "ok": 0,
+                    "errors": 0,
+                    "total_vllm_s": 0.0,
+                    "total_write_s": 0.0,
+                    "start_time": 0.0,
+                },
+            )
+        )
+
+        await staging_file_created.wait()
+        assert (out / ".hs_42.safetensors.tmp").exists()
+        worker_task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await worker_task
+
+    # Staging file must be cleaned up and not left behind
+    assert list(out.glob(".hs_*.safetensors.tmp")) == []
+    assert not (out / "hs_42.safetensors").exists()
+
+
+def test_clean_or_warn_orphaned_staging_files(tmp_path, caplog):
+    gen = importlib.import_module("speculators.cli.generate_offline_data")
+
+    out = tmp_path / "hidden_states"
+    out.mkdir()
+
+    tmp_file1 = out / ".hs_0.safetensors.tmp"
+    tmp_file2 = out / ".hs_1.safetensors.tmp"
+    tmp_file1.write_bytes(b"temp data 1")
+    tmp_file2.write_bytes(b"temp data 2")
+
+    # Under world_size=1, files should be removed
+    with caplog.at_level("WARNING"):
+        gen._clean_or_warn_orphaned_staging_files(out, world_size=1, rank=0)
+
+    assert not tmp_file1.exists()
+    assert not tmp_file2.exists()
+    assert "Found and removed 2 orphaned staging file(s)" in caplog.text
+
+    # Re-create files for multi-rank test
+    tmp_file1.write_bytes(b"temp data 1")
+    tmp_file2.write_bytes(b"temp data 2")
+    caplog.clear()
+
+    # Under multi-rank execution, files must NOT be deleted
+    with caplog.at_level("WARNING"):
+        gen._clean_or_warn_orphaned_staging_files(out, world_size=2, rank=0)
+
+    assert tmp_file1.exists()
+    assert tmp_file2.exists()
+    assert (
+        "Under multi-rank execution (world_size=2), automatic cleanup is skipped"
+        in caplog.text
+    )
