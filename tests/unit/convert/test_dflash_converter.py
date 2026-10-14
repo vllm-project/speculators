@@ -272,6 +272,17 @@ class TestMultimodalVerifier:
         ]
 
     @patch("speculators.convert.dflash.converter.PretrainedConfig.get_config_dict")
+    def test_null_text_config_falls_back_to_top_level(self, mock_get_config):
+        mock_get_config.return_value = (
+            {"hidden_size": 4096, "num_hidden_layers": 34, "text_config": None},
+            None,
+        )
+        config = DFlashConverter()._build_config(
+            _source_config(), "Qwen/Qwen3-8B", None
+        )
+        assert config.aux_hidden_state_layer_ids == [2, 10, 18, 26]
+
+    @patch("speculators.convert.dflash.converter.PretrainedConfig.get_config_dict")
     def test_text_config_hidden_size_mismatch_raises(self, mock_get_config):
         mock_get_config.return_value = (
             {"text_config": {"hidden_size": 2048, "num_hidden_layers": 36}},

@@ -99,8 +99,8 @@ class DFlashConverter:
 
         verifier_config_dict, _ = PretrainedConfig.get_config_dict(base_model)
         # Multimodal verifiers (e.g. Qwen3.5) nest the text model's dimensions
-        verifier_text_config = verifier_config_dict.get(
-            "text_config", verifier_config_dict
+        verifier_text_config = (
+            verifier_config_dict.get("text_config") or verifier_config_dict
         )
         source_hidden = transformer_config.get("hidden_size")
         target_hidden = verifier_text_config.get("hidden_size")
