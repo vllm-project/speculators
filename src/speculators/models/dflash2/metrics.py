@@ -196,7 +196,31 @@ def compute_metrics(
         sample_from_anchor=sample_from_anchor,
         selector_valid_mask=selector_valid_mask,
     )
-    loss = unary_loss + selector_loss_alpha * selector_loss
+
+    if dflash2_loss_normalization == "effective_weight_sum":
+        if per_position_loss_weight == "dpace":
+            raise ValueError(
+                "effective_weight_sum currently supports fixed-exp-decay only"
+            )
+
+        pos_idx = (
+            torch.arange(loss_mask.shape[1], device=loss_mask.device) % block_size
+        ).unsqueeze(0)
+        decay = dflash_loss_decay(
+            pos_idx.to(loss_mask.dtype),
+            gamma=gamma,
+            sample_from_anchor=sample_from_anchor,
+        )
+        valid = loss_mask.to(decay.dtype)
+        eps = 1e-5  # Match loss_function's reduction epsilon.
+        scale = (valid.sum() + eps) / ((valid * decay).sum() + eps)
+
+        unary_loss = unary_loss * scale
+        selector_loss = selector_loss * scale
+    elif dflash2_loss_normalization != "valid_token_count":
+        raise ValueError(
+            f"Unknown DFlash2 loss normalization: {dflash2_loss_normalization!r}"
+        )
 
     one = torch.ones((), device=unary_logits.device)
     metrics["unary_loss_sum"] = unary_loss.detach().clone()

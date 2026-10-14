@@ -119,6 +119,9 @@ class DFlash2DraftModel(DFlashDraftModel):
             "dpace_alpha": kwargs.get("dpace_alpha", 0.5),
             "selector_loss_alpha": kwargs.get("selector_loss_alpha", 1.0),
             "selector_miss_policy": kwargs.get("selector_miss_policy", "replace"),
+            "dflash2_loss_normalization": kwargs.get(
+                "dflash2_loss_normalization", "valid_token_count"
+            ),
         }
         return dict(shared), dict(shared)
 
@@ -152,6 +155,7 @@ class DFlash2DraftModel(DFlashDraftModel):
         per_position_loss_weight: str = "fixed-exp-decay",
         dpace_alpha: float = 0.5,
         selector_miss_policy: str = "replace",
+        dflash2_loss_normalization: str = "valid_token_count",
         **kwargs,
     ) -> tuple[None, torch.Tensor, dict[str, Any]]:
         hidden, unary_logits, targets, aligned_loss_mask, block_indices = (

@@ -513,7 +513,13 @@ class DFlash2Args(_Group):
         "into the training candidates; 'strict' leaves top-K unchanged and "
         "excludes that position from selector CE. Unary loss remains active."
     ),
-)
+    )
+    dflash2_loss_normalization: Literal[
+        "valid_token_count", "effective_weight_sum"
+    ] = Field(
+        default="valid_token_count",
+        description="DFlash2 loss denominator mode for the normalization ablation.",
+    )
 
 
 class DSparkArgs(_Group):
