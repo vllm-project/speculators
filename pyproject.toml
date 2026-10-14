@@ -116,8 +116,9 @@ dev = [
     "pytest-mock~=3.16.0",
     "pytest-rerunfailures~=16.7",
 
-    # benchmarking (scripts/benchmark.py statistics)
+    # benchmarking (scripts/benchmark.py statistics and report charts)
     "scipy",
+    "plotly",
 
     # code quality
     "mypy~=2.1.0",
