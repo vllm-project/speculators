@@ -2,7 +2,7 @@
 
 ## Pull requests
 
-Read [CONTRIBUTING.md](./CONTRIBUTING.md) before contributing. Install the git hooks once per clone, after installing the `[dev]` extras — they append the DCO sign-off trailer and run the same checks as `make quality`, so neither needs doing by hand:
+Read [CONTRIBUTING.md](./CONTRIBUTING.md) before contributing. Install the git hooks once per clone, after installing the `[dev]` extras:
 
 ```bash
 pre-commit install
@@ -10,9 +10,9 @@ pre-commit install
 
 Fill in the PR template's **Purpose** and **Tests** sections. A reviewer should get the point in under 30 seconds:
 
-- **Purpose**: 1–3 sentences or a few bullets on *why*, plus the issue link. Not a restatement of the diff.
+- **Purpose**: 1–3 sentences or a few bullets on *why*, plus the issue link if available. Not a restatement of the diff.
 - **Tests**: the command you ran and its real output. Never paste results you did not actually produce.
-- No emoji headings, no "comprehensive"/"robust"/"production-ready", no per-file summary tables, no benchmark numbers you did not measure.
+- Do not state unverified hypothesis as facts, and no benchmark numbers you did not measure.
 - Leave the "I (a human) have written or reviewed the code" checkbox unchecked — that one is the human author's to tick.
 
 ## Provenance
