@@ -14,7 +14,7 @@ Fill in the PR template's **Purpose** and **Tests** sections. A reviewer should 
 - **Tests**: the command you ran and its real output. Never paste results you did not produce or numbers you did not measure.
 - Do not state unverified hypotheses as facts.
 - No emoji headings, no "comprehensive"/"robust"/"production-ready", no per-file summary tables.
-- Leave the "I (a human) have written or reviewed the code" checkbox unchecked — that one is the human author's to tick.
+- Leave the "I (a human) have written or reviewed the code" checkbox unchecked.
 
 ## Provenance
 
