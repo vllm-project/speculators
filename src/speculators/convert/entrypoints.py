@@ -14,7 +14,7 @@ Functions:
 
 import os
 import tempfile
-from typing import Literal
+from typing import Literal, get_args
 
 from loguru import logger
 from transformers import PretrainedConfig
@@ -23,13 +23,18 @@ from speculators.convert.dflash.converter import DFlashConverter
 from speculators.convert.eagle.eagle3_converter import Eagle3Converter
 from speculators.convert.mtp.converter import MTPConverter
 
-__all__ = ["convert_model", "maybe_convert_external_checkpoint"]
+__all__ = ["SUPPORTED_ALGORITHMS", "convert_model", "maybe_convert_external_checkpoint"]
+
+AlgorithmType = Literal["eagle3", "mtp", "dflash"]
+# Single source of truth for the algorithms convert_model dispatches on; the
+# CLI choice list is derived from it so the two cannot drift apart.
+SUPPORTED_ALGORITHMS: tuple[str, ...] = get_args(AlgorithmType)
 
 
 def convert_model(
     model: str,
     verifier: str,
-    algorithm: Literal["eagle3", "mtp", "dflash"],
+    algorithm: AlgorithmType,
     output_path: str = "converted",
     validate_device: str | None = None,
     **kwargs,
