@@ -8,7 +8,7 @@ Read [CONTRIBUTING.md](./CONTRIBUTING.md) before contributing. Install the git h
 pre-commit install
 ```
 
-Fill in the PR template's **Purpose** and **Tests** sections. A reviewer should get the point in under 30 seconds:
+Fill in the PR template's **Purpose** and **Tests** sections (see [PULL_REQUEST_TEMPLATE.md](./.github/PULL_REQUEST_TEMPLATE.md)). A reviewer should get the point in under 30 seconds:
 
 - **Purpose**: 1–3 sentences or a few bullets on *why*, plus the issue link if available. Not a restatement of the diff.
 - **Tests**: the command you ran and its real output. Never paste results you did not produce or numbers you did not measure.
