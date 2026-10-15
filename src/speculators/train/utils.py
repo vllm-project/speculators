@@ -130,7 +130,7 @@ def save_train_command(save_path: str, argv: list[str] | None = None) -> None:
 
     header = "\n".join(
         [
-            f"# Timestamp: {datetime.datetime.now(datetime.timezone.utc).isoformat()}",
+            f"# Timestamp: {datetime.datetime.now(datetime.UTC).isoformat()}",
             f"# Git SHA: {sha}",
             f"# World size: {os.environ.get('WORLD_SIZE', '1')}",
             *pkg_versions,

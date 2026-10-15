@@ -314,7 +314,7 @@ def _save_vllm_command(
     vllm_ver: str,
 ) -> None:
     sha_label = f"{sha} (dirty)" if diff else sha
-    ts = datetime.datetime.now(tz=datetime.timezone.utc).isoformat()
+    ts = datetime.datetime.now(tz=datetime.UTC).isoformat()
     header = "\n".join(
         [
             f"# Timestamp: {ts}",
