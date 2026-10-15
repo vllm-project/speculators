@@ -322,14 +322,15 @@ class SpeculatorModelConfig(PydanticClassRegistryMixin, PretrainedConfig):
     @classmethod
     def validate_transformer_config(cls, value: Any) -> PretrainedConfig:
         """Resolve decoder dictionaries, retaining each subclass's default type."""
-        if isinstance(value, dict):
-            if "model_type" in value:
-                config_class = AutoConfig.for_model(value["model_type"]).__class__
-            else:
-                field = cls.model_fields["transformer_layer_config"]
-                config_class = type(field.get_default(call_default_factory=True))
-            return config_class(**value)
-        return value
+        if not isinstance(value, dict):
+            return value
+
+        if "model_type" in value:
+            config_class = AutoConfig.for_model(value["model_type"]).__class__
+        else:
+            field = cls.model_fields["transformer_layer_config"]
+            config_class = type(field.get_default(call_default_factory=True))
+        return config_class(**value)
 
     def to_dict(self) -> dict[str, Any]:
         """
