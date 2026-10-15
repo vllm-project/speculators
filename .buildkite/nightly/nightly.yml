@@ -65,11 +65,8 @@ steps:
 
         matrix:
           setup:
-            python: ["3.10", "3.13"]
+            python: ["3.11", "3.13"]
             transformers: ["latest", "main"]
-          adjustments:
-            - with: {python: "3.10", transformers: "main"}
-              skip: true
 
   - group: ":test_tube: Nightly Integration Tests (H100)"
     steps:
@@ -137,8 +134,5 @@ steps:
 
         matrix:
           setup:
-            python: ["3.10", "3.13"]
+            python: ["3.11", "3.13"]
             transformers: ["latest", "main"]
-          adjustments:
-            - with: {python: "3.10", transformers: "main"}
-              skip: true

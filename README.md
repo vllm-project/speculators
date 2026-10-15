@@ -6,7 +6,7 @@
     <img alt="Speculators logo" src="https://raw.githubusercontent.com/vllm-project/speculators/main/docs/assets/branding/speculators-logo-black.svg" height="64" />
   </picture>
 
-[![License](https://img.shields.io/github/license/vllm-project/speculators.svg)](https://github.com/vllm-project/speculators/blob/main/LICENSE) [![Python Versions](https://img.shields.io/badge/Python-3.10--3.13-orange)](https://pypi.org/project/speculators/) [![docs](https://img.shields.io/badge/docs-Speculators-blue)](https://docs.vllm.ai/projects/speculators/en/latest/) [![PyPI](https://img.shields.io/pypi/v/speculators.svg)](https://pypi.org/project/speculators/) [![tests](https://badge.buildkite.com/ec24a960c7238e18953364f4e7117a5301185b37e60283b5b0.svg?branch=main)](https://buildkite.com/vllm/speculators)
+[![License](https://img.shields.io/github/license/vllm-project/speculators.svg)](https://github.com/vllm-project/speculators/blob/main/LICENSE) [![Python Versions](https://img.shields.io/badge/Python-3.11--3.13-orange)](https://pypi.org/project/speculators/) [![docs](https://img.shields.io/badge/docs-Speculators-blue)](https://docs.vllm.ai/projects/speculators/en/latest/) [![PyPI](https://img.shields.io/pypi/v/speculators.svg)](https://pypi.org/project/speculators/) [![tests](https://badge.buildkite.com/ec24a960c7238e18953364f4e7117a5301185b37e60283b5b0.svg?branch=main)](https://buildkite.com/vllm/speculators)
 
 </div>
 
@@ -94,7 +94,7 @@ Served models can then be benchmarked using [GuideLLM](https://github.com/vllm-p
 Before installing, ensure you have the following:
 
 - **Operating System:** Linux or macOS
-- **Python:** 3.10 or higher
+- **Python:** 3.11 or higher
 - **Package Manager:** pip (recommended) or conda
 
 #### Install from PyPI (Recommended)
