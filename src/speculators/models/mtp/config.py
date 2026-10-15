@@ -1,9 +1,9 @@
 """Configuration for MTP speculator model."""
 
-from typing import Any, Literal
+from typing import Literal
 
-from pydantic import Field, field_serializer, field_validator
-from transformers import AutoConfig, PretrainedConfig
+from pydantic import Field, field_validator
+from transformers import PretrainedConfig
 from transformers.models.qwen2.configuration_qwen2 import Qwen2Config
 
 from speculators import SpeculatorModelConfig
@@ -82,20 +82,4 @@ class MTPSpeculatorConfig(SpeculatorModelConfig):
     def validate_num_nextn_predict_layers(cls, value: int) -> int:
         if value != 1:
             raise ValueError(f"MTP currently supports 1 layer, got {value}.")
-        return value
-
-    @field_serializer("transformer_layer_config")
-    def serialize_transformer_config(self, value: PretrainedConfig) -> dict:
-        return value.to_diff_dict()
-
-    @field_validator("transformer_layer_config", mode="before")
-    @classmethod
-    def validate_transformer_config(cls, value: Any) -> PretrainedConfig:
-        if isinstance(value, dict):
-            config_class: type[PretrainedConfig] = Qwen2Config
-            if "model_type" in value:
-                config_class = AutoConfig.for_model(
-                    model_type=value["model_type"]
-                ).__class__
-            return config_class(**value)
         return value
