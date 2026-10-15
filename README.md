@@ -77,11 +77,11 @@ vllm serve RedHatAI/Qwen3-8B-speculator.eagle3
 Served models can then be benchmarked using [GuideLLM](https://github.com/vllm-project/guidellm), enabled by the benchmarking tooling in [`scripts/evaluate`](https://github.com/vllm-project/speculators/tree/main/scripts/evaluate). Below, we show sample benchmark results for [NVIDIA-Nemotron-3.5-Super-VL-120B-A12B-BF16](https://huggingface.co/nvidia/NVIDIA-Nemotron-3.5-Super-VL-120B-A12B-BF16) with a trained DSpark speculator, [RedHatAI/NVIDIA-Nemotron-3.5-Super-VL-120B-A12B.dspark](https://huggingface.co/RedHatAI/NVIDIA-Nemotron-3.5-Super-VL-120B-A12B.dspark), and show further optimization by combining it with the quantized FP8 verifier, [RedHatAI/NVIDIA-Nemotron-3.5-Super-VL-120B-A12B-FP8](https://huggingface.co/RedHatAI/NVIDIA-Nemotron-3.5-Super-VL-120B-A12B-FP8), on Hopper GPUs.
 
 <p align="center">
-  <img alt="HumanEval benchmark results comparing DSpark and FP8+DSpark speculative decoding" src="https://raw.githubusercontent.com/vllm-project/speculators/main/docs/assets/humaneval_dspark_fp8_dspark.png" width=180%>
+  <img alt="HumanEval benchmark results comparing DSpark and FP8+DSpark speculative decoding" src="docs/assets/humaneval_dspark_fp8_dspark.png" width=180%>
 </p>
 
 <p align="center">
-  <img alt="Math reasoning benchmark results comparing DSpark and FP8+DSpark speculative decoding" src="https://raw.githubusercontent.com/vllm-project/speculators/main/docs/assets/math_reasoning_dspark_fp8_dspark.png" width=180%>
+  <img alt="Math reasoning benchmark results comparing DSpark and FP8+DSpark speculative decoding" src="docs/assets/math_reasoning_dspark_fp8_dspark.png" width=180%>
 </p>
 
 ## Additional Utility Scripts
