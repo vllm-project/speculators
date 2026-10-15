@@ -31,7 +31,7 @@ import json
 import logging
 import shlex
 import sys
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from urllib.error import URLError
 from urllib.request import urlopen
@@ -120,7 +120,7 @@ def save_eval_provenance(output_dir: Path) -> None:
         versions = package_versions()
         header = "\n".join(
             [
-                f"# Timestamp: {datetime.now(timezone.utc).isoformat()}",
+                f"# Timestamp: {datetime.now(UTC).isoformat()}",
                 f"# Git SHA: {sha}",
                 *versions,
             ]

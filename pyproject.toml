@@ -2,7 +2,6 @@
 requires = [
     "setuptools >= 84.0.0",
     "setuptools-git-versioning>=2.0,<3",
-    "tomli>=2.0; python_version < '3.11'",
 ]
 build-backend = "setuptools.build_meta"
 
@@ -25,7 +24,7 @@ dynamic = ["version", "dependencies"]
 name = "speculators"
 description = "A unified library for creating, representing, and storing speculative decoding algorithms for LLM serving such as in vLLM."
 readme = { file = "README.md", content-type = "text/markdown" }
-requires-python = ">=3.10"
+requires-python = ">=3.11"
 license = "Apache-2.0"
 license-files = ["LICENSE"]
 authors = [ { name = "Red Hat"} ]
