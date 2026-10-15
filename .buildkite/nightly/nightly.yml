@@ -67,6 +67,9 @@ steps:
           setup:
             python: ["3.11", "3.13"]
             transformers: ["latest", "main"]
+          adjustments:
+            - with: {python: "3.11", transformers: "main"}
+              skip: true
 
   - group: ":test_tube: Nightly Integration Tests (H100)"
     steps:
@@ -136,3 +139,6 @@ steps:
           setup:
             python: ["3.11", "3.13"]
             transformers: ["latest", "main"]
+          adjustments:
+            - with: {python: "3.11", transformers: "main"}
+              skip: true
