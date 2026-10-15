@@ -72,13 +72,16 @@ Models trained through Speculators can run seamlessly in vLLM using a simple `vl
 vllm serve RedHatAI/Qwen3-8B-speculator.eagle3
 ```
 
-Served models can then be benchmarked using [GuideLLM](https://github.com/vllm-project/guidellm). Below, we show sample benchmark results where we compare our speculator with its dense counterpart. We also additionally compare [quantization](https://github.com/vllm-project/llm-compressor) to explore additional performance improvements by swapping the dense verifier, `Qwen/Qwen3-8B` with the quantized FP8 model, [RedHatAI/Qwen3-8B-FP8-dynamic](https://huggingface.co/RedHatAI/Qwen3-8B-FP8-dynamic) in the `speculator_config`.
+### Performance Benchmarking
+
+Served models can then be benchmarked using [GuideLLM](https://github.com/vllm-project/guidellm), enabled by the benchmarking tooling in [`scripts/evaluate`](https://github.com/vllm-project/speculators/tree/main/scripts/evaluate). Below, we show sample benchmark results for [NVIDIA-Nemotron-3.5-Super-VL-120B-A12B-BF16](https://huggingface.co/nvidia/NVIDIA-Nemotron-3.5-Super-VL-120B-A12B-BF16) with a trained DSpark speculator, [RedHatAI/NVIDIA-Nemotron-3.5-Super-VL-120B-A12B.dspark](https://huggingface.co/RedHatAI/NVIDIA-Nemotron-3.5-Super-VL-120B-A12B.dspark), and show further optimization by combining it with the quantized FP8 verifier, [RedHatAI/NVIDIA-Nemotron-3.5-Super-VL-120B-A12B-FP8](https://huggingface.co/RedHatAI/NVIDIA-Nemotron-3.5-Super-VL-120B-A12B-FP8), on Hopper GPUs.
 
 <p align="center">
-  <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/vllm-project/speculators/main/docs/assets/qwen_quant_benchmark.png">
-    <img alt="GuideLLM Logo" src="https://raw.githubusercontent.com/vllm-project/speculators/main/docs/assets/qwen_quant_benchmark.png" width=180%>
-  </picture>
+  <img alt="HumanEval benchmark results comparing DSpark and FP8+DSpark speculative decoding" src="docs/assets/humaneval_dspark_fp8_dspark.png" width=180%>
+</p>
+
+<p align="center">
+  <img alt="Math reasoning benchmark results comparing DSpark and FP8+DSpark speculative decoding" src="docs/assets/math_reasoning_dspark_fp8_dspark.png" width=180%>
 </p>
 
 ## Additional Utility Scripts
