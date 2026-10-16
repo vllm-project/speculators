@@ -503,6 +503,14 @@ class DFlash2Args(_Group):
         ge=0.0,
         description="DFlash2: weight of the candidate-selector K-way CE term.",
     )
+    selector_miss_policy: Literal["replace", "strict"] = Field(
+    default="replace",
+    description=(
+        "DFlash2 selector target-miss policy. 'replace' inserts the gold token "
+        "into the training candidates; 'strict' leaves top-K unchanged and "
+        "excludes that position from selector CE. Unary loss remains active."
+    ),
+)
 
 
 class DSparkArgs(_Group):
