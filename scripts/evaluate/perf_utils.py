@@ -545,6 +545,33 @@ def fetch_metrics(metrics_url: str, retries: int = 3, delay: float = 2.0) -> str
     return None
 
 
+def _guidellm_data_arg(
+    dataset: str,
+    subset: str | None,
+    data_kind: str,
+    history: str | None,
+) -> str:
+    """Build the ``--data`` argument value for a guidellm run.
+
+    OTEL traces carry their own recorded messages and token counts, so they
+    replay through guidellm's otel deserializer with a nested source (a
+    Hugging Face dataset id or a local JSONL file) instead of a
+    column-mapped dataset.
+    """
+    if data_kind == "otel":
+        if Path(dataset).exists():
+            data = f"kind=otel,source.kind=json_file,source.path={dataset}"
+        else:
+            data = f"kind=otel,source.kind=huggingface,source.source={dataset}"
+        if history:
+            data += f",history={history}"
+        return data
+    if subset is not None:
+        data = f"kind=huggingface,source={dataset}"
+        return data + f",load_kwargs.data_files={subset}.jsonl,load_kwargs.split=train"
+    return f"kind=json_file,path={dataset},load_kwargs.split=train"
+
+
 def run_guidellm(
     target: str,
     dataset: str,
@@ -558,6 +585,8 @@ def run_guidellm(
     max_tokens: int,
     gen_kwargs: dict | None = None,
     request_format: str | None = None,
+    data_kind: str = "standard",
+    history: str | None = None,
 ) -> None:
     # Building the backend as a JSON object to support nested gen_kwargs for guidellm.
     backend: dict[str, object] = {
@@ -571,14 +600,11 @@ def run_guidellm(
         backend["extras"] = {"body": gen_kwargs}
     cmd = ["guidellm", "run", "--backend", json.dumps(backend)]
 
-    if subset is not None:
-        data = f"kind=huggingface,source={dataset}"
-        data += f",load_kwargs.data_files={subset}.jsonl,load_kwargs.split=train"
-    else:
-        data = f"kind=json_file,path={dataset},load_kwargs.split=train"
-    cmd.extend(["--data", data])
+    cmd.extend(["--data", _guidellm_data_arg(dataset, subset, data_kind, history)])
 
-    cmd.extend(["--data-column-mapper", data_column_mapper])
+    # The otel deserializer maps its own columns; a column mapper does not apply.
+    if data_kind != "otel" and data_column_mapper:
+        cmd.extend(["--data-column-mapper", data_column_mapper])
 
     profile_str = f"kind={profile},max_concurrency={max_concurrency}"
     if profile == "sweep":

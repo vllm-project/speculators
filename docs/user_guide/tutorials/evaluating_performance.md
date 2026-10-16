@@ -31,7 +31,8 @@ Both `throughput` and `sweep` share the same options:
 
 ```
   --target URL               vLLM server endpoint (required)
-  --dataset DATASET          HF dataset ID or local dir (default: RedHatAI/speculator_benchmarks)
+  --dataset DATASET          HF dataset ID or local dir (default: RedHatAI/speculator_benchmarks;
+                             ibm-research/lmcache-agentic-traces_Otel with --otel)
   --subsets LIST             Comma-separated subset names (default: all 9)
   --output-dir DIR           Output directory (default: perf_results_TIMESTAMP)
   --max-concurrency N        Max concurrent requests (default: 128)
@@ -98,6 +99,33 @@ python evaluate.py throughput \
 Available configs: `qualitative`, `throughput_1k`, `throughput_2k`, `throughput_8k`, `throughput_32k`.
 
 Results are written to `acceptance.csv` in the output directory with per-category acceptance lengths and per-position acceptance rates, identical in format to the `RedHatAI/speculator_benchmarks` output.
+
+## OTEL trace replay
+
+`guidellm` 0.8+ can replay [OpenTelemetry GenAI traces](https://vllm-project.github.io/guidellm/0.8.0/guides/trace_replay/), which record the actual conversation content — unlike token-count-only trace formats (e.g. WEKA), which replay synthetic filler text. Replaying OTEL traces therefore measures speculative-decode acceptance on realistic semantic prompts and continuations.
+
+Pass `--otel` and point `--dataset` at a trace source (a Hugging Face dataset id or a local JSONL file in a layout guidellm's otel format accepts). With no `--dataset`, `--otel` defaults to `ibm-research/lmcache-agentic-traces_Otel` — real GAIA / SWE-bench / WildClaw agent sessions (Claude) whose conversations grow to ~90k tokens of recorded context:
+
+```bash
+# default agentic trace dataset (conversations up to ~90k tokens):
+python evaluate.py throughput \
+    --target http://localhost:8000/v1 --otel
+
+# any other OTEL trace source, e.g. shorter multi-turn chats:
+python evaluate.py throughput \
+    --target http://localhost:8000/v1 \
+    --dataset ibm-research/synthetic-conversations-traces --otel
+```
+
+Any `max_model_len` works: requests whose recorded prompt plus completion exceed the server's context length are simply dropped — the server rejects the request and the run continues with the remaining ones (the rest of an affected conversation is dropped too, since its later turns depend on the dropped turn). A larger context window just replays more of the longest conversations. The default dataset is a single ~2.7 GB JSONL fetched from Hugging Face on first use; pass a local JSONL path to avoid the download.
+
+OTEL traces run under the mode's normal profiles like any other dataset — requests go out at max concurrency (or across sweep rate points), with the recorded trace timestamps ignored. Turns within one conversation stay serialized (guidellm's conversation DAG), preserving prefix-cache order and multi-turn dependencies. Each request's output length comes from the span's recorded completion count, so the gen-length estimation pass is skipped for `--otel`; `--max-requests` (default 200) still bounds the run. Both `throughput` and `sweep` modes are supported.
+
+Options:
+
+- `--otel-history runtime` (default) sends only new messages and chains live completions (cache-friendly, but content diverges from the trace as the live model generates); `trace` resends each span's full recorded input, so prompts are exactly the recorded content.
+
+If you need replay pacing at the trace's recorded timestamps instead (for serving-realism experiments rather than acceptance rates), invoke `guidellm run` directly with `--profile kind=replay`.
 
 ## Visualization
 
