@@ -302,3 +302,73 @@ def test_pretokenized_dataset_skips_render():
         HFDataset.from_dict(data), NO_PROCESSOR, num_proc=1
     )
     assert len(ds) == 1
+
+
+# --------------------------------------------------------------------------- #
+# endpoint-level failures abort the build instead of dropping conversations    #
+# --------------------------------------------------------------------------- #
+def test_render_conversation_transport_error_is_an_endpoint_error(monkeypatch):
+    # A dead server raises a transport error, which says nothing about the
+    # conversation being rendered.
+    def post(*a, **k):
+        raise render_client.httpx.ConnectError("Connection refused")
+
+    monkeypatch.setattr(render_client, "_post", post)
+    monkeypatch.setattr(time, "sleep", lambda _: None)
+    with pytest.raises(render_client.RenderEndpointError):
+        render_client.render_conversation(
+            "http://x", [], add_generation_prompt=False, max_retries=1
+        )
+
+
+def test_render_conversation_5xx_is_an_endpoint_error(monkeypatch):
+    monkeypatch.setattr(
+        render_client, "_post", lambda *a, **k: _Resp(503, {}, "unavailable")
+    )
+    monkeypatch.setattr(time, "sleep", lambda _: None)
+    with pytest.raises(render_client.RenderEndpointError):
+        render_client.render_conversation(
+            "http://x", [], add_generation_prompt=False, max_retries=0
+        )
+
+
+def test_render_conversation_rows_reraises_an_endpoint_failure(monkeypatch):
+    # The regression: the broad `except Exception` here used to turn an endpoint
+    # failure into a dropped conversation, so the build finished with a dataset
+    # silently missing everything after the first failure.
+    def fake_render(*a, **k):
+        raise render_client.RenderEndpointError("endpoint down")
+
+    monkeypatch.setattr(preprocessing, "render_conversation", fake_render)
+    with pytest.raises(render_client.RenderEndpointError):
+        preprocessing._render_conversation_rows(_conv(2), None, 0, "http://x", 100)
+
+
+def test_render_conversation_rows_still_skips_conversation_failures(monkeypatch):
+    # A conversation the chat template cannot handle is still skipped: only
+    # endpoint-level failures are fatal.
+    def fake_render(*a, **k):
+        raise preprocessing.BoundaryUnstableError("template rewrites history")
+
+    monkeypatch.setattr(preprocessing, "render_conversation", fake_render)
+    assert (
+        preprocessing._render_conversation_rows(_conv(2), None, 0, "http://x", 100)
+        == []
+    )
+
+
+def test_build_aborts_when_the_render_endpoint_fails(monkeypatch):
+    # End to end: the run must surface the failure rather than return a partial
+    # training set with no error.
+    def fake_render(*a, **k):
+        raise render_client.RenderEndpointError("connection refused")
+
+    monkeypatch.setattr(preprocessing, "render_conversation", fake_render)
+    data = {"conversations": [_conv(3), _conv(3)]}
+    with pytest.raises(render_client.RenderEndpointError):
+        build_speculator_training_dataset(
+            HFDataset.from_dict(data),
+            NO_PROCESSOR,
+            num_proc=1,
+            render_endpoint="http://x",
+        )
