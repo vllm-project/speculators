@@ -13,6 +13,7 @@ Covers the three mutually exclusive init paths and their guard rails:
 
 import argparse
 import json
+import warnings
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -141,6 +142,7 @@ def test_draft_config_with_from_pretrained_errors(monkeypatch):
         ["--draft-hidden-act", "gelu"],
         ["--sliding-window", "1024"],
         ["--full-attention-indices", "0", "1"],
+        ["--draft-num-key-value-heads", "8"],
     ],
 )
 def test_draft_config_with_decoder_flag_errors(monkeypatch, extra):
@@ -261,6 +263,7 @@ def test_from_pretrained_alone_parses(monkeypatch):
         ["--draft-hidden-act", "gelu"],
         ["--sliding-window", "1024"],
         ["--full-attention-indices", "0", "1"],
+        ["--draft-num-key-value-heads", "8"],
         ["--draft-config", "c"],
     ],
 )
@@ -296,6 +299,7 @@ def test_mtp_from_scratch_alone_parses(monkeypatch):
         ["--num-layers", "5"],
         ["--draft-arch", "qwen3"],
         ["--sliding-window", "1024"],
+        ["--draft-num-key-value-heads", "8"],
     ],
 )
 def test_mtp_from_scratch_rejects_inapplicable_flags(monkeypatch, extra):
@@ -749,3 +753,152 @@ def test_hetero_verifier_rejects_inconsistent_geometry():
     )
     with pytest.raises(ValueError, match="Inconsistent draft attention geometry"):
         _create_layer_config_for(verifier)
+
+
+# ---------------------------------------------------------------------------
+# --draft-num-key-value-heads and MLA verifiers
+# ---------------------------------------------------------------------------
+
+
+def _make_mla_verifier_namespace(**overrides) -> SimpleNamespace:
+    """A minimal MLA-style verifier (DeepSeek-V3 / GLM-5 layout): the
+    config carries kv_lora_rank, and num_key_value_heads is a nominal value equal
+    to num_attention_heads."""
+    base = {
+        "num_attention_heads": 4,
+        "num_key_value_heads": 4,
+        "head_dim": 8,
+        "intermediate_size": 48,
+        "kv_lora_rank": 16,
+    }
+    base.update(overrides)
+    return _make_verifier_namespace(**base)
+
+
+def _create_layer_config_with_kv_heads(
+    verifier: SimpleNamespace, draft_num_key_value_heads: int | None
+):
+    with patch(
+        "speculators.train.cli.AutoConfig.from_pretrained", return_value=verifier
+    ):
+        return create_transformer_layer_config(
+            "target",
+            num_layers=2,
+            draft_arch="llama",
+            hidden_act=None,
+            sliding_window=2048,
+            full_attention_indices=[],
+            draft_num_key_value_heads=draft_num_key_value_heads,
+        )
+
+
+@pytest.mark.parametrize(
+    ("cli_args", "expected"),
+    [
+        ([], None),
+        (["--draft-num-key-value-heads", "8"], 8),
+    ],
+)
+def test_draft_num_key_value_heads_parsing(monkeypatch, cli_args, expected):
+    """Defaults to None (inherit from the verifier) and parses explicit values."""
+    assert _parse(monkeypatch, cli_args).draft_num_key_value_heads == expected
+
+
+def test_mla_verifier_default_warns_and_keeps_verifier_kv_heads():
+    """Without an override, an MLA verifier still yields the verifier's nominal
+    num_key_value_heads (default behavior unchanged) but emits a warning."""
+    verifier = _make_mla_verifier_namespace()
+
+    with pytest.warns(UserWarning, match="Multi-head Latent Attention") as caught:
+        config = _create_layer_config_with_kv_heads(verifier, None)
+
+    assert len(caught) == 1
+    assert "--draft-num-key-value-heads" in str(caught[0].message)
+    assert config.num_attention_heads == 4
+    assert config.num_key_value_heads == 4
+    assert config.head_dim == 8
+
+
+def test_mla_verifier_with_override_uses_gqa_without_warning():
+    """An explicit --draft-num-key-value-heads builds a grouped-query draft and
+    silences the MLA warning; num_attention_heads and head_dim are unchanged."""
+    verifier = _make_mla_verifier_namespace()
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        config = _create_layer_config_with_kv_heads(verifier, 2)
+
+    assert config.num_key_value_heads == 2
+    assert config.num_attention_heads == 4
+    assert config.head_dim == 8
+
+
+def test_non_mla_verifier_does_not_warn():
+    """Verifiers without kv_lora_rank keep the existing silent behavior."""
+    verifier = _make_verifier_namespace(intermediate_size=48)
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        config = _create_layer_config_with_kv_heads(verifier, None)
+
+    assert config.num_key_value_heads == 2
+
+
+def test_override_applies_to_non_mla_verifier():
+    verifier = _make_verifier_namespace(intermediate_size=48)
+
+    config = _create_layer_config_with_kv_heads(verifier, 1)
+
+    assert config.num_key_value_heads == 1
+    assert config.num_attention_heads == 4
+
+
+@pytest.mark.parametrize("bad_kv_heads", [0, -2, 3])
+def test_invalid_draft_num_key_value_heads_raises(bad_kv_heads):
+    """The override must be a positive divisor of num_attention_heads."""
+    verifier = _make_mla_verifier_namespace()
+
+    with pytest.raises(ValueError, match="--draft-num-key-value-heads"):
+        _create_layer_config_with_kv_heads(verifier, bad_kv_heads)
+
+
+@pytest.mark.parametrize("requested", [None, 8])
+def test_build_draft_model_forwards_draft_num_key_value_heads(monkeypatch, requested):
+    """build_draft_model passes --draft-num-key-value-heads through to
+    create_transformer_layer_config on the synthesized-draft path."""
+    captured = {}
+
+    def _fake_create(*, draft_num_key_value_heads, **_kwargs):
+        captured["draft_num_key_value_heads"] = draft_num_key_value_heads
+        return SimpleNamespace(vocab_size=128)
+
+    monkeypatch.setattr(
+        "speculators.train.cli.create_transformer_layer_config", _fake_create
+    )
+    monkeypatch.setattr(
+        "speculators.train.cli.resolve_mask_token_id", lambda *_a, **_k: 0
+    )
+
+    class _FakeModel:
+        @classmethod
+        def from_training_args(cls, **_kwargs):
+            return "MODEL"
+
+    args = SimpleNamespace(
+        speculator_type="dspark",
+        from_pretrained="",
+        draft_config="",
+        verifier_name_or_path="some-verifier",
+        num_layers=3,
+        draft_arch="qwen3",
+        draft_hidden_act=None,
+        draft_num_key_value_heads=requested,
+        sliding_window=2048,
+        full_attention_indices=[],
+        mask_token_id=None,
+        trust_remote_code=False,
+        draft_mrope_full_head_hack=True,
+    )
+    build_draft_model(args, _FakeModel, None, None, 128)  # type: ignore[arg-type]
+
+    assert captured["draft_num_key_value_heads"] == requested
