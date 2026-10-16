@@ -394,6 +394,36 @@ def _warn_deprecated(provided: set[str]) -> None:
         )
 
 
+def _warn_sliding_window_without_flex(cfg: TrainConfig) -> None:
+    """Warn that sliding window attention buys nothing on a dense-mask backend.
+
+    ``sdpa`` and ``eager`` build their mask from the same ``mask_mod`` as flex,
+    so the window is applied correctly -- but it is materialized as a dense
+    ``[1, 1, q_len, kv_len]`` mask and every block is still computed. Only
+    ``simple_flex_attention`` turns the window into a ``BlockMask`` that skips
+    fully-masked blocks. Measured on a DSpark draft at seq_len 32768, windowing
+    every layer versus windowing none costs 195.0 ms and 193.8 ms per step under
+    ``sdpa`` -- no gain -- against 129.8 ms and 153.1 ms under flex. Peak
+    allocated is unchanged by the window on either backend; what the window buys
+    on flex is attention work, not memory.
+    """
+    if cfg.speculator_type == "mtp":  # no sliding window support
+        return
+    if cfg.draft.draft_attn_impl not in {"sdpa", "eager"}:
+        return
+    num_layers = cfg.draft.num_layers or 0
+    if not set(range(num_layers)) - set(cfg.draft.full_attention_indices):
+        return  # every layer already uses full attention; nothing is lost
+    warnings.warn(
+        f"--sliding-window={cfg.draft.sliding_window} has no performance benefit "
+        f"with --draft-attn-impl={cfg.draft.draft_attn_impl}: the window is "
+        "applied correctly, but the mask is materialized dense so no attention "
+        "blocks are skipped. Use --draft-attn-impl=simple_flex_attention to turn "
+        "the window into an actual reduction in attention work.",
+        stacklevel=2,
+    )
+
+
 def build_from_sources(
     cls: type[TrainConfig],
     *,
@@ -453,6 +483,7 @@ def build_from_sources(
     provided = {dest for dest, layer in cfg._provenance.items() if layer != "default"}
     _warn_mismatched_algorithm_blocks(cfg, provided)
     _warn_deprecated(provided)
+    _warn_sliding_window_without_flex(cfg)
     _validate_draft_init(cfg, provided)
     _validate_required(cfg)
     return cfg
