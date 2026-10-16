@@ -189,6 +189,23 @@ def _resolve_speedbench(
     return results
 
 
+def _validate_throughput_results(run_output: Path, subset: str) -> None:
+    """Require a readable throughput report with successful requests."""
+    try:
+        with run_output.open() as stream:
+            benchmarks = json.load(stream)["benchmarks"]
+
+        successful = sum(
+            benchmark["metrics"]["request_totals"]["successful"]
+            for benchmark in benchmarks
+        )
+        if successful <= 0:
+            raise ValueError("No successful throughput requests")
+    except (OSError, ValueError, KeyError, TypeError) as exc:
+        logger.error("[%s] Invalid throughput results: %s", subset, exc)
+        sys.exit(1)
+
+
 def _run_subset(
     subset: str,
     args: argparse.Namespace,
@@ -263,19 +280,7 @@ def _run_subset(
     current = _require_metrics(metrics_url)
 
     if not is_sweep:
-        try:
-            with run_output.open() as stream:
-                benchmarks = json.load(stream)["benchmarks"]
-
-            successful = sum(
-                benchmark["metrics"]["request_totals"]["successful"]
-                for benchmark in benchmarks
-            )
-            if successful <= 0:
-                raise ValueError("No successful throughput requests")
-        except (OSError, ValueError, KeyError, TypeError) as exc:
-            logger.error("[%s] Invalid throughput results: %s", subset, exc)
-            sys.exit(1)
+        _validate_throughput_results(run_output, subset)
 
     spec = extract_spec_decode_metrics(
         current,

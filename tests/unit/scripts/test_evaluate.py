@@ -262,11 +262,7 @@ def test_zero_successful_throughput_requests_is_fatal(benchmark_args, benchmark_
     def write_zero_successful(**kwargs):
         kwargs["output_path"].write_text(
             json.dumps(
-                {
-                    "benchmarks": [
-                        _benchmark("throughput", successful=0, errored=2)
-                    ]
-                }
+                {"benchmarks": [_benchmark("throughput", successful=0, errored=2)]}
             )
         )
 
@@ -296,9 +292,7 @@ def _write_malformed_report(**kwargs):
     [_write_missing_report, _write_empty_report, _write_malformed_report],
     ids=["missing", "empty", "malformed"],
 )
-def test_invalid_throughput_report_is_fatal(
-    benchmark_args, benchmark_io, write_report
-):
+def test_invalid_throughput_report_is_fatal(benchmark_args, benchmark_io, write_report):
     benchmark_args.mode = "throughput"
     run, _ = benchmark_io
     run.side_effect = write_report
@@ -319,9 +313,7 @@ def test_throughput_succeeds_with_empty_sampled_requests(
             json.dumps(
                 {
                     "benchmarks": [
-                        _benchmark(
-                            "throughput", successful=5, sampled_successful=[]
-                        )
+                        _benchmark("throughput", successful=5, sampled_successful=[])
                     ]
                 }
             )
