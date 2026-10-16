@@ -1,10 +1,6 @@
 <div align="center">
 
-<picture>
-    <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/vllm-project/speculators/main/docs/assets/branding/speculators-logo-white.svg" />
-    <source media="(prefers-color-scheme: light)" srcset="https://raw.githubusercontent.com/vllm-project/speculators/main/docs/assets/branding/speculators-logo-black.svg" />
-    <img alt="Speculators logo" src="https://raw.githubusercontent.com/vllm-project/speculators/main/docs/assets/branding/speculators-logo-black.svg" height="64" />
-  </picture>
+![Speculators logo](./docs/assets/branding/speculators-logo-white.svg#gh-dark-mode-only) ![Speculators logo](./docs/assets/branding/speculators-logo-black.svg#gh-light-mode-only)
 
 [![License](https://img.shields.io/github/license/vllm-project/speculators.svg)](https://github.com/vllm-project/speculators/blob/main/LICENSE) [![Python Versions](https://img.shields.io/badge/Python-3.11--3.13-orange)](https://pypi.org/project/speculators/) [![docs](https://img.shields.io/badge/docs-Speculators-blue)](https://docs.vllm.ai/projects/speculators/en/latest/) [![PyPI](https://img.shields.io/pypi/v/speculators.svg)](https://pypi.org/project/speculators/) [![tests](https://badge.buildkite.com/ec24a960c7238e18953364f4e7117a5301185b37e60283b5b0.svg?branch=main)](https://buildkite.com/vllm/speculators)
 
