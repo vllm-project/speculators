@@ -80,6 +80,7 @@ def build_optimizers(model: Module, config) -> list[torch.optim.Optimizer]:
                 model.named_parameters(),
                 lr=config.lr,
                 weight_decay=config.weight_decay,
+                fused=True,
             )
         ]
 
@@ -109,6 +110,7 @@ def build_optimizers(model: Module, config) -> list[torch.optim.Optimizer]:
                     adamw_params,
                     lr=config.lr,
                     weight_decay=config.weight_decay,
+                    fused=True,
                 )
             )
         if not optimizers:
