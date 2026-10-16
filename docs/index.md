@@ -185,7 +185,7 @@ The following table summarizes the models that have been trained end-to-end by o
 Before installing, ensure you have the following:
 
 - **Operating System:** Linux or macOS
-- **Python:** 3.10 or higher
+- **Python:** 3.11 or higher
 - **Package Manager:** pip (recommended) or conda
 
 ### Install from PyPI (Recommended)
