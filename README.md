@@ -1,7 +1,7 @@
 <div align="center">
 
 <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/vllm-project/speculators/main/docs/assets/branding/speculators-logo-white.svg" />
+    <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/vllm-project/speculators/main/docs/assets/branding/speculators-logo-white.svg" style="background-color: white;"/>
     <source media="(prefers-color-scheme: light)" srcset="https://raw.githubusercontent.com/vllm-project/speculators/main/docs/assets/branding/speculators-logo-black.svg" />
     <img alt="Speculators logo" src="https://raw.githubusercontent.com/vllm-project/speculators/main/docs/assets/branding/speculators-logo-black.svg" height="64" />
   </picture>
