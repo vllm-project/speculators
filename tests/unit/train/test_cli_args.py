@@ -173,6 +173,65 @@ def test_dflash_defaults_norm_output_false(monkeypatch):
     assert args.norm_output is False
 
 
+def test_dspark_accepts_glm5_draft_arch(monkeypatch):
+    args = _parse(
+        monkeypatch,
+        ["--speculator-type", "dspark", "--draft-arch", "glm5"],
+    )
+    assert args.draft_arch == "glm5"
+
+
+def test_dflash_accepts_glm5_draft_arch(monkeypatch):
+    args = _parse(
+        monkeypatch,
+        ["--speculator-type", "dflash", "--draft-arch", "glm5"],
+    )
+    assert args.draft_arch == "glm5"
+
+
+def test_eagle3_rejects_glm5_draft_arch(monkeypatch):
+    with pytest.raises(SystemExit):
+        _parse(monkeypatch, ["--draft-arch", "glm5"])
+
+
+def test_q_lora_rank_requires_glm5(monkeypatch):
+    with pytest.raises(SystemExit):
+        _parse(
+            monkeypatch,
+            ["--speculator-type", "dflash", "--q-lora-rank", "32"],
+        )
+
+
+def test_q_lora_rank_accepted_with_glm5(monkeypatch):
+    args = _parse(
+        monkeypatch,
+        [
+            "--speculator-type",
+            "dflash",
+            "--draft-arch",
+            "glm5",
+            "--q-lora-rank",
+            "32",
+        ],
+    )
+    assert args.q_lora_rank == 32
+    assert args.draft_arch == "glm5"
+
+
+def test_q_lora_rank_rejects_negative(monkeypatch):
+    with pytest.raises(SystemExit):
+        _parse(
+            monkeypatch,
+            [
+                "--speculator-type",
+                "dflash",
+                "--draft-arch",
+                "glm5",
+                "--q-lora-rank=-1",
+            ],
+        )
+
+
 # ---------------------------------------------------------------------------
 # Per-speculator-type defaults for num_layers, per_position_loss_weight, loss_fn
 # (best-practices recipe from https://github.com/vllm-project/speculators/issues/979)
