@@ -56,7 +56,7 @@ import logging
 import os
 import warnings
 from collections.abc import Mapping
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from logging.config import dictConfig
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Union
@@ -118,7 +118,7 @@ def _substitute_placeholders(
 
     substitutions = {
         "{time}": datetime.now().isoformat(timespec="seconds"),
-        "{utc_time}": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        "{utc_time}": datetime.now(UTC).isoformat(timespec="seconds"),
         "{rank}": int(os.environ.get("RANK", "0")),
         "{local_rank}": int(os.environ.get("LOCAL_RANK", "0")),
     }

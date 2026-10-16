@@ -91,7 +91,7 @@ Note: if you are using an experiment tracker (e.g. trackio, wandb, tensorboard, 
 
 **Prerequisites:**
 
-- Python 3.10+
+- Python 3.11+
 - One or more accelerators (NVIDIA GPU, AMD GPU, or Ascend NPU)
 - For offline mode, disk space for the cached hidden states -- see [Estimating Disk Space](#estimating-disk-space-requirements)
 - For MTP, a verifier with native MTP layers (e.g. `Qwen/Qwen3.5-9B`, `Qwen/Qwen3.5-0.8B`)
