@@ -136,6 +136,9 @@ async def _worker(  # noqa: C901
             queue.task_done()
             continue
 
+        staging_hidden_states_path = (
+            hidden_states_output_dir / f".hs_{idx}.safetensors.tmp"
+        )
         target_hidden_states_path = hidden_states_output_dir / f"hs_{idx}.safetensors"
 
         try:
@@ -156,20 +159,23 @@ async def _worker(  # noqa: C901
             async with write_semaphore:
                 t_write = time.perf_counter()
                 await asyncio.to_thread(
-                    shutil.move, hidden_states_path, target_hidden_states_path
+                    shutil.move, hidden_states_path, staging_hidden_states_path
                 )
-                write_s = time.perf_counter() - t_write
                 if validate_outputs:
 
                     def _load_and_check(
-                        path=target_hidden_states_path,
+                        path=staging_hidden_states_path,
                         tokens=item["input_ids"],
                     ):
                         loaded = load_file(path)
                         check_hidden_states(loaded, tokens)
 
                     await asyncio.to_thread(_load_and_check)
+
+                staging_hidden_states_path.replace(target_hidden_states_path)
+                write_s = time.perf_counter() - t_write
         except Exception as e:
+            staging_hidden_states_path.unlink(missing_ok=True)
             if fail_on_error:
                 logger.exception(
                     "Fatal: sample %d aborted with --fail-on-error: %s", idx, e
