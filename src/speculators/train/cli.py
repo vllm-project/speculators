@@ -12,6 +12,10 @@ import numpy as np
 import torch
 import torch.distributed as dist
 import transformers
+from huggingface_hub import constants as hub_constants
+from huggingface_hub import snapshot_download
+from huggingface_hub.errors import HFValidationError, LocalEntryNotFoundError
+from huggingface_hub.utils import validate_repo_id
 from packaging import version
 from transformers import LlamaConfig, PretrainedConfig
 from transformers.models.auto.configuration_auto import AutoConfig
@@ -444,6 +448,48 @@ def parse_vocab_mappings(args: argparse.Namespace):
     return result
 
 
+def _resolve_config_verifier(
+    config: PretrainedConfig,
+    verifier_name_or_path: str | None,
+) -> None:
+    """Use a local verifier for an uncached non-MTP Hub id in offline mode.
+
+    Saved paths and cached Hub snapshots keep precedence. A missing relative
+    path with two components is indistinguishable from a Hub id; use ``./`` to
+    mark such a value as a local path.
+    """
+    speculators_config = getattr(config, "speculators_config", None)
+    if not verifier_name_or_path or speculators_config is None:
+        return
+    verifier = speculators_config.verifier
+    saved = verifier.name_or_path
+    if not saved:
+        verifier.name_or_path = verifier_name_or_path
+        return
+    if (
+        getattr(config, "speculators_model_type", None) == "mtp"
+        or not hub_constants.HF_HUB_OFFLINE
+        or not Path(verifier_name_or_path).is_dir()
+        or Path(saved).exists()
+        or saved.count("/") != 1
+    ):
+        return
+    try:
+        validate_repo_id(saved)
+    except HFValidationError:
+        return
+    try:
+        snapshot_download(saved, local_files_only=True)
+    except LocalEntryNotFoundError:
+        logger.warning(
+            "Offline verifier '%s' has no cached snapshot; using local "
+            "--verifier-name-or-path '%s'. It must contain the same verifier weights.",
+            saved,
+            verifier_name_or_path,
+        )
+        verifier.name_or_path = verifier_name_or_path
+
+
 def _build_from_config_only(
     model_class: type[SpeculatorModel],
     path: str,
@@ -461,16 +507,7 @@ def _build_from_config_only(
     config = model_class.config_class.from_pretrained(path)
     if draft_attn_impl is not None:
         config.transformer_layer_config._attn_implementation = draft_attn_impl  # noqa: SLF001
-    speculators_config = getattr(config, "speculators_config", None)
-    # Fall back to the CLI --verifier-name-or-path only when the saved config has
-    # no verifier path -- either null or blanked to "". A real path in the config
-    # takes precedence and the CLI value is ignored.
-    if (
-        verifier_name_or_path
-        and speculators_config is not None
-        and not getattr(speculators_config.verifier, "name_or_path", None)
-    ):
-        speculators_config.verifier.name_or_path = verifier_name_or_path
+    _resolve_config_verifier(config, verifier_name_or_path)
     model = model_class(config=config)
     if hasattr(model, "load_vocab_mappings"):
         model.load_vocab_mappings(t2d, d2t)  # type: ignore[attr-defined, operator]
@@ -524,6 +561,7 @@ def build_draft_model(
             # __init__ resolves its own default ("sdpa") when it is absent.
             config = model_class.config_class.from_pretrained(args.from_pretrained)
             config.transformer_layer_config._attn_implementation = args.draft_attn_impl  # noqa: SLF001
+            _resolve_config_verifier(config, args.verifier_name_or_path)
             return model_class.from_pretrained(
                 args.from_pretrained,
                 config=config,
