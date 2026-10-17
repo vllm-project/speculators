@@ -3,6 +3,7 @@
 import logging
 from pathlib import Path
 
+import pytest
 import torch
 from datasets import Dataset
 
@@ -11,12 +12,22 @@ from speculators.models.eagle3.data import shift_batch
 from speculators.train.data import (
     ArrowDataset,
     CollateFn,
+    build_client_item,
 )
 from speculators.train.recovery import (
     RECOVERY_METADATA_KEY,
     RecoveryMetadata,
     SampleUnavailable,
 )
+
+
+@pytest.mark.parametrize(
+    "content", ["hello", [{"type": "text", "text": "hello"}], ["hello"], [], None]
+)
+def test_build_client_item_text_only_uses_prepared_token_ids(content):
+    messages = None if content is None else [{"role": "user", "content": content}]
+    row = {"input_ids": torch.tensor([1, 2]), "messages": messages}
+    assert build_client_item(row) == {"input_ids": [1, 2]}
 
 
 def test_shift_batch():

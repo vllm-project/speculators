@@ -229,6 +229,8 @@ async def generate_hidden_states_async(
                 "add_generation_prompt": False,
                 # Re-render to match the stored ``input_ids`` (model-dependent).
                 "continue_final_message": _continue_final_message_for(model),
+                "truncate_prompt_tokens": len(token_ids),
+                "truncation_side": "right",
                 "return_token_ids": True,
             },
             timeout=timeout,
@@ -277,6 +279,8 @@ def generate_hidden_states(
                 "add_generation_prompt": False,
                 # Re-render to match the stored ``input_ids`` (model-dependent).
                 "continue_final_message": _continue_final_message_for(model),
+                "truncate_prompt_tokens": len(token_ids),
+                "truncation_side": "right",
                 "return_token_ids": True,
             },
             timeout=timeout,

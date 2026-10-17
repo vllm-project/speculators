@@ -164,7 +164,7 @@ def _adapt_part_for_vllm(part: str | dict):
     for modality in ("image", "video", "audio"):
         if part_type == modality:
             if local_path := part.get("path"):
-                file_url = f"file://{Path(local_path).absolute()}"
+                file_url = Path(local_path).expanduser().absolute().as_uri()
                 return {"type": f"{modality}_url", f"{modality}_url": {"url": file_url}}
             if url := part.get("url"):
                 return {"type": f"{modality}_url", f"{modality}_url": {"url": url}}
@@ -507,7 +507,7 @@ def _preprocess_batch(
     conversations: list[list[dict]] = examples.get("conversations", [])
 
     # MM inputs are extracted via the Chat Completions API, which needs the
-    # original messages -- token ids alone cannot carry the images.
+    # original messages -- token ids alone cannot carry media references.
     if is_multimodal:
         results["messages"] = []
 
@@ -601,7 +601,7 @@ def build_speculator_training_dataset(
     # These rows carry their supervision mask, so _preprocess_batch passes them
     # through without rendering or boundary derivation.
     pretokenized = {"input_ids", "loss_mask"} <= set(original_cols)
-    # Multimodal rows keep their `messages` so the images survive to hidden-state
+    # Multimodal rows keep their `messages` so media survives to hidden-state
     # extraction. Compute once here rather than pickling the heavyweight processor
     # into every map worker just to recheck it.
     is_multimodal = isinstance(processor, ProcessorMixin)

@@ -220,11 +220,9 @@ def _run_subset(
 ) -> tuple[CsvWriter | None, CsvWriter | None, int | None]:
     """Run benchmark for one subset.
 
-    *subset* is the human-readable label used for output file names and the
-    acceptance CSV.  When ``guidellm_common["dataset"]`` is a local file path
-    the ``--data-args`` flag is suppressed automatically; when it is an HF
-    dataset ID *subset* is also passed as the data-args filter so guidellm
-    loads just that split.
+    *subset* labels output files and the acceptance CSV. For HF datasets,
+    it also selects ``<subset>.jsonl`` unless explicit dataset load kwargs
+    are supplied. Local JSONL files are loaded directly.
     """
 
     logger.info("[%s] Starting", subset)
@@ -238,8 +236,7 @@ def _run_subset(
         **parse_gen_kwargs(args.gen_kwargs),
     }
 
-    # For local JSONL files (SPEED-Bench) the dataset path IS the file —
-    # no --data-args needed.  For HF datasets subset name doubles as the filter.
+    # Local JSONL files need no subset filter. Explicit HF load kwargs override it.
     guidellm_subset = None if Path(guidellm_common["dataset"]).exists() else subset
 
     if is_sweep:
@@ -405,7 +402,6 @@ def run_benchmark(args: argparse.Namespace) -> None:
     all_max_tokens: dict[str, int] = {}
 
     # Build a flat list of (label, guidellm_common) to run uniformly.
-    # _run_subset auto-detects whether --data-args is needed from the dataset path.
     dataset_spec = args.dataset
     run_items: list[tuple[str, dict]] = []
 
@@ -417,6 +413,7 @@ def run_benchmark(args: argparse.Namespace) -> None:
         guidellm_common = {
             "target": args.target,
             "dataset": dataset_spec,
+            "dataset_load_kwargs": getattr(args, "dataset_load_kwargs", None),
             "data_column_mapper": args.data_column_mapper,
             "max_concurrency": args.max_concurrency,
         }
@@ -431,6 +428,7 @@ def run_benchmark(args: argparse.Namespace) -> None:
         "Mode: %s | %d subsets | Output: %s", args.mode, len(run_items), output_dir
     )
     for label, common in run_items:
+        common["data_preprocessors"] = getattr(args, "data_preprocessor", None)
         acceptance_csv, perf_csv, mt = _run_subset(
             label,
             args,
@@ -496,6 +494,14 @@ def main() -> None:
         help=f"HF dataset ID or local directory (default: {DEFAULT_DATASET})",
     )
     parser.add_argument(
+        "--dataset-load-kwargs",
+        default=None,
+        help=(
+            "JSON object passed to Hugging Face load_dataset, replacing the "
+            "default data_files/split. Use --subsets to label the run."
+        ),
+    )
+    parser.add_argument(
         "--subsets",
         default=DEFAULT_SUBSETS,
         help="Comma-separated subset names (default: all 9 standard subsets)",
@@ -545,6 +551,11 @@ def main() -> None:
         f" (default: {DEFAULT_DATA_COLUMN_MAPPER})",
     )
     parser.add_argument(
+        "--data-preprocessor",
+        action="append",
+        help="GuideLLM preprocessor in typed key=value format (repeatable)",
+    )
+    parser.add_argument(
         "--speedbench-data-dir",
         default=None,
         dest="speedbench_data_dir",
@@ -589,6 +600,16 @@ def main() -> None:
         "the partial cache as-is)",
     )
     args = parser.parse_args()
+
+    if args.dataset_load_kwargs is not None:
+        try:
+            args.dataset_load_kwargs = json.loads(args.dataset_load_kwargs)
+        except json.JSONDecodeError as exc:
+            parser.error(f"--dataset-load-kwargs: {exc}")
+        if not isinstance(args.dataset_load_kwargs, dict):
+            parser.error("--dataset-load-kwargs must be a JSON object")
+        if args.dataset == MRCR_DATASET or args.dataset.startswith("speedbench/"):
+            parser.error("--dataset-load-kwargs is not supported for MRCR/SPEED-Bench")
 
     if args.output_dir is None:
         model_name = _fetch_model_name(args.target)
