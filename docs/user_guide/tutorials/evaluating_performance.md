@@ -38,6 +38,7 @@ Both `throughput` and `sweep` share the same options:
 ```
   --target URL               vLLM server endpoint (required)
   --dataset DATASET          HF dataset ID or local dir (default: RedHatAI/speculator_benchmarks)
+  --dataset-load-kwargs JSON HF load_dataset kwargs replacing the default data_files/split
   --subsets LIST             Comma-separated subset names (default: all 9)
   --output-dir DIR           Output directory (default: perf_results_TIMESTAMP)
   --max-concurrency N        Max concurrent requests (default: 128)
@@ -47,7 +48,10 @@ Both `throughput` and `sweep` share the same options:
   --gen-kwargs JSON          Generation kwargs, e.g. '{"temperature":0.6}'
   --data-column-mapper TEXT  Column mapping for guidellm in typed key=value format
                              (default: kind=generative_column_mapper,column_mappings.text_column=prompt)
+  --data-preprocessor TEXT   GuideLLM preprocessor in typed key=value format (repeatable)
 ```
+
+With `--dataset-load-kwargs`, `--subsets` supplies the output label rather than a dataset filter. See the [LibriSpeech audio example](https://github.com/vllm-project/speculators/blob/main/examples/evaluate/example_qwen3_asr_librispeech.sh) for loading a Hugging Face audio split directly.
 
 ## SPEED-Bench
 

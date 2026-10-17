@@ -15,6 +15,7 @@ from typing import Any
 import pytest
 
 from tests.e2e.utils import (
+    ChatPrompts,
     launch_vllm_server_context,
     run_data_generation_offline,
     run_prepare_data,
@@ -114,7 +115,7 @@ def test_offline_smoke(
     tmp_path: Path,
     model: str,
     dataset: str,
-    prompts: list[list[dict[str, str]]],
+    prompts: ChatPrompts,
     speculator_type: str,
     extra_train_args: list[str],
     target_layer_ids: list[int] | None,
@@ -158,7 +159,7 @@ def run_offline_e2e(
     draft_vocab_size: int = 8192,
     epochs: int = 1,
     lr: float = 3e-4,
-    prompts: list[list[dict[str, str]]] | None = None,
+    prompts: ChatPrompts | None = None,
     disable_compile_cache: bool = False,
     max_tokens: int = 50,
     ignore_eos: bool = True,

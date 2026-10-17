@@ -216,6 +216,30 @@ class TestRunGuidellm:
         assert "load_kwargs.data_files=qa.jsonl" in data
         assert "load_kwargs.split=train" in data
 
+    @pytest.mark.parametrize(
+        "load_kwargs",
+        [
+            {},
+            {
+                "name": "clean",
+                "data_files": {"test": ["clean/test/*.parquet"]},
+                "split": "test[:80]",
+            },
+        ],
+    )
+    def test_explicit_huggingface_load_kwargs(self, perf_utils, load_kwargs):
+        cmd = self._capture_cmd(
+            perf_utils,
+            dataset="openslr/librispeech_asr",
+            subset="librispeech_clean_test",
+            dataset_load_kwargs=load_kwargs,
+        )
+        assert json.loads(cmd[cmd.index("--data") + 1]) == {
+            "kind": "huggingface",
+            "source": "openslr/librispeech_asr",
+            "load_kwargs": load_kwargs,
+        }
+
     @pytest.mark.parametrize("dataset", ["/tmp/local.jsonl", "/tmp/local.json"])
     def test_data_local_file_without_subset(self, perf_utils, dataset):
         cmd = self._capture_cmd(
@@ -236,6 +260,19 @@ class TestRunGuidellm:
         assert "kind=sweep" in profile
         assert "sweep_size=10" in profile
         assert "max_concurrency=128" in profile
+
+    @pytest.mark.parametrize(
+        "preprocessors",
+        [None, ["kind=encode_media,audio_kwargs.audio_format=wav"]],
+    )
+    def test_data_preprocessors(self, perf_utils, preprocessors):
+        cmd = self._capture_cmd(perf_utils, data_preprocessors=preprocessors)
+        actual = [
+            cmd[index + 1]
+            for index, arg in enumerate(cmd)
+            if arg == "--data-preprocessor"
+        ]
+        assert actual == (preprocessors or [])
 
     def test_profile_throughput_no_sweep_size(self, perf_utils):
         cmd = self._capture_cmd(perf_utils, profile="throughput", rate=128)
