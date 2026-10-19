@@ -4,6 +4,7 @@ from .dflash import DFlashDraftModel, DFlashSpeculatorConfig
 from .dflash2 import DFlash2DraftModel, DFlash2SpeculatorConfig
 from .dspark import DSparkDraftModel, DSparkSpeculatorConfig
 from .eagle3 import Eagle3DraftModel, Eagle3SpeculatorConfig
+from .lilicorr import LiLiCorrDraftModel, LiLiCorrSpeculatorConfig
 from .mamba_attn_hybrid import (
     MambaAttnHybridDraftModel,
     MambaAttnHybridSpeculatorConfig,
@@ -21,6 +22,8 @@ __all__ = [
     "DSparkSpeculatorConfig",
     "Eagle3DraftModel",
     "Eagle3SpeculatorConfig",
+    "LiLiCorrDraftModel",
+    "LiLiCorrSpeculatorConfig",
     "MTPDraftModel",
     "MTPSpeculatorConfig",
     "MambaAttnHybridDraftModel",

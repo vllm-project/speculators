@@ -733,9 +733,10 @@ _GROUPS: dict[str, type[_Group]] = {
 # falls back to the generic default below.
 _DEFAULT_LOSS_FN: dict[str, str] = {
     "dflash": "ce",
+    "lilicorr": "ce",
     "xpress": '{"ce": 0.1, "tv": 0.9}',
 }
-_DEFAULT_BLOCK_SIZE: dict[str, int] = {"dflash": 16, "xpress": 16}
+_DEFAULT_BLOCK_SIZE: dict[str, int] = {"dflash": 16, "xpress": 16, "lilicorr": 16}
 
 
 class TrainConfig(BaseSettings):
@@ -816,7 +817,8 @@ class TrainConfig(BaseSettings):
     speculator_type: str = Field(
         default="eagle3",
         description="Type of speculator model to train "
-        "(eagle3, dflash, dflash2, dspark, xpress, peagle, mtp, mamba_attn_hybrid).",
+        "(eagle3, dflash, dflash2, dspark, xpress, lilicorr, peagle, mtp, "
+        "mamba_attn_hybrid).",
     )
     dry_run: bool = Field(
         default=False,
@@ -886,6 +888,7 @@ class TrainConfig(BaseSettings):
             "dspark",
             "dflash2",
             "xpress",
+            "lilicorr",
         }
         if self.draft.draft_arch is None:
             self.draft.draft_arch = "llama" if is_eagle3 else "qwen3"
