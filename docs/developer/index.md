@@ -46,7 +46,7 @@ Speculators is an open-source project that values community contributions. We ma
 
 ### Quick Setup
 
-1. **Prerequisites**: Ensure you have Python 3.10+ and Git installed
+1. **Prerequisites**: Ensure you have Python 3.11+ and Git installed
 2. **Clone**: `git clone https://github.com/vllm-project/speculators.git`
 3. **Install**: `pip install -e .[dev]`
 4. **Code Quality**: Run `make quality` to check code quality, or `make style` to auto-fix issues

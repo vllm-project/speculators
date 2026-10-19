@@ -26,7 +26,7 @@ export PYTHONPATH="$repo_root/hs_connectors/src:$repo_root/src${PYTHONPATH:+:$PY
 export TOKENIZERS_PARALLELISM=false
 
 cd "$repo_root"
-python scripts/prepare_data.py \
+python -m speculators prepare-data \
   --model "$model_path" \
   --trust-remote-code \
   --data "$source_jsonl" \
