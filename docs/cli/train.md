@@ -133,6 +133,8 @@ torchrun --standalone --nproc_per_node=4 -m speculators.train \
 
 - **`--optimizer`** (str, default: `"muon"`) Optimizer to use. Options: `adamw`, `muon`. The `muon` option applies the Muon optimizer to 2D weight matrices and AdamW to the remaining parameters (norms, biases, embeddings, lm_head).
 
+- **`--optimizer-implementation`** (str, default: `"fused"`) AdamW implementation to use. Options: `fused`, `eager`. The `fused` option runs the update in a single kernel; `eager` falls back to PyTorch's default (foreach) path for accelerators or dtypes where the fused kernel is unsupported.
+
 - **`--weight-decay`** (float, default: `0.01`) Weight decay for the AdamW optimizer (and the AdamW group in muon mode).
 
 - **`--muon-lr`** (float, default: `lr`) Learning rate for the Muon (2D weights) group. Only used with `--optimizer muon`. Defaults to the `--lr` value.

@@ -19,7 +19,6 @@ from loguru import logger
 
 from tests.conftest import requires_multi_gpu
 from tests.e2e.utils import (
-    SCRIPTS_DIR,
     launch_vllm_server_context,
     run_data_generation_offline,
     run_prepare_data,
@@ -44,7 +43,8 @@ def _run_distributed_training(
         "torch.distributed.run",
         "--nproc_per_node",
         str(nproc),
-        str(SCRIPTS_DIR / "train.py"),
+        "--module",
+        "speculators.train",
         "--verifier-name-or-path",
         MODEL,
         "--speculator-type",
