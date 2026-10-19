@@ -3,6 +3,7 @@ from types import SimpleNamespace
 import pytest
 import torch
 
+from speculators.train.config import TrainConfig
 from speculators.train.optimizers import build_optimizers
 
 
@@ -11,9 +12,10 @@ def _model() -> torch.nn.Module:
     return torch.nn.Sequential(torch.nn.Linear(8, 8), torch.nn.LayerNorm(8))
 
 
-def _config(optimizer: str) -> SimpleNamespace:
+def _config(optimizer: str, implementation: str = "fused") -> SimpleNamespace:
     return SimpleNamespace(
         optimizer=optimizer,
+        optimizer_implementation=implementation,
         lr=1e-3,
         weight_decay=0.01,
         muon_lr=2e-2,
@@ -24,26 +26,49 @@ def _config(optimizer: str) -> SimpleNamespace:
     )
 
 
-def test_adamw_is_fused():
-    (optimizer,) = build_optimizers(_model(), _config("adamw"))
+@pytest.mark.parametrize(
+    ("implementation", "fused"), [("fused", True), ("eager", False)]
+)
+def test_adamw_follows_implementation(implementation, fused):
+    (optimizer,) = build_optimizers(_model(), _config("adamw", implementation))
 
     assert isinstance(optimizer, torch.optim.AdamW)
-    assert all(group["fused"] for group in optimizer.param_groups)
+    assert all(group["fused"] is fused for group in optimizer.param_groups)
 
 
-def test_muon_adamw_group_is_fused():
-    optimizers = build_optimizers(_model(), _config("muon"))
+@pytest.mark.parametrize(
+    ("implementation", "fused"), [("fused", True), ("eager", False)]
+)
+def test_muon_adamw_group_follows_implementation(implementation, fused):
+    optimizers = build_optimizers(_model(), _config("muon", implementation))
 
     adamw = [opt for opt in optimizers if isinstance(opt, torch.optim.AdamW)]
     assert adamw, "muon should pair Muon with AdamW for the non-matrix params"
-    assert all(group["fused"] for opt in adamw for group in opt.param_groups)
+    assert all(group["fused"] is fused for opt in adamw for group in opt.param_groups)
+
+
+def test_fused_is_the_default():
+    assert (
+        TrainConfig.resolve(
+            ["--verifier-name-or-path", "dummy"]
+        ).optimizer.optimizer_implementation
+        == "fused"
+    )
+
+
+def test_implementation_comes_from_the_cli():
+    cfg = TrainConfig.resolve(
+        ["--verifier-name-or-path", "dummy", "--optimizer-implementation", "eager"]
+    )
+    assert cfg.optimizer.optimizer_implementation == "eager"
 
 
 @pytest.mark.parametrize("optimizer", ["adamw", "muon"])
-def test_step_runs(optimizer):
+@pytest.mark.parametrize("implementation", ["fused", "eager"])
+def test_step_runs(optimizer, implementation):
     """The fused path rejects unsupported devices/dtypes at ``step``, not init."""
     model = _model()
-    optimizers = build_optimizers(model, _config(optimizer))
+    optimizers = build_optimizers(model, _config(optimizer, implementation))
     for param in model.parameters():
         param.grad = torch.ones_like(param)
 
