@@ -341,6 +341,12 @@ class OptimizerArgs(_Group):
         description="Optimizer to use. 'muon' applies Muon to 2D weight matrices and "
         "AdamW to the remaining params (norms, biases, embeddings, lm_head).",
     )
+    optimizer_implementation: Literal["fused", "eager"] = Field(
+        default="fused",
+        description="AdamW implementation to use; 'fused' runs the update in a single "
+        "kernel, 'eager' falls back to PyTorch's default (foreach) path for "
+        "accelerators or dtypes where the fused kernel is unsupported.",
+    )
     lr: float = Field(default=1e-3, description="Learning rate (AdamW / base group).")
     weight_decay: float = Field(
         default=0.01,
