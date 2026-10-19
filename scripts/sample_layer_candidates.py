@@ -7,25 +7,25 @@ deliberately outside the pool: ``launch_vllm.py --include-last-layer`` captures
 it separately as the verifier's last hidden states.
 
 Each candidate is printed on its own line as space-separated ids, ready to
-pass to ``--target-layer-ids``; with more than one bias sampled, each group
-is preceded by a ``# <bias>`` comment line. Layer ids index the *input* to
-each block: id ``N`` is the output of block ``N - 1`` (id ``0`` is the
-embedding output).
+pass to ``--target-layer-ids``; with more than one bias type sampled, each
+group is preceded by a ``# <bias-type>`` comment line. Layer ids index the
+*input* to each block: id ``N`` is the output of block ``N - 1`` (id ``0`` is
+the embedding output).
 
 Example:
 
     python scripts/sample_layer_candidates.py \
         --num-layers 32 --num-layer-ids 3 --num-candidates-per-bias 12 \
-        --bias deep --minimum-gap 1 --seed 0
+        --bias-type deep --minimum-gap 1 --seed 0
 """
 
 import argparse
 import random
 
-BIASES = ("uniform", "deep", "shallow", "center", "tails")
+BIAS_TYPES = ("uniform", "deep", "shallow", "center", "tails")
 
 
-def bias_weights(bias: str, num_layers: int) -> list[int]:
+def bias_type_weights(bias_type: str, num_layers: int) -> list[int]:
     """Per-layer sampling weights over ids ``[0, num_layers - 1]``.
 
     Zero-weight layers are never sampled. Weights are proportional to:
@@ -36,18 +36,18 @@ def bias_weights(bias: str, num_layers: int) -> list[int]:
     - ``center``: a triangle peaking at the middle, zero at both ends
     - ``tails``: the inverse triangle -- zero at the middle, peaks at both ends
 
-    :param bias: One of ``BIASES``.
+    :param bias_type: One of ``BIAS_TYPES``.
     :param num_layers: Number of verifier transformer blocks.
     :return: Sampling weight per layer id.
     """
     last = num_layers - 1
-    if bias == "uniform":
+    if bias_type == "uniform":
         return [1] * num_layers
-    if bias == "deep":
+    if bias_type == "deep":
         return list(range(num_layers))
-    if bias == "shallow":
+    if bias_type == "shallow":
         return [last - i for i in range(num_layers)]
-    if bias == "center":
+    if bias_type == "center":
         return [min(i, last - i) for i in range(num_layers)]
     return [abs(2 * i - last) for i in range(num_layers)]
 
@@ -82,7 +82,7 @@ def sample_candidate(
     pick, it and every id within ``minimum_gap`` of it are removed, so any
     two selected ids ``N`` and ``M`` satisfy ``|N - M| > minimum_gap``.
 
-    :param weights: Per-id sampling weight from :func:`bias_weights`.
+    :param weights: Per-id sampling weight from :func:`bias_type_weights`.
     :param size: Number of ids in the candidate (``k``).
     :param minimum_gap: Required pairwise separation, exclusive.
     :param rng: Random generator.
@@ -114,7 +114,7 @@ def sample_candidate(
         if not safe:
             raise ValueError(
                 "no eligible layers left to sample; reduce"
-                " --num-layer-ids or --minimum-gap, or pick a --bias"
+                " --num-layer-ids or --minimum-gap, or pick a --bias-type"
                 " with more positive-weight layers at this depth"
             )
         total = sum(weights[i] for i in safe)
@@ -129,6 +129,71 @@ def sample_candidate(
                 allowed[lo:hi] = [False] * (hi - lo)
                 break
     return sorted(picked)
+
+
+def build_parser() -> argparse.ArgumentParser:
+    """Build the CLI argument parser."""
+    parser = argparse.ArgumentParser(
+        description=(
+            "Sample candidate verifier hidden-state layer-id sets for"
+            " layer-selection ablations. Each line of output is one candidate,"
+            " as space-separated ids usable with --target-layer-ids, grouped"
+            " under # <bias-type> comment headers when several bias types"
+            " are sampled."
+        ),
+        allow_abbrev=False,
+    )
+    parser.add_argument(
+        "--num-layers",
+        type=int,
+        required=True,
+        help=(
+            "Number of verifier transformer blocks; ids span"
+            " [0, num_layers - 1]. The final layer is not in the pool:"
+            " --include-last-layer captures it separately."
+        ),
+    )
+    parser.add_argument(
+        "--num-layer-ids",
+        type=int,
+        required=True,
+        help="Number of layer ids (k) in each candidate set.",
+    )
+    parser.add_argument(
+        "--num-candidates-per-bias",
+        type=int,
+        required=True,
+        help="Number of candidate sets (M) sampled for each bias type.",
+    )
+    parser.add_argument(
+        "--bias-type",
+        nargs="+",
+        choices=BIAS_TYPES,
+        default=list(BIAS_TYPES),
+        help=(
+            "One or more depth weightings of the sampling distribution"
+            " (default: all). deep favors late layers (P proportional to"
+            " id), shallow favors early ones, center peaks mid-depth with"
+            " zero weight at both ends, tails is the inverse of center."
+        ),
+    )
+    parser.add_argument(
+        "--minimum-gap",
+        type=int,
+        default=1,
+        help=(
+            "Enforce |N - M| > minimum-gap for any two ids N, M in a"
+            " candidate (default: 1, which excludes adjacent layers;"
+            " pass 0 to allow them)."
+        ),
+    )
+    parser.add_argument(
+        "--seed",
+        type=int,
+        default=None,
+        help="Random seed for reproducible candidates.",
+    )
+    return parser
 
 
 def validate_args(parser: argparse.ArgumentParser, args: argparse.Namespace) -> None:
@@ -153,85 +218,29 @@ def validate_args(parser: argparse.ArgumentParser, args: argparse.Namespace) -> 
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(
-        description=(
-            "Sample candidate verifier hidden-state layer-id sets for"
-            " layer-selection ablations. Each line of output is one candidate,"
-            " as space-separated ids usable with --target-layer-ids, grouped"
-            " under # <bias> comment headers when several biases are sampled."
-        )
-    )
-    parser.add_argument(
-        "--num-layers",
-        type=int,
-        required=True,
-        help=(
-            "Number of verifier transformer blocks; ids span"
-            " [0, num_layers - 1]. The final layer is not in the pool:"
-            " --include-last-layer captures it separately."
-        ),
-    )
-    parser.add_argument(
-        "--num-layer-ids",
-        type=int,
-        required=True,
-        help="Number of layer ids (k) in each candidate set.",
-    )
-    parser.add_argument(
-        "--num-candidates-per-bias",
-        type=int,
-        required=True,
-        help="Number of candidate sets (M) sampled for each bias.",
-    )
-    parser.add_argument(
-        "--bias",
-        nargs="+",
-        choices=BIASES,
-        default=list(BIASES),
-        help=(
-            "One or more depth weightings of the sampling distribution"
-            " (default: all). deep favors late layers (P proportional to"
-            " id), shallow favors early ones, center peaks mid-depth with"
-            " zero weight at both ends, tails is the inverse of center."
-        ),
-    )
-    parser.add_argument(
-        "--minimum-gap",
-        type=int,
-        default=1,
-        help=(
-            "Enforce |N - M| > minimum-gap for any two ids N, M in a"
-            " candidate (default: 1, which excludes adjacent layers;"
-            " pass 0 to allow them)."
-        ),
-    )
-    parser.add_argument(
-        "--seed",
-        type=int,
-        default=None,
-        help="Random seed for reproducible candidates.",
-    )
+    parser = build_parser()
     args = parser.parse_args()
     validate_args(parser, args)
 
-    biases = list(dict.fromkeys(args.bias))  # dedupe, keep order
-    per_bias_weights: dict[str, list[int]] = {}
-    for bias in biases:
-        weights = bias_weights(bias, args.num_layers)
+    bias_types = list(dict.fromkeys(args.bias_type))  # dedupe, keep order
+    per_bias_type_weights: dict[str, list[int]] = {}
+    for bias_type in bias_types:
+        weights = bias_type_weights(bias_type, args.num_layers)
         if sum(weights) <= 0:
             parser.error(
-                f"--bias {bias} leaves every layer with zero weight at"
-                f" --num-layers {args.num_layers}"
+                f"--bias-type {bias_type} leaves every layer with zero weight"
+                f" at --num-layers {args.num_layers}"
             )
-        per_bias_weights[bias] = weights
+        per_bias_type_weights[bias_type] = weights
 
     rng = random.Random(args.seed)
     try:
-        for bias, weights in per_bias_weights.items():
-            # Header only when several biases are sampled, so single-bias
-            # output is purely numeric (parseable by --target-layer-ids).
-            if len(per_bias_weights) > 1:
-                print(f"# {bias}")
+        for bias_type, weights in per_bias_type_weights.items():
+            # Header only when several bias types are sampled, so output
+            # for a single bias type is purely numeric (parseable by
+            # --target-layer-ids).
+            if len(per_bias_type_weights) > 1:
+                print(f"# {bias_type}")
             for _ in range(args.num_candidates_per_bias):
                 candidate = sample_candidate(
                     weights, args.num_layer_ids, args.minimum_gap, rng

@@ -31,19 +31,20 @@ We provide a utility script to generate candidate layer-id lists:
 ```bash
 # For a target model with 32 layers, this will generate
 # 20 total candidate layer ID lists of 6 hidden state IDs.
-# It will be 4 candidate lists per 'bias', for each of the
-# 5 biases. The bias determines the probability of a layer
-# ID being chosen based on its position. As an example,
-# the 'deep' bias favors larger layer IDs over smaller layer
-# IDs. The --minimum-gap parameter enforces a minimum spacing
-# between layer IDs in each candidate list. In this example,
-# [2,5,7,10,19,20] would be impossible, because the pair (19,20)
-# does not satisfy the minimum-gap of 1.
+# It will be 4 candidate lists per bias type, for each of
+# the 5 bias types. The bias type determines the probability
+# of a layer ID being chosen based on its position. As an
+# example, the 'deep' bias type favors larger layer IDs over
+# smaller layer IDs. The --minimum-gap parameter enforces a
+# minimum spacing between layer IDs in each candidate list.
+# In this example, [2,5,7,10,19,20] would be impossible,
+# because the pair (19,20) does not satisfy the minimum-gap
+# of 1.
 python scripts/sample_layer_candidates.py \
     --num-layers 32 \
     --num-layer-ids 6 \
     --num-candidates-per-bias 4 \
-    --bias uniform deep shallow tails center \
+    --bias-type uniform deep shallow tails center \
     --minimum-gap 1 \
     --seed 0
 ```
