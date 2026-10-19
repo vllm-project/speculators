@@ -6,7 +6,7 @@ from typing import Literal, TypedDict
 
 import torch
 from datasets import Dataset as HFDataset
-from datasets import concatenate_datasets, load_dataset
+from datasets import List, Value, concatenate_datasets, load_dataset
 from huggingface_hub import hf_hub_download
 from transformers import (
     AutoProcessor,
@@ -395,7 +395,7 @@ def _append_row(
     if minimum_valid_tokens is not None and num_valid_tokens < minimum_valid_tokens:
         return "filtered"
     results["input_ids"].append(torch.tensor(input_ids, dtype=torch.long))
-    results["loss_mask"].append(torch.tensor(loss_mask, dtype=torch.long))
+    results["loss_mask"].append(torch.tensor(loss_mask, dtype=torch.bool))
     results["seq_len"].append(len(input_ids))
     return "kept"
 
@@ -608,6 +608,8 @@ def build_speculator_training_dataset(
 
     if pretokenized:
         log.info("Speculator-format rows: using their loss mask, skipping render")
+        # Dataset.map otherwise preserves an existing integer mask schema.
+        dataset = dataset.cast_column("loss_mask", List(Value("bool")))
     elif render_endpoint is None:
         raise ValueError(
             "render_endpoint is required to convert natural-language "
