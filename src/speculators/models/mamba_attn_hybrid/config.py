@@ -160,11 +160,92 @@ class MambaAttnHybridSpeculatorConfig(MambaAttnHybridBaseConfig):
         "EAGLE-3 fc_norm style. Default off = unchanged.",
     )
 
+    enable_lilicorr: bool = Field(
+        default=False,
+        description="Attach the LiLiCorr candidate-lattice selector head "
+        "(models/lilicorr/model_definitions.LiLiCorrHead) as ``self.lilicorr`` and "
+        "add its objective to the loss. When False (default) the head is never "
+        "instantiated and behavior is unchanged. When True requires: full verifier "
+        "vocabulary (draft_vocab_size == verifier vocab), markov_rank=0, "
+        "enable_confidence_head=False, and the latent-seed injection enabled "
+        "(disable_mamba_init_state_injection=False) so the head's anchor context z "
+        "exists. Head geometry comes from the lilicorr_* fields (defaults: K=8, "
+        "head width 1024, factor width 1024, 2 layers, 8 heads, mlp_ratio 2, "
+        "logit_scale 8, vector_eps 1e-4).",
+    )
+    lilicorr_candidate_topk: int = Field(
+        default=8, description="LiLiCorr head: candidates kept per slot."
+    )
+    lilicorr_hidden_size: int | None = Field(
+        default=1024,
+        description="LiLiCorr head width; None uses the draft hidden size.",
+    )
+    lilicorr_factor_dim: int = Field(
+        default=1024, description="LiLiCorr head: width of the out/in factor vectors."
+    )
+    lilicorr_num_layers: int = Field(
+        default=2, description="LiLiCorr head: lattice layers."
+    )
+    lilicorr_num_heads: int = Field(
+        default=8, description="LiLiCorr head: lattice attention heads."
+    )
+    lilicorr_mlp_ratio: float = Field(
+        default=2.0, description="LiLiCorr head: lattice MLP ratio."
+    )
+    lilicorr_logit_scale: float = Field(
+        default=8.0, description="LiLiCorr head: fixed scale on the cosine factors."
+    )
+    lilicorr_vector_eps: float = Field(
+        default=1e-4, description="LiLiCorr head: epsilon for L2 normalization."
+    )
+    lilicorr_w_ce: float = Field(
+        default=0.25,
+        description="LiLiCorr head: weight of the lattice cross-entropy term in "
+        "the combined loss (paper default 0.25).",
+    )
+    lilicorr_w_pen: float = Field(
+        default=0.25,
+        description="LiLiCorr head: weight of the distractor-penalty term in "
+        "the combined loss (paper default 0.25).",
+    )
+
     @model_validator(mode="after")
     def _validate_previous_token_heads(self):
         if self.confidence_head_with_markov and self.markov_rank == 0:
             raise ValueError(
                 "confidence_head_with_markov=True requires markov_rank > 0."
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _validate_lilicorr_combination(self):
+        if not self.enable_lilicorr:
+            return self
+        verifier_vocab = getattr(self.transformer_layer_config, "vocab_size", None)
+        if verifier_vocab is not None and self.draft_vocab_size != verifier_vocab:
+            raise ValueError(
+                "enable_lilicorr=True requires the full verifier vocabulary "
+                f"(draft_vocab_size == {verifier_vocab}); got "
+                f"draft_vocab_size={self.draft_vocab_size}. The LiLiCorr lattice "
+                "gathers top-K candidates from the draft vocabulary logits and "
+                "vLLM cannot serve a reduced draft vocab with the head."
+            )
+        if self.markov_rank != 0:
+            raise ValueError(
+                "enable_lilicorr=True requires markov_rank=0 (the LiLiCorr head "
+                "replaces the Markov correction path); "
+                f"got markov_rank={self.markov_rank}."
+            )
+        if self.enable_confidence_head:
+            raise ValueError(
+                "enable_lilicorr=True requires enable_confidence_head=False "
+                "(the confidence head is a standalone-HSpec option)."
+            )
+        if self.disable_mamba_init_state_injection:
+            raise ValueError(
+                "enable_lilicorr=True requires the latent-seed injection enabled "
+                "(disable_mamba_init_state_injection=False): the head's anchor "
+                "context is HSpec's fused latent z."
             )
         return self
 

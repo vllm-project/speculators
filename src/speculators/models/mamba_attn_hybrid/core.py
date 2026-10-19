@@ -13,6 +13,7 @@ from transformers.models.qwen3.modeling_qwen3 import (
 
 from speculators.model import DraftVocabMixin, SpeculatorModel
 from speculators.models.dspark.model_definitions import ConfidenceHead, MarkovHead
+from speculators.models.lilicorr.model_definitions import LiLiCorrHead
 from speculators.models.mamba_attn_hybrid.attention import (
     create_anchor_block_mask_mod,
     create_block_only_mask_mod,
@@ -404,6 +405,32 @@ class MambaAttnHybridDraftModel(DraftVocabMixin, SpeculatorModel):
                 config.markov_rank if config.confidence_head_with_markov else 0
             )
             self.confidence_head = ConfidenceHead(conf_in_dim)
+        self.lilicorr: LiLiCorrHead | None = None
+        if config.enable_lilicorr:
+            topk = config.lilicorr_candidate_topk
+            if topk < 1 or topk > 16 or topk & (topk - 1):  # noqa: PLR2004
+                raise ValueError(
+                    "lilicorr_candidate_topk must be a power of two <= 16; "
+                    f"got {topk}."
+                )
+            if config.block_size < 2:
+                raise ValueError(
+                    "enable_lilicorr=True requires block_size >= 2 (one anchor "
+                    "slot plus at least one proposal slot)."
+                )
+            self.lilicorr = LiLiCorrHead(
+                model_hidden_size=hidden_size,
+                block_size=self.block_size,
+                candidate_topk=topk,
+                hidden_size=config.lilicorr_hidden_size,
+                factor_dim=config.lilicorr_factor_dim,
+                num_layers=config.lilicorr_num_layers,
+                num_heads=config.lilicorr_num_heads,
+                mlp_ratio=config.lilicorr_mlp_ratio,
+                logit_scale=config.lilicorr_logit_scale,
+                vector_eps=config.lilicorr_vector_eps,
+                rms_norm_eps=tl_config.rms_norm_eps,  # type: ignore[arg-type]
+            )
 
         logger.info("mamba_attn_hybrid recipe: %s", " ".join(block_pattern))
         for k, lid in enumerate(self.attn_kv_layer_ids):
@@ -704,6 +731,7 @@ class MambaAttnHybridDraftModel(DraftVocabMixin, SpeculatorModel):
                 "confidence_head_with_markov", False
             ),
             fc_norm=kwargs.get("fc_norm", False),
+            enable_lilicorr=kwargs.get("enable_lilicorr", False),
             speculators_config=SpeculatorsConfig(
                 algorithm="mamba_attn_hybrid",
                 proposal_methods=[
@@ -1017,5 +1045,92 @@ class MambaAttnHybridDraftModel(DraftVocabMixin, SpeculatorModel):
             loss_config=loss_config,
         )
         draft_tokens = torch.argmax(logits, dim=-1)
+        if self.lilicorr is not None:
+            loss, metrics = self._lilicorr_forward(
+                hidden,
+                logits,
+                targets,
+                aligned_loss_mask,
+                anchored_block_indices,
+                document_ids,
+                z,
+                anchor_valid,
+                loss,
+                metrics,
+            )
 
         return draft_tokens, loss, metrics
+
+    def _lilicorr_forward(
+        self,
+        hidden: torch.Tensor,  # [1, N*B, H] final normalized draft hidden states
+        logits: torch.Tensor,  # [1, N*B, V] uncorrected vocabulary logits
+        targets: torch.Tensor,  # [1, N*B, V] aligned teacher logits
+        aligned_loss_mask: torch.Tensor,  # [1, N*B]
+        anchored_block_indices: torch.Tensor,  # [N*B]
+        document_ids: torch.Tensor,  # [1, total_seq_len]
+        z: torch.Tensor,  # [N, H] fused latent anchor context
+        anchor_valid: torch.Tensor,  # [N] bool
+        backbone_loss: torch.Tensor,
+        metrics: dict,
+    ) -> tuple[torch.Tensor, dict]:
+        """LiLiCorr head pass for the combined model (enable_lilicorr=True).
+
+        Adds ``lilicorr_w_ce * lattice CE + lilicorr_w_pen * distractor penalty``
+        (both default 0.25) to the existing HSpec loss and the head's metrics.
+        The lattice covers block positions 1..B-1 (position 0 is the anchor
+        token and is excluded); candidates are the top-K of HSpec's uncorrected
+        logits with full-vocabulary log-sum-exp normalization; the anchor
+        context is HSpec's fused latent ``z`` (per-layer fc_norm, fusion
+        projection, and hidden_norm already applied in ``forward``).
+        """
+        from speculators.models.lilicorr.core import (  # noqa: PLC0415
+            lilicorr_lattice_terms,
+        )
+
+        num_anchors = hidden.shape[1] // self.block_size
+        block = self.block_size
+        topk = self.lilicorr.candidate_topk
+
+        # Block position 0 is the anchor token; the lattice covers positions 1..B-1.
+        logits_s = logits.view(num_anchors, block, -1)[:, 1:]
+        targets_s = targets.view(num_anchors, block, -1)[:, 1:]
+        hidden_s = hidden.view(num_anchors, block, -1)[:, 1:]
+        slot_mask = aligned_loss_mask.view(num_anchors, block)[:, 1:].bool()
+        block_docs = document_ids[0, anchored_block_indices].view(num_anchors, block)
+        # Score a block only if every slot is supervised and it stays in one document.
+        valid_block = slot_mask.all(-1) & (block_docs == block_docs[:, :1]).all(-1)
+
+        with torch.no_grad():
+            candidate_ids = logits_s.topk(topk, dim=-1).indices  # [N, S, K]
+
+        # Live full-vocabulary log-probs so the lattice terms reach the backbone.
+        candidate_log_probs = logits_s.gather(
+            -1, candidate_ids
+        ).float() - torch.logsumexp(logits_s.float(), dim=-1, keepdim=True)
+
+        ce_loss, pen_loss, lilicorr_metrics, _ = lilicorr_lattice_terms(
+            self.lilicorr,
+            candidate_ids,
+            candidate_log_probs,
+            self.embed_tokens(candidate_ids).detach(),
+            hidden_s,
+            z,
+            anchor_valid,
+            targets_s,
+            valid_block,
+            slot_mask,
+        )
+
+        loss = (
+            backbone_loss
+            + self.config.lilicorr_w_ce * ce_loss
+            + self.config.lilicorr_w_pen * pen_loss
+        )
+
+        metrics["backbone_loss_sum"] = metrics.pop("loss_sum")
+        metrics["backbone_loss_total"] = metrics.pop("loss_total")
+        metrics["loss_sum"] = loss.detach().clone()
+        metrics["loss_total"] = torch.ones((), device=loss.device)
+        metrics.update(lilicorr_metrics)
+        return loss, metrics

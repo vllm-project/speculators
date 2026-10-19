@@ -693,6 +693,15 @@ class MambaAttnHybridArgs(_Group):
         "loss: 'dflash' = fixed exponential position decay (default); 'dpace' = "
         "adaptive Dynamic Position-Aware Cross-Entropy weights.",
     )
+    enable_lilicorr: bool = Field(
+        default=False,
+        description="mamba_attn_hybrid: attach the LiLiCorr candidate-lattice "
+        "selector head to the hybrid backbone and add its objective to the loss "
+        "(HSpec + LiLiCorr combination). Requires full verifier vocabulary, "
+        "markov_rank=0, confidence head disabled, and latent-seed injection "
+        "enabled. Head geometry uses the lilicorr_* defaults (K=8, width 1024).",
+        json_schema_extra=_CLI_BOOL_OPTIONAL,
+    )
 
 
 class MTPArgs(_Group):

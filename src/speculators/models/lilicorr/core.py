@@ -15,7 +15,110 @@ from speculators.models.utils import conditional_torch_compile
 
 __all__ = [
     "LiLiCorrDraftModel",
+    "lilicorr_lattice_terms",
 ]
+
+
+def lilicorr_lattice_terms(
+    head: LiLiCorrHead,
+    candidate_ids: torch.Tensor,  # [N, S, K], descending rank order
+    candidate_log_probs: torch.Tensor,  # [N, S, K], descending rank order
+    token_embeddings: torch.Tensor,  # [N, S, K, H_model], detached
+    pass_hidden: torch.Tensor,  # [N, S, H_model]
+    anchor_hidden: torch.Tensor,  # [N, H_model]
+    anchor_valid: torch.Tensor,  # [N]
+    targets_s: torch.Tensor,  # [N, S, V] aligned teacher logits for the slots
+    valid_block: torch.Tensor,  # [N]
+    slot_mask: torch.Tensor,  # [N, S] bool
+) -> tuple[torch.Tensor, torch.Tensor, dict[str, torch.Tensor], torch.Tensor]:
+    """Score the candidate lattice and return its loss terms and metrics.
+
+    Shared by the standalone LiLiCorr model and the mamba_attn_hybrid +
+    LiLiCorr combination. Everything backbone-specific (candidate ids and their
+    log-probs, pass hidden states, the anchor context row) arrives as explicit
+    tensors; this helper only runs the head and the objective:
+
+    - teacher-forced transitions (slot 0 against the anchor, slot s > 0 leaving
+      the candidate that held the ground truth at slot s-1),
+    - supervision only through the contiguous prefix whose teacher-argmax
+      tokens occur in the lattice, on blocks whose slots are all supervised and
+      within one document,
+    - the distractor penalty, and the greedy walk / EAL metrics.
+
+    ``candidate_log_probs`` and ``pass_hidden`` stay attached to the caller's
+    graph so the lattice terms reach the backbone. Returns ``(ce_loss,
+    pen_loss, metrics, selected_ids)``; a batch with no eligible lattice
+    positions yields finite zero losses (``denominators`` clamp to 1).
+    """
+    topk = head.candidate_topk
+    log_start, log_pair = head(
+        token_embeddings,
+        candidate_log_probs,
+        pass_hidden,
+        anchor_hidden,
+        anchor_valid,
+    )
+
+    with torch.no_grad():
+        gt_ids = targets_s.argmax(-1)  # [N, S]
+        gt_hits = candidate_ids == gt_ids.unsqueeze(-1)
+        gt_in_lattice = gt_hits.any(-1)
+        gt_index = gt_hits.float().argmax(-1)  # [N, S]
+
+    # Teacher-forced node potentials: slot 0 against the anchor, slot s > 0
+    # leaving the candidate that held the ground truth at slot s-1.
+    prev_gt = gt_index[:, :-1, None, None].expand(-1, -1, 1, topk)
+    nodes = torch.cat(
+        [log_start.unsqueeze(1), log_pair.gather(2, prev_gt).squeeze(2)], dim=1
+    )  # [N, S, K]
+    log_p = F.log_softmax(nodes, dim=-1)
+
+    supervised = (
+        gt_in_lattice.long().cumprod(-1).bool() & valid_block[:, None]
+    ).float()
+    denom = supervised.sum().clamp_min(1.0)
+    ce = -log_p.gather(-1, gt_index.unsqueeze(-1)).squeeze(-1)
+    ce_loss = (ce * supervised).sum() / denom
+
+    # Distractor penalty: the head's mass on each candidate, weighted by how far
+    # below the ground truth the target's logit puts it.
+    cand_target_logits = targets_s.gather(-1, candidate_ids).float()
+    gt_target_logit = cand_target_logits.gather(-1, gt_index.unsqueeze(-1))
+    rejection = (gt_target_logit - cand_target_logits).clamp_min(0.0)
+    pen_loss = ((log_p.exp() * rejection).sum(-1) * supervised).sum() / denom
+
+    metrics: dict[str, torch.Tensor] = {}
+    with torch.no_grad():
+        # Greedy left-to-right walk, as served.
+        current = log_start.argmax(-1)
+        picks = [current]
+        for slot in range(head.num_slots - 1):
+            row = log_pair[:, slot].gather(
+                1, current[:, None, None].expand(-1, 1, topk)
+            )
+            current = row.squeeze(1).argmax(-1)
+            picks.append(current)
+        selected_ids = candidate_ids.gather(
+            -1, torch.stack(picks, dim=1).unsqueeze(-1)
+        ).squeeze(-1)
+        eval_mask = slot_mask & valid_block[:, None]
+        ones = torch.ones((), device=ce_loss.device)
+        metrics["lilicorr_ce_sum"] = ce_loss.detach()
+        metrics["lilicorr_ce_total"] = ones.clone()
+        metrics["lilicorr_penalty_sum"] = pen_loss.detach()
+        metrics["lilicorr_penalty_total"] = ones.clone()
+        # Same blocks for all three, so lilicorr_eal - lilicorr_top1_eal is the
+        # head's gain and lilicorr_oracle_eal bounds what any walk could reach.
+        for name, correct in (
+            ("lilicorr_eal", selected_ids == gt_ids),
+            ("lilicorr_top1_eal", candidate_ids[..., 0] == gt_ids),
+            ("lilicorr_oracle_eal", gt_in_lattice),
+        ):
+            eal_sum, eal_total = compute_accepted_length_counts(correct, eval_mask)
+            metrics[f"{name}_sum"] = eal_sum
+            metrics[f"{name}_total"] = eal_total
+
+    return ce_loss, pen_loss, metrics, selected_ids
 
 
 @SpeculatorModel.register("lilicorr")
@@ -146,10 +249,6 @@ class LiLiCorrDraftModel(DFlashDraftModel):
 
         with torch.no_grad():
             candidate_ids = logits_s.topk(topk, dim=-1).indices  # [N, S, K]
-            gt_ids = targets_s.argmax(-1)  # [N, S]
-            gt_hits = candidate_ids == gt_ids.unsqueeze(-1)
-            gt_in_lattice = gt_hits.any(-1)
-            gt_index = gt_hits.float().argmax(-1)  # [N, S]
 
         # Recomputed from the live logits so the lattice terms reach the backbone.
         candidate_log_probs = logits_s.gather(
@@ -165,70 +264,25 @@ class LiLiCorrDraftModel(DFlashDraftModel):
         )
         anchor_hidden = self.hidden_norm(self.fc(hidden_states[0, prev_pos]))
 
-        log_start, log_pair = self.lilicorr(
-            self.embed_tokens(candidate_ids).detach(),
+        ce_loss, pen_loss, lilicorr_metrics, _ = lilicorr_lattice_terms(
+            self.lilicorr,
+            candidate_ids,
             candidate_log_probs,
+            self.embed_tokens(candidate_ids).detach(),
             hidden_s,
             anchor_hidden,
             anchor_valid,
+            targets_s,
+            valid_block,
+            slot_mask,
         )
-
-        # Teacher-forced node potentials: slot 0 against the anchor, slot s > 0
-        # leaving the candidate that held the ground truth at slot s-1.
-        prev_gt = gt_index[:, :-1, None, None].expand(-1, -1, 1, topk)
-        nodes = torch.cat(
-            [log_start.unsqueeze(1), log_pair.gather(2, prev_gt).squeeze(2)], dim=1
-        )  # [N, S, K]
-        log_p = F.log_softmax(nodes, dim=-1)
-
-        supervised = (
-            gt_in_lattice.long().cumprod(-1).bool() & valid_block[:, None]
-        ).float()
-        denom = supervised.sum().clamp_min(1.0)
-        ce = -log_p.gather(-1, gt_index.unsqueeze(-1)).squeeze(-1)
-        ce_loss = (ce * supervised).sum() / denom
-
-        # Distractor penalty: the head's mass on each candidate, weighted by how far
-        # below the ground truth the target's logit puts it.
-        cand_target_logits = targets_s.gather(-1, candidate_ids).float()
-        gt_target_logit = cand_target_logits.gather(-1, gt_index.unsqueeze(-1))
-        rejection = (gt_target_logit - cand_target_logits).clamp_min(0.0)
-        pen_loss = ((log_p.exp() * rejection).sum(-1) * supervised).sum() / denom
 
         loss = dflash_loss + lilicorr_w_ce * ce_loss + lilicorr_w_pen * pen_loss
 
-        with torch.no_grad():
-            # Greedy left-to-right walk, as served.
-            current = log_start.argmax(-1)
-            picks = [current]
-            for slot in range(block - 2):
-                row = log_pair[:, slot].gather(
-                    1, current[:, None, None].expand(-1, 1, topk)
-                )
-                current = row.squeeze(1).argmax(-1)
-                picks.append(current)
-            selected_ids = candidate_ids.gather(
-                -1, torch.stack(picks, dim=1).unsqueeze(-1)
-            ).squeeze(-1)
-            eval_mask = slot_mask & valid_block[:, None]
-            ones = torch.ones((), device=loss.device)
-            metrics["dflash_loss_sum"] = metrics.pop("loss_sum")
-            metrics["dflash_loss_total"] = metrics.pop("loss_total")
-            metrics["loss_sum"] = loss.detach().clone()
-            metrics["loss_total"] = ones
-            metrics["lilicorr_ce_sum"] = ce_loss.detach()
-            metrics["lilicorr_ce_total"] = ones.clone()
-            metrics["lilicorr_penalty_sum"] = pen_loss.detach()
-            metrics["lilicorr_penalty_total"] = ones.clone()
-            # Same blocks for all three, so lilicorr_eal - lilicorr_top1_eal is the
-            # head's gain and lilicorr_oracle_eal bounds what any walk could reach.
-            for name, correct in (
-                ("lilicorr_eal", selected_ids == gt_ids),
-                ("lilicorr_top1_eal", candidate_ids[..., 0] == gt_ids),
-                ("lilicorr_oracle_eal", gt_in_lattice),
-            ):
-                eal_sum, eal_total = compute_accepted_length_counts(correct, eval_mask)
-                metrics[f"{name}_sum"] = eal_sum
-                metrics[f"{name}_total"] = eal_total
+        metrics["dflash_loss_sum"] = metrics.pop("loss_sum")
+        metrics["dflash_loss_total"] = metrics.pop("loss_total")
+        metrics["loss_sum"] = loss.detach().clone()
+        metrics["loss_total"] = torch.ones((), device=loss.device)
+        metrics.update(lilicorr_metrics)
 
         return None, loss, metrics
