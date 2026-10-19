@@ -52,6 +52,20 @@ def bias_weights(bias: str, num_layers: int) -> list[int]:
     return [abs(2 * i - last) for i in range(num_layers)]
 
 
+def _max_picks(ids: list[int], minimum_gap: int) -> int:
+    """Largest number of ``ids`` pairwise separated by more than the gap.
+
+    ``ids`` must be sorted; the greedy left-to-right scan is optimal.
+    """
+    count = 0
+    prev: int | None = None
+    for i in ids:
+        if prev is None or i - prev > minimum_gap:
+            count += 1
+            prev = i
+    return count
+
+
 def sample_candidate(
     weights: list[int],
     size: int,
@@ -62,32 +76,52 @@ def sample_candidate(
 
     Ids are drawn sequentially from the remaining pool, weighted by
     ``weights`` (as in ``numpy.random.choice(..., replace=False, p=...)``).
-    After a pick, it and every id within ``minimum_gap`` of it are removed,
-    so any two selected ids ``N`` and ``M`` satisfy ``|N - M| > minimum_gap``.
+    Only ids that keep the candidate completable -- whose gap exclusion
+    still leaves enough mutually separated eligible ids for the remaining
+    picks -- are considered, so a feasible request never dead-ends. After a
+    pick, it and every id within ``minimum_gap`` of it are removed, so any
+    two selected ids ``N`` and ``M`` satisfy ``|N - M| > minimum_gap``.
 
     :param weights: Per-id sampling weight from :func:`bias_weights`.
     :param size: Number of ids in the candidate (``k``).
     :param minimum_gap: Required pairwise separation, exclusive.
     :param rng: Random generator.
     :return: Sorted list of ``size`` layer ids.
-    :raises ValueError: If the pool is exhausted before ``size`` picks.
+    :raises ValueError: If no valid candidate of ``size`` ids exists.
     """
     allowed = [True] * len(weights)
     picked: list[int] = []
     for _ in range(size):
-        total = sum(w for w, ok in zip(weights, allowed, strict=True) if ok)
-        if total <= 0:
+        remaining = size - len(picked) - 1
+        # Ids that can still be picked: allowed with positive weight.
+        eligible = [
+            i
+            for i, (w, ok) in enumerate(zip(weights, allowed, strict=True))
+            if ok and w > 0
+        ]
+        # A pick is kept only if its gap exclusion still leaves at least
+        # ``remaining`` mutually separated eligible ids; otherwise the
+        # loop could dead-end even though a valid candidate exists.
+        safe = [
+            i
+            for i in eligible
+            if _max_picks(
+                [j for j in eligible if not (i - minimum_gap <= j <= i + minimum_gap)],
+                minimum_gap,
+            )
+            >= remaining
+        ]
+        if not safe:
             raise ValueError(
                 "no eligible layers left to sample; reduce"
                 " --num-layer-ids or --minimum-gap, or pick a --bias"
                 " with more positive-weight layers at this depth"
             )
+        total = sum(weights[i] for i in safe)
         threshold = rng.random() * total
         cumulative = 0
-        for i, (w, ok) in enumerate(zip(weights, allowed, strict=True)):
-            if not ok:
-                continue
-            cumulative += w
+        for i in safe:
+            cumulative += weights[i]
             if threshold < cumulative:
                 picked.append(i)
                 lo = max(0, i - minimum_gap)
@@ -95,6 +129,27 @@ def sample_candidate(
                 allowed[lo:hi] = [False] * (hi - lo)
                 break
     return sorted(picked)
+
+
+def validate_args(parser: argparse.ArgumentParser, args: argparse.Namespace) -> None:
+    """Reject invalid argument values via ``parser.error``."""
+    if args.num_layers < 1:
+        parser.error("--num-layers must be >= 1")
+    if args.num_layer_ids < 1:
+        parser.error("--num-layer-ids must be >= 1")
+    if args.num_candidates_per_bias < 1:
+        parser.error("--num-candidates-per-bias must be >= 1")
+    if args.minimum_gap < 0:
+        parser.error("--minimum-gap must be >= 0")
+    # At most ceil(num_layers / (minimum_gap + 1)) ids can coexist under the
+    # pairwise gap constraint.
+    max_size = -(-args.num_layers // (args.minimum_gap + 1))
+    if args.num_layer_ids > max_size:
+        parser.error(
+            f"--num-layer-ids {args.num_layer_ids} is infeasible:"
+            f" at most {max_size} ids from {args.num_layers} layers can satisfy"
+            f" |N - M| > {args.minimum_gap}"
+        )
 
 
 def main() -> None:
@@ -157,24 +212,7 @@ def main() -> None:
         help="Random seed for reproducible candidates.",
     )
     args = parser.parse_args()
-
-    if args.num_layers < 1:
-        parser.error("--num-layers must be >= 1")
-    if args.num_layer_ids < 1:
-        parser.error("--num-layer-ids must be >= 1")
-    if args.num_candidates_per_bias < 1:
-        parser.error("--num-candidates-per-bias must be >= 1")
-    if args.minimum_gap < 0:
-        parser.error("--minimum-gap must be >= 0")
-    # At most ceil(num_layers / (minimum_gap + 1)) ids can coexist under the
-    # pairwise gap constraint.
-    max_size = -(-args.num_layers // (args.minimum_gap + 1))
-    if args.num_layer_ids > max_size:
-        parser.error(
-            f"--num-layer-ids {args.num_layer_ids} is infeasible:"
-            f" at most {max_size} ids from {args.num_layers} layers can satisfy"
-            f" |N - M| > {args.minimum_gap}"
-        )
+    validate_args(parser, args)
 
     biases = list(dict.fromkeys(args.bias))  # dedupe, keep order
     per_bias_weights: dict[str, list[int]] = {}
@@ -190,7 +228,10 @@ def main() -> None:
     rng = random.Random(args.seed)
     try:
         for bias, weights in per_bias_weights.items():
-            print(f"# {bias}")
+            # Header only when several biases are sampled, so single-bias
+            # output is purely numeric (parseable by --target-layer-ids).
+            if len(per_bias_weights) > 1:
+                print(f"# {bias}")
             for _ in range(args.num_candidates_per_bias):
                 candidate = sample_candidate(
                     weights, args.num_layer_ids, args.minimum_gap, rng

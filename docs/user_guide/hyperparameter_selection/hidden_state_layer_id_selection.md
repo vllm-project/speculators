@@ -11,7 +11,7 @@ However, different hidden states contain different information about upcoming to
 As indicated above, hidden states from different target layers contain different information.
 Nearby layers (and especially adjacent layers, e.g. layer 30 and layer 31) tend to be highly correlated (e.g. see [Gromov, Tirumala et al., 2024](https://arxiv.org/pdf/2403.17887)).
 Thus, if you already have layer 30 in your hidden state selection, adding layer 31 may not provide much **additional** information to the draft model.
-In particular, here is an example of how **NOT** to do layer selection: 1. Do a sweep of all single-layer-id lists. 2. Select the N highest performing layer ids.
+In particular, here is an example of how **NOT** to do layer selection: 1. Do a sweep of all single-layer-ID lists. 2. Select the N highest performing layer IDs.
 This will likely end up with many layers that are close together and highly correlated (e.g. if layer 30 is the top performer, it is likely layer 31 will be in the top N as well).
 
 ## Recommended Layer Selection Strategy
