@@ -1,18 +1,10 @@
 # Hidden State Layer ID Selection
 
-Most speculative decoding architectures use hidden states from multiple layers in the target model as an input (the primary exception is MTP, which always uses the final hidden state).
-For such architectures (Eagle-3, DFlash2, DSpark, etc...), the list of hidden states can be specified with the `--target-layer-ids` training flag.
-The default list of target layer IDs has three items: `[2, num_layers // 2, num_layers - 3]`.
-This is an acceptable default and a good starting point.
-However, different hidden states contain different information about upcoming tokens, thus hidden state layer selection can materially impact the final performance of the model.
+Most speculative decoding architectures use hidden states from multiple layers in the target model as an input (the primary exception is MTP, which always uses the final hidden state). For such architectures (Eagle-3, DFlash2, DSpark, etc...), the list of hidden states can be specified with the `--target-layer-ids` training flag. The default list of target layer IDs has three items: `[2, num_layers // 2, num_layers - 3]`. This is an acceptable default and a good starting point. However, different hidden states contain different information about upcoming tokens, thus hidden state layer selection can materially impact the final performance of the model.
 
 ## Principles to Keep In Mind
 
-As indicated above, hidden states from different target layers contain different information.
-Nearby layers (and especially adjacent layers, e.g. layer 30 and layer 31) tend to be highly correlated (e.g. see [Gromov, Tirumala et al., 2024](https://arxiv.org/pdf/2403.17887)).
-Thus, if you already have layer 30 in your hidden state selection, adding layer 31 may not provide much **additional** information to the draft model.
-In particular, here is an example of how **NOT** to do layer selection: 1. Do a sweep of all single-layer-ID lists. 2. Select the N highest performing layer IDs.
-This will likely end up with many layers that are close together and highly correlated (e.g. if layer 30 is the top performer, it is likely layer 31 will be in the top N as well).
+As indicated above, hidden states from different target layers contain different information. Nearby layers (and especially adjacent layers, e.g. layer 30 and layer 31) tend to be highly correlated (e.g. see [Gromov, Tirumala et al., 2024](https://arxiv.org/pdf/2403.17887)). Thus, if you already have layer 30 in your hidden state selection, adding layer 31 may not provide much **additional** information to the draft model. In particular, here is an example of how **NOT** to do layer selection: 1. Do a sweep of all single-layer-ID lists. 2. Select the N highest performing layer IDs. This will likely end up with many layers that are close together and highly correlated (e.g. if layer 30 is the top performer, it is likely layer 31 will be in the top N as well).
 
 ## Recommended Layer Selection Strategy
 
@@ -49,6 +41,4 @@ python scripts/sample_layer_candidates.py \
     --seed 0
 ```
 
-As in the RFC, using approximately one epoch 4000 samples for the small training runs and one epoch of 64000 samples for the medium training runs is a reasonable starting point.
-This can, of course, be scaled up or down depending on your compute and data capacity.
-Larger and longer small/medium training runs will provide more reliable layer selection at the cost of more compute.
+As in the RFC, using approximately one epoch 4000 samples for the small training runs and one epoch of 64000 samples for the medium training runs is a reasonable starting point. This can, of course, be scaled up or down depending on your compute and data capacity. Larger and longer small/medium training runs will provide more reliable layer selection at the cost of more compute.
