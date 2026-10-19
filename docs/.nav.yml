@@ -5,6 +5,9 @@ nav:
           - Getting Started: user_guide/getting_started.md
           - Features: user_guide/features.md
           - Loss Functions: user_guide/loss_functions.md
+          - Hyperparameter Selection:
+                - user_guide/hyperparameter_selection/index.md
+                - Hidden State Layer ID Selection: user_guide/hyperparameter_selection/hidden_state_layer_id_selection.md
           - Algorithms:
                 - user_guide/algorithms/index.md
                 - Eagle3: user_guide/algorithms/eagle3.md
