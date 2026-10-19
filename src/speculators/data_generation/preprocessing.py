@@ -414,10 +414,9 @@ def _append_boundary_rows(
     num_maybe_truncated = 0
 
     for row in rows:
-        # vLLM applies the requested right-side truncation before returning the
-        # render. A row at the limit may therefore have been truncated, but the
-        # render response does not expose the original length.
-        maybe_truncated = len(row["input_ids"]) >= max_length
+        # The context-limit fallback can reduce the render limit by one token.
+        # Conservatively flag rows at either limit as potentially truncated.
+        maybe_truncated = len(row["input_ids"]) >= max_length - 1
         status = _append_row(
             results,
             row["input_ids"],
@@ -450,7 +449,8 @@ def _warn_seq_length(
     if num_maybe_truncated:
         log.warning(
             f"{num_maybe_truncated} rows may have been truncated because "
-            f"their seq_length==max_seq_length ({max_length}). The assistant "
+            f"their length is at or within one token of --seq-length ({max_length}). "
+            "The assistant "
             "turn may be cut mid-response. Raise --seq-length to reduce truncation."
         )
 

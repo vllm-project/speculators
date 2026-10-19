@@ -165,17 +165,23 @@ def test_append_row_statuses():
     assert results["seq_len"] == [3]
 
 
-def test_append_boundary_rows_counts_rows_at_limit_as_maybe_truncated():
+@pytest.mark.parametrize(("length", "expected"), [(2, 0), (3, 1), (4, 1)])
+def test_append_boundary_rows_counts_rows_near_limit_as_maybe_truncated(
+    caplog, length, expected
+):
     results: dict[str, list] = {"input_ids": [], "loss_mask": [], "seq_len": []}
     rows: list[preprocessing.BoundaryRow] = [
         {
-            "input_ids": [1, 2, 3, 4],
-            "loss_mask": [0, 1, 1, 1],
+            "input_ids": [1, 2, 3, 4][:length],
+            "loss_mask": [0, 1, 1, 1][:length],
             "conv": _conv(2),
         }
     ]
 
-    assert preprocessing._append_boundary_rows(results, rows, 4, None) == (1, 0, 1)
+    counts = preprocessing._append_boundary_rows(results, rows, 4, None)
+    assert counts == (1, 0, expected)
+    preprocessing._warn_seq_length(counts[1], counts[2], 4)
+    assert ("may have been truncated" in caplog.text) == bool(expected)
 
 
 # --------------------------------------------------------------------------- #
