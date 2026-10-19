@@ -77,7 +77,9 @@ def test_finetuning_weight_sanity(tmp_path: Path):
     result = subprocess.run(  # noqa: S603
         [
             sys.executable,
-            "scripts/train.py",
+            "-m",
+            "speculators",
+            "train",
             "--from-pretrained",
             PRETRAINED,
             "--verifier-name-or-path",

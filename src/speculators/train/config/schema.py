@@ -215,9 +215,6 @@ class DataArgs(_Group):
         description="Fraction of the dataset used for training; the remainder is held "
         "out for validation.",
     )
-    noise_std: float = Field(
-        default=0.05, description="Standard deviation for noise augmentation."
-    )
     hidden_states_dtype: str = Field(
         default="bfloat16",
         description="Data type for dataloader hidden states and autocast compute. "
@@ -343,6 +340,12 @@ class OptimizerArgs(_Group):
         default="muon",
         description="Optimizer to use. 'muon' applies Muon to 2D weight matrices and "
         "AdamW to the remaining params (norms, biases, embeddings, lm_head).",
+    )
+    optimizer_implementation: Literal["fused", "eager"] = Field(
+        default="fused",
+        description="AdamW implementation to use; 'fused' runs the update in a single "
+        "kernel, 'eager' falls back to PyTorch's default (foreach) path for "
+        "accelerators or dtypes where the fused kernel is unsupported.",
     )
     lr: float = Field(default=1e-3, description="Learning rate (AdamW / base group).")
     weight_decay: float = Field(
@@ -890,7 +893,7 @@ class TrainConfig(BaseSettings):
         """The impure CLI boundary: parse argv, layer, validate.
 
         Turns any configuration error into a clean ``SystemExit(2)``. This is what
-        ``scripts/train.py`` calls.
+        the ``speculators train`` command calls.
         """
         from speculators.train.config import resolution  # noqa: PLC0415
 

@@ -247,7 +247,7 @@ class _SequenceTransfer:
     def get_cached(self, _file_idx):
         return None
 
-    def get_generated(self, _handle):
+    def get_generated(self, _hs_transfer_params):
         result = self.generated_results.pop(0)
         if isinstance(result, Exception):
             raise result
@@ -289,6 +289,11 @@ def _valid_generated_sample() -> dict[str, torch.Tensor]:
     }
 
 
+def _next_generation_result(handles):
+    handle = next(handles)
+    return handle, {"handle": handle}
+
+
 def test_arrow_dataset_retries_nonfinite_read_then_recovers(
     tmp_path, monkeypatch, caplog
 ):
@@ -304,7 +309,7 @@ def test_arrow_dataset_retries_nonfinite_read_then_recovers(
     monkeypatch.setattr(
         data_module,
         "generate_hidden_states",
-        lambda *_args, **_kwargs: next(handles),
+        lambda *_args, **_kwargs: _next_generation_result(handles),
     )
 
     with caplog.at_level(logging.WARNING, logger="speculators"):
@@ -334,7 +339,7 @@ def test_exhausted_generation_produces_locally_empty_zero_loss_batch(
     monkeypatch.setattr(
         data_module,
         "generate_hidden_states",
-        lambda *_args, **_kwargs: next(handles),
+        lambda *_args, **_kwargs: _next_generation_result(handles),
     )
 
     with caplog.at_level(logging.WARNING, logger="speculators"):
@@ -382,7 +387,7 @@ def test_consecutive_generation_failures_trip_circuit_breaker(
     monkeypatch.setattr(
         data_module,
         "generate_hidden_states",
-        lambda *_args, **_kwargs: next(handles),
+        lambda *_args, **_kwargs: _next_generation_result(handles),
     )
 
     with caplog.at_level(logging.WARNING, logger="speculators"):

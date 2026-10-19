@@ -125,7 +125,9 @@ def test_mtp_roundtrip(tmp_path: Path, seed):
     result = subprocess.run(  # noqa: S603
         [
             sys.executable,
-            "scripts/stitch_mtp.py",
+            "-m",
+            "speculators",
+            "stitch-mtp",
             str(perturbed_path),
             str(verifier_local_path),
             "--output-path",

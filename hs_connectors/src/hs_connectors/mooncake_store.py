@@ -1,9 +1,10 @@
 """Mooncake-backed store for hidden states, keyed by request id.
 
 The file backend (``ExampleHiddenStatesConnector``) needs the vLLM target and
-the trainer to share a filesystem; this stores the same
-``{"hidden_states", "token_ids"}`` payload in a Mooncake store instead, so they
-can run on different nodes.
+the trainer to share a filesystem. This backend stores the tensor payload as a
+raw packed Mooncake object instead, while the versioned transfer manifest
+(tensor shapes, dtypes, and byte offsets) travels separately in the vLLM
+response so the two sides can run on different nodes.
 """
 
 from __future__ import annotations
@@ -13,6 +14,7 @@ import logging
 import threading
 import time
 from dataclasses import dataclass
+from math import prod
 from typing import Any
 
 import torch
@@ -21,8 +23,9 @@ from hs_connectors.device import ensure_accelerator_context
 
 logger = logging.getLogger(__name__)
 
-_MANIFEST_VERSION = 2
-_TRAILER_LEN_BYTES = 8
+
+VERSION = 1
+
 _TENSOR_ALIGN = 64
 _STAGING_GRANULE = 64 << 20
 _OBJECT_NOT_FOUND = -704
@@ -73,25 +76,23 @@ def _align(offset: int) -> int:
     return -(-offset // _TENSOR_ALIGN) * _TENSOR_ALIGN
 
 
-def _encode_trailer(manifest: dict[str, Any]) -> bytes:
-    body = json.dumps(manifest).encode("utf-8")
-    return body + len(body).to_bytes(_TRAILER_LEN_BYTES, "little")
-
-
-def _layout(tensors: dict[str, torch.Tensor]) -> tuple[dict[str, Any], int]:
-    """Assign aligned offsets; return the manifest and where its trailer starts."""
+def packed_layout(
+    tensors: dict[str, tuple[tuple[int, ...], torch.dtype]],
+) -> tuple[dict[str, Any], int]:
+    """Assign aligned offsets; return the tensor spec and total size"""
     specs: dict[str, dict[str, Any]] = {}
     offset = 0
-    for name, tensor in tensors.items():
-        nbytes = tensor.numel() * tensor.element_size()
+    for name, tensor_metadata in tensors.items():
+        shape, dtype = tensor_metadata
+        nbytes = prod(shape) * torch.empty((), dtype=dtype).element_size()
         specs[name] = {
-            "shape": list(tensor.shape),
-            "dtype": str(tensor.dtype),
-            "offset": offset,
+            "shape": shape,
+            "dtype": str(dtype),
             "nbytes": nbytes,
+            "offset": offset,  # byte offset in packed tensor
         }
         offset = _align(offset + nbytes)
-    return {"version": _MANIFEST_VERSION, "status": "ok", "tensors": specs}, offset
+    return specs, offset
 
 
 def _parse_dtype(key: str, name: str, value: Any) -> torch.dtype:
@@ -136,12 +137,13 @@ class MooncakeStoreConfig:
 class MooncakeHiddenStatesStore:
     """Stores/loads tensor dicts in a Mooncake store.
 
-    Each sample is one object: the 64-byte-aligned tensor bytes followed by a
-    JSON manifest (shape, dtype, offset of every tensor) and its 8-byte length. A
-    Mooncake put becomes visible atomically, so the object's presence marks the
-    sample complete. Objects move through per-thread staging buffers that are
-    registered with Mooncake once, so ``put_from``/``get_into`` go zero-copy
-    over RDMA and skip the client-side bounce buffer.
+    Each sample is one raw object containing 64-byte-aligned tensor bytes. The
+    versioned transfer manifest is supplied separately and describes the layout
+    of those bytes. A Mooncake put becomes visible atomically, so the object's
+    presence marks the sample complete. Per-thread staging buffers are
+    registered with Mooncake once, allowing ``put_from``/``get_into`` to use
+    those buffers directly without an additional Mooncake client-side bounce
+    buffer.
     """
 
     def __init__(self, config: MooncakeStoreConfig):
@@ -209,56 +211,136 @@ class MooncakeHiddenStatesStore:
         self._staging[slot] = buffer
         return buffer
 
-    def put_sample(self, key: str, tensors: dict[str, torch.Tensor]) -> None:
+    def put_sample(
+        self, transfer_manifest: dict[str, Any], tensors: dict[str, torch.Tensor]
+    ) -> None:
         """Publish ``tensors``, which may live on the accelerator.
+
+        The transfer manifest supplies the packed byte layout shared with the
+        consumer.
 
         Device tensors are copied into the pinned staging buffer on the current
         stream, so callers can pick the stream the DtoH copy runs on.
         """
+        tensor_spec = transfer_manifest["tensors"]
+        total_bytes = transfer_manifest["metadata"]["total_aligned_bytes"]
+
+        expected_names = set(tensor_spec)
+        actual_names = set(tensors)
+        if actual_names != expected_names:
+            raise MooncakeIntegrityError(
+                "Producer tensor names do not match manifest: "
+                f"expected={sorted(expected_names)}, actual={sorted(actual_names)}"
+            )
+
+        for name, spec in tensor_spec.items():
+            tensor = tensors[name]
+            expected_shape = tuple(spec["shape"])
+            if tuple(tensor.shape) != expected_shape:
+                raise MooncakeIntegrityError(
+                    f"Producer tensor {name!r} shape {tuple(tensor.shape)} does not "
+                    f"match manifest shape {expected_shape}"
+                )
+
+            expected_dtype = _parse_dtype(
+                transfer_manifest["handle"], name, spec["dtype"]
+            )
+            if tensor.dtype != expected_dtype:
+                raise MooncakeIntegrityError(
+                    f"Producer tensor {name!r} dtype {tensor.dtype} does not "
+                    f"match manifest dtype {expected_dtype}"
+                )
+
+            actual_nbytes = tensor.numel() * tensor.element_size()
+            if actual_nbytes != spec["nbytes"]:
+                raise MooncakeIntegrityError(
+                    f"Producer tensor {name!r} has {actual_nbytes} bytes, but the "
+                    f"manifest reserves {spec['nbytes']}"
+                )
+
         store = self._require_store()
-        manifest, trailer_offset = _layout(tensors)
-        trailer = _encode_trailer(manifest)
-        total = trailer_offset + len(trailer)
-        staging = self._staging_buffer("put", total)
-        for name, tensor in tensors.items():
-            spec = manifest["tensors"][name]
+        staging = self._staging_buffer("put", total_bytes)
+
+        for name, spec in tensor_spec.items():
+            tensor = tensors[name]
             region = staging[spec["offset"] : spec["offset"] + spec["nbytes"]]
             region.view(tensor.dtype).view(tensor.shape).copy_(tensor)
-        staging[trailer_offset:total].copy_(
-            torch.frombuffer(bytearray(trailer), dtype=torch.uint8)
-        )
 
-        result = store.put_from(key, staging.data_ptr(), total)
-        _check_store_result("put_from", key, result)
+        handle = transfer_manifest["handle"]
+        result = store.put_from(handle, staging.data_ptr(), total_bytes)
+        _check_store_result("put_from", handle, result)
 
-    def put_error(self, key: str, error: str) -> None:
+    def put_error(self, transfer_manifest: dict[str, Any], error: str) -> None:
         """Publish a small terminal marker so consumers fail fast and can retry."""
         store = self._require_store()
-        manifest = {
-            "version": _MANIFEST_VERSION,
-            "status": "error",
+        error_dict = {
             "error": error[:4096],
-            "tensors": {},
         }
-        _check_store_result("put", key, store.put(key, _encode_trailer(manifest)))
+        error_handle = transfer_manifest["handle"] + ":error"
+
+        _check_store_result(
+            "put",
+            error_handle,
+            store.put(error_handle, json.dumps(error_dict).encode("utf-8")),
+        )
 
     def delete_sample(self, key: str) -> None:
-        """Remove a sample from the store; a missing sample is not an error."""
-        result = self._require_store().remove(key, force=True)
-        if result != _OBJECT_NOT_FOUND:
-            _check_store_result("remove", key, result)
+        """Remove the data and error objects for a sample.
+
+        A missing object is not an error.
+        """
+        error_handle = key + ":error"
+
+        for k in (key, error_handle):
+            result = self._require_store().remove(k, force=True)
+            if result != _OBJECT_NOT_FOUND:
+                _check_store_result("remove", k, result)
 
     def get_sample(
-        self, key: str, timeout: float = 120.0, poll_interval: float = 0.05
+        self,
+        transfer_manifest: dict[str, Any],
+        timeout: float = 120.0,
+        poll_interval: float = 0.05,
     ) -> dict[str, torch.Tensor]:
-        store = self._require_store()
-        self._wait_for(key, timeout, poll_interval)
+        """Wait for and decode a sample described by ``transfer_manifest``.
 
+        Mooncake contains only the packed tensor bytes. The manifest returned
+        by vLLM supplies the layout needed to reconstruct each tensor.
+        """
+
+        if (manifest_version := transfer_manifest.get("version", 0)) != VERSION:
+            raise MooncakeIntegrityError(
+                f"Mooncake manifest version {manifest_version} didn't match "
+                f"local version {VERSION}"
+                f"Transfer manifest: {transfer_manifest}\n"
+            )
+
+        self._wait_for(transfer_manifest, timeout, poll_interval)
+
+        handle = transfer_manifest["handle"]
+        tensor_specs = transfer_manifest["tensors"]
+        expected_payload_size = transfer_manifest["metadata"]["total_aligned_bytes"]
+        staging_tensor = self._read_from_store(handle, expected_payload_size)
+
+        return {
+            name: self._extract_tensor(handle, name, staging_tensor, spec)
+            for name, spec in tensor_specs.items()
+        }
+
+    def _read_from_store(self, key, expected_payload_size: int = 0):
+        """Read one raw Mooncake object into the registered get buffer."""
+        store = self._require_store()
         size = store.get_size(key)
         if not isinstance(size, int) or size < 0:
             raise MooncakeIntegrityError(
-                f"Mooncake sample unavailable for key={key} (status={size})"
+                f"Mooncake value unavailable for key={key} (status={size})"
             )
+        if expected_payload_size > 0 and size != expected_payload_size:
+            raise MooncakeIntegrityError(
+                f"Mooncake payload size {size} doesn't match expected payload "
+                f"size {expected_payload_size}"
+            )
+
         staging = self._staging_buffer("get", size)
         received = store.get_into(key, staging.data_ptr(), size)
         if received != size:
@@ -267,58 +349,36 @@ class MooncakeHiddenStatesStore:
                 f"expected {size} bytes"
             )
 
-        tensor_specs = self._parse_manifest(key, staging[:size])
-        return {
-            name: self._read_tensor(key, name, staging[:size], spec)
-            for name, spec in tensor_specs.items()
-        }
+        return staging[:size]
 
-    @staticmethod
-    def _parse_manifest(key: str, obj: torch.Tensor) -> dict[str, dict[str, Any]]:
-        size = obj.numel()
-        trailer_len = (
-            int.from_bytes(obj[-_TRAILER_LEN_BYTES:].numpy().tobytes(), "little")
-            if size >= _TRAILER_LEN_BYTES
-            else size
-        )
-        if trailer_len + _TRAILER_LEN_BYTES > size:
-            raise MooncakeIntegrityError(
-                f"Truncated Mooncake manifest for key={key}: "
-                f"object={size} bytes, manifest={trailer_len} bytes"
-            )
-        manifest_end = size - _TRAILER_LEN_BYTES
-        raw = obj[manifest_end - trailer_len : manifest_end].numpy().tobytes()
+    def _process_error(self, error_handle, transfer_manifest: dict[str, Any]):
+        """Read a producer error marker and raise it as an integrity error."""
+        obj = self._read_from_store(error_handle)
+
+        raw = obj.numpy().tobytes()
         try:
-            manifest = json.loads(raw)
+            error_dict = json.loads(raw)
         except (UnicodeDecodeError, json.JSONDecodeError) as e:
             raise MooncakeIntegrityError(
-                f"Corrupt Mooncake manifest for key={key}: {e}"
+                f"Corrupt Mooncake json for key={error_handle}: {e}"
             ) from e
 
-        if not isinstance(manifest, dict):
+        if not isinstance(error_dict, dict):
             raise MooncakeIntegrityError(
-                f"Invalid Mooncake manifest type for key={key}: "
-                f"{type(manifest).__name__}"
+                f"Invalid Mooncake error marker for key={error_handle}: "
+                f"Received: {error_dict}\n"
+                f"Transfer manifest: {transfer_manifest}\n"
             )
-        if manifest.get("status") == "error":
-            raise MooncakeIntegrityError(
-                f"Mooncake producer rejected key={key}: "
-                f"{manifest.get('error', 'unknown producer error')}"
-            )
-        if manifest.get("version") != _MANIFEST_VERSION:
-            raise MooncakeIntegrityError(
-                f"Unsupported Mooncake manifest version for key={key}: "
-                f"{manifest.get('version')!r}"
-            )
-        tensor_specs = manifest.get("tensors")
-        if not isinstance(tensor_specs, dict) or not tensor_specs:
-            raise MooncakeIntegrityError(
-                f"Mooncake manifest has no tensors for key={key}"
-            )
-        return tensor_specs
+        raise MooncakeIntegrityError(
+            f"Mooncake producer error for key={error_handle}: "
+            f"{error_dict.get('error', 'unknown producer error')}\n"
+            f"Transfer manifest: {transfer_manifest}\n"
+        )
 
     @staticmethod
-    def _read_tensor(key: str, name: str, obj: torch.Tensor, spec: Any) -> torch.Tensor:
+    def _extract_tensor(
+        key: str, name: str, obj: torch.Tensor, spec: Any
+    ) -> torch.Tensor:
         """Copy one tensor out of the staging buffer, which the next get reuses."""
         try:
             shape = tuple(int(d) for d in spec["shape"])
@@ -338,24 +398,43 @@ class MooncakeHiddenStatesStore:
             )
         return obj[offset : offset + nbytes].view(dtype).view(shape).clone()
 
-    def _wait_for(self, key: str, timeout: float, poll_interval: float) -> None:
-        """Poll with exponential backoff capped at ``poll_interval``.
+    def _wait_for(
+        self,
+        transfer_manifest: dict[str, Any],
+        timeout: float,
+        poll_interval: float,
+    ) -> None:
+        """Wait for the data object or its terminal error marker.
 
         vLLM answers the HTTP request before the connector's put completes, so
         the sample usually lands a few milliseconds after the consumer asks.
+        The error marker is checked first so producer failures take precedence
+        if both keys happen to be visible.
         """
         store = self._require_store()
-        deadline = time.monotonic() + timeout
-        delay = min(_MIN_POLL_INTERVAL, poll_interval)
-        while True:
+
+        def _check_key(key: str) -> bool:
             exists = store.is_exist(key)
             if exists == 1:
-                return
+                return True
             if exists != 0:
                 raise RuntimeError(
                     f"Mooncake is_exist failed for key={key} with status={exists}"
                 )
+            return False
+
+        handle = transfer_manifest["handle"]
+        error_handle = handle + ":error"
+
+        deadline = time.monotonic() + timeout
+        delay = min(_MIN_POLL_INTERVAL, poll_interval)
+        while True:
+            # Prefer the terminal error marker over the data object.
+            if _check_key(error_handle):
+                self._process_error(error_handle, transfer_manifest)
+            if _check_key(handle):
+                return
             if time.monotonic() >= deadline:
-                raise TimeoutError(f"Timed out waiting for Mooncake key: {key}")
+                raise TimeoutError(f"Timed out waiting for Mooncake key: {handle}")
             time.sleep(delay)
             delay = min(delay * 2, poll_interval)
