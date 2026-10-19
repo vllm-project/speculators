@@ -1,6 +1,6 @@
 # Hidden State Layer ID Selection
 
-Most speculative decoding architectures use hidden states from multiple positions in the target model as an input (the primary exception is MTP, which always uses the final hidden state).
+Most speculative decoding architectures use hidden states from multiple layers in the target model as an input (the primary exception is MTP, which always uses the final hidden state).
 For such architectures (Eagle-3, DFlash2, DSpark, etc...), the list of hidden states can be specified with the `--target-layer-ids` training flag.
 The default list of target layer IDs has three items: `[2, num_layers // 2, num_layers - 3]`.
 This is an acceptable default and a good starting point.
