@@ -56,6 +56,8 @@ def compute_metrics(
     ttt_step: int,
     ttt_step_loss_decay: float,
     loss_config: LossConfig | None = None,
+    pred_ids: torch.Tensor | None = None,
+    target_ids: torch.Tensor | None = None,
 ) -> tuple[torch.Tensor, dict]:
     """Compute metrics for a given ttt_step.
 
@@ -67,6 +69,15 @@ def compute_metrics(
         ttt_step: The current ttt_step.
         ttt_step_loss_decay: The loss decay for the current ttt_step.
         loss_config: Mapping of ``{name: (loss_fn, weight)}``.
+        pred_ids: Optional precomputed ``argmax(logits, dim=-1)`` for the
+            *full* (unsliced) logits, shape ``[1, total_seq_len]``. Row-wise
+            argmax commutes with the seq-len slicing in ``align_for_step``,
+            so the sliced ids are identical to argmax of the sliced logits.
+            When omitted, they are computed here.
+        target_ids: Optional precomputed ``argmax(targets, dim=-1)`` for the
+            *full* (unsliced) targets, shape ``[1, total_seq_len]``. The
+            targets matrix is fixed across ttt_steps, so callers can compute
+            this once per forward pass and reuse it every step.
 
     Effects:
         Modifies prev_correct in place.
@@ -97,8 +108,14 @@ def compute_metrics(
         decay_fn=partial(exp_loss_decay, gamma=ttt_step_loss_decay),
     )
 
-    pred_ids = torch.argmax(s_logits, dim=-1)
-    target_ids = torch.argmax(s_targets, dim=-1)
+    if pred_ids is None:
+        pred_ids = torch.argmax(s_logits, dim=-1)
+    else:
+        pred_ids = pred_ids[:, :seq_len]
+    if target_ids is None:
+        target_ids = torch.argmax(s_targets, dim=-1)
+    else:
+        target_ids = target_ids[:, ttt_step:]
 
     full_correct, full_total, cond_correct, cond_total = compute_accuracy_single_step(
         pred_ids, target_ids, s_loss_mask, s_prev_correct

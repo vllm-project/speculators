@@ -252,6 +252,10 @@ class Eagle3DraftModel(DraftVocabMixin, SpeculatorModel):
                     self.verifier_norm(verifier_last_hidden_states)
                 )
                 # shape: [1, total_seq_len, draft_vocab_size]
+                # Targets are fixed across ttt_steps, so their argmax (used by
+                # the accuracy metrics every step) is computed once here.
+                target_ids = torch.argmax(targets, dim=-1)
+                # shape: [1, total_seq_len]
             loss = torch.tensor(0.0, device=device)
 
             # prev_correct is a boolean tensor that is True for tokens that have been
@@ -306,6 +310,11 @@ class Eagle3DraftModel(DraftVocabMixin, SpeculatorModel):
                 logits = self.lm_head(self.norm(hidden_states))
             # shape: [1, total_seq_len, draft_vocab_size]
 
+            # One argmax per step feeds both the accuracy metrics and the
+            # next draft tokens (compute_metrics slices it to the aligned
+            # length, which is exact for a row-wise argmax).
+            pred_ids = torch.argmax(logits, dim=-1)
+
             if return_loss:
                 s_loss, s_metrics = compute_metrics(
                     logits,
@@ -315,11 +324,13 @@ class Eagle3DraftModel(DraftVocabMixin, SpeculatorModel):
                     ttt_step,
                     ttt_step_loss_decay,
                     loss_config=loss_config,
+                    pred_ids=pred_ids,
+                    target_ids=target_ids,
                 )
                 loss += s_loss
                 metrics.update(s_metrics)
 
-            input_ids = torch.argmax(logits, dim=-1)
+            input_ids = pred_ids
             draft_tokens.append(input_ids.detach().clone())
             # shape: [1, total_seq_len]
 
