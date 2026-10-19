@@ -27,6 +27,7 @@ from speculators.models.utils import (
     resolve_draft_intermediate_size,
 )
 from speculators.train.config import TrainConfig
+from speculators.train.data import create_empty_nkv_mamba_sample
 from speculators.train.dataloader import create_train_val_loaders
 from speculators.train.distributed import (
     get_rank,
@@ -556,6 +557,36 @@ def build_draft_model(
             )
         else:
             full_attention_indices = args.full_attention_indices
+            if args.speculator_type == "mamba_attn_hybrid":
+                from speculators.models.mamba_attn_hybrid.config import (  # noqa: PLC0415
+                    parse_block_pattern,
+                )
+
+                n_attn = parse_block_pattern(args.block_pattern).count("attention")
+                if args.num_layers != n_attn:
+                    logger.info(
+                        "mamba_attn_hybrid: setting --num-layers to the %d attention "
+                        "sub-layers in --block-pattern (was %d).",
+                        n_attn,
+                        args.num_layers,
+                    )
+                    args.num_layers = n_attn
+                if args.sliding_window_indices is not None:
+                    bad = [
+                        i
+                        for i in args.sliding_window_indices
+                        if not 0 <= i < args.num_layers
+                    ]
+                    if bad:
+                        raise ValueError(
+                            f"--sliding-window-indices {bad} out of range for "
+                            f"{args.num_layers} attention sub-layers."
+                        )
+                    full_attention_indices = [
+                        i
+                        for i in range(args.num_layers)
+                        if i not in set(args.sliding_window_indices)
+                    ]
             if not full_attention_indices:
                 logger.info(
                     "All %d draft layers using sliding window attention "
@@ -705,6 +736,25 @@ def main(cfg: TrainConfig):  # noqa: C901
     }
     preprocess = preprocess_fns.get(args.speculator_type)
 
+    data_format = "hidden_states"
+    empty_sample_factory = None
+    if args.speculator_type == "mamba_attn_hybrid":
+        data_format = "nkv_mamba"
+        tl_config = draft_model.config.transformer_layer_config
+        num_kv_layers = len(draft_model.target_layer_ids)
+        num_fusion_layers = len(draft_model.config.latent_fusion_layer_ids)
+        head_dim = getattr(tl_config, "head_dim", None) or (
+            tl_config.hidden_size // tl_config.num_attention_heads
+        )
+        empty_sample_factory = lambda: create_empty_nkv_mamba_sample(  # noqa: E731
+            hidden_size=tl_config.hidden_size,
+            num_fusion_layers=num_fusion_layers,
+            num_target_layers=num_kv_layers,
+            num_kv_heads=tl_config.num_key_value_heads,
+            head_dim=head_dim,
+            dtype=hidden_states_dtype,
+        )
+
     backend_registry = HiddenStatesBackend.registry
     backend_cls = backend_registry[args.hidden_states_backend]
     # from_train_args is the live runtime consumer of the backend's (mirrored)
@@ -732,6 +782,8 @@ def main(cfg: TrainConfig):  # noqa: C901
         num_workers=args.num_workers,
         prefetch_factor=args.prefetch_factor,
         preprocess=preprocess,
+        data_format=data_format,
+        empty_sample_factory=empty_sample_factory,
         train_data_ratio=args.train_data_ratio,
         seed=args.seed,
     )

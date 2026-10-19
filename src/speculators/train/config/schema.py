@@ -602,6 +602,99 @@ class PEagleArgs(_Group):
     )
 
 
+class MambaAttnHybridArgs(_Group):
+    """mamba_attn_hybrid-exclusive knobs (block recipe, verifier-KV reuse,
+    Mamba-2 mixer dims, latent-seed fusion)."""
+
+    block_pattern: list[str] = Field(
+        default_factory=lambda: ["mamba", "attention", "mlp"] * 5,
+        description="mamba_attn_hybrid recipe: a flat sequence of {mamba, attention, "
+        "mlp} sub-layers. Each mlp marks the end of one layer; must contain >=1 mamba "
+        "and >=1 attention and end with mlp.",
+    )
+    attn_kv_layer_ids: list[int] | None = Field(
+        default=None,
+        description="mamba_attn_hybrid: the SOLE verifier-KV source -- the verifier KV "
+        "layer each attention sub-layer reads, in attention-block order. REQUIRED for "
+        "the hybrid; the data's KV set is sorted(set(...)). Length must equal the "
+        "number of 'attention' tokens in --block-pattern. Pass the same ids to "
+        "launch_vllm_nkv.py --attn-kv-layer-ids.",
+    )
+    latent_fusion_layer_ids: list[int] | None = Field(
+        default=None,
+        description="Verifier hidden-state layer ids fused into the SSM seed latent. "
+        "Defaults to sorted(set(--attn-kv-layer-ids)) when unset.",
+    )
+    mamba_seed_mode: Literal["per_layer", "shared", "once"] = Field(
+        default="per_layer",
+        description="How the verifier latent z seeds the SSM across mamba sub-layers: "
+        "'per_layer' = a distinct seed proj per sub-layer (default, heaviest); "
+        "'shared' = one shared proj reused everywhere; 'once' = seed only the first "
+        "mamba (later ones start from a zero SSM state).",
+    )
+    mamba_d_state: int = Field(
+        default=16,
+        description="SSM latent state size (d_state) of the Mamba-2 mixer (default: 16).",
+    )
+    mamba_num_heads: int = Field(
+        default=64,
+        description="Number of SSD heads of the Mamba-2 mixer (default: 64).",
+    )
+    mamba_head_dim: int = Field(
+        default=64,
+        description="SSD head dimension of the Mamba-2 mixer (default: 64).",
+    )
+    mamba_n_groups: int = Field(
+        default=1,
+        description="Number of B/C groups of the Mamba-2 mixer (default: 1).",
+    )
+    mamba_conv_kernel: int = Field(
+        default=4,
+        description="Depthwise conv width of the Mamba-2 mixer (default: 4).",
+    )
+    mamba_expand: int = Field(
+        default=1,
+        description="(Deprecated/ignored) former expansion factor; d_inner is "
+        "num_heads * head_dim.",
+    )
+    sliding_window_indices: list[int] | None = Field(
+        default=None,
+        description="mamba_attn_hybrid: attention sub-layer indices that use "
+        "sliding-window attention (window = --sliding-window); every other attention "
+        "sub-layer is full attention. Unset leaves the --full-attention-indices "
+        "convention in charge (all sub-layers windowed unless listed there).",
+    )
+    sliding_window_prefix: int = Field(
+        default=0,
+        description="Number of attention-sink tokens at the start of each document to "
+        "always attend to in sliding window layers (0 = disabled).",
+    )
+    trainable_q_proj: bool = Field(
+        default=False,
+        description="mamba_attn_hybrid: allow draft q_proj to train. Default: frozen.",
+        json_schema_extra=_CLI_BOOL_OPTIONAL,
+    )
+    trainable_kv_proj: bool = Field(
+        default=False,
+        description="mamba_attn_hybrid: allow draft k_proj/v_proj to train. Default: "
+        "frozen.",
+        json_schema_extra=_CLI_BOOL_OPTIONAL,
+    )
+    use_qk_norm: bool = Field(
+        default=True,
+        description="mamba_attn_hybrid: apply per-head RMSNorm (q_norm/k_norm) in the "
+        "hybrid draft attention; --no-use-qk-norm disables it (Identity). Explicit "
+        "choice, no verifier auto-detection.",
+        json_schema_extra=_CLI_BOOL_OPTIONAL,
+    )
+    parallel_drafting_loss_weight: Literal["dflash", "dpace"] = Field(
+        default="dflash",
+        description="mamba_attn_hybrid: per-position weighting of the block-drafting "
+        "loss: 'dflash' = fixed exponential position decay (default); 'dpace' = "
+        "adaptive Dynamic Position-Aware Cross-Entropy weights.",
+    )
+
+
 class MTPArgs(_Group):
     num_speculative_steps: int = Field(
         default=3, description="Number of MTP prediction steps (default: 3)."
@@ -630,6 +723,7 @@ _GROUPS: dict[str, type[_Group]] = {
     "dspark": DSparkArgs,
     "xpress": XPressArgs,
     "peagle": PEagleArgs,
+    "mamba_attn_hybrid": MambaAttnHybridArgs,
     "mtp": MTPArgs,
 }
 
@@ -722,7 +816,7 @@ class TrainConfig(BaseSettings):
     speculator_type: str = Field(
         default="eagle3",
         description="Type of speculator model to train "
-        "(eagle3, dflash, dflash2, dspark, xpress, peagle, mtp).",
+        "(eagle3, dflash, dflash2, dspark, xpress, peagle, mtp, mamba_attn_hybrid).",
     )
     dry_run: bool = Field(
         default=False,
@@ -751,6 +845,7 @@ class TrainConfig(BaseSettings):
     dspark: DSparkArgs = Field(default_factory=DSparkArgs)
     xpress: XPressArgs = Field(default_factory=XPressArgs)
     peagle: PEagleArgs = Field(default_factory=PEagleArgs)
+    mamba_attn_hybrid: MambaAttnHybridArgs = Field(default_factory=MambaAttnHybridArgs)
     mtp: MTPArgs = Field(default_factory=MTPArgs)
 
     @model_validator(mode="after")
@@ -803,7 +898,16 @@ class TrainConfig(BaseSettings):
         if self.optimizer.muon_lr is None:
             self.optimizer.muon_lr = self.optimizer.lr
         if self.draft.num_layers is None:
-            self.draft.num_layers = 5 if is_dflash_family else 1
+            if self.speculator_type == "mamba_attn_hybrid":
+                from speculators.models.mamba_attn_hybrid.config import (  # noqa: PLC0415
+                    parse_block_pattern,
+                )
+
+                self.draft.num_layers = parse_block_pattern(
+                    self.mamba_attn_hybrid.block_pattern
+                ).count("attention")
+            else:
+                self.draft.num_layers = 5 if is_dflash_family else 1
         if self.dflash.per_position_loss_weight is None:
             self.dflash.per_position_loss_weight = (
                 "dpace" if is_dflash else "fixed-exp-decay"

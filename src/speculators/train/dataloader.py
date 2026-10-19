@@ -60,6 +60,7 @@ def _setup_dataloader(
     num_target_layers: int = 3,
     prefetch_factor: int | None = 4,
     preprocess: Callable[[BatchType], BatchType] | None = None,
+    empty_sample_factory: Callable[[], BatchType] | None = None,
     max_batches: int | None = None,
     seed: int = 0,
 ) -> DataLoader:
@@ -84,6 +85,7 @@ def _setup_dataloader(
             num_target_layers=num_target_layers,
             dtype=dataset.hidden_states_dtype,
             preprocess=preprocess,
+            empty_sample_factory=empty_sample_factory,
         ),
         persistent_workers=use_workers,
         multiprocessing_context="spawn" if use_workers else None,
@@ -109,6 +111,8 @@ def create_train_val_loaders(
     num_workers: int,
     prefetch_factor: int,
     preprocess: Callable[[BatchType], BatchType] | None,
+    data_format: Literal["hidden_states", "nkv_mamba"] = "hidden_states",
+    empty_sample_factory: Callable[[], BatchType] | None = None,
     train_data_ratio: float = 0.9,
     max_train_batches: int | None = None,
     seed: int = 0,
@@ -142,6 +146,7 @@ def create_train_val_loaders(
         max_retries=max_retries,
         generation_validation_retries=generation_validation_retries,
         max_consecutive_generation_failures=max_consecutive_generation_failures,
+        data_format=data_format,
     )
     val_dataset: BaseDataset = ArrowDataset(
         datapath=data_path,
@@ -157,6 +162,7 @@ def create_train_val_loaders(
         max_retries=max_retries,
         generation_validation_retries=generation_validation_retries,
         max_consecutive_generation_failures=max_consecutive_generation_failures,
+        data_format=data_format,
     )
 
     train_loader = _setup_dataloader(
@@ -167,6 +173,7 @@ def create_train_val_loaders(
         num_workers=num_workers,
         prefetch_factor=prefetch_factor,
         preprocess=preprocess,
+        empty_sample_factory=empty_sample_factory,
         max_batches=max_train_batches,
         seed=seed,
     )
@@ -178,6 +185,7 @@ def create_train_val_loaders(
         num_workers=num_workers,
         prefetch_factor=prefetch_factor,
         preprocess=preprocess,
+        empty_sample_factory=empty_sample_factory,
     )
 
     return train_loader, val_loader

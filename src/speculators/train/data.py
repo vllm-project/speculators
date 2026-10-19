@@ -55,6 +55,29 @@ def create_empty_sample(
     }
 
 
+def create_empty_nkv_mamba_sample(
+    hidden_size: int,
+    num_fusion_layers: int,
+    num_target_layers: int,
+    num_kv_heads: int,
+    head_dim: int,
+    dtype: torch.dtype = torch.bfloat16,
+):
+    return {
+        "kv_caches": torch.empty(
+            0, num_target_layers, 2, num_kv_heads, head_dim, dtype=dtype
+        ),
+        "verifier_hidden_states": torch.empty(
+            0, num_fusion_layers * hidden_size, dtype=dtype
+        ),
+        "verifier_last_hidden_states": torch.empty(0, hidden_size, dtype=dtype),
+        "input_ids": torch.empty(0, dtype=torch.long),
+        "loss_mask": torch.empty(0, dtype=torch.bool),
+        "lengths": torch.tensor([0], dtype=torch.long),
+        "position_ids": torch.arange(0, dtype=torch.long),
+    }
+
+
 def _has_multimodal_content(messages: list[dict]) -> bool:
     """True when any turn carries non-text content (images, video, audio).
 
@@ -159,6 +182,7 @@ class ArrowDataset(BaseDataset):
         request_timeout: float | None = DEFAULT_REQUEST_TIMEOUT,
         max_retries: int = DEFAULT_MAX_RETRIES,
         generation_validation_retries: int = 2,
+        data_format: Literal["hidden_states", "nkv_mamba"] = "hidden_states",
         max_consecutive_generation_failures: int = 20,
     ):
         self.data = load_from_disk(datapath)
@@ -187,6 +211,7 @@ class ArrowDataset(BaseDataset):
         self.client: openai.OpenAI | None = None
         self.model = model
         self.request_timeout = request_timeout
+        self.data_format = data_format
         self.max_retries = max_retries
         self.generation_recovery = GenerationRecoveryGuard(
             retries=generation_validation_retries,
@@ -321,6 +346,24 @@ class ArrowDataset(BaseDataset):
                 reason=f"Cached token ids do not match sample {index}"
             )
 
+        if self.data_format == "nkv_mamba":
+            if "kv_caches" not in loaded_hs:
+                warnings.warn(
+                    f"nkv_mamba data format expected but no kv_caches key found "
+                    f"for sample {index}. Skipping.",
+                    stacklevel=1,
+                )
+                return SampleUnavailable(reason=f"No kv_caches for sample {index}")
+            kv_caches = loaded_hs["kv_caches"].permute(2, 0, 1, 3, 4)
+            hidden_states = loaded_hs["hidden_states"]
+            return {
+                "kv_caches": kv_caches,
+                "verifier_hidden_states": hidden_states[:, :-1].flatten(1),
+                "verifier_last_hidden_states": hidden_states[:, -1],
+                "input_ids": loaded_hs["token_ids"],
+                "loss_mask": self.data[index]["loss_mask"],
+            }
+
         return {
             "hidden_states": loaded_hs["hidden_states"][:, :-1].flatten(
                 1
@@ -343,12 +386,14 @@ class CollateFn:
         num_target_layers: int = 3,
         dtype: torch.dtype = torch.bfloat16,
         preprocess: Callable[[BatchType], BatchType] | None = None,
+        empty_sample_factory: Callable[[], BatchType] | None = None,
     ):
         self.max_len = max_len
         self.hidden_size = hidden_size
         self.num_target_layers = num_target_layers
         self.dtype = dtype
         self.preprocess = preprocess
+        self.empty_sample_factory = empty_sample_factory
 
     def _clean_batch(
         self, batch: Sequence[BatchType | SampleUnavailable | None]
@@ -385,8 +430,12 @@ class CollateFn:
             # Match the configured `dtype` so the placeholder doesn't crash
             # downstream layers loaded at a different precision (e.g. bf16
             # weights vs fp32 default placeholders).
-            empty = create_empty_sample(
-                self.hidden_size, self.num_target_layers, dtype=dtype
+            empty = (
+                self.empty_sample_factory()
+                if self.empty_sample_factory is not None
+                else create_empty_sample(
+                    self.hidden_size, self.num_target_layers, dtype=dtype
+                )
             )
             if self.preprocess:
                 empty = self.preprocess(empty)
@@ -402,7 +451,9 @@ class CollateFn:
                 continue
             # one copy per sample: preallocated buffer, hidden states cast during write
             first = batch[0][key]  # type: ignore[index]
-            buffer_dtype = dtype if "hidden_states" in key else first.dtype
+            buffer_dtype = (
+                dtype if ("hidden_states" in key or key == "kv_caches") else first.dtype
+            )
             out = torch.zeros(
                 (max_len, *first.shape[1:]), dtype=buffer_dtype, device=first.device
             )
