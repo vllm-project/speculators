@@ -12,7 +12,7 @@
 # throughput, the more each user gains from it.
 #
 # Prerequisites:
-#   pip install "guidellm>=0.8.0" matplotlib     (plus a vLLM that serves the model)
+#   uv pip install -r scripts/evaluate/requirements.txt     (plus a vLLM that serves the model)
 #
 # Usage:
 #   CUDA_VISIBLE_DEVICES=0 bash examples/evaluate/example_qwen3_8_27b_dspark_throughput_interactivity.sh
@@ -20,15 +20,13 @@
 #   port and GPU to run a second copy of this script on the same host).
 #
 # Output (in $OUT_DIR, default ./qwen3_8_27b_dspark_<timestamp>):
-#   <config>_<subset>/            raw GuideLLM JSON per point, server-metrics
-#                                 sidecars, bench_command.txt (provenance, one
-#                                 block per collect call)
-#   <config>_<subset>.csv         one row per point and repeat
+#   <config>_<subset>/            prompts.jsonl, timed GuideLLM result JSON,
+#                                 and eval_command.txt
 #   <subset>.png                  the chart, all configurations
 #   serve_<config>.log            vLLM server logs and the exact serve command
 #
-# Expect about 40 minutes per configuration (three configurations) with the defaults below. Raise
-# REPEATS to 3 before quoting a number; the validate step reports the spread.
+# Scheduled load per point is WARMUP_SECONDS + MAX_SECONDS, plus client overhead. Raise REPEATS to 3
+# before quoting small differences.
 
 set -euo pipefail
 
@@ -40,8 +38,9 @@ MTP_SPEC_TOKENS=2              # MTP draft tokens per step; the head has one lay
                                # default would be 1, and the vLLM recipe for this model suggests 3
 DATASET="RedHatAI/speculator_benchmarks"
 SUBSETS="HumanEval math_reasoning"
-STREAMS_SHORT="1,2,4,8,16"     # 30 s warmup + 90 s window each
-STREAMS_LONG="32,64,128"       # 60 s warmup + 120 s window each
+STREAMS="1,2,4,8,16,32,64,128"
+WARMUP_SECONDS=30
+MAX_SECONDS=100
 MAX_TOKENS=1024
 REPEATS=1
 MAX_MODEL_LEN=16384
@@ -50,8 +49,7 @@ MAX_MODEL_LEN=16384
 MAX_NUM_SEQS=256
 MAX_NUM_BATCHED_TOKENS=16384
 # Prefix caching is off so the curves measure the drafter and nothing else: the
-# repeated prompts would otherwise be prefilled from cache, and GuideLLM cannot see
-# cache hits over HTTP. Serve on one GPU, the way a 27B model is deployed.
+# repeated prompts would otherwise be prefilled from cache. Serve on one GPU, the way a 27B model is deployed.
 VLLM_EXTRA_ARGS=(--no-enable-prefix-caching)
 VLLM_PORT="${VLLM_PORT:-8110}"
 SERVER_START_TIMEOUT=1800      # seconds to wait for the server's /health before giving up
@@ -62,11 +60,9 @@ OUT_DIR="${OUT_DIR:-./qwen3_8_27b_dspark_$(date +%Y%m%d_%H%M%S)}"
 
 EXAMPLE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 BENCH="$(cd "$EXAMPLE_DIR/../../scripts/evaluate" && pwd)/throughput_interactivity.py"
+EVAL="${BENCH%/*}/evaluate.py"
+PYTHON="${PYTHON:-python}"
 
-if ! command -v guidellm &> /dev/null; then
-    echo "ERROR: guidellm not found. Install it first: pip install 'guidellm>=0.8.0' matplotlib"
-    exit 1
-fi
 mkdir -p "$OUT_DIR"
 
 VLLM_PID=""
@@ -108,19 +104,16 @@ start_server() {  # <config> [extra vllm args...]
     echo "vLLM server ready."
 }
 
-INCOMPLETE=()  # <config>_<subset> sweeps with failed points (collect exits non-zero)
+INCOMPLETE=()  # <config>_<subset> sweeps with failed points (speedup exits non-zero)
 sweep() {  # <config> <subset>
-    local config=$1 subset=$2 ok=1
-    local common=(--target "$SERVER_URL" --model "$TARGET_MODEL"
-                  --dataset "$DATASET" --subset "$subset" --max-tokens "$MAX_TOKENS"
-                  --repeats "$REPEATS" --out-dir "$OUT_DIR/${config}_${subset}"
-                  --label "$config" --csv "$OUT_DIR/${config}_${subset}.csv" --keep-going)
-    python "$BENCH" collect "${common[@]}" --streams "$STREAMS_SHORT" \
-        --max-seconds 90 --warmup-seconds 30 || ok=0
-    python "$BENCH" collect "${common[@]}" --streams "$STREAMS_LONG" \
-        --max-seconds 120 --warmup-seconds 60 || ok=0
-    if (( ! ok )); then
-        echo "WARNING: some points of ${config}/${subset} failed; its CSV is incomplete"
+    local config=$1 subset=$2
+    local run_dir="$OUT_DIR/${config}_${subset}"
+    if ! "$PYTHON" "$EVAL" speedup \
+        --target "$SERVER_URL" --model "$TARGET_MODEL" \
+        --dataset "$DATASET" --data-files "${subset}.jsonl" --max-tokens "$MAX_TOKENS" \
+        --repeats "$REPEATS" --output-dir "$run_dir" --label "$config" \
+        --streams "$STREAMS" --max-seconds "$MAX_SECONDS" \
+        --warmup-seconds "$WARMUP_SECONDS"; then
         INCOMPLETE+=("${config}_${subset}")
     fi
 }
@@ -142,8 +135,7 @@ start_server mtp --speculative-config \
 for subset in $SUBSETS; do sweep mtp "$subset"; done
 cleanup
 
-# One chart per dataset, with every configuration that produced a CSV. A sweep
-# whose points all failed has no CSV; it is left off the chart and listed below.
+# One chart per dataset. Only complete sweeps are included.
 declare -A SERIES_NAME=(
     [baseline]="${TARGET_MODEL}, no speculator"
     [dspark]="+ ${SPECULATOR} (${SPEC_TOKENS} draft tokens)"
@@ -153,26 +145,27 @@ declare -A SERIES_COLOR=([baseline]="#7a8c3f" [dspark]="#b52513" [mtp]="#2c6e9b"
 for subset in $SUBSETS; do
     series=()
     for config in baseline dspark mtp; do
-        csv="$OUT_DIR/${config}_${subset}.csv"
-        if [[ -s "$csv" ]]; then
-            series+=(--series "${csv}:${SERIES_NAME[$config]}:${SERIES_COLOR[$config]}")
+        run_dir="$OUT_DIR/${config}_${subset}"
+        if [[ -f "$run_dir/conc${STREAMS##*,}_r${REPEATS}.json" ]] &&
+           [[ " ${INCOMPLETE[*]} " != *" ${config}_${subset} "* ]]; then
+            series+=(--series "${run_dir}:${SERIES_NAME[$config]}:${SERIES_COLOR[$config]}")
         else
-            echo "WARNING: no CSV for ${config}/${subset}; it is left off the chart"
+            echo "WARNING: incomplete results for ${config}/${subset}; it is left off the chart"
         fi
     done
     if (( ${#series[@]} == 0 )); then
         echo "WARNING: no results for ${subset}; no chart"
         continue
     fi
-    python "$BENCH" plot "${series[@]}" \
+    "$PYTHON" "$BENCH" plot "${series[@]}" \
         --title "Output Throughput vs. Interactivity: ${subset}" \
-        --subtitle "${TARGET_MODEL} · ${DATASET} ${subset} · max_tokens ${MAX_TOKENS} · closed loop, N = ${STREAMS_SHORT},${STREAMS_LONG} · ${REPEATS} run(s) per point" \
+        --subtitle "${TARGET_MODEL} · ${DATASET} ${subset} · max_tokens ${MAX_TOKENS} · closed loop, N = ${STREAMS} · ${REPEATS} run(s) per point" \
         --out "$OUT_DIR/${subset}.png" \
         || echo "WARNING: could not draw $OUT_DIR/${subset}.png"
 done
 
 echo ""
-echo "Done. Results in $OUT_DIR: <subset>.png, <config>_<subset>.csv, and raw runs."
+echo "Done. Results in $OUT_DIR: <subset>.png, timed GuideLLM results, and provenance."
 if (( ${#INCOMPLETE[@]} )); then
     echo "Incomplete sweeps (some points failed, see their logs): ${INCOMPLETE[*]}"
     exit 1
