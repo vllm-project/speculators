@@ -289,7 +289,7 @@ def add_config_cli_arguments(parser: argparse.ArgumentParser) -> None:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    """The ``train.py`` parser: ``--config`` plus the schema-generated flags."""
+    """The ``speculators train`` parser: ``--config`` plus schema-generated flags."""
     parser = argparse.ArgumentParser()
     parser.add_argument(
         "--config",
