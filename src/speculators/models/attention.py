@@ -16,15 +16,10 @@ from torch.nn.attention.flex_attention import (
 )
 from transformers.modeling_utils import AttentionInterface
 
-# flex_attention only uses its memory-efficient fused kernel when it runs under
-# torch.compile; called eagerly it falls back to the reference implementation
-# that materializes the full [B, H, Q, KV] scores (O(seq^2) memory). The model
-# forward is torch.compile'd, but a graph break at the attention dispatch can
-# drop this call to the eager path and OOM on long sequences. Compile the call
-# directly so the fused kernel is used regardless (mirrors the existing
-# `_compiled_create_block_mask` in dflash/core.py).
+from speculators.models.utils import conditional_torch_compile
 
-_compiled_flex_attention = torch.compile(flex_attention)
+# Compile flex attention on CUDA to avoid dense scores during checkpoint recompute.
+_compiled_flex_attention = conditional_torch_compile(flex_attention)
 
 
 def flex_attention_forward(
