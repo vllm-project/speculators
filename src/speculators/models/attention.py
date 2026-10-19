@@ -16,6 +16,11 @@ from torch.nn.attention.flex_attention import (
 )
 from transformers.modeling_utils import AttentionInterface
 
+from speculators.models.utils import conditional_torch_compile
+
+# Compile flex attention on CUDA to avoid dense scores during checkpoint recompute.
+_compiled_flex_attention = conditional_torch_compile(flex_attention)
+
 
 def flex_attention_forward(
     module: torch.nn.Module,  # noqa: ARG001
@@ -52,7 +57,7 @@ def flex_attention_forward(
     key = key.contiguous()
     value = value.contiguous()
 
-    flex_attention_output = flex_attention(
+    flex_attention_output = _compiled_flex_attention(
         query,
         key,
         value,
