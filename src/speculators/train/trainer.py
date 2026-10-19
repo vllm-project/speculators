@@ -322,6 +322,30 @@ class Trainer:
                     f"Restored best_val_loss={self.best_val_loss:.6f} from checkpoint"
                 )
 
+    def _precast_frozen_linear_weights(self) -> None:
+        """Store frozen fp32 ``nn.Linear`` weights in the autocast dtype.
+
+        Autocast rounds a linear's fp32 weight to the compute dtype on every
+        matmul; for frozen weights that rounded value never changes, so
+        storing it once removes a per-use ``[out, in]`` device copy (about
+        1 ms/step for vocab-sized heads) while keeping every matmul input --
+        and therefore every result -- bit-identical. Trainable weights keep
+        their fp32 master copy, and frozen non-linear weights (embeddings,
+        norms) are left alone: embedding lookups are dtype-preserving, so
+        pre-casting those would change results.
+        """
+        dtype = self.config.hidden_states_dtype
+        for module in self.model.modules():
+            if not isinstance(module, torch.nn.Linear):
+                continue
+            weight = module.weight
+            if (
+                not weight.requires_grad
+                and weight.is_floating_point()
+                and weight.dtype != dtype
+            ):
+                module.weight.data = weight.data.to(dtype)
+
     def setup_model(self):
         # Verify model is compatible with training infrastructure
         SpeculatorModel.verify_training_compatible(self.model)
@@ -339,6 +363,11 @@ class Trainer:
                 )
             self.model.gradient_checkpointing_enable()
             root_logger.info("Gradient checkpointing enabled")
+
+        # Before any DDP/FSDP wrapping (which buckets/shard parameters) and
+        # before checkpoints load (their fp32 values copy_ into the cast
+        # parameters unchanged).
+        self._precast_frozen_linear_weights()
 
         load_checkpoint = (
             self.resume_from_checkpoint and self.checkpointer.previous_epoch != -1
