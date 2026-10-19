@@ -22,6 +22,7 @@ nav:
                 - Train a Speculator: user_guide/tutorials/train.md
                 - Multi-Node Training: user_guide/tutorials/multi_node_training.md
                 - Response Regeneration: user_guide/tutorials/response_regeneration.md
+                - RAG Training Data: user_guide/tutorials/rag.md
                 - Evaluating Model Performance: user_guide/tutorials/evaluating_performance.md
                 - Throughput vs. Interactivity: user_guide/tutorials/throughput_interactivity.md
                 - Serve in vLLM: user_guide/tutorials/serve_vllm.md
