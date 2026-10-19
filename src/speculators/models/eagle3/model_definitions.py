@@ -67,7 +67,13 @@ class Eagle3FirstLayerMixin:
         #   hidden_states = self.input_layernorm(hidden_states)
 
         # ##### Start of Eagle3 modifications #####
-
+        # Gradient checkpointing replays this forward during backward, after later
+        # TTT steps have grown the shared cache; drop those entries so the replay
+        # attends over the same prefix as the original forward.
+        if past_key_values is not None and cache_position is not None:
+            extra = past_key_values.get_seq_length() - int(cache_position[0])
+            if extra > 0:
+                past_key_values.crop(-extra)
         # hidden_states are cat([embeds, hidden], dim=-1)
         # so residual should be hidden part only, and embeds should be normalized
         mid = hidden_states.shape[2] // 2
@@ -111,6 +117,8 @@ class Eagle3FirstLayerMixin:
 
 
 class LlamaDecoderEagle3FirstLayer(Eagle3FirstLayerMixin, LlamaDecoderLayer):  # type:ignore[misc]
+    _can_checkpoint_with_cache = True
+
     def __init__(
         self,
         config: LlamaConfig,
@@ -122,6 +130,8 @@ class LlamaDecoderEagle3FirstLayer(Eagle3FirstLayerMixin, LlamaDecoderLayer):  #
 
 
 class Qwen3DecoderEagle3FirstLayer(Eagle3FirstLayerMixin, Qwen3DecoderLayer):  # type:ignore[misc]
+    _can_checkpoint_with_cache = True
+
     def __init__(
         self,
         config: Qwen3Config,
