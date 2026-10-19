@@ -87,6 +87,14 @@ def render_conversation(
     resp = _post(url, json=body, timeout=timeout)
 
     if (
+        resp.status_code == HTTPStatus.BAD_REQUEST
+        and "max_tokens must be at least 1" in resp.text
+        and truncate_prompt_tokens
+    ):
+        body["truncate_prompt_tokens"] = truncate_prompt_tokens - 1
+        resp = _post(url, json=body, timeout=timeout)
+
+    if (
         HTTPStatus.BAD_REQUEST <= resp.status_code < HTTPStatus.INTERNAL_SERVER_ERROR
         and resp.status_code not in TRANSIENT_STATUSES
     ):
