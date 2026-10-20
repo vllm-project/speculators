@@ -13,6 +13,7 @@ from speculators.train.data import (
     ArrowDataset,
     CollateFn,
     SpeculatorsDataset,
+    identity_collate,
 )
 from speculators.train.data_types import DatasetRecord
 from speculators.train.recovery import (
@@ -287,6 +288,8 @@ def _make_generation_dataset(
         records=records,
         max_len=8,
         hidden_states=source,
+        hidden_size=4,
+        num_target_layers=1,
     )
     source.client = object()  # type: ignore[assignment]
     return dataset
@@ -309,6 +312,24 @@ def _valid_generated_sample() -> dict[str, torch.Tensor]:
         "hidden_states": torch.ones(3, 2, 4, dtype=torch.bfloat16),
         "token_ids": torch.tensor([1, 2, 3], dtype=torch.long),
     }
+
+
+def test_speculators_dataset_getitems_builds_collated_batch(tmp_path, monkeypatch):
+    transfer = _SequenceTransfer([_valid_generated_sample()])
+    dataset = _make_generation_dataset(tmp_path, transfer)
+    handles = iter(["handle"])
+    monkeypatch.setattr(
+        source_module,
+        "generate_hidden_states",
+        lambda *_args, **_kwargs: _next_generation_result(handles),
+    )
+
+    batch = identity_collate(dataset.__getitems__([0]))
+
+    assert batch["input_ids"].shape == (1, 8)
+    assert batch["hidden_states"].shape == (1, 8, 4)
+    assert batch["document_ids"].shape == (1, 8)
+    assert batch["error_records"] == 0
 
 
 def test_offline_hidden_states_source_loads_cached_sample():
@@ -540,9 +561,9 @@ def test_collator_keeps_valid_samples_when_one_generation_fails():
         consecutive_failures=1,
     )
 
-    collated = CollateFn(8, 4, num_target_layers=1)([None, failure, valid])
+    collated = CollateFn(8, 4, num_target_layers=1)([failure, valid])
 
-    assert collated["error_records"] == 2
+    assert collated["error_records"] == 1
     metadata = collated[RECOVERY_METADATA_KEY]
     assert isinstance(metadata, RecoveryMetadata)
     assert not metadata.locally_empty

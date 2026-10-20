@@ -14,7 +14,6 @@ from torch.utils.data import DataLoader
 from hs_connectors import FileTransfer, HiddenStatesTransfer
 from speculators.train.data import (
     ArrowDataset,
-    CollateFn,
     SpeculatorsDataset,
 )
 from speculators.train.distributed import get_dp_rank, get_dp_size
@@ -56,15 +55,14 @@ def _worker_init_fn(worker_id: int) -> None:  # noqa: ARG001
     if torch.accelerator.is_available():
         torch.accelerator.set_device_index(local_rank)
 
+def identity_fn(x):
+    return x
 
 def _setup_dataloader(
     dataset: SpeculatorsDataset,
     total_seq_len: int,
-    hidden_size: int,
     num_workers: int = 12,
-    num_target_layers: int = 3,
     prefetch_factor: int | None = 4,
-    preprocess: Callable[[BatchType], BatchType] | None = None,
     max_batches: int | None = None,
     seed: int = 0,
 ) -> DataLoader:
@@ -83,13 +81,7 @@ def _setup_dataloader(
         num_workers=num_workers,
         prefetch_factor=prefetch_factor if use_workers else None,
         pin_memory=True,
-        collate_fn=CollateFn(
-            total_seq_len,
-            hidden_size,
-            num_target_layers=num_target_layers,
-            dtype=dataset.hidden_states_dtype,
-            preprocess=preprocess,
-        ),
+        collate_fn=identity_fn,
         persistent_workers=use_workers,
         multiprocessing_context="spawn" if use_workers else None,
         worker_init_fn=_worker_init_fn if use_workers else None,
@@ -169,34 +161,34 @@ def create_train_val_loaders(
         records=train_records,
         max_len=total_seq_len,
         hidden_states=hidden_states_source,
+        hidden_size=hidden_size,
         hidden_states_dtype=hidden_states_dtype,
+        num_target_layers=num_target_layers,
+        preprocess=preprocess,
     )
     val_dataset = SpeculatorsDataset(
         records=val_records,
         max_len=total_seq_len,
         hidden_states=hidden_states_source,
+        hidden_size=hidden_size,
         hidden_states_dtype=hidden_states_dtype,
+        num_target_layers=num_target_layers,
+        preprocess=preprocess,
     )
 
     train_loader = _setup_dataloader(
         train_dataset,
         total_seq_len,
-        hidden_size,
-        num_target_layers=num_target_layers,
         num_workers=num_workers,
         prefetch_factor=prefetch_factor,
-        preprocess=preprocess,
         max_batches=max_train_batches,
         seed=seed,
     )
     val_loader = _setup_dataloader(
         val_dataset,
         total_seq_len,
-        hidden_size,
-        num_target_layers=num_target_layers,
         num_workers=num_workers,
         prefetch_factor=prefetch_factor,
-        preprocess=preprocess,
     )
 
     return train_loader, val_loader

@@ -99,9 +99,15 @@ class SpeculatorsDataset(Dataset):
         max_len: int,
         records: ArrowDataset,
         hidden_states: HiddenStatesSource,
+        hidden_size: int,
         hidden_states_dtype=torch.bfloat16,
+        num_target_layers: int = 3,
+        preprocess: Callable[[BatchType], BatchType] | None = None,
     ):
         self.max_len = max_len
+        self.hidden_size = hidden_size
+        self.num_target_layers = num_target_layers
+        self.preprocess = preprocess
         self.hidden_states_dtype = hidden_states_dtype
         self.records = records
         self.hidden_states = hidden_states
@@ -147,13 +153,133 @@ class SpeculatorsDataset(Dataset):
             "position_ids": torch.arange(seq_len, dtype=torch.long),
         }
 
+    def __getitems__(self, indices: list[int]) -> BatchType:
+        """Fetch and collate a DataLoader batch into its final representation."""
+        samples = [self[index] for index in indices]
+        return _collate_samples(
+            samples,
+            max_len=self.max_len,
+            hidden_size=self.hidden_size,
+            num_target_layers=self.num_target_layers,
+            dtype=self.hidden_states_dtype,
+            preprocess=self.preprocess,
+        )
+
     def close(self) -> None:
         """Close resources owned by the hidden-state source."""
         self.hidden_states.close()
 
 
+def _clean_batch(
+    batch: Sequence[BatchType | SampleUnavailable],
+    preprocess: Callable[[BatchType], BatchType] | None,
+) -> tuple[list[BatchType], list[SampleUnavailable], int]:
+    """Preprocess valid samples and collect unavailable or dropped samples."""
+    unavailable = []
+    num_dropped = 0
+    valid_batch: list[BatchType] = []
+    for item in batch:
+        if isinstance(item, SampleUnavailable):
+            unavailable.append(item)
+            num_dropped += 1
+            continue
+
+        valid_batch.append(preprocess(item) if preprocess else item)
+    return valid_batch, unavailable, num_dropped
+
+
+def _pad_samples(batch: list[BatchType], max_len: int, dtype: torch.dtype) -> BatchType:
+    """Copy samples into one fixed-length, padded batch."""
+    collated_data: BatchType = {}
+    for key in batch[0]:
+        if key == "lengths":
+            collated_data[key] = torch.cat([sample[key] for sample in batch], dim=0)
+            continue
+
+        # One copy per sample: preallocated buffer, hidden states cast during write.
+        first = batch[0][key]
+        buffer_dtype = dtype if "hidden_states" in key else first.dtype
+        out = torch.zeros(
+            (max_len, *first.shape[1:]), dtype=buffer_dtype, device=first.device
+        )
+        offset = 0
+        for sample in batch:
+            tensor = sample[key]
+            num_rows = min(tensor.shape[0], max_len - offset)
+            out[offset : offset + num_rows] = tensor[:num_rows]
+            offset += num_rows
+            if offset == max_len:
+                break
+        collated_data[key] = out.unsqueeze(0)
+    return collated_data
+
+
+def _add_document_ids(collated_data: BatchType, max_len: int) -> None:
+    """Truncate document lengths and add document IDs for packed attention."""
+    # Include lengths until they fit in max_len. The last included length is
+    # truncated if necessary; any additional lengths are discarded.
+    lengths = collated_data.pop("lengths")
+    new_lengths = []
+    cum_length = 0
+    for length in lengths:
+        if length + cum_length >= max_len:
+            new_lengths.append(max_len - cum_length)
+            break
+        new_lengths.append(length)
+        cum_length += length
+    lengths = torch.tensor(new_lengths, dtype=torch.long)
+
+    # Each position maps to its document, with -1 for padding.
+    document_ids = torch.repeat_interleave(
+        torch.arange(lengths.shape[0], dtype=torch.long), lengths
+    )
+    document_ids = torch.cat(
+        [
+            document_ids,
+            -1 * torch.ones(max_len - document_ids.shape[0], dtype=torch.long),
+        ]
+    ).unsqueeze(0)
+    collated_data["document_ids"] = document_ids
+
+
+def _collate_samples(
+    batch: Sequence[BatchType | SampleUnavailable],
+    *,
+    max_len: int,
+    hidden_size: int,
+    num_target_layers: int,
+    dtype: torch.dtype,
+    preprocess: Callable[[BatchType], BatchType] | None,
+) -> BatchType:
+    """Pack per-sample results into the fixed-shape training batch."""
+    valid_batch, unavailable, num_dropped = _clean_batch(batch, preprocess)
+
+    if not valid_batch:
+        # Create empty sample which then gets padded to full batch size if no
+        # valid samples are found. Match the configured dtype so the placeholder
+        # doesn't crash downstream layers loaded at a different precision.
+        empty = create_empty_sample(hidden_size, num_target_layers, dtype=dtype)
+        valid_batch = [preprocess(empty) if preprocess else empty]
+        locally_empty = True
+    else:
+        locally_empty = False
+
+    collated_data = _pad_samples(valid_batch, max_len, dtype)
+    _add_document_ids(collated_data, max_len)
+
+    collated_data["error_records"] = num_dropped
+    metadata = RecoveryMetadata.from_unavailable(
+        unavailable,
+        locally_empty=locally_empty,
+    )
+    if metadata.failure_count or metadata.locally_empty:
+        collated_data[RECOVERY_METADATA_KEY] = metadata
+
+    return collated_data
+
+
 class CollateFn:
-    """Picklable collate function for use with ``multiprocessing_context='spawn'``."""
+    """Compatibility wrapper for callers that collate samples directly."""
 
     def __init__(
         self,
@@ -169,106 +295,12 @@ class CollateFn:
         self.dtype = dtype
         self.preprocess = preprocess
 
-    def _clean_batch(
-        self, batch: Sequence[BatchType | SampleUnavailable | None]
-    ) -> tuple[list[BatchType], list[SampleUnavailable], int]:
-        """Preprocess valid samples and collect unavailable and dropped samples."""
-        preprocess = self.preprocess
-        unavailable = []
-        num_dropped = 0
-        new_batch = []
-        for item in batch:
-            if item is None:
-                num_dropped += 1
-                continue
-            if isinstance(item, SampleUnavailable):
-                unavailable.append(item)
-                num_dropped += 1
-                continue
-
-            new_batch.append(preprocess(item) if preprocess else item)
-
-        return new_batch, unavailable, num_dropped
-
-    def __call__(
-        self, batch: Sequence[BatchType | SampleUnavailable | None]
-    ) -> BatchType:
-        max_len = self.max_len
-        dtype = self.dtype
-
-        batch, unavailable, num_dropped = self._clean_batch(batch)
-
-        if not batch:
-            # Create empty sample which then gets padded to full
-            # batch size if no valid samples are found.
-            # Match the configured `dtype` so the placeholder doesn't crash
-            # downstream layers loaded at a different precision (e.g. bf16
-            # weights vs fp32 default placeholders).
-            empty = create_empty_sample(
-                self.hidden_size, self.num_target_layers, dtype=dtype
-            )
-            if self.preprocess:
-                empty = self.preprocess(empty)
-            batch = [empty]
-            locally_empty = True
-        else:
-            locally_empty = False
-
-        collated_data: BatchType = {}
-        for key in batch[0]:  # type: ignore[union-attr]
-            if key == "lengths":
-                collated_data[key] = torch.cat([b[key] for b in batch], dim=0)  # type: ignore[index]
-                continue
-            # one copy per sample: preallocated buffer, hidden states cast during write
-            first = batch[0][key]  # type: ignore[index]
-            buffer_dtype = dtype if "hidden_states" in key else first.dtype
-            out = torch.zeros(
-                (max_len, *first.shape[1:]), dtype=buffer_dtype, device=first.device
-            )
-            offset = 0
-            for b in batch:
-                tensor = b[key]  # type: ignore[index]
-                num_rows = min(tensor.shape[0], max_len - offset)
-                out[offset : offset + num_rows] = tensor[:num_rows]
-                offset += num_rows
-                if offset == max_len:
-                    break
-            collated_data[key] = out.unsqueeze(0)
-            # shape: [1, max_len, ...]
-
-        # Include lengths until while they fit in max_len
-        # The last included length is (if necessary) truncated
-        # Any additional lengths are discarded
-        lengths = collated_data.pop("lengths")
-        new_lengths = []
-        cum_length = 0
-        for length in lengths:
-            if length + cum_length >= max_len:
-                new_lengths.append(max_len - cum_length)
-                break
-            new_lengths.append(length)
-            cum_length += length
-        lengths = torch.tensor(new_lengths, dtype=torch.long)
-
-        # Create document_ids: maps each position to its document index, -1 for padding
-        document_ids = torch.repeat_interleave(
-            torch.arange(lengths.shape[0], dtype=torch.long), lengths
+    def __call__(self, batch: Sequence[BatchType | SampleUnavailable]) -> BatchType:
+        return _collate_samples(
+            batch,
+            max_len=self.max_len,
+            hidden_size=self.hidden_size,
+            num_target_layers=self.num_target_layers,
+            dtype=self.dtype,
+            preprocess=self.preprocess,
         )
-        document_ids = torch.cat(
-            [
-                document_ids,
-                -1 * torch.ones(max_len - document_ids.shape[0], dtype=torch.long),
-            ]
-        ).unsqueeze(0)
-        # shape: [1, max_len]
-        collated_data["document_ids"] = document_ids
-
-        collated_data["error_records"] = num_dropped
-        metadata = RecoveryMetadata.from_unavailable(
-            unavailable,
-            locally_empty=locally_empty,
-        )
-        if metadata.failure_count or metadata.locally_empty:
-            collated_data[RECOVERY_METADATA_KEY] = metadata
-
-        return collated_data
