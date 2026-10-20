@@ -56,6 +56,8 @@ def compute_metrics(
     ttt_step: int,
     ttt_step_loss_decay: float,
     loss_config: LossConfig | None = None,
+    pred_ids: torch.Tensor | None = None,
+    target_ids: torch.Tensor | None = None,
 ) -> tuple[torch.Tensor, dict]:
     """Compute metrics for a given ttt_step.
 
@@ -67,6 +69,9 @@ def compute_metrics(
         ttt_step: The current ttt_step.
         ttt_step_loss_decay: The loss decay for the current ttt_step.
         loss_config: Mapping of ``{name: (loss_fn, weight)}``.
+        pred_ids: Optional precomputed ``argmax(logits, -1)`` (unaligned, shape
+            ``[1, total_seq_len]``); avoids a second argmax over the vocab.
+        target_ids: Optional precomputed ``argmax(targets, -1)`` (unaligned).
 
     Effects:
         Modifies prev_correct in place.
@@ -97,8 +102,16 @@ def compute_metrics(
         decay_fn=partial(exp_loss_decay, gamma=ttt_step_loss_decay),
     )
 
-    pred_ids = torch.argmax(s_logits, dim=-1)
-    target_ids = torch.argmax(s_targets, dim=-1)
+    # argmax is row-wise, so slicing precomputed ids with the same alignment
+    # as logits/targets gives exactly argmax of the aligned tensors.
+    if pred_ids is None:
+        pred_ids = torch.argmax(s_logits, dim=-1)
+    elif ttt_step > 0:
+        pred_ids = pred_ids[:, :-ttt_step]
+    if target_ids is None:
+        target_ids = torch.argmax(s_targets, dim=-1)
+    else:
+        target_ids = target_ids[:, ttt_step:]
 
     full_correct, full_total, cond_correct, cond_total = compute_accuracy_single_step(
         pred_ids, target_ids, s_loss_mask, s_prev_correct
