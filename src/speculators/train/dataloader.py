@@ -16,6 +16,7 @@ from speculators.train.data import (
     ArrowDataset,
     BaseDataset,
     CollateFn,
+    SpeculatorsDataset,
 )
 from speculators.train.distributed import get_dp_rank, get_dp_size
 from speculators.train.distributed_batch_sampler import (
@@ -128,14 +129,23 @@ def create_train_val_loaders(
     if not (0.0 < train_data_ratio < 1.0):
         raise ValueError(f"train_data_ratio must be in (0, 1), got {train_data_ratio}")
 
-    train_dataset: BaseDataset = ArrowDataset(
+    train_records = ArrowDataset(
         datapath=data_path,
+        train_ratio=train_data_ratio,
+        split="train",
+    )
+    val_records = ArrowDataset(
+        datapath=data_path,
+        train_ratio=train_data_ratio,
+        split="val",
+    )
+
+    train_dataset: BaseDataset = SpeculatorsDataset(
+        records=train_records,
         max_len=total_seq_len,
         transfer=transfer,
         vllm_endpoint=vllm_endpoint,
         on_missing=on_missing,
-        train_ratio=train_data_ratio,
-        split="train",
         model=verifier_name_or_path,
         hidden_states_dtype=hidden_states_dtype,
         num_target_layers=num_target_layers,
@@ -144,14 +154,12 @@ def create_train_val_loaders(
         generation_validation_retries=generation_validation_retries,
         max_consecutive_generation_failures=max_consecutive_generation_failures,
     )
-    val_dataset: BaseDataset = ArrowDataset(
-        datapath=data_path,
+    val_dataset: BaseDataset = SpeculatorsDataset(
+        records=val_records,
         max_len=total_seq_len,
         transfer=transfer,
         vllm_endpoint=vllm_endpoint,
         on_missing=on_missing,
-        train_ratio=train_data_ratio,
-        split="val",
         model=verifier_name_or_path,
         hidden_states_dtype=hidden_states_dtype,
         num_target_layers=num_target_layers,

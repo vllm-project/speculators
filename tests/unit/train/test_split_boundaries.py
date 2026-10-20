@@ -25,9 +25,7 @@ def _dataset(tmp_path: Path, n: int) -> str:
 
 def _split(path: str, ratio: float, split: Literal["train", "val"]) -> ArrowDataset:
     return ArrowDataset(
-        max_len=128,
         datapath=path,
-        on_missing="skip",
         train_ratio=ratio,
         split=split,
     )
@@ -42,7 +40,7 @@ def test_splits_are_exactly_complementary(tmp_path, ratio, n):
 
     assert len(train) + len(val) == n, "splits must partition the dataset"
     assert len(train) == int(n * ratio)
-    assert val.start_file_idx == len(train), "val must begin where train ends"
+    assert val.start_storage_index == len(train), "val must begin where train ends"
     assert len(train) > 0
     assert len(val) > 0
 
