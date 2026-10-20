@@ -102,24 +102,17 @@ class BaseDataset(Dataset):
         return data
 
 
-class ArrowDataset(BaseDataset):
+class ArrowDataset(Dataset):
+    """Load preprocessed Arrow rows and expose them as dataset records."""
+
     def __init__(
         self,
-        max_len: int,
         datapath: str | PathLike,
-        transfer: HiddenStatesTransfer | None = None,
-        vllm_endpoint: str = "http://localhost:8000/v1",
-        on_missing: Literal["generate", "skip", "warn", "raise"] = "generate",
         train_ratio: float = 1.0,
         split: Literal["train", "val"] = "train",
-        hidden_states_dtype=torch.bfloat16,
-        model: str | None = None,
-        request_timeout: float | None = DEFAULT_REQUEST_TIMEOUT,
-        max_retries: int = DEFAULT_MAX_RETRIES,
-        generation_validation_retries: int = 2,
-        max_consecutive_generation_failures: int = 20,
     ):
-        self.data = load_from_disk(datapath)
+        self.datapath = Path(datapath)
+        self.data = load_from_disk(self.datapath)
         if not 0.0 < train_ratio <= 1.0:
             raise ValueError(f"train_ratio must be in (0.0, 1.0], got {train_ratio}")
         if split == "val" and train_ratio == 1.0:
@@ -134,12 +127,44 @@ class ArrowDataset(BaseDataset):
         if start >= stop:
             raise ValueError(
                 f"{split} split is empty (dataset has {len(self.data)} rows, "
-                f"train_ratio={train_ratio} gives split_idx={split_idx})"
+                f"train_ratio={train_ratio} gives split_idx={split_idx}"
             )
-        self.start_file_idx = start
+        self.start_storage_index = start
         self.data = self.data.select(range(start, stop))
+        self.approx_lengths = list(self.data.with_format(None)["seq_len"])
 
-        self.transfer = transfer or FileTransfer(Path(datapath) / "hidden_states")
+    def _map_to_storage_index(self, index: int) -> int:
+        return index + self.start_storage_index
+
+    def __len__(self) -> int:
+        return len(self.data)
+
+    def __getitem__(self, index: int) -> DatasetRecord:
+        return DatasetRecord.from_arrow_row(
+            self.data[index],
+            storage_index=self._map_to_storage_index(index),
+        )
+
+
+class SpeculatorsDataset(BaseDataset):
+    """Combine Arrow records with hidden states for training."""
+
+    def __init__(
+        self,
+        max_len: int,
+        records: ArrowDataset,
+        transfer: HiddenStatesTransfer | None = None,
+        vllm_endpoint: str = "http://localhost:8000/v1",
+        on_missing: Literal["generate", "skip", "warn", "raise"] = "generate",
+        hidden_states_dtype=torch.bfloat16,
+        model: str | None = None,
+        request_timeout: float | None = DEFAULT_REQUEST_TIMEOUT,
+        max_retries: int = DEFAULT_MAX_RETRIES,
+        generation_validation_retries: int = 2,
+        max_consecutive_generation_failures: int = 20,
+    ):
+        self.records = records
+        self.transfer = transfer or FileTransfer(records.datapath / "hidden_states")
         self.on_missing = on_missing
         self.offline_source = OfflineHiddenStatesSource(transfer=self.transfer)
         self.vllm_source = VllmHiddenStatesSource(
@@ -155,25 +180,15 @@ class ArrowDataset(BaseDataset):
         # Delay super init so that `_compute_approx_lengths` has required data
         super().__init__(max_len, hidden_states_dtype)
 
-    def _map_to_file_idx(self, index: int):
-        return index + self.start_file_idx
-
-    def _get_record(self, index: int) -> DatasetRecord:
-        """Convert a local Arrow row into the training data contract."""
-        return DatasetRecord.from_arrow_row(
-            self.data[index],
-            storage_index=self._map_to_file_idx(index),
-        )
-
-    def __len__(self):
-        return len(self.data)
+    def __len__(self) -> int:
+        return len(self.records)
 
     def _compute_approx_lengths(self) -> list[int]:
         """Get lengths of the dataset samples."""
-        return list(self.data.with_format(None)["seq_len"])
+        return self.records.approx_lengths
 
     def _get_raw_data(self, index: int) -> BatchType | SampleUnavailable:
-        record = self._get_record(index)
+        record = self.records[index]
         cached_hs = self.offline_source.get_one(record)
         if cached_hs is None:
             if self.on_missing == "generate":

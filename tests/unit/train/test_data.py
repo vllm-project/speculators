@@ -11,6 +11,7 @@ from speculators.models.eagle3.data import shift_batch
 from speculators.train.data import (
     ArrowDataset,
     CollateFn,
+    SpeculatorsDataset,
 )
 from speculators.train.data_types import DatasetRecord
 from speculators.train.recovery import (
@@ -225,14 +226,12 @@ def test_arrow_dataset_default_train_ratio_does_not_crash(tmp_path: Path):
     (tmp_path / "data" / "hidden_states").mkdir()
 
     arrow_ds = ArrowDataset(
-        max_len=128,
         datapath=str(tmp_path / "data"),
-        on_missing="skip",
     )
 
     # Should not raise AttributeError
-    assert arrow_ds._map_to_file_idx(0) == 0
-    assert arrow_ds._map_to_file_idx(5) == 5
+    assert arrow_ds._map_to_storage_index(0) == 0
+    assert arrow_ds._map_to_storage_index(5) == 5
 
 
 class _SequenceTransfer:
@@ -262,7 +261,7 @@ def _make_generation_dataset(
     tmp_path: Path,
     transfer: _SequenceTransfer,
     **kwargs,
-) -> ArrowDataset:
+) -> SpeculatorsDataset:
     ds = Dataset.from_dict(
         {
             "input_ids": [[1, 2, 3]],
@@ -271,22 +270,25 @@ def _make_generation_dataset(
         }
     )
     ds.save_to_disk(str(tmp_path / "data"))
-    arrow_ds = ArrowDataset(
-        max_len=8,
+    records = ArrowDataset(
         datapath=str(tmp_path / "data"),
+    )
+    records.data.set_format(type="torch")
+    dataset = SpeculatorsDataset(
+        records=records,
+        max_len=8,
         transfer=transfer,  # type: ignore[arg-type]
         **kwargs,
     )
-    arrow_ds.data.set_format(type="torch")
-    arrow_ds.vllm_source.client = object()  # type: ignore[assignment]
-    arrow_ds.vllm_source.model = "model"
-    return arrow_ds
+    dataset.vllm_source.client = object()  # type: ignore[assignment]
+    dataset.vllm_source.model = "model"
+    return dataset
 
 
 def test_arrow_dataset_builds_explicit_dataset_record(tmp_path):
     arrow_ds = _make_generation_dataset(tmp_path, _SequenceTransfer([]))
 
-    record = arrow_ds._get_record(0)
+    record = arrow_ds.records[0]
 
     assert torch.equal(record.input_ids, torch.tensor([1, 2, 3]))
     assert torch.equal(record.loss_mask, torch.tensor([1, 1, 1]))

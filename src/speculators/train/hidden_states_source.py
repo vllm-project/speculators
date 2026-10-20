@@ -54,10 +54,10 @@ class OfflineHiddenStatesSource:
 class VllmHiddenStatesSource:
     """Generate and retrieve hidden states from a vLLM endpoint.
 
-    This is intentionally a small extraction of the existing ArrowDataset
-    behavior. Cache lookup and the ``on_missing`` policy remain in
-    :class:`ArrowDataset` for now; this object owns only the vLLM round trip,
-    validation, cleanup, and generation recovery.
+    This is intentionally a small extraction of the existing
+    :class:`SpeculatorsDataset` behavior. Cache lookup and the ``on_missing``
+    policy remain in :class:`SpeculatorsDataset` for now; this object owns only
+    the vLLM round trip, validation, cleanup, and generation recovery.
     """
 
     def __init__(
