@@ -44,6 +44,7 @@ nav:
           - train.py: cli/train.md
           - response_regeneration: cli/response_regeneration.md
           - throughput_interactivity.py: cli/throughput_interactivity.md
+    - Open Research Hub: research
     - Community:
           - community/index.md
           - Contact Us: community/contact_us.md
