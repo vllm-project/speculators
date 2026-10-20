@@ -8,15 +8,9 @@ import torch
 from datasets import load_from_disk
 from torch.utils.data import Dataset
 
-from hs_connectors import FileTransfer, HiddenStatesTransfer
-from speculators.data_generation.vllm_client import (
-    DEFAULT_MAX_RETRIES,
-    DEFAULT_REQUEST_TIMEOUT,
-)
 from speculators.train.data_types import DatasetRecord
 from speculators.train.hidden_states_source import (
-    OfflineHiddenStatesSource,
-    VllmHiddenStatesSource,
+    HiddenStatesSource,
 )
 from speculators.train.recovery import (
     RECOVERY_METADATA_KEY,
@@ -153,31 +147,13 @@ class SpeculatorsDataset(BaseDataset):
         self,
         max_len: int,
         records: ArrowDataset,
-        transfer: HiddenStatesTransfer | None = None,
-        vllm_endpoint: str = "http://localhost:8000/v1",
-        on_missing: Literal["generate", "skip", "warn", "raise"] = "generate",
+        hidden_states: HiddenStatesSource,
         hidden_states_dtype=torch.bfloat16,
         num_target_layers: int = 3,
-        model: str | None = None,
-        request_timeout: float | None = DEFAULT_REQUEST_TIMEOUT,
-        max_retries: int = DEFAULT_MAX_RETRIES,
-        generation_validation_retries: int = 2,
-        max_consecutive_generation_failures: int = 20,
     ):
         self.records = records
-        self.transfer = transfer or FileTransfer(records.datapath / "hidden_states")
-        self.on_missing = on_missing
         self.num_target_layers = num_target_layers
-        self.offline_source = OfflineHiddenStatesSource(transfer=self.transfer)
-        self.vllm_source = VllmHiddenStatesSource(
-            transfer=self.transfer,
-            vllm_endpoint=vllm_endpoint,
-            model=model,
-            request_timeout=request_timeout,
-            max_retries=max_retries,
-            generation_validation_retries=generation_validation_retries,
-            max_consecutive_generation_failures=max_consecutive_generation_failures,
-        )
+        self.hidden_states = hidden_states
 
         # Delay super init so that `_compute_approx_lengths` has required data
         super().__init__(max_len, hidden_states_dtype)
@@ -191,24 +167,7 @@ class SpeculatorsDataset(BaseDataset):
 
     def _get_raw_data(self, index: int) -> BatchType | SampleUnavailable:
         record = self.records[index]
-        cached_hs = self.offline_source.get_one(record)
-        if cached_hs is None:
-            if self.on_missing == "generate":
-                loaded_hs = self.vllm_source.get_one(record)
-            elif self.on_missing == "skip":
-                return SampleUnavailable()
-            elif self.on_missing == "warn":
-                warnings.warn(
-                    f"Failed to load hidden states for sample {index}. Skipping...",
-                    stacklevel=1,
-                )
-                return SampleUnavailable(
-                    reason=f"Hidden states unavailable for sample {index}"
-                )
-            else:
-                raise RuntimeError(f"Failed to load hidden states for sample {index}.")
-        else:
-            loaded_hs = cached_hs
+        loaded_hs = self.hidden_states.get_one(record)
 
         if isinstance(loaded_hs, SampleUnavailable):
             return loaded_hs
@@ -258,7 +217,7 @@ class SpeculatorsDataset(BaseDataset):
 
     def close(self) -> None:
         """Close resources owned by the hidden-state source."""
-        self.vllm_source.close()
+        self.hidden_states.close()
 
 
 class CollateFn:

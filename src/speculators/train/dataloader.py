@@ -11,7 +11,7 @@ import os
 import torch
 from torch.utils.data import DataLoader
 
-from hs_connectors import HiddenStatesTransfer
+from hs_connectors import FileTransfer, HiddenStatesTransfer
 from speculators.train.data import (
     ArrowDataset,
     BaseDataset,
@@ -21,6 +21,11 @@ from speculators.train.data import (
 from speculators.train.distributed import get_dp_rank, get_dp_size
 from speculators.train.distributed_batch_sampler import (
     MultipackDistributedBatchSamplerV2,
+)
+from speculators.train.hidden_states_source import (
+    HiddenStatesSource,
+    OfflineHiddenStatesSource,
+    VllmHiddenStatesSource,
 )
 
 logger = logging.getLogger(__name__)
@@ -140,33 +145,40 @@ def create_train_val_loaders(
         split="val",
     )
 
+    # ``on_missing=generate`` is retained as the backwards-compatible switch
+    # for the vLLM source. The other values select offline loading and define
+    # what happens when a cached sample is absent.
+    source_transfer = transfer or FileTransfer(train_records.datapath / "hidden_states")
+    hidden_states_source: HiddenStatesSource
+    if on_missing == "generate":
+        hidden_states_source = VllmHiddenStatesSource(
+            transfer=source_transfer,
+            vllm_endpoint=vllm_endpoint,
+            model=verifier_name_or_path,
+            request_timeout=request_timeout,
+            max_retries=max_retries,
+            generation_validation_retries=generation_validation_retries,
+            max_consecutive_generation_failures=max_consecutive_generation_failures,
+        )
+    else:
+        hidden_states_source = OfflineHiddenStatesSource(
+            transfer=source_transfer,
+            on_missing=on_missing,
+        )
+
     train_dataset: BaseDataset = SpeculatorsDataset(
         records=train_records,
         max_len=total_seq_len,
-        transfer=transfer,
-        vllm_endpoint=vllm_endpoint,
-        on_missing=on_missing,
-        model=verifier_name_or_path,
+        hidden_states=hidden_states_source,
         hidden_states_dtype=hidden_states_dtype,
         num_target_layers=num_target_layers,
-        request_timeout=request_timeout,
-        max_retries=max_retries,
-        generation_validation_retries=generation_validation_retries,
-        max_consecutive_generation_failures=max_consecutive_generation_failures,
     )
     val_dataset: BaseDataset = SpeculatorsDataset(
         records=val_records,
         max_len=total_seq_len,
-        transfer=transfer,
-        vllm_endpoint=vllm_endpoint,
-        on_missing=on_missing,
-        model=verifier_name_or_path,
+        hidden_states=hidden_states_source,
         hidden_states_dtype=hidden_states_dtype,
         num_target_layers=num_target_layers,
-        request_timeout=request_timeout,
-        max_retries=max_retries,
-        generation_validation_retries=generation_validation_retries,
-        max_consecutive_generation_failures=max_consecutive_generation_failures,
     )
 
     train_loader = _setup_dataloader(
