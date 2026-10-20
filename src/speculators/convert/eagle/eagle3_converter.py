@@ -181,7 +181,9 @@ class Eagle3Converter:
                 rope_theta=eagle_config.get("rope_theta", 10000.0),
                 rope_scaling=eagle_config.get("rope_scaling"),
             ),
-            **build_llama_config_dtype_kwarg(eagle_config.get("torch_dtype")),
+            **build_llama_config_dtype_kwarg(
+                eagle_config.get("torch_dtype") or eagle_config.get("dtype")
+            ),
         )
 
     def _save_converted_checkpoint(
