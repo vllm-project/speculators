@@ -14,7 +14,6 @@ from torch.utils.data import DataLoader
 from hs_connectors import FileTransfer, HiddenStatesTransfer
 from speculators.train.data import (
     ArrowDataset,
-    BaseDataset,
     CollateFn,
     SpeculatorsDataset,
 )
@@ -59,7 +58,7 @@ def _worker_init_fn(worker_id: int) -> None:  # noqa: ARG001
 
 
 def _setup_dataloader(
-    dataset: BaseDataset,
+    dataset: SpeculatorsDataset,
     total_seq_len: int,
     hidden_size: int,
     num_workers: int = 12,
@@ -166,14 +165,14 @@ def create_train_val_loaders(
             on_missing=on_missing,
         )
 
-    train_dataset: BaseDataset = SpeculatorsDataset(
+    train_dataset = SpeculatorsDataset(
         records=train_records,
         max_len=total_seq_len,
         hidden_states=hidden_states_source,
         hidden_states_dtype=hidden_states_dtype,
         num_target_layers=num_target_layers,
     )
-    val_dataset: BaseDataset = SpeculatorsDataset(
+    val_dataset = SpeculatorsDataset(
         records=val_records,
         max_len=total_seq_len,
         hidden_states=hidden_states_source,

@@ -260,7 +260,7 @@ def make_sample(
 ) -> dict[str, torch.Tensor]:
     """Generate a single synthetic sample (no batch dim, seq_len on dim 0).
 
-    Matches the per-sample format produced by BaseDataset.__getitem__:
+    Matches the per-sample format produced by SpeculatorsDataset.__getitem__:
         hidden_states: [seq_len, hidden_multiplier * hidden_size]
         input_ids: [seq_len]
         verifier_last_hidden_states: [seq_len, hidden_size]
