@@ -49,7 +49,9 @@ Example Usage:
 # SPDX-License-Identifier: Apache-2.0
 
 # Standard
+import atexit
 import contextlib
+import copy
 import importlib
 import json
 import logging
@@ -58,6 +60,8 @@ import warnings
 from collections.abc import Mapping
 from datetime import datetime, timezone
 from logging.config import dictConfig
+from logging.handlers import QueueHandler, QueueListener
+from queue import SimpleQueue
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Union
 
@@ -618,6 +622,33 @@ class MLFlowHandler(logging.Handler):
         super().close()
 
 
+class _PassthroughQueueHandler(QueueHandler):
+    """QueueHandler that enqueues an unformatted copy of each record.
+
+    The stock ``prepare`` pre-formats the message into a string, which would
+    hand ``FormatDictFilter`` a ``str`` instead of the metric dict. Records
+    never leave the process, so a shallow copy is all that is needed.
+    """
+
+    def prepare(self, record):
+        return copy.copy(record)
+
+
+def _make_async(handler: logging.Handler) -> logging.Handler:
+    """Run ``handler`` on a background thread behind a queue.
+
+    Rendering and writing a Rich console line costs milliseconds per record
+    when stdout is a pipe, and the per-step metric log sits on the training
+    loop's critical path. The caller only pays for an enqueue; the listener
+    is flushed at interpreter exit.
+    """
+    log_queue: SimpleQueue = SimpleQueue()
+    listener = QueueListener(log_queue, handler, respect_handler_level=True)
+    listener.start()
+    atexit.register(listener.stop)
+    return _PassthroughQueueHandler(log_queue)
+
+
 ### Main functions
 
 
@@ -626,14 +657,17 @@ def setup_root_logger(level="INFO"):
 
     This function sets up the root logger with a RichHandler for
     console output and adds the FormatDictFilter for better dictionary message
-    formatting.
+    formatting. The RichHandler runs asynchronously (see ``_make_async``).
     """
-    handler = RichHandler()
-    handler.addFilter(FormatDictFilter())
-    handler.addFilter(IsRank0Filter())
-    logging.basicConfig(
-        level=level, format="%(message)s", datefmt="[%X]", handlers=[handler]
-    )
+    root = logging.getLogger()
+    # Mirror logging.basicConfig: a no-op when the root is already configured.
+    if not root.handlers:
+        handler = RichHandler()
+        handler.setFormatter(logging.Formatter("%(message)s", datefmt="[%X]"))
+        handler.addFilter(FormatDictFilter())
+        handler.addFilter(IsRank0Filter())
+        root.addHandler(_make_async(handler))
+        root.setLevel(level)
 
     # Disable verbose HTTP response logs from httpx
     logging.getLogger("httpx").propagate = False
