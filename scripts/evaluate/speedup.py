@@ -4,15 +4,22 @@ from __future__ import annotations
 
 import argparse  # noqa: TC003
 import csv
+import fcntl
 import json
 import math
+import os
 import re
 import statistics
 import subprocess
+import sys
+from contextlib import contextmanager
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
 import httpx
+
+MIN_USABLE_COMPLETIONS = 10
+MAX_REPEAT_CV = 0.1
 
 
 def refuse_prefix_caching(target: str) -> None:
@@ -51,142 +58,318 @@ def summarize_benchmark(report: dict) -> dict:
     ]
     if not tpots or end <= start:
         raise ValueError("No usable requests completed in the measurement window")
+    x = 1 / statistics.fmean(tpots)
+    y = benchmark["metrics"]["output_tokens_per_second"]["total"]["mean"]
+    if not all(math.isfinite(v) and v > 0 for v in (x, y)):
+        raise ValueError("Invalid throughput or interactivity")
+    ttfts = [
+        r["time_to_first_token_ms"]
+        for r in measured
+        if r.get("time_to_first_token_ms") is not None
+    ]
     return {
         "streams": benchmark["config"]["strategy"]["streams"],
-        "x": 1 / statistics.fmean(tpots),
-        "y": benchmark["metrics"]["output_tokens_per_second"]["total"]["mean"],
+        "x": x,
+        "y": y,
         "completed": len(measured),
+        "usable_completions": len(tpots),
+        "mean_ttft_ms": statistics.fmean(ttfts) if ttfts else None,
         "duration": end - start,
         "incomplete": len(requests["incomplete"]),
     }
 
 
-def run(args: argparse.Namespace, requests: list[dict]) -> int:
-    artifacts = args.output_dir / "artifacts"
-    archive_path = args.output_dir / "benchmarks.jsonl"
-    if (
-        archive_path.exists()
-        or artifacts.exists()
-        or any(args.output_dir.glob("conc*_r*.json"))
-    ):
-        raise ValueError(
-            f"{args.output_dir} already exists; use a fresh output directory"
-        )
-    refuse_prefix_caching(args.target)
-    with TemporaryDirectory(prefix="speculators-speedup-") as temporary:
-        dataset_path = Path(temporary) / "prompts.jsonl"
-        # This is an input supply, not a quota: max_duration ends each point.
-        copies = max(1, math.ceil(5000 / len(requests)))
-        with archive_path.open("x") as handle:
-            handle.write(
-                json.dumps(
-                    {
-                        "inputs": [
-                            {"messages": r["body"]["messages"]} for r in requests
-                        ],
-                        "copies": copies,
-                    }
-                )
-                + "\n"
-            )
-        with dataset_path.open("w") as handle:
-            for _ in range(copies):
-                for request in requests:
-                    handle.write(
-                        json.dumps({"messages": request["body"]["messages"]}) + "\n"
-                    )
+def read_archive(path: Path) -> tuple[dict, dict[str, dict], int]:
+    """Read the last attempt per point; tolerate only an interrupted final write."""
+    data = path.read_bytes()
+    records, offset = [], 0
+    for line in data.splitlines(keepends=True):
+        try:
+            records.append(json.loads(line))
+        except json.JSONDecodeError:
+            if offset + len(line) != len(data) or line.endswith(b"\n"):
+                raise ValueError(
+                    f"Malformed benchmark archive at byte {offset}"
+                ) from None
+            print("Warning: ignoring interrupted final archive write", file=sys.stderr)
+            break
+        offset += len(line)
+    if not records:
+        raise ValueError("Benchmark archive has no input header")
+    return records[0], {r["point"]: r for r in records[1:]}, offset
 
-        body = dict(requests[0]["body"])
-        for key in ("model", "messages", "stream", "stream_options"):
-            body.pop(key, None)
-        backend = {
-            "kind": "openai_http",
-            "target": args.target,
-            "model": args.model,
-            "request_format": "/v1/chat/completions",
-            "max_tokens": body.pop(
-                "max_tokens", body.pop("max_completion_tokens", None)
+
+def write_summary(
+    path: Path, records: dict[str, dict], streams: list[int], repeats: int
+) -> None:
+    """Retain failed counts and diagnostics; average axes only over valid repeats."""
+    rows = []
+    for n in streams:
+        attempts = [
+            records[f"conc{n}_r{i}"]
+            for i in range(1, repeats + 1)
+            if f"conc{n}_r{i}" in records
+        ]
+        if not attempts:
+            continue
+        good = [r for r in attempts if r.get("status") == "ok"]
+        points = [r["summary"] for r in good]
+        row: dict = {
+            "concurrency": n,
+            "repeats": len(good),
+            "interactivity_tok_s_per_user": statistics.fmean(p["x"] for p in points)
+            if points
+            else None,
+            "output_throughput_tok_s": statistics.fmean(p["y"] for p in points)
+            if points
+            else None,
+            "expected_repeats": repeats,
+            "failed_repeats": sum(r.get("status") != "ok" for r in attempts),
+            "status": "complete"
+            if len(good) == repeats
+            else "partial"
+            if good
+            else "failed",
+            "min_usable_completions": min(
+                (p["usable_completions"] for p in points), default=None
             ),
-            "extras": {"body": body},
         }
-        duration = args.warmup_seconds + args.max_seconds
-        print(
-            f"Sweep: {len(args.streams) * args.repeats} points, "
-            f"{args.warmup_seconds:g}s warmup + {args.max_seconds:g}s measured each "
-            "(plus client setup/teardown)",
-            flush=True,
-        )
-        summary_rows = []
-        for streams in args.streams:
-            points = []
-            for repeat in range(1, args.repeats + 1):
-                name = f"conc{streams}_r{repeat}"
-                result_path = Path(temporary) / f"{name}.json"
-                if result_path.exists():
-                    raise ValueError(
-                        f"{result_path} already exists; use a fresh output directory"
-                    )
-                command = [
-                    args.guidellm_bin,
-                    "run",
-                    "--backend",
-                    json.dumps(backend),
-                    "--tokenizer",
-                    json.dumps(
-                        {"kind": "hf_auto", "model": args.tokenizer or args.model}
-                    ),
-                    "--data",
-                    json.dumps(
-                        {
-                            "kind": "json_file",
-                            "path": str(dataset_path),
-                            "load_kwargs": {"split": "train"},
-                        }
-                    ),
-                    "--data-column-mapper",
-                    "kind=generative_column_mapper,column_mappings.raw_messages_column=messages",
-                    "--profile",
-                    f"kind=concurrent,streams={streams},warmup={args.warmup_seconds:g}",
-                    "--constraint",
-                    f"kind=max_duration,seconds={duration:g}",
-                    "--metrics",
-                    "kind=generative,sample_size=0,prefer_response_metrics=false",
-                    "--label",
-                    f"name={args.label}",
-                    "--output",
-                    json.dumps({"kind": "json", "path": str(result_path)}),
-                    "--disable-console-interactive",
-                ]
-                print(f"Collecting {name}", flush=True)
-                record = {"point": name, "command": command}
-                try:
-                    subprocess.run(command, check=True)  # noqa: S603
-                finally:
-                    if result_path.exists():
-                        report = json.loads(result_path.read_text())
-                        report["label"] = args.label
-                        record["report"] = report
-                    with archive_path.open("a") as handle:
-                        handle.write(json.dumps(record) + "\n")
-                point = summarize_benchmark(record["report"])
-                points.append(point)
-                print(
-                    f"{name}: {point['completed']} completed in "
-                    f"{point['duration']:.1f}s",
-                    flush=True,
-                )
-            summary_rows.append(
-                {
-                    "concurrency": streams,
-                    "repeats": len(points),
-                    "interactivity_tok_s_per_user": statistics.fmean(
-                        p["x"] for p in points
-                    ),
-                    "output_throughput_tok_s": statistics.fmean(p["y"] for p in points),
-                }
+        for key in ("x", "y"):
+            values = [p[key] for p in points]
+            row[f"{key}_repeat_cv"] = (
+                statistics.pstdev(values) / statistics.fmean(values)
+                if len(values) > 1
+                else None
             )
-            with (args.output_dir / "summary.csv").open("w", newline="") as handle:
-                writer = csv.DictWriter(handle, fieldnames=list(summary_rows[0]))
-                writer.writeheader()
-                writer.writerows(summary_rows)
-        return 0
+        ttfts = [p["mean_ttft_ms"] for p in points if p["mean_ttft_ms"] is not None]
+        row["mean_ttft_ms"] = statistics.fmean(ttfts) if ttfts else None
+        rows.append(row)
+    if rows:
+        temporary = path.with_suffix(".csv.tmp")
+        with temporary.open("w", newline="") as handle:
+            writer = csv.DictWriter(handle, fieldnames=list(rows[0]))
+            writer.writeheader()
+            writer.writerows(rows)
+        temporary.replace(path)
+
+
+def _append(archive, record: dict) -> None:
+    archive.write(json.dumps(record, allow_nan=False) + "\n")
+    archive.flush()
+    os.fsync(archive.fileno())
+
+
+@contextmanager
+def _journal(archive_path: Path, header: dict, resume: bool):
+    with archive_path.open("a+") as archive:
+        try:
+            fcntl.flock(archive, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            raise ValueError("This sweep already has an active writer") from None
+        archive.seek(0, os.SEEK_END)
+        if not resume and archive.tell():
+            raise ValueError("Benchmark archive already exists; use --resume")
+        records: dict[str, dict] = {}
+        if resume:
+            saved, records, offset = read_archive(archive_path)
+            if saved != header:
+                raise ValueError(
+                    "Resume configuration or inputs differ; "
+                    "use a fresh output directory"
+                )
+            archive.seek(offset)
+            archive.truncate()
+            if offset and not archive_path.read_bytes().endswith(b"\n"):
+                archive.write("\n")
+        if not resume:
+            _append(archive, header)
+        yield archive, records
+
+
+def _command(args, backend, dataset_path, result_path, streams) -> list[str]:
+    duration = args.warmup_seconds + args.max_seconds
+    return [
+        args.guidellm_bin,
+        "run",
+        "--backend",
+        json.dumps(backend),
+        "--tokenizer",
+        json.dumps({"kind": "hf_auto", "model": args.tokenizer or args.model}),
+        "--data",
+        json.dumps(
+            {
+                "kind": "json_file",
+                "path": str(dataset_path),
+                "load_kwargs": {"split": "train"},
+            }
+        ),
+        "--data-column-mapper",
+        "kind=generative_column_mapper,column_mappings.raw_messages_column=messages",
+        "--profile",
+        f"kind=concurrent,streams={streams},warmup={args.warmup_seconds:g}",
+        "--constraint",
+        f"kind=max_duration,seconds={duration:g}",
+        "--metrics",
+        "kind=generative,sample_size=0,prefer_response_metrics=false",
+        "--label",
+        f"name={args.label}",
+        "--output",
+        json.dumps({"kind": "json", "path": str(result_path)}),
+        "--disable-console-interactive",
+    ]
+
+
+def _collect_point(args, name, command, result_path, archive) -> dict:
+    record = {"point": name, "command": command, "status": "started"}
+    _append(archive, record)
+    print(f"Collecting {name}", flush=True)
+    try:
+        # An orphaned client keeps the lock, preventing a competing resume.
+        subprocess.run(command, check=True, pass_fds=(archive.fileno(),))  # noqa: S603
+        record["report"] = json.loads(result_path.read_text())
+        record["report"]["label"] = args.label
+        record["summary"] = summarize_benchmark(record["report"])
+        record["status"] = "ok"
+    except (
+        OSError,
+        ValueError,
+        KeyError,
+        TypeError,
+        subprocess.CalledProcessError,
+    ) as exc:
+        record.update(status="failed", error=f"{type(exc).__name__}: {exc}")
+    finally:
+        if "report" not in record and result_path.exists():
+            try:
+                record["report"] = json.loads(result_path.read_text())
+            except ValueError:
+                record["unparsed_report"] = result_path.read_text()
+        if record["status"] == "started":
+            record.update(
+                status="interrupted",
+                error="Point interrupted; retry only with --resume --retry-failed",
+            )
+        _append(archive, record)
+    return record
+
+
+def _warn_point(record: dict) -> None:
+    name = record["point"]
+    notices = []
+    if record["status"] != "ok":
+        notices.append(record["error"])
+    elif record["summary"]["usable_completions"] < MIN_USABLE_COMPLETIONS:
+        notices.append(
+            f"only {record['summary']['usable_completions']} usable completions; "
+            "increase --max-seconds for a more stable x"
+        )
+    for notice in notices:
+        print(f"Warning: {name}: {notice}", file=sys.stderr, flush=True)
+
+
+def _warn_repeats(records, streams, repeats) -> None:
+    valid = [
+        records[f"conc{streams}_r{i}"]["summary"]
+        for i in range(1, repeats + 1)
+        if records.get(f"conc{streams}_r{i}", {}).get("status") == "ok"
+    ]
+    for axis in ("x", "y"):
+        values = [p[axis] for p in valid]
+        if (
+            len(values) > 1
+            and statistics.pstdev(values) / statistics.fmean(values) > MAX_REPEAT_CV
+        ):
+            print(
+                f"Warning: concurrency {streams}: "
+                f"{axis} varies by more than 10% across repeats",
+                file=sys.stderr,
+            )
+
+
+def run(args: argparse.Namespace, requests: list[dict]) -> int:
+    """Journal attempts, continue failed points, and explicitly resume missing work."""
+    archive_path = args.output_dir / "benchmarks.jsonl"
+    resume = getattr(args, "resume", False)
+    if archive_path.exists() and not resume:
+        raise ValueError(
+            f"{args.output_dir} already exists; "
+            "use --resume or a fresh output directory"
+        )
+    if resume and not archive_path.exists():
+        raise ValueError("--resume requires an existing benchmarks.jsonl")
+    if (args.output_dir / "artifacts").exists() or any(
+        args.output_dir.glob("conc*_r*.json")
+    ):
+        raise ValueError("Use a fresh output directory for legacy per-point results")
+    inputs = [{"messages": r["body"]["messages"]} for r in requests]
+    body = dict(requests[0]["body"])
+    for key in ("model", "messages", "stream", "stream_options"):
+        body.pop(key, None)
+    backend = {
+        "kind": "openai_http",
+        "target": args.target,
+        "model": args.model,
+        "request_format": "/v1/chat/completions",
+        "max_tokens": body.pop("max_tokens", body.pop("max_completion_tokens", None)),
+        "extras": {"body": body},
+    }
+    config = {
+        "backend": backend,
+        "tokenizer": args.tokenizer or args.model,
+        "label": args.label,
+        "streams": args.streams,
+        "repeats": args.repeats,
+        "warmup_seconds": args.warmup_seconds,
+        "max_seconds": args.max_seconds,
+    }
+    header: dict = {
+        "inputs": inputs,
+        "copies": max(1, math.ceil(5000 / len(requests))),
+        "config": config,
+    }
+    with _journal(archive_path, header, resume) as (archive, records):
+        refuse_prefix_caching(args.target)
+        with TemporaryDirectory(prefix="speculators-speedup-") as temporary:
+            dataset_path = Path(temporary) / "prompts.jsonl"
+            with dataset_path.open("w") as handle:
+                for _ in range(header["copies"]):
+                    for request in inputs:
+                        handle.write(json.dumps(request) + "\n")
+            print(
+                f"Sweep: {len(args.streams) * args.repeats} points, "
+                f"{args.warmup_seconds:g}s warmup + {args.max_seconds:g}s measured "
+                "each (plus setup/teardown)",
+                flush=True,
+            )
+            for streams in args.streams:
+                for repeat in range(1, args.repeats + 1):
+                    name = f"conc{streams}_r{repeat}"
+                    previous = records.get(name)
+                    if previous and (
+                        previous.get("status") == "ok"
+                        or not getattr(args, "retry_failed", False)
+                    ):
+                        print(
+                            f"Skipping recorded {name} "
+                            f"({previous.get('status', 'interrupted')})",
+                            flush=True,
+                        )
+                        continue
+                    result_path = Path(temporary) / f"{name}.json"
+                    command = _command(
+                        args, backend, dataset_path, result_path, streams
+                    )
+                    record = _collect_point(args, name, command, result_path, archive)
+                    records[name] = record
+                    write_summary(
+                        args.output_dir / "summary.csv",
+                        records,
+                        args.streams,
+                        args.repeats,
+                    )
+                    _warn_point(record)
+                _warn_repeats(records, streams, args.repeats)
+            write_summary(
+                args.output_dir / "summary.csv", records, args.streams, args.repeats
+            )
+            return int(any(r.get("status") != "ok" for r in records.values()))

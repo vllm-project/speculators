@@ -54,18 +54,32 @@ MRCR defaults to 8 needles; `--needles 2 4 8` selects each separately. `--data-f
 ## Speedup
 
 ```bash
-# Baseline server.
 speculators evaluate speedup \
   --dataset humaneval --target http://localhost:9124 --model my-model \
   --tokenizer my-verifier-model --label baseline \
   --output-dir results/humaneval_baseline
 
-# Speculative server.
 speculators evaluate speedup \
   --dataset humaneval --target http://localhost:9123 --model my-model \
   --tokenizer my-verifier-model --label dspark \
   --output-dir results/humaneval_dspark
 ```
+
+Defaults: streams 1/4/8/16/32/64/128, three repeats, 30 seconds warmup and 100 measured seconds per point. GuideLLM owns the timed scheduler; replay supplies inputs rather than setting a request quota. X is reciprocal mean TPOT of usable window-completed requests; Y is native GuideLLM window output throughput. Averages are per run across repeats. Deadline-incomplete requests are separate from request errors.
+
+`benchmarks.jsonl` is the single journal for inputs, configuration, point starts, outcomes, native reports. No artifacts directory or per-repeat CSV is created. A failed point is recorded and the sweep continues; exit 1 reports failures. `summary.csv` includes valid/expected/failed repeat counts and marks incomplete concurrencies, rather than treating a missing repeat as success.
+
+TTFT, usable completion counts and repeat coefficient of variation are saved. Fewer than ten usable completions or repeat CV above 10% produce warnings. A zero-completion or errored point is excluded; increase `--max-seconds` for a new explicitly chosen measurement rather than silently extending a point.
+
+```bash
+# Repeat the same command/settings with --resume to run only missing points.
+speculators evaluate speedup \
+  --dataset humaneval --target http://localhost:9123 --model my-model \
+  --tokenizer my-verifier-model --label dspark \
+  --output-dir results/humaneval_dspark --resume
+```
+
+Resume checks saved inputs and configuration and locks the journal against concurrent writers. It skips completed, failed and interrupted attempts. Only an explicit `--resume --retry-failed` retries failed/interrupted points; previous attempts remain in the journal. Older archives without a configuration header are still plottable but cannot be safely resumed. Plotting excludes failed attempts and incomplete concurrency groups with a warning.
 
 ## Graph
 

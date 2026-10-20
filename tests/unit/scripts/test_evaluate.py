@@ -517,16 +517,17 @@ def test_timed_sweep_saves_one_archive_summary_and_plot(tmp_path, monkeypatch):
     }
     calls: list[list[str]] = []
 
-    def bench(command, *, check):
+    def bench(command, *, check, pass_fds):
         if len(calls) == 2:
             saved = list(csv.DictReader((tmp_path / "summary.csv").open()))
             assert len(saved) == 1
             assert saved[0]["concurrency"] == "1"
             assert saved[0]["repeats"] == "2"
             records = (tmp_path / "benchmarks.jsonl").read_text().splitlines()
-            assert len(records) == 3  # Inputs plus two durable completed points.
+            assert len(records) == 6  # Two completed points plus the next start record.
         calls.append(command)
         assert check
+        assert len(pass_fds) == 1
         assert command[:2] == ["/existing/guidellm", "run"]
         assert "--max-requests" not in command
         assert "--num-prompts" not in command
@@ -585,7 +586,10 @@ def test_timed_sweep_saves_one_archive_summary_and_plot(tmp_path, monkeypatch):
         json.loads(line)
         for line in (tmp_path / "benchmarks.jsonl").read_text().splitlines()
     ]
-    assert records[0] == {"inputs": [{"messages": messages}], "copies": 5000}
+    assert records[0]["inputs"] == [{"messages": messages}]
+    assert records[0]["copies"] == 5000
+    assert records[0]["config"]["max_seconds"] == 100
+    records = [records[0], *[r for r in records[1:] if r["status"] == "ok"]]
     assert [row["point"] for row in records[1:]] == [
         "conc1_r1",
         "conc1_r2",
@@ -603,6 +607,7 @@ def test_timed_sweep_saves_one_archive_summary_and_plot(tmp_path, monkeypatch):
     assert [row["concurrency"] for row in rows] == ["1", "8"]
     for row in rows:
         assert int(row["repeats"]) == 2
+        assert row["status"] == "complete"
         assert float(row["interactivity_tok_s_per_user"]) == pytest.approx(50)
         assert float(row["output_throughput_tok_s"]) == pytest.approx(1851)
     plotted = ti._load_series(argparse.Namespace(series=[str(tmp_path)]))[0]["points"]
@@ -625,47 +630,80 @@ def test_failed_point_is_archived_without_leaving_temporary_files(
     tmp_path, monkeypatch
 ):
     monkeypatch.setattr(speedup, "refuse_prefix_caching", lambda target: None)
-    staging = []
+    calls: list[list[str]] = []
 
-    def bench(command, *, check):
+    def bench(command, *, check, pass_fds):
+        calls.append(command)
         path = Path(json.loads(command[command.index("--output") + 1])["path"])
-        staging.append(path.parent)
-        path.write_text(json.dumps(timed_report(errored=[{"error": "HTTP 500"}])))
-        raise speedup.subprocess.CalledProcessError(1, command)
+        n = int(
+            command[command.index("--profile") + 1].split("streams=")[1].split(",")[0]
+        )
+        report = timed_report(
+            n, errored=[{"error": "HTTP 500"}] if len(calls) == 1 else []
+        )
+        if len(calls) == 2:
+            report["benchmarks"][0]["requests"]["successful"] = []
+        path.write_text(json.dumps(report))
+        if len(calls) == 1:
+            raise speedup.subprocess.CalledProcessError(1, command)
 
     monkeypatch.setattr(speedup.subprocess, "run", bench)
     args = argparse.Namespace(
         output_dir=tmp_path,
         target="http://server",
-        streams=[1],
-        repeats=1,
+        streams=[1, 8],
+        repeats=2,
         model="served",
         label="test",
         tokenizer=None,
         guidellm_bin="guidellm",
         warmup_seconds=30,
         max_seconds=100,
+        resume=False,
+        retry_failed=False,
     )
-    with pytest.raises(speedup.subprocess.CalledProcessError):
-        speedup.run(
-            args,
-            [
-                {
-                    "body": {
-                        "messages": [{"role": "user", "content": "test"}],
-                        "max_tokens": 16,
-                    }
-                }
-            ],
-        )
-    assert [p.name for p in tmp_path.iterdir()] == ["benchmarks.jsonl"]
-    assert all(not p.exists() for p in staging)
-    records = [
-        json.loads(line)
-        for line in (tmp_path / "benchmarks.jsonl").read_text().splitlines()
+    requests = [
+        {"body": {"messages": [{"role": "user", "content": "test"}], "max_tokens": 16}}
     ]
-    assert records[1]["report"]["benchmarks"][0]["requests"]["errored"] == [
-        {"error": "HTTP 500"}
-    ]
-    with pytest.raises(ValueError, match="failed requests"):
-        ti._load_series(argparse.Namespace(series=[str(tmp_path)]))
+    assert speedup.run(args, requests) == 1
+    assert len(calls) == 4
+    header, points, _ = speedup.read_archive(tmp_path / "benchmarks.jsonl")
+    assert points["conc1_r1"]["status"] == "failed"
+    assert points["conc8_r2"]["status"] == "ok"
+    assert all(
+        not Path(json.loads(c[c.index("--output") + 1])["path"]).exists() for c in calls
+    )
+    assert [
+        p["streams"]
+        for p in ti._load_series(argparse.Namespace(series=[str(tmp_path)]))[0][
+            "points"
+        ]
+    ] == [8]
+    args.resume = True
+    with (tmp_path / "benchmarks.jsonl").open("ab") as handle:
+        handle.write(b'{"point":')  # Crash midway through the final journal write.
+    assert speedup.run(args, requests) == 1
+    assert len(calls) == 4
+    args.max_seconds = 101
+    with pytest.raises(ValueError, match="configuration or inputs differ"):
+        speedup.run(args, requests)
+    assert len(calls) == 4
+    args.max_seconds = 100
+    args.retry_failed = True
+    assert speedup.run(args, requests) == 0
+    assert len(calls) == 6
+    # An interrupted point is retained and skipped until retry is explicitly requested.
+    with (tmp_path / "benchmarks.jsonl").open("a") as handle:
+        handle.write(json.dumps({"point": "conc8_r2", "status": "started"}) + "\n")
+    args.retry_failed = False
+    assert speedup.run(args, requests) == 1
+    assert len(calls) == 6
+    args.retry_failed = True
+    assert speedup.run(args, requests) == 0
+    assert len(calls) == 7
+    assert len(speedup.read_archive(tmp_path / "benchmarks.jsonl")[1]) == 4
+    with (tmp_path / "benchmarks.jsonl").open() as locked:
+        speedup.fcntl.flock(locked, speedup.fcntl.LOCK_EX | speedup.fcntl.LOCK_NB)
+        with pytest.raises(ValueError, match="active writer"):
+            speedup.run(args, requests)
+    assert len(calls) == 7

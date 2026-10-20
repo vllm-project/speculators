@@ -51,7 +51,13 @@ def save_eval_provenance(output_dir: Path) -> None:
         )
         atomic_write(
             output_dir / "eval_command.txt",
-            f"{header}\n{shlex.join(sys.argv)}\n",
+            (
+                (output_dir / "eval_command.txt").read_text()
+                + "\n# Resume invocation\n"
+                if (output_dir / "eval_command.txt").exists()
+                else ""
+            )
+            + f"{header}\n{shlex.join(sys.argv)}\n",
         )
     except OSError:
         logger.warning("Failed to save eval_command.txt", exc_info=True)
@@ -63,6 +69,8 @@ def _validate_args(args: argparse.Namespace, parser: argparse.ArgumentParser) ->
     ):
         parser.error("MRCR is currently supported only in acceptance mode")
     if args.mode == "speedup":
+        if args.retry_failed and not args.resume:
+            parser.error("--retry-failed requires --resume")
         if args.max_seconds <= 0 or args.warmup_seconds < 0:
             parser.error(
                 "--max-seconds must be positive and --warmup-seconds nonnegative"
@@ -148,6 +156,16 @@ def main(argv: list[str] | None = None) -> int:
                 "--tokenizer", help="HF tokenizer or local path (default: served model)"
             )
             sub.add_argument("--label", required=True)
+            sub.add_argument(
+                "--resume",
+                action="store_true",
+                help="Resume missing points with identical inputs/settings",
+            )
+            sub.add_argument(
+                "--retry-failed",
+                action="store_true",
+                help="With --resume, explicitly retry failed/interrupted points",
+            )
     args = parser.parse_args(argv)
     _validate_args(args, parser)
     args.target = args.target.rstrip("/").removesuffix("/v1")

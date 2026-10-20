@@ -11,7 +11,7 @@ from collections import defaultdict
 from pathlib import Path
 from typing import Any
 
-from speedup import summarize_benchmark
+from speedup import read_archive, summarize_benchmark
 
 
 def interactivity(result: dict) -> float:
@@ -72,9 +72,37 @@ LABEL_OFFSETS = [
 MARKER_PX = 8  # markers closer than this sit on top of each other
 
 
+def _archive_reports(path: Path) -> list[dict]:
+    header, records, _ = read_archive(path)
+    valid = []
+    for record in records.values():
+        if record.get("status", "ok") != "ok" or "report" not in record:
+            print(
+                f"Warning: excluding {record['point']} "
+                f"({record.get('status', 'missing report')})",
+                file=sys.stderr,
+            )
+            continue
+        valid.append(record)
+    expected = header.get("config", {}).get("repeats")
+    counts: dict[str, int] = defaultdict(int)
+    for record in valid:
+        counts[record["point"].split("_r")[0]] += 1
+    results = []
+    for record in valid:
+        if expected is not None and counts[record["point"].split("_r")[0]] != expected:
+            print(
+                f"Warning: excluding partial concurrency at {record['point']}",
+                file=sys.stderr,
+            )
+            continue
+        results.append(record["report"])
+    return results
+
+
 def _load_series(args: argparse.Namespace) -> list[dict]:
-    series = []
-    methods = set()
+    series: list[dict] = []
+    methods: set[str] = set()
     for spec in args.series:
         # DIRECTORY[:NAME[:#COLOR]]: the color is a trailing `:#...` field, so the name
         # may contain colons ("B200: no speculator").
@@ -87,14 +115,7 @@ def _load_series(args: argparse.Namespace) -> list[dict]:
         result_dir = path / "artifacts" if (path / "artifacts").is_dir() else path
         archive_path = path / "benchmarks.jsonl"
         if archive_path.exists():
-            with archive_path.open() as handle:
-                next(handle)  # Input selection and replay count, not a result.
-                results = []
-                for line in handle:
-                    record = json.loads(line)
-                    if "report" not in record:
-                        raise ValueError(f"No report for {record['point']}")
-                    results.append(record["report"])
+            results = _archive_reports(archive_path)
         else:
             results = [
                 json.loads(p.read_text())
