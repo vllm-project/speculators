@@ -153,8 +153,11 @@ class TestEagle3ConverterFixes:
         llama_config = Eagle3Converter()._create_transformer_config_from_eagle(
             sample_eagle3_config, "meta-llama/Llama-3.1-8B-Instruct"
         )
-        # _save_converted_checkpoint casts the weights to this attribute.
-        assert getattr(llama_config, "torch_dtype", None) == torch.bfloat16
+        # The dtype _save_converted_checkpoint casts the weights to.
+        saved_dtype = getattr(llama_config, "dtype", None) or getattr(
+            llama_config, "torch_dtype", None
+        )
+        assert saved_dtype == torch.bfloat16
 
     @pytest.mark.sanity
     @patch(

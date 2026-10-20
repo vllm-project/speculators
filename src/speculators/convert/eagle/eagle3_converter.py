@@ -222,7 +222,11 @@ class Eagle3Converter:
         if unexpected_keys:
             logger.warning(f"Unexpected keys in checkpoint: {unexpected_keys}")
 
-        weights_dtype = getattr(config.transformer_layer_config, "torch_dtype", None)
+        tl_config = config.transformer_layer_config
+        # transformers 5 keeps ``torch_dtype`` only as a deprecated alias.
+        weights_dtype = getattr(tl_config, "dtype", None) or getattr(
+            tl_config, "torch_dtype", None
+        )
         # .to() wont convert d2t/t2d buffers as they are not fp tensors
         model.to(dtype=weights_dtype)  # type: ignore[call-arg]
         model.save_pretrained(str(output_dir))  # type: ignore[attr-defined]
