@@ -68,5 +68,5 @@ __all__ = [
     "reload_schemas",
 ]
 
-# base imports complete, run auto loading for base classes
+# Imports have registered built-ins; rebuild the config schemas with those classes.
 reload_schemas()

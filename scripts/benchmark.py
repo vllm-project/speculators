@@ -49,7 +49,7 @@ import socket
 import statistics
 import subprocess
 import sys
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 import torch
@@ -185,7 +185,7 @@ def collect_provenance() -> dict:
 
     return {
         "git_sha": git_sha,
-        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "timestamp": datetime.now(UTC).isoformat(),
         "hostname": socket.gethostname(),
         "python_version": sys.version.split()[0],
         "pytorch_version": torch.__version__,
