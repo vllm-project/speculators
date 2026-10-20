@@ -12,6 +12,7 @@ from speculators.train.data import (
     ArrowDataset,
     CollateFn,
 )
+from speculators.train.data_types import DatasetRecord
 from speculators.train.recovery import (
     RECOVERY_METADATA_KEY,
     RecoveryMetadata,
@@ -282,6 +283,18 @@ def _make_generation_dataset(
     return arrow_ds
 
 
+def test_arrow_dataset_builds_explicit_dataset_record(tmp_path):
+    arrow_ds = _make_generation_dataset(tmp_path, _SequenceTransfer([]))
+
+    record = arrow_ds._get_record(0)
+
+    assert torch.equal(record.input_ids, torch.tensor([1, 2, 3]))
+    assert torch.equal(record.loss_mask, torch.tensor([1, 1, 1]))
+    assert record.seq_len == 3
+    assert record.storage_index == 0
+    assert record.messages is None
+
+
 def _valid_generated_sample() -> dict[str, torch.Tensor]:
     return {
         "hidden_states": torch.ones(3, 2, 4, dtype=torch.bfloat16),
@@ -303,7 +316,13 @@ def test_offline_hidden_states_source_loads_cached_sample():
     transfer = CachedTransfer()
     source = source_module.OfflineHiddenStatesSource(transfer=transfer)  # type: ignore[arg-type]
 
-    assert source.get_one(17) is cached
+    record = DatasetRecord(
+        input_ids=torch.tensor([1, 2, 3]),
+        loss_mask=torch.ones(3, dtype=torch.bool),
+        seq_len=3,
+        storage_index=17,
+    )
+    assert source.get_one(record) is cached
     assert transfer.requested_indices == [17]
 
 
