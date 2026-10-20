@@ -1,41 +1,28 @@
 # Evaluating Model Performance
 
-The evaluator has two modes:
-
-- `acceptance`: an acceptance run over the selected datasets that reports draft acceptance rate, acceptance length, and per-position acceptance rates. No baseline is needed.
-- `speedup`: closed-loop concurrency sweeps with warmup and repeats. Collect a baseline and a speculative configuration separately, then compare them using `throughput_interactivity.py plot`.
+The evaluator has two modes: `acceptance` collects speculative acceptance counters; `speedup` runs GuideLLM timed concurrency sweeps. Collect each comparator separately and plot the results offline.
 
 ## Setup
 
-Run commands from the repository root. With an editable source-checkout installation, `speculators evaluate` forwards to the same evaluator without duplicating its logic. For example, `speculators evaluate acceptance --help` and `speculators evaluate speedup --help` show the mode arguments. The script form below also works. Evaluation scripts are not bundled in standalone wheels. Install client requirements in your environment:
+Run from an editable source checkout and install the client dependencies:
 
 ```bash
 uv pip install -r scripts/evaluate/requirements.txt
 ```
 
-Acceptance needs a vllm instance supporting `--per-request-spec-decode-metrics summary`. The response schema record and pin the server commit used for evaluations. Enable `--enable-per-request-metrics` if server timing metrics are also wanted. Speedup uses GuideLLM 0.8.0 for native timed concurrency runs. Use `--guidellm-bin /path/to/guidellm` if the client is installed in a separate environment. Set `--tokenizer` to the verifier tokenizer or local snapshot when the served alias is not a tokenizer repository. For speedup sweeps, disable prefix caching (`--no-enable-prefix-caching` on current vLLM) because the workload cycles through the same prompts.
+Acceptance supports the vLLM 0.30+ `metrics.speculative_decoding` response schema and requires `--per-request-spec-decode-metrics summary` with `n=1`. This is an [experimental vLLM interface](https://github.com/vllm-project/vllm/blob/v0.30.0/vllm/config/observability.py): pin the server version/commit and retain the serving command. A version number alone does not guarantee an unchanged response schema.
+
+Speedup uses GuideLLM 0.8.0. Disable prefix caching on every compared server (`--no-enable-prefix-caching`). Use `--guidellm-bin` for an existing client executable and `--tokenizer` for the verifier tokenizer when the served alias is not a tokenizer repository. Keep hardware, TP, generation settings and time budgets matched.
 
 ## Dataset inputs
 
-Both modes take one or more datasets through `--dataset`. They share the same loader and column mappings. MRCR is supported only in acceptance mode for now.
+`--dataset` accepts presets, Hugging Face IDs and local JSON/JSONL/CSV/Parquet files. Presets supply their source, split and column mapping. `basic` expands GSM8K, MATH-500, HumanEval, MBPP, AIME26, MT-Bench and Arena-Hard; MRCR is separate and acceptance-only.
 
-`--dataset` accepts preset names, Hugging Face dataset IDs, or local `.jsonl`, `.json`, `.csv`, or `.parquet` files. Use `--dataset-config`, `--split`, `--data-files`, and `--revision` to select HF configurations, splits, files, and revisions. An explicit `--max-requests` overrides the request count and cycles the selection if necessary. Speedup replays a prompt pool until each point reaches its time limit. It does not require a full dataset pass within that time.
+`--max-samples` defaults to 128 **per dataset**, keeping all rows of smaller datasets. Generation defaults are 8192 output tokens, temperature 0 and thinking enabled. `--body` replaces the generation defaults; `--max-tokens` overrides the body's output budget.
 
-### Built-in datasets and blends
+Source-specific flags (`--dataset-config`, `--data-files`, `--split`, `--revision` and column mappings) require a single dataset, excluding blends such as `basic`. They override that source's preset. Run differently configured datasets separately so flags cannot accidentally apply to another dataset.
 
-`--dataset basic` includes the full GSM8K, MATH-500, HumanEval, MBPP, AIME 2026, MT-Bench, MRCR and Arena-Hard datasets. Presets supply their source configuration, split, and column mapping, using the current default dataset revision. No equal-size sampling is applied. `--max-samples` and `--max-requests` limit data only when explicitly supplied.
-
-| Preset       | Source                                               |
-| ------------ | ---------------------------------------------------- |
-| `gsm8k`      | `openai/gsm8k`, main/test                            |
-| `math500`    | `HuggingFaceH4/MATH-500`, test                       |
-| `humaneval`  | `openai/openai_humaneval`, test                      |
-| `mbpp`       | `google-research-datasets/mbpp`, full/test           |
-| `aime26`     | `math-ai/aime26`, test                               |
-| `mtbench`    | `HuggingFaceH4/mt_bench_prompts`, train              |
-| `arena-hard` | `lmarena-ai/arena-hard-auto`, v2.0 (750 prompts)     |
-| `mrcr`       | `openai/mrcr`, all needle counts                     |
-| `speedbench` | NVIDIA data prepared and cached locally on first use |
+Acceptance's `--max-requests` is a **total ordered limit**, not a per-dataset cap. A short limit may visit only the first dataset; the overall row describes only requests actually sent. Use `--max-samples` for coverage across datasets. All requests and datasets are attempted despite individual request errors. Reports are retained; exit 1 indicates request errors or missing speculative metrics. The default total timeout is 900 seconds per request, including streaming; increase it for long thinking or long context.
 
 ## Acceptance
 
@@ -47,13 +34,22 @@ speculators evaluate acceptance \
 ```
 
 ```bash
-# MRCR: 8 needles.
+# MRCR: 8 needles, with prompts rendered by the serving tokenizer.
 speculators evaluate acceptance \
-  --dataset openai/mrcr --data-files '8needle/*.parquet' \
-  --messages-column prompt \
+  --dataset mrcr --needles 8 --concurrency 1 --timeout 3600 \
   --target http://localhost:9123 --model my-model \
   --output-dir results/mrcr_8needle
+
+# Choose a rendered prompt-length range (inclusive), e.g. 8K–128K.
+speculators evaluate acceptance \
+  --dataset mrcr --needles 8 \
+  --min-prompt-tokens 8192 --max-prompt-tokens 131072 \
+  --concurrency 1 --timeout 3600 \
+  --target http://localhost:9123 --model my-model \
+  --output-dir results/mrcr_8needle_8k_128k
 ```
+
+MRCR defaults to 8 needles; `--needles 2 4 8` selects each separately. `--data-files '8needle/*.parquet'` can select files instead. The loader preserves complete message histories, uses `/tokenize` with the generation chat-template options, and filters **before** the sample cap. It discovers the context limit through `/v1/models` and reserves the output-token budget. Length bounds must fit that budget; prompts are never truncated. `summary.json` records scanned, filtered and selected counts under `source_selection`. Selection is in source order, not balanced across length buckets. A range filter is selection, not an over-context failure. Server errors, including their response bodies, remain in `requests.jsonl`. Successful response token counts drive `summary_by_prompt_length.csv` automatically.
 
 ## Speedup
 

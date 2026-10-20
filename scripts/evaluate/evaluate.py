@@ -57,6 +57,28 @@ def save_eval_provenance(output_dir: Path) -> None:
         logger.warning("Failed to save eval_command.txt", exc_info=True)
 
 
+def _validate_args(args: argparse.Namespace, parser: argparse.ArgumentParser) -> None:
+    if args.mode == "speedup" and any(
+        name in {"mrcr", "openai/mrcr"} for name in args.dataset
+    ):
+        parser.error("MRCR is currently supported only in acceptance mode")
+    if args.mode == "speedup":
+        if args.max_seconds <= 0 or args.warmup_seconds < 0:
+            parser.error(
+                "--max-seconds must be positive and --warmup-seconds nonnegative"
+            )
+        if 0 < args.warmup_seconds < 1:
+            parser.error("--warmup-seconds must be 0 or at least 1")
+        if args.repeats <= 0 or any(n <= 0 for n in args.streams):
+            parser.error("streams/repeats must be positive")
+    elif (
+        args.timeout <= 0
+        or args.concurrency <= 0
+        or (args.max_requests is not None and args.max_requests <= 0)
+    ):
+        parser.error("timeout, concurrency and max-requests must be positive")
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     modes = parser.add_subparsers(dest="mode", required=True)
@@ -84,11 +106,17 @@ def main(argv: list[str] | None = None) -> int:
             help="Generation budget per request (default: 8192; overrides --body)",
         )
         if mode == "acceptance":
-            sub.add_argument("--timeout", type=float, default=300)
+            sub.add_argument(
+                "--timeout",
+                type=float,
+                default=900,
+                help="Total wall-clock seconds per request (default: 900)",
+            )
             sub.add_argument(
                 "--max-requests",
                 type=int,
-                help="Request count (default: one pass over the full selection)",
+                help="Total request count, consuming datasets in order and cycling "
+                "if needed; use --max-samples for a cap per dataset",
             )
             sub.add_argument(
                 "--concurrency",
@@ -121,19 +149,7 @@ def main(argv: list[str] | None = None) -> int:
             )
             sub.add_argument("--label", required=True)
     args = parser.parse_args(argv)
-    if args.mode == "speedup" and any(
-        name in {"mrcr", "openai/mrcr"} for name in args.dataset
-    ):
-        parser.error("MRCR is currently supported only in acceptance mode")
-    if args.mode == "speedup":
-        if args.max_seconds <= 0 or args.warmup_seconds < 0:
-            parser.error(
-                "--max-seconds must be positive and --warmup-seconds nonnegative"
-            )
-        if 0 < args.warmup_seconds < 1:
-            parser.error("--warmup-seconds must be 0 or at least 1")
-        if args.repeats <= 0 or any(n <= 0 for n in args.streams):
-            parser.error("streams/repeats must be positive")
+    _validate_args(args, parser)
     args.target = args.target.rstrip("/").removesuffix("/v1")
     if args.output_dir is None:
         model_name = args.model.replace("/", "_").replace(" ", "_")

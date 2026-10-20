@@ -6,7 +6,7 @@ import argparse  # noqa: TC003
 import json
 from itertools import islice
 
-from eval_datasets import basic, speedbench
+from eval_datasets import basic, mrcr, speedbench
 
 
 def add_dataset_arguments(parser: argparse.ArgumentParser) -> None:
@@ -17,7 +17,7 @@ def add_dataset_arguments(parser: argparse.ArgumentParser) -> None:
         help="Hugging Face dataset configuration, e.g. main for GSM8K; "
         "omit to use the default configuration (all configurations for speedbench)",
     )
-    group.add_argument("--split", default="train")
+    group.add_argument("--split", help="Source split (preset default, otherwise train)")
     group.add_argument(
         "--data-files", nargs="+", help="Source file paths or HF file patterns"
     )
@@ -49,13 +49,71 @@ def add_dataset_arguments(parser: argparse.ArgumentParser) -> None:
         default=128,
         help="Maximum source rows per dataset (default: 128)",
     )
+    group.add_argument(
+        "--needles",
+        type=int,
+        choices=(2, 4, 8),
+        nargs="+",
+        help="MRCR needle counts (preset default: 8)",
+    )
+    group.add_argument(
+        "--min-prompt-tokens",
+        type=int,
+        default=0,
+        help="MRCR minimum rendered prompt length, inclusive",
+    )
+    group.add_argument(
+        "--max-prompt-tokens",
+        type=int,
+        help="MRCR maximum rendered prompt length "
+        "(default: server context minus output budget)",
+    )
 
 
 def _load_datasets(args: argparse.Namespace) -> dict:
     """Select loaders and merge their named, lazy conversation iterators."""
-    datasets = {}
+    source_flags = (
+        "dataset_config",
+        "data_files",
+        "split",
+        "revision",
+        "prompt_column",
+        "messages_column",
+        "prompt_template",
+    )
+    if (len(args.dataset) > 1 or "basic" in args.dataset) and any(
+        getattr(args, flag, None) is not None for flag in source_flags
+    ):
+        raise ValueError(
+            "Source-specific loading flags require a single dataset; "
+            "run differently configured datasets separately"
+        )
+    if args.max_samples <= 0:
+        raise ValueError("--max-samples must be positive")
+    if "speedbench" in args.dataset and any(
+        getattr(args, flag, None) is not None
+        for flag in (
+            "split",
+            "revision",
+            "prompt_column",
+            "messages_column",
+            "prompt_template",
+        )
+    ):
+        raise ValueError(
+            "SPEED-Bench prepared inputs support --dataset-config and --data-files, "
+            "not split/revision/column overrides"
+        )
+    has_mrcr = any(name in {"mrcr", "openai/mrcr"} for name in args.dataset)
+    if not has_mrcr and (
+        args.needles or args.min_prompt_tokens or args.max_prompt_tokens is not None
+    ):
+        raise ValueError("Needle and prompt-length selection flags require MRCR")
+    datasets: dict = {}
     for source in args.dataset:
         match source:
+            case "mrcr" | "openai/mrcr":
+                selected = mrcr.load(args)
             case "speedbench":
                 selected = speedbench.load(args)
             case _:
@@ -79,7 +137,7 @@ def _requests(datasets: dict, args: argparse.Namespace):
     for name, conversations in datasets.items():
         for index, sample in enumerate(islice(conversations, args.max_samples)):
             yield {
-                "id": f"{name}:{index}",
+                "id": sample.get("id", f"{name}:{index}"),
                 "dataset": name,
                 "category": sample["category"],
                 "body": {**body, "messages": sample["messages"]},

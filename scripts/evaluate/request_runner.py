@@ -28,6 +28,9 @@ async def send_request(
         async with client.stream(
             "POST", target + "/v1/chat/completions", json=request["body"]
         ) as response:
+            if response.is_error:
+                await response.aread()
+                raise ValueError(f"HTTP {response.status_code}: {response.text[:8192]}")
             response.raise_for_status()
             await _read_stream(response, result)
         result["output_tokens"] = result["usage"]["completion_tokens"]

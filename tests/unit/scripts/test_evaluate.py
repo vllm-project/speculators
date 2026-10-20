@@ -19,7 +19,7 @@ import request_runner  # type: ignore[import-not-found]
 import speedup  # type: ignore[import-not-found]
 import throughput_interactivity as ti  # type: ignore[import-not-found]
 from acceptance import acceptance_summary  # type: ignore[import-not-found]
-from eval_datasets import basic  # type: ignore[import-not-found]
+from eval_datasets import basic, mrcr  # type: ignore[import-not-found]
 from loader import (  # type: ignore[import-not-found]
     add_dataset_arguments,
     load_evaluation_requests,
@@ -178,9 +178,44 @@ def test_sample_limit_applies_per_dataset_without_overreading(monkeypatch):
         "example/second:0",
         "example/second:1",
     ]
+    for flags in [
+        ("--data-files", "a.jsonl"),
+        ("--split", "test"),
+        ("--revision", "pinned"),
+        ("--dataset-config", "main"),
+    ]:
+        with pytest.raises(ValueError, match="single dataset"):
+            load_evaluation_requests(_args("speedbench", "custom/data", *flags))
+    calls = []
+
+    def rows(source, **kwargs):
+        calls.append((source, kwargs))
+        return iter([{"question": "hello"}])
+
+    monkeypatch.setattr(basic, "dataset_rows", rows)
+    load_evaluation_requests(
+        _args(
+            "gsm8k",
+            "--split",
+            "train",
+            "--revision",
+            "rev",
+            "--data-files",
+            "one.jsonl",
+        )
+    )
+    assert calls[0] == (
+        "openai/gsm8k",
+        {
+            "dataset_config": "main",
+            "split": "train",
+            "data_files": ["one.jsonl"],
+            "revision": "rev",
+        },
+    )
 
 
-def test_mrcr_parquet_preserves_the_full_conversation(tmp_path):
+def test_mrcr_parquet_preserves_the_full_conversation(tmp_path, monkeypatch):
     source = tmp_path / "mrcr.parquet"
     pq.write_table(
         pa.Table.from_pylist(
@@ -196,6 +231,76 @@ def test_mrcr_parquet_preserves_the_full_conversation(tmp_path):
     assert body["temperature"] == 0
     assert body["chat_template_kwargs"] == {"enable_thinking": True}
     assert body["stream_options"] == {"include_usage": True}
+
+    # MRCR filters by the served tokenizer before applying the per-dataset cap.
+    calls = []
+
+    def rows(*args, **kwargs):
+        assert kwargs["data_files"] in (["8needle/*.parquet"], ["2needle/*.parquet"])
+        return iter(
+            [
+                {
+                    "prompt": json.dumps(
+                        [{**m, "content": str(n)} for m in _conversation()]
+                    )
+                }
+                for n in (250, 20, 40)
+            ]
+        )
+
+    monkeypatch.setattr(mrcr, "dataset_rows", rows)
+    monkeypatch.setattr(
+        mrcr.httpx,
+        "get",
+        lambda *a, **k: httpx.Response(
+            200,
+            json={"data": [{"id": "test-model", "max_model_len": 100}]},
+            request=httpx.Request("GET", "http://server/v1/models"),
+        ),
+    )
+    client_class = httpx.Client
+
+    def tokenize(request):
+        body = json.loads(request.content)
+        calls.append(body)
+        assert [m["role"] for m in body["messages"]] == [
+            "system",
+            "user",
+            "assistant",
+            "user",
+        ]
+        assert body["add_generation_prompt"]
+        assert body["chat_template_kwargs"]["enable_thinking"]
+        return httpx.Response(200, json={"count": int(body["messages"][0]["content"])})
+
+    monkeypatch.setattr(
+        mrcr.httpx,
+        "Client",
+        lambda **kw: client_class(transport=httpx.MockTransport(tokenize)),
+    )
+    args = _args("mrcr", "--max-samples", "1")
+    selected = load_evaluation_requests(args)
+    assert len(calls) == 2
+    assert selected[0]["id"] == "mrcr/8needle:1"
+    assert args.dataset_selection["mrcr/8needle"] == {
+        "scanned": 2,
+        "filtered_by_length": 1,
+        "selected": 1,
+        "min_prompt_tokens": 0,
+        "max_prompt_tokens": 84,
+        "server_context": 100,
+        "output_budget": 16,
+    }
+    args = _args(
+        "openai/mrcr", "--min-prompt-tokens", "30", "--max-prompt-tokens", "50"
+    )
+    assert [r["id"] for r in load_evaluation_requests(args)] == ["mrcr/8needle:2"]
+    multi = load_evaluation_requests(
+        _args("mrcr", "--needles", "2", "8", "--max-samples", "1")
+    )
+    assert [r["id"] for r in multi] == ["mrcr/2needle:1", "mrcr/8needle:1"]
+    with pytest.raises(ValueError, match="fit server context"):
+        load_evaluation_requests(_args("mrcr", "--max-prompt-tokens", "100"))
 
 
 def test_speedbench_jsonl_all_null_metadata_then_strings(tmp_path):
@@ -245,6 +350,10 @@ def test_position_rates_count_steps_accepting_through_each_position():
 def test_stream_collects_final_metrics_and_rejects_truncation():
     async def run():
         def respond(request):
+            if request.url.path.startswith("/bad/"):
+                return httpx.Response(
+                    400, json={"error": {"message": "maximum context length is 128"}}
+                )
             return _stream_response(
                 request, complete=request.url.path.startswith("/complete/")
             )
@@ -254,14 +363,17 @@ def test_stream_collects_final_metrics_and_rejects_truncation():
             truncated = await send_request(
                 client, "http://test/truncated", _request(), 1
             )
-        return complete, truncated
+            bad = await send_request(client, "http://test/bad", _request(), 2)
+        return complete, truncated, bad
 
-    complete, truncated = asyncio.run(run())
+    complete, truncated, bad = asyncio.run(run())
     assert complete["status"] == "ok"
     assert complete["output_tokens"] == 3
     assert complete["metrics"] == _spec([0, 1], 2)
     assert truncated["status"] == "error"
     assert "incomplete stream" in truncated["error"]
+    assert bad["status"] == "error"
+    assert "maximum context length is 128" in bad["error"]
 
 
 def test_fixed_count_does_not_overshoot_with_multiple_workers(tmp_path, monkeypatch):
@@ -381,6 +493,13 @@ def test_interrupted_later_dataset_preserves_completed_csv_row(tmp_path, monkeyp
     assert len((tmp_path / "requests.jsonl").read_text().splitlines()) == 2
     summary = json.loads((tmp_path / "summary.json").read_text())
     assert summary["overall"]["requests"] == 2
+    limited = tmp_path / "limited"
+    limited.mkdir()
+    assert acceptance.run(_run_args(limited, max_requests=1), _datasets()) == 0
+    summary = json.loads((limited / "summary.json").read_text())
+    assert summary["overall"]["requests"] == 1
+    assert summary["selected_datasets"] == ["first", "second"]
+    assert list(summary["by_dataset"]) == ["first"]
 
 
 def test_timed_sweep_saves_one_archive_summary_and_plot(tmp_path, monkeypatch):

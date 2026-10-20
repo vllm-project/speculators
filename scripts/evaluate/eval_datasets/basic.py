@@ -6,7 +6,7 @@ from pathlib import Path
 
 from datasets import load_dataset
 
-DATASET_PRESETS = {
+DATASET_PRESETS: dict[str, dict] = {
     "gsm8k": {
         "dataset": "openai/gsm8k",
         "dataset_config": "main",
@@ -97,17 +97,16 @@ def _column(row: dict, name: str):
 
 
 def _conversations(name: str, args: argparse.Namespace):
-    options = DATASET_PRESETS.get(name)
-    if options is None:
-        options = {
-            "dataset": name,
-            "dataset_config": args.dataset_config,
-            "split": args.split,
-            "data_files": args.data_files,
-            "messages_column": args.messages_column,
-            "prompt_column": args.prompt_column,
-            "prompt_template": args.prompt_template,
-        }
+    options = {"dataset": name, "split": "train", **DATASET_PRESETS.get(name, {})}
+    for key in ("dataset_config", "split", "data_files"):
+        if (value := getattr(args, key)) is not None:
+            options[key] = value
+    if any(
+        getattr(args, key) is not None
+        for key in ("messages_column", "prompt_column", "prompt_template")
+    ):
+        for key in ("messages_column", "prompt_column", "prompt_template"):
+            options[key] = getattr(args, key)
     rows = dataset_rows(
         options["dataset"],
         dataset_config=options.get("dataset_config"),

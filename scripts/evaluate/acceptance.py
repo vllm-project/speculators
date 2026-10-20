@@ -136,8 +136,10 @@ def run(args: argparse.Namespace, requests: list[dict]) -> int:
     limit = args.max_requests if args.max_requests is not None else len(requests)
     cycles, remaining = divmod(limit, len(requests))
     results = []
-    report = {
+    report: dict = {
         "schema_version": 1,
+        "selected_datasets": list(dict.fromkeys(r["dataset"] for r in requests)),
+        "source_selection": getattr(args, "dataset_selection", {}),
         "overall": acceptance_summary([]),
         "by_dataset": {},
         "by_prompt_length": {},
@@ -146,6 +148,12 @@ def run(args: argparse.Namespace, requests: list[dict]) -> int:
     start = time.perf_counter()
     csv_rows = []
     csv_path = args.output_dir / "summary.csv"
+    if limit < len(requests):
+        print(
+            "Warning: --max-requests is a total ordered limit; overall describes "
+            "only requests actually sent. Use --max-samples for per-dataset coverage.",
+            file=sys.stderr,
+        )
     with (args.output_dir / "requests.jsonl").open("x") as raw:
         for dataset, group in groupby(requests, key=itemgetter("dataset")):
             samples = list(group)
@@ -196,4 +204,16 @@ def run(args: argparse.Namespace, requests: list[dict]) -> int:
             _csv_row("overall", report["overall"], time.perf_counter() - start)
         )
         _write_csv(csv_path, csv_rows)
+    skipped = set(report["selected_datasets"]) - report["by_dataset"].keys()
+    if skipped:
+        print(
+            f"Warning: datasets not visited: {', '.join(sorted(skipped))}",
+            file=sys.stderr,
+        )
+    print(
+        f"Finished: {report['overall']['successful_requests']} successful, "
+        f"{report['overall']['errored_requests']} errors, "
+        f"{report['overall']['requests_without_spec_metrics']} missing metrics",
+        flush=True,
+    )
     return 0 if check_results(report["overall"]) else 1
