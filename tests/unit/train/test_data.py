@@ -3,6 +3,7 @@
 import logging
 from pathlib import Path
 
+import pytest
 import torch
 from datasets import Dataset
 
@@ -274,21 +275,27 @@ def _make_generation_dataset(
         datapath=str(tmp_path / "data"),
     )
     records.data.set_format(type="torch")
+    source = source_module.VllmHiddenStatesSource(
+        transfer=transfer,  # type: ignore[arg-type]
+        model="model",
+        generation_validation_retries=kwargs.pop("generation_validation_retries", 2),
+        max_consecutive_generation_failures=kwargs.pop(
+            "max_consecutive_generation_failures", 20
+        ),
+    )
     dataset = SpeculatorsDataset(
         records=records,
         max_len=8,
-        transfer=transfer,  # type: ignore[arg-type]
-        **kwargs,
+        hidden_states=source,
     )
-    dataset.vllm_source.client = object()  # type: ignore[assignment]
-    dataset.vllm_source.model = "model"
+    source.client = object()  # type: ignore[assignment]
     return dataset
 
 
 def test_arrow_dataset_builds_explicit_dataset_record(tmp_path):
-    arrow_ds = _make_generation_dataset(tmp_path, _SequenceTransfer([]))
+    dataset = _make_generation_dataset(tmp_path, _SequenceTransfer([]))
 
-    record = arrow_ds.records[0]
+    record = dataset.records[0]
 
     assert torch.equal(record.input_ids, torch.tensor([1, 2, 3]))
     assert torch.equal(record.loss_mask, torch.tensor([1, 1, 1]))
@@ -316,7 +323,10 @@ def test_offline_hidden_states_source_loads_cached_sample():
             return cached
 
     transfer = CachedTransfer()
-    source = source_module.OfflineHiddenStatesSource(transfer=transfer)  # type: ignore[arg-type]
+    source = source_module.OfflineHiddenStatesSource(
+        transfer=transfer,  # type: ignore[arg-type]
+        on_missing="raise",
+    )
 
     record = DatasetRecord(
         input_ids=torch.tensor([1, 2, 3]),
@@ -326,6 +336,73 @@ def test_offline_hidden_states_source_loads_cached_sample():
     )
     assert source.get_one(record) is cached
     assert transfer.requested_indices == [17]
+
+
+@pytest.mark.parametrize("on_missing", ["skip", "warn"])
+def test_offline_hidden_states_source_handles_cache_miss(on_missing):
+    class MissingTransfer:
+        def get_cached(self, _storage_index):
+            return None
+
+    record = DatasetRecord(
+        input_ids=torch.tensor([1, 2, 3]),
+        loss_mask=torch.ones(3, dtype=torch.bool),
+        seq_len=3,
+        storage_index=17,
+    )
+    source = source_module.OfflineHiddenStatesSource(
+        transfer=MissingTransfer(),  # type: ignore[arg-type]
+        on_missing=on_missing,
+    )
+
+    if on_missing == "warn":
+        with pytest.warns(UserWarning, match="sample 17"):
+            result = source.get_one(record)
+    else:
+        result = source.get_one(record)
+
+    assert isinstance(result, SampleUnavailable)
+
+
+def test_offline_hidden_states_source_raises_on_cache_miss():
+    class MissingTransfer:
+        def get_cached(self, _storage_index):
+            return None
+
+    record = DatasetRecord(
+        input_ids=torch.tensor([1, 2, 3]),
+        loss_mask=torch.ones(3, dtype=torch.bool),
+        seq_len=3,
+        storage_index=17,
+    )
+    source = source_module.OfflineHiddenStatesSource(
+        transfer=MissingTransfer(),  # type: ignore[arg-type]
+        on_missing="raise",
+    )
+
+    with pytest.raises(RuntimeError, match="sample 17"):
+        source.get_one(record)
+
+
+def test_vllm_hidden_states_source_close_is_idempotent():
+    class CloseableClient:
+        def __init__(self):
+            self.close_calls = 0
+
+        def close(self):
+            self.close_calls += 1
+
+    source = source_module.VllmHiddenStatesSource(
+        transfer=object(),  # type: ignore[arg-type]
+    )
+    client = CloseableClient()
+    source.client = client  # type: ignore[assignment]
+
+    source.close()
+    source.close()
+
+    assert client.close_calls == 1
+    assert source.client is None
 
 
 def _next_generation_result(handles):
@@ -359,7 +436,7 @@ def test_arrow_dataset_retries_nonfinite_read_then_recovers(
     assert item["hidden_states"].shape == (3, 4)
     assert torch.isfinite(item["hidden_states"]).all()
     assert transfer.deleted == ["bad-handle", "good-handle"]
-    assert arrow_ds.vllm_source.generation_recovery.consecutive_failures == 0
+    assert arrow_ds.hidden_states.generation_recovery.consecutive_failures == 0
 
 
 def test_exhausted_generation_produces_locally_empty_zero_loss_batch(

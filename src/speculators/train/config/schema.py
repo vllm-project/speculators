@@ -257,15 +257,15 @@ class GenerationArgs(_Group):
 
     vllm_endpoint: str = Field(
         default="http://localhost:8000/v1",
-        description="vLLM endpoint used to generate hidden states on demand. Only "
-        "needed if --on-missing=generate and samples are missing. The vLLM instance "
+        description="vLLM endpoint used to generate hidden states on demand when "
+        "--on-missing=generate. The vLLM instance "
         "must cache hidden states to a location reachable from the training instance.",
     )
     on_missing: Literal["generate", "skip", "warn", "raise"] = Field(
         default="generate",
-        description="Dataloader behaviour when a sample has no cached hidden states. "
-        "Default 'generate' generates them on demand via the vLLM endpoint; the others "
-        "skip the sample, skip with a warning, or raise.",
+        description="Hidden-state source and offline cache-miss policy. 'generate' "
+        "selects vLLM generation; 'skip', 'warn', and 'raise' select the offline "
+        "source and control what happens when a cached sample is missing.",
     )
     on_generate: Literal["delete"] = Field(
         default="delete",

@@ -1,7 +1,8 @@
 """Hidden-state acquisition for training data."""
 
 import logging
-from typing import Any, cast
+import warnings
+from typing import Any, Literal, Protocol, cast
 
 import openai
 import torch
@@ -18,6 +19,19 @@ from speculators.train.data_types import DatasetRecord
 from speculators.train.recovery import GenerationRecoveryGuard, SampleUnavailable
 
 logger = logging.getLogger("speculators")
+
+HiddenStateSample = dict[str, torch.Tensor]
+OfflineMissingPolicy = Literal["skip", "warn", "raise"]
+
+
+class HiddenStatesSource(Protocol):
+    """Source of hidden states for one training record."""
+
+    def get_one(self, record: DatasetRecord) -> HiddenStateSample | SampleUnavailable:
+        """Return hidden states or a structured unavailable result."""
+
+    def close(self) -> None:
+        """Release source resources."""
 
 
 def _has_multimodal_content(messages: list[dict]) -> bool:
@@ -43,21 +57,46 @@ def build_client_item(record: DatasetRecord) -> ClientItem:
 class OfflineHiddenStatesSource:
     """Load hidden states that were already written to the transfer backend."""
 
-    def __init__(self, *, transfer: HiddenStatesTransfer):
+    def __init__(
+        self,
+        *,
+        transfer: HiddenStatesTransfer,
+        on_missing: OfflineMissingPolicy,
+    ):
         self.transfer = transfer
+        self.on_missing = on_missing
 
-    def get_one(self, record: DatasetRecord) -> dict[str, torch.Tensor] | None:
+    def get_one(self, record: DatasetRecord) -> HiddenStateSample | SampleUnavailable:
         """Load one cached sample by its storage index."""
-        return self.transfer.get_cached(record.storage_index)
+        cached = self.transfer.get_cached(record.storage_index)
+        if cached is not None:
+            return cached
+
+        if self.on_missing == "skip":
+            return SampleUnavailable()
+        if self.on_missing == "warn":
+            warnings.warn(
+                "Failed to load hidden states for sample "
+                f"{record.storage_index}. Skipping...",
+                stacklevel=1,
+            )
+            return SampleUnavailable(
+                reason=f"Hidden states unavailable for sample {record.storage_index}"
+            )
+        raise RuntimeError(
+            f"Failed to load hidden states for sample {record.storage_index}."
+        )
+
+    def close(self) -> None:
+        """Offline transfers do not currently own closeable resources."""
 
 
 class VllmHiddenStatesSource:
     """Generate and retrieve hidden states from a vLLM endpoint.
 
-    This is intentionally a small extraction of the existing
-    :class:`SpeculatorsDataset` behavior. Cache lookup and the ``on_missing``
-    policy remain in :class:`SpeculatorsDataset` for now; this object owns only
-    the vLLM round trip, validation, cleanup, and generation recovery.
+    This source always generates a sample. Cache-miss handling belongs to
+    :class:`OfflineHiddenStatesSource`; this object owns the vLLM round trip,
+    validation, cleanup, and generation recovery.
     """
 
     def __init__(
@@ -149,7 +188,7 @@ class VllmHiddenStatesSource:
     def get_one(
         self,
         record: DatasetRecord,
-    ) -> dict[str, torch.Tensor] | SampleUnavailable:
+    ) -> HiddenStateSample | SampleUnavailable:
         """Generate one sample, including full-round-trip recovery."""
         return self.generation_recovery.run(
             lambda: self._generate_once(record),
