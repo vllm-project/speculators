@@ -56,6 +56,19 @@ def _all_reduce_metrics(metrics: dict[str, torch.Tensor]) -> dict[str, torch.Ten
     return dict(zip(keys, stacked, strict=True))
 
 
+def _metrics_to_floats(metrics: dict[str, torch.Tensor]) -> dict[str, float]:
+    """Copy scalar metric tensors to Python floats in one device-to-host transfer.
+
+    A ``.item()`` per metric is a separate blocking copy each; stacking first
+    turns the two dozen per-step metrics into a single one.
+    """
+    if not metrics:
+        return {}
+    keys = list(metrics)
+    values = torch.stack([metrics[k].float().reshape(()) for k in keys]).tolist()
+    return dict(zip(keys, values, strict=True))
+
+
 class _StepTimer:
     # Each mark()/now() forces an accelerator.synchronize to capture true GPU time.
     # This serialises the CUDA pipeline, so profiled steps are slower; keep
@@ -576,7 +589,7 @@ class Trainer:
                 if self.is_distributed:
                     metrics = _all_reduce_metrics(metrics)
 
-                metrics = {k: v.item() for k, v in metrics.items()}
+                metrics = _metrics_to_floats(metrics)
                 world_size = dist.get_world_size() if self.is_distributed else 1
                 metrics = normalize_counted_metrics(metrics, world_size)
                 lr_info = (
