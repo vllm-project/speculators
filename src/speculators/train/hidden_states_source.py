@@ -20,6 +20,17 @@ BatchType = dict[str, Any]
 logger = logging.getLogger("speculators")
 
 
+class OfflineHiddenStatesSource:
+    """Load hidden states that were already written to the transfer backend."""
+
+    def __init__(self, *, transfer: HiddenStatesTransfer):
+        self.transfer = transfer
+
+    def get_one(self, file_index: int) -> dict[str, torch.Tensor] | None:
+        """Load one cached sample by its storage index."""
+        return self.transfer.get_cached(file_index)
+
+
 class VllmHiddenStatesSource:
     """Generate and retrieve hidden states from a vLLM endpoint.
 

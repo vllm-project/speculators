@@ -16,7 +16,10 @@ from speculators.data_generation.vllm_client import (
     generate_hidden_states,
     has_multimodal_content,
 )
-from speculators.train.hidden_states_source import VllmHiddenStatesSource
+from speculators.train.hidden_states_source import (
+    OfflineHiddenStatesSource,
+    VllmHiddenStatesSource,
+)
 from speculators.train.recovery import (
     RECOVERY_METADATA_KEY,
     RecoveryMetadata,
@@ -174,6 +177,7 @@ class ArrowDataset(BaseDataset):
         self.transfer = transfer or FileTransfer(Path(datapath) / "hidden_states")
         self.on_missing = on_missing
         self.num_target_layers = num_target_layers
+        self.offline_source = OfflineHiddenStatesSource(transfer=self.transfer)
         self.vllm_source = VllmHiddenStatesSource(
             transfer=self.transfer,
             vllm_endpoint=vllm_endpoint,
@@ -199,7 +203,7 @@ class ArrowDataset(BaseDataset):
 
     def _get_raw_data(self, index: int) -> BatchType | SampleUnavailable:
         file_idx = self._map_to_file_idx(index)
-        cached_hs = self.transfer.get_cached(file_idx)
+        cached_hs = self.offline_source.get_one(file_idx)
         if cached_hs is None:
             if self.on_missing == "generate":
                 dataset_item = self.data[index]
