@@ -114,6 +114,8 @@ speculators prepare-data \
 
 If your generation pipeline saves natural-language conversations instead, start the target model's vLLM server as described in Step 2, then use its render endpoint to convert those responses into speculator format:
 
+Set the rendering server's `--max-model-len` above `--seq-length` (for example, at least `8193` for the `8192`-token preparation below) so vLLM has room for an output token. If this is too large for the model or available memory, lower `--seq-length` instead.
+
 ```bash
 speculators prepare-data \
   --model Qwen/Qwen3-8B \

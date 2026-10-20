@@ -1,7 +1,10 @@
 from http import HTTPStatus
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 from speculators.data_generation import render_client
+from speculators.data_generation.vllm_client import InvalidResponseError
 
 
 def _resp(status, text="", payload=None):
@@ -12,24 +15,27 @@ def _resp(status, text="", payload=None):
     return r
 
 
-def test_render_retries_once_on_max_tokens_zero():
+def test_render_reports_context_limit_without_retry():
     bad = _resp(
         HTTPStatus.BAD_REQUEST,
         text="max_tokens must be at least 1, got 0",
     )
-    ok = _resp(
-        HTTPStatus.OK,
-        payload={"token_ids": [1, 2, 3]},
-    )
 
-    with patch.object(render_client, "_post", side_effect=[bad, ok]) as post:
-        out = render_client.render_conversation(
+    with (
+        patch.object(render_client, "_post", return_value=bad) as post,
+        pytest.raises(InvalidResponseError) as exc_info,
+    ):
+        render_client.render_conversation(
             "http://x",
             [{"role": "user", "content": "hi"}],
             add_generation_prompt=False,
             truncate_prompt_tokens=8192,
         )
 
-    assert out == [1, 2, 3]
-    assert post.call_count == 2
-    assert post.call_args_list[1].kwargs["json"]["truncate_prompt_tokens"] == 8191
+    assert post.call_count == 1
+    assert post.call_args.kwargs["json"]["truncate_prompt_tokens"] == 8192
+    message = str(exc_info.value)
+    assert "--max-model-len" in message
+    assert "--seq-length" in message
+    assert "8192" in message
+    assert "max_tokens must be at least 1" in message
