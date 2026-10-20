@@ -153,19 +153,18 @@ class SpeculatorsDataset(Dataset):
         else:
             hs_features = loaded_hs["hidden_states"][:, :-1]
 
-        data = {
+        seq_len = loaded_hs["token_ids"].shape[0]
+
+        return {
             "hidden_states": hs_features.flatten(1),  # [seq_len, n_feat * h]
             "input_ids": loaded_hs["token_ids"],  # [seq_len]
             "verifier_last_hidden_states": loaded_hs["hidden_states"][
                 :, -1
             ],  # [seq_len, hidden_size]
             "loss_mask": record.loss_mask,  # [seq_len]
+            "lengths": torch.tensor([seq_len], dtype=torch.long),
+            "position_ids": torch.arange(seq_len, dtype=torch.long),
         }
-
-        seq_len = data["input_ids"].shape[0]
-        data["lengths"] = torch.tensor([seq_len], dtype=torch.long)
-        data["position_ids"] = torch.arange(seq_len, dtype=torch.long)
-        return data
 
     def close(self) -> None:
         """Close resources owned by the hidden-state source."""
