@@ -436,6 +436,7 @@ def test_arrow_dataset_retries_nonfinite_read_then_recovers(
     assert item["hidden_states"].shape == (3, 4)
     assert torch.isfinite(item["hidden_states"]).all()
     assert transfer.deleted == ["bad-handle", "good-handle"]
+    assert isinstance(arrow_ds.hidden_states, source_module.VllmHiddenStatesSource)
     assert arrow_ds.hidden_states.generation_recovery.consecutive_failures == 0
 
 

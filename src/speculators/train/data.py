@@ -132,21 +132,20 @@ class SpeculatorsDataset(Dataset):
                 reason=f"Extracted token ids do not match sample {index}"
             )
 
-        data = {
+        seq_len = loaded_hs["token_ids"].shape[0]
+
+        return {
             "hidden_states": loaded_hs["hidden_states"][:, :-1].flatten(
                 1
-            ),  # [seq_len, 3 * hidden_size]
+            ),  # [seq_len, num_layers * hidden_size]
             "input_ids": loaded_hs["token_ids"],  # [seq_len]
             "verifier_last_hidden_states": loaded_hs["hidden_states"][
                 :, -1
             ],  # [seq_len, hidden_size]
             "loss_mask": record.loss_mask,  # [seq_len]
+            "lengths": torch.tensor([seq_len], dtype=torch.long),
+            "position_ids": torch.arange(seq_len, dtype=torch.long),
         }
-
-        seq_len = data["input_ids"].shape[0]
-        data["lengths"] = torch.tensor([seq_len], dtype=torch.long)
-        data["position_ids"] = torch.arange(seq_len, dtype=torch.long)
-        return data
 
     def close(self) -> None:
         """Close resources owned by the hidden-state source."""
