@@ -180,6 +180,9 @@ _EAGER_LOSS_FN_MAP: dict[str, Callable[[torch.Tensor, torch.Tensor], torch.Tenso
 
 _LOSS_FN_MAPS = {"fused": _FUSED_LOSS_FN_MAP, "eager": _EAGER_LOSS_FN_MAP}
 
+# Loss fns that accept logits with extra trailing positions (see _FusedLoss).
+_TRAILING_LOGITS_LOSS_FNS = tuple(_FUSED_LOSS_FN_MAP.values())
+
 
 def resolve_loss_config(spec: str, implementation: str = "fused") -> LossConfig:
     """Parse a loss spec into ``{name: (loss_fn, weight)}``.
@@ -248,7 +251,7 @@ def compound_loss(
     keyed as ``"{name}_loss"``.  When the config contains a single term the
     dict is empty (the overall loss already captures it).
     """
-    total = torch.tensor(0.0, device=logits.device, dtype=torch.float32)
+    total = torch.zeros((), device=logits.device, dtype=torch.float32)
     term_losses: dict[str, torch.Tensor] = {}
     multi = len(loss_config) > 1
     for name, (fn, weight) in loss_config.items():
@@ -277,7 +280,8 @@ def loss_function(
     """Compute masked, optionally position-decayed training loss.
 
     Args:
-        logits: Draft model logits.
+        logits: Draft model logits. May have more positions than ``targets``;
+            the trailing ones are excluded from the loss.
         targets: Target model logits.
         loss_mask: Boolean mask selecting positions to include in the loss.
         pos_idx: Position indices within each speculative block.
@@ -287,6 +291,10 @@ def loss_function(
     Returns:
         Scalar mean loss across the batch.
     """
+    if logits.shape[1] != targets.shape[1] and loss_fn not in (
+        _TRAILING_LOGITS_LOSS_FNS
+    ):
+        logits = logits[:, : targets.shape[1]]
     elementwise_loss = loss_fn(logits, targets)  # shape: [1, seq_len]
 
     loss_mask = loss_mask.to(elementwise_loss.dtype)

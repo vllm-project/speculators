@@ -23,6 +23,7 @@ from speculators.models.utils import (
     resolve_target_layer_ids,
 )
 from speculators.proposals.greedy import GreedyTokenProposalConfig
+from speculators.utils.argmax import argmax_last_dim
 
 
 @SpeculatorModel.register("eagle3")
@@ -252,7 +253,9 @@ class Eagle3DraftModel(DraftVocabMixin, SpeculatorModel):
                     self.verifier_norm(verifier_last_hidden_states)
                 )
                 # shape: [1, total_seq_len, draft_vocab_size]
-            loss = torch.tensor(0.0, device=device)
+                target_ids = argmax_last_dim(targets)
+                # shape: [1, total_seq_len]
+            loss = torch.zeros((), device=device)
 
             # prev_correct is a boolean tensor that is True for tokens that have been
             # correctly predicted on all previous ttt_steps.
@@ -306,6 +309,9 @@ class Eagle3DraftModel(DraftVocabMixin, SpeculatorModel):
                 logits = self.lm_head(self.norm(hidden_states))
             # shape: [1, total_seq_len, draft_vocab_size]
 
+            input_ids = argmax_last_dim(logits)
+            # shape: [1, total_seq_len]
+
             if return_loss:
                 s_loss, s_metrics = compute_metrics(
                     logits,
@@ -315,11 +321,12 @@ class Eagle3DraftModel(DraftVocabMixin, SpeculatorModel):
                     ttt_step,
                     ttt_step_loss_decay,
                     loss_config=loss_config,
+                    pred_ids=input_ids,
+                    target_ids=target_ids,
                 )
                 loss += s_loss
                 metrics.update(s_metrics)
 
-            input_ids = torch.argmax(logits, dim=-1)
             draft_tokens.append(input_ids.detach().clone())
             # shape: [1, total_seq_len]
 
@@ -359,7 +366,7 @@ class Eagle3DraftModel(DraftVocabMixin, SpeculatorModel):
 
         if return_loss:
             metrics["loss_sum"] = loss.detach().clone()
-            metrics["loss_total"] = torch.tensor(1.0, device=device)
+            metrics["loss_total"] = torch.ones((), device=device)
             return draft_tokens, loss, metrics
         else:
             return draft_tokens

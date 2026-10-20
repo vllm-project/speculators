@@ -176,6 +176,47 @@ def loss_forward_kernel(  # noqa: C901 -- constexpr OP branches, pruned per inst
     logits_ptr += pid * n_cols
     targets_ptr += pid * n_cols
 
+    if OP == _OP_KL:
+        # Single pass over both rows. With tp = softmax(y), dp = softmax(x):
+        #   KL = sum tp * (log tp - log dp) = E_tp[y - x] - lse_t + lse_d,
+        # so alongside the online max / sum-exp of each row it is enough to
+        # carry s = sum exp(y - m_t) * (y - x), rescaled whenever m_t moves.
+        # That reads each row once instead of twice; the forward is memory
+        # bound, so this halves its runtime.
+        m_d = float("-inf")
+        z_d = 0.0
+        m_t = float("-inf")
+        z_t = 0.0
+        s = 0.0
+        for i in range(0, n_cols, BLOCK_SIZE):
+            offsets = i + tl.arange(0, BLOCK_SIZE)
+            mask = offsets < n_cols
+            x = tl.load(logits_ptr + offsets, mask=mask, other=float("-inf")).cast(
+                tl.float32
+            )
+            y = tl.load(targets_ptr + offsets, mask=mask, other=float("-inf")).cast(
+                tl.float32
+            )
+            m_d_new = tl.maximum(m_d, tl.max(x))
+            z_d = z_d * tl.exp(m_d - m_d_new) + tl.sum(
+                tl.where(mask, tl.exp(x - m_d_new), 0.0)
+            )
+            m_d = m_d_new
+            m_t_new = tl.maximum(m_t, tl.max(y))
+            rescale = tl.exp(m_t - m_t_new)
+            ey = tl.where(mask, tl.exp(y - m_t_new), 0.0)
+            z_t = z_t * rescale + tl.sum(ey)
+            s = s * rescale + tl.sum(tl.where(mask, ey * (y - x), 0.0))
+            m_t = m_t_new
+        kl = s / z_t - (m_t + tl.log(z_t)) + (m_d + tl.log(z_d))
+        tl.store(stats_ptr + 0 * stats_row + pid, m_d)
+        tl.store(stats_ptr + 1 * stats_row + pid, z_d)
+        tl.store(stats_ptr + 2 * stats_row + pid, m_t)
+        tl.store(stats_ptr + 3 * stats_row + pid, z_t)
+        tl.store(loss_ptr + pid, kl)
+        tl.store(stats_ptr + 4 * stats_row + pid, kl)
+        return
+
     m_d, z_d = _online_stats(logits_ptr, n_cols, BLOCK_SIZE)
     lse_d = m_d + tl.log(z_d)
     tl.store(stats_ptr + 0 * stats_row + pid, m_d)
@@ -218,9 +259,7 @@ def loss_forward_kernel(  # noqa: C901 -- constexpr OP branches, pruned per inst
             ltp = y - lse_t
             dp = tl.exp(ldp)
             tp = tl.exp(ltp)
-            if OP == _OP_KL:
-                acc += tl.sum(tl.where(mask, tp * (ltp - ldp), 0.0))
-            elif OP == _OP_RKL:
+            if OP == _OP_RKL:
                 acc += tl.sum(tl.where(mask, dp * (ldp - ltp), 0.0))
             elif OP == _OP_JSD:
                 lmp = _log_mix(ldp, ltp)
@@ -230,8 +269,7 @@ def loss_forward_kernel(  # noqa: C901 -- constexpr OP branches, pruned per inst
                 acc += tl.sum(tl.where(mask, tl.minimum(dp, tp), 0.0))
                 extra += tl.sum(tl.where(mask & (dp <= tp), dp, 0.0))
 
-        # Lint exemptions: `in`/merged compares aren't constexpr-foldable here.
-        if OP == _OP_KL or OP == _OP_RKL:  # noqa: PLR1714, SIM109
+        if OP == _OP_RKL:
             tl.store(loss_ptr + pid, acc)
             tl.store(stats_ptr + 4 * stats_row + pid, acc)
         elif OP == _OP_JSD:
@@ -309,12 +347,23 @@ class _FusedLoss(torch.autograd.Function):
 
     Targets intentionally receive no gradient; use the eager implementation when
     target gradients are required.
+
+    With a batch of one, ``logits`` may have more positions than ``targets``:
+    position ``i`` of ``logits`` pairs with position ``i`` of ``targets`` and the
+    trailing logit positions are left out of the loss (zero gradient). This is
+    the same as passing ``logits[:, :T]``, but autograd's backward for that slice
+    would allocate a zeroed ``[T_logits, V]`` buffer and copy the gradient into
+    it. Here the backward writes straight into a full-size buffer instead.
     """
 
     @staticmethod
     def forward(ctx, logits, targets, op):
-        B, T, V = logits.shape
-        logits_flat = logits.contiguous().view(B * T, V)
+        B, T, V = targets.shape
+        if logits.shape[1] != T and B != 1:
+            raise ValueError(
+                "logits may only carry extra trailing positions with batch size 1"
+            )
+        logits_flat = logits.contiguous().view(-1, V)
         targets_flat = targets.contiguous().view(B * T, V)
         loss = torch.empty(B * T, device=logits.device, dtype=torch.float32)
         stats = torch.empty(_N_STATS, B * T, device=logits.device, dtype=torch.float32)
@@ -333,6 +382,7 @@ class _FusedLoss(torch.autograd.Function):
         )
         ctx.op = op
         ctx.shape = (B, T, V)
+        ctx.logits_shape = logits.shape
         return loss.view(B, T)
 
     @staticmethod
@@ -340,17 +390,24 @@ class _FusedLoss(torch.autograd.Function):
         logits_flat, targets_flat, stats = ctx.saved_tensors
         B, T, V = ctx.shape
         grad_in = torch.empty_like(logits_flat)
-        loss_backward_kernel[(B * T,)](
+        grad_out = grad_output.contiguous().view(-1)
+        n_rows = logits_flat.shape[0]
+        if n_rows != B * T:
+            # Trailing logit positions have no loss. A zero upstream gradient
+            # sends their rows down the kernel's zero-fill path, which returns
+            # before reading stats or targets for them.
+            grad_out = torch.cat([grad_out, grad_out.new_zeros(n_rows - B * T)])
+        loss_backward_kernel[(n_rows,)](
             logits_flat,
             targets_flat,
             grad_in,
-            grad_output.contiguous().view(-1),
+            grad_out,
             stats,
             stats.stride(0),
             V,
             OP=ctx.op,
         )
-        return grad_in.view(B, T, V), None, None
+        return grad_in.view(ctx.logits_shape), None, None
 
 
 _NLA_EPS = 1e-5

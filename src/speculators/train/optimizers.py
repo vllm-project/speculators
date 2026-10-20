@@ -16,7 +16,9 @@ import logging
 
 import torch
 from torch import Tensor
+from torch.distributed.tensor import DTensor
 from torch.nn import Module
+from torch.optim._muon import _adjust_lr, _zeropower_via_newtonschulz
 
 logger = logging.getLogger("speculators")
 
@@ -66,6 +68,105 @@ def split_named_params_for_muon(
     return muon_params, adamw_params
 
 
+class Muon(torch.optim.Muon):
+    """``torch.optim.Muon`` with the Newton-Schulz iterations batched by shape.
+
+    The stock implementation orthogonalizes one matrix at a time: ~5 x 3 small
+    matmuls plus a handful of pointwise ops per parameter, which leaves a small
+    draft model's optimizer step bound by kernel launches. Matrices that share a
+    (transposed-to-wide) shape -- e.g. k/v/o projections, or MLP gate/up/down --
+    are instead stacked and iterated with ``bmm``/``baddbmm``. The per-matrix
+    normalization, momentum, weight decay and LR adjustment are the stock ops,
+    applied per parameter, and state (``momentum_buffer``) is unchanged, so
+    checkpoints are interchangeable with ``torch.optim.Muon``.
+
+    Sharded (``DTensor``) parameters use the stock path, which already handles
+    their distributed orthogonalization.
+    """
+
+    @torch.no_grad()
+    def step(self, closure=None):
+        if any(
+            isinstance(p, DTensor)
+            for group in self.param_groups
+            for p in group["params"]
+        ):
+            return super().step(closure)
+
+        loss = None
+        if closure is not None:
+            with torch.enable_grad():
+                loss = closure()
+
+        for group in self.param_groups:
+            params: list[Tensor] = []
+            grads: list[Tensor] = []
+            bufs: list[Tensor] = []
+            if self._init_group(group, params, grads, bufs):
+                raise ValueError("Complex parameters are not supported")
+            momentum = group["momentum"]
+
+            updates = []
+            for grad, buf in zip(grads, bufs, strict=True):
+                if grad.ndim != 2:  # noqa: PLR2004
+                    raise ValueError("Param gradient must be a 2D matrix")
+                buf.lerp_(grad, 1 - momentum)
+                updates.append(grad.lerp(buf, momentum) if group["nesterov"] else buf)
+
+            orthogonalized = _batched_zeropower_via_newtonschulz(
+                updates, group["ns_coefficients"], group["ns_steps"], group["eps"]
+            )
+
+            lr = group["lr"]
+            for param, update in zip(params, orthogonalized, strict=True):
+                adjusted_lr = _adjust_lr(lr, group["adjust_lr_fn"], param.shape)
+                param.mul_(1 - lr * group["weight_decay"])
+                param.add_(update, alpha=-adjusted_lr)
+        return loss
+
+
+def _batched_zeropower_via_newtonschulz(
+    grads: list[Tensor],
+    ns_coefficients: tuple[float, float, float],
+    ns_steps: int,
+    eps: float,
+) -> list[Tensor]:
+    """``_zeropower_via_newtonschulz`` over a list, batching same-shape matrices.
+
+    Mirrors the stock op by op: bf16 cast, transpose to wide, per-matrix
+    spectral normalization, then ``ns_steps`` quintic iterations, with each
+    ``mm``/``addmm`` replaced by its batched twin.
+    """
+    a, b, c = ns_coefficients
+    out: list[Tensor | None] = [None] * len(grads)
+    by_shape: dict[torch.Size, list[int]] = {}
+    for i, grad in enumerate(grads):
+        wide = grad.size(0) <= grad.size(1)
+        by_shape.setdefault(grad.shape if wide else grad.mT.shape, []).append(i)
+
+    for indices in by_shape.values():
+        if len(indices) == 1:
+            i = indices[0]
+            out[i] = _zeropower_via_newtonschulz(
+                grads[i], ns_coefficients, ns_steps, eps
+            )
+            continue
+        mats = []
+        for i in indices:
+            mat = grads[i].bfloat16()
+            if grads[i].size(0) > grads[i].size(1):
+                mat = mat.T
+            mats.append(mat.div(mat.norm().clamp(min=eps)))
+        ortho = torch.stack(mats)
+        for _ in range(ns_steps):
+            gram = ortho @ ortho.mT
+            gram_update = torch.baddbmm(gram, gram, gram, beta=b, alpha=c)
+            ortho = torch.baddbmm(ortho, gram_update, ortho, beta=a)
+        for i, mat in zip(indices, ortho.unbind(0), strict=True):
+            out[i] = mat.T if grads[i].size(0) > grads[i].size(1) else mat
+    return out  # type: ignore[return-value]
+
+
 def build_optimizers(model: Module, config) -> list[torch.optim.Optimizer]:
     """Build the optimizer(s) for a training run based on ``config.optimizer``.
 
@@ -94,7 +195,7 @@ def build_optimizers(model: Module, config) -> list[torch.optim.Optimizer]:
         optimizers: list[torch.optim.Optimizer] = []
         if muon_params:
             optimizers.append(
-                torch.optim.Muon(
+                Muon(
                     muon_params,
                     lr=config.muon_lr,
                     momentum=config.muon_momentum,

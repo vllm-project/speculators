@@ -49,11 +49,14 @@ Example Usage:
 # SPDX-License-Identifier: Apache-2.0
 
 # Standard
+import atexit
 import contextlib
 import importlib
 import json
 import logging
+import logging.handlers
 import os
+import queue
 import warnings
 from collections.abc import Mapping
 from datetime import datetime, timezone
@@ -621,19 +624,43 @@ class MLFlowHandler(logging.Handler):
 ### Main functions
 
 
+class _InProcessQueueHandler(logging.handlers.QueueHandler):
+    """QueueHandler that hands records to the listener thread unformatted.
+
+    The stock ``prepare`` formats each record in the caller's thread so it can
+    be pickled across processes. The queue here never leaves the process, so
+    all formatting (``FormatDictFilter`` and rich rendering) is deferred to the
+    listener thread, keeping it off the training loop.
+    """
+
+    def prepare(self, record):
+        return record
+
+
 def setup_root_logger(level="INFO"):
     """Configure the root logger with rich formatting.
 
     This function sets up the root logger with a RichHandler for
     console output and adds the FormatDictFilter for better dictionary message
     formatting.
+
+    The RichHandler runs on a background ``QueueListener`` thread: the trainer
+    logs a metrics dict every ``log_freq`` steps, and formatting plus writing
+    it to the console synchronously costs milliseconds per step.
     """
     handler = RichHandler()
     handler.addFilter(FormatDictFilter())
     handler.addFilter(IsRank0Filter())
+    queue_handler = _InProcessQueueHandler(queue.SimpleQueue())
+    queue_handler.addFilter(IsRank0Filter())
     logging.basicConfig(
-        level=level, format="%(message)s", datefmt="[%X]", handlers=[handler]
+        level=level, format="%(message)s", datefmt="[%X]", handlers=[queue_handler]
     )
+    if queue_handler in logging.getLogger().handlers:
+        listener = logging.handlers.QueueListener(queue_handler.queue, handler)
+        listener.start()
+        # Drain pending records before interpreter shutdown.
+        atexit.register(listener.stop)
 
     # Disable verbose HTTP response logs from httpx
     logging.getLogger("httpx").propagate = False

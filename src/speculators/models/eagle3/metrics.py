@@ -56,6 +56,8 @@ def compute_metrics(
     ttt_step: int,
     ttt_step_loss_decay: float,
     loss_config: LossConfig | None = None,
+    pred_ids: torch.Tensor | None = None,
+    target_ids: torch.Tensor | None = None,
 ) -> tuple[torch.Tensor, dict]:
     """Compute metrics for a given ttt_step.
 
@@ -67,6 +69,12 @@ def compute_metrics(
         ttt_step: The current ttt_step.
         ttt_step_loss_decay: The loss decay for the current ttt_step.
         loss_config: Mapping of ``{name: (loss_fn, weight)}``.
+        pred_ids: Optional precomputed ``argmax(logits, dim=-1)`` (unaligned). The
+            caller usually needs it anyway for the next draft token, and each
+            full-vocab argmax is a full read of the logits.
+        target_ids: Optional precomputed ``argmax(targets, dim=-1)`` (unaligned).
+            The targets are the same for every ttt_step, so this can be computed
+            once per forward rather than once per step.
 
     Effects:
         Modifies prev_correct in place.
@@ -88,8 +96,12 @@ def compute_metrics(
         (1, seq_len), ttt_step, device=s_logits.device, dtype=torch.long
     )
 
+    # Pass the unaligned logits: the loss pairs their leading positions with
+    # s_targets and drops the trailing ttt_step ones, which equals using
+    # s_logits but lets the fused losses skip the full-size gradient copy that
+    # backward through the slice would cost.
     s_loss, term_losses = compound_loss(
-        s_logits,
+        logits,
         s_targets,
         s_loss_mask,
         pos_idx,
@@ -97,14 +109,20 @@ def compute_metrics(
         decay_fn=partial(exp_loss_decay, gamma=ttt_step_loss_decay),
     )
 
-    pred_ids = torch.argmax(s_logits, dim=-1)
-    target_ids = torch.argmax(s_targets, dim=-1)
+    # argmax is row-wise, so aligning the argmax equals the argmax of the
+    # aligned tensor.
+    if pred_ids is None:
+        pred_ids = torch.argmax(logits, dim=-1)
+    if target_ids is None:
+        target_ids = torch.argmax(targets, dim=-1)
+    pred_ids = pred_ids[:, :-ttt_step] if ttt_step > 0 else pred_ids
+    target_ids = target_ids[:, ttt_step:]
 
     full_correct, full_total, cond_correct, cond_total = compute_accuracy_single_step(
         pred_ids, target_ids, s_loss_mask, s_prev_correct
     )
 
-    ones = torch.tensor(1.0, device=s_loss.device)
+    ones = torch.ones((), device=s_loss.device)
     s_metrics = {}
     s_metrics[f"loss_{ttt_step}_sum"] = s_loss.detach().clone()
     s_metrics[f"loss_{ttt_step}_total"] = ones

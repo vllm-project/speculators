@@ -150,6 +150,46 @@ def test_compiles_fullgraph(name, eager_fn, fused_name):
     assert torch.isfinite(logits.grad).all()
 
 
+@requires_accelerator
+@pytest.mark.parametrize("implementation", ["fused", "eager"])
+@pytest.mark.parametrize("compiled", [False, True], ids=["eager_mode", "compiled"])
+@pytest.mark.parametrize("name", [c[0] for c in CASES])
+def test_trailing_logit_positions_match_slicing(name, implementation, compiled):
+    """loss_function on logits with extra trailing positions == on logits[:, :T].
+
+    Eagle3 passes unaligned logits so the fused losses can skip backward
+    through the slice; values and gradients must be bitwise identical, with
+    zero gradient on the trailing positions.
+    """
+    pytest.importorskip("speculators.losses.fused")
+    from speculators.losses import loss_function  # noqa: PLC0415
+
+    fn = resolve_loss_config(name, implementation)[name][0]
+    torch.manual_seed(0)
+    seq_len, trailing = 32, 2
+    base = (torch.randn(1, seq_len + trailing, 512, device=DEVICE) * 3).bfloat16()
+    targets = (torch.randn(1, seq_len, 512, device=DEVICE) * 3).bfloat16()
+    loss_mask = torch.rand(1, seq_len, device=DEVICE) > 0.3
+    pos_idx = torch.zeros(1, seq_len, device=DEVICE, dtype=torch.long)
+
+    def run(logits):
+        return loss_function(logits, targets, loss_mask, pos_idx, loss_fn=fn)
+
+    if compiled:
+        run = torch.compile(run)
+
+    sliced = base.clone().requires_grad_(True)
+    loss_sliced = run(sliced[:, :seq_len])
+    loss_sliced.backward()
+    full = base.clone().requires_grad_(True)
+    loss_full = run(full)
+    loss_full.backward()
+
+    assert torch.equal(loss_full, loss_sliced)
+    assert torch.equal(full.grad, sliced.grad)
+    assert not full.grad[:, seq_len:].any()
+
+
 @requires_cuda
 def test_ce_releases_targets_before_backward():
     """CE releases targets after forward; distribution losses retain them."""
