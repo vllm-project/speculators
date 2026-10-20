@@ -289,6 +289,24 @@ def _valid_generated_sample() -> dict[str, torch.Tensor]:
     }
 
 
+def test_offline_hidden_states_source_loads_cached_sample():
+    cached = _valid_generated_sample()
+
+    class CachedTransfer:
+        def __init__(self):
+            self.requested_indices = []
+
+        def get_cached(self, file_index):
+            self.requested_indices.append(file_index)
+            return cached
+
+    transfer = CachedTransfer()
+    source = source_module.OfflineHiddenStatesSource(transfer=transfer)  # type: ignore[arg-type]
+
+    assert source.get_one(17) is cached
+    assert transfer.requested_indices == [17]
+
+
 def _next_generation_result(handles):
     handle = next(handles)
     return handle, {"handle": handle}
