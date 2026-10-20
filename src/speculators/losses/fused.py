@@ -123,8 +123,9 @@ def _prune_oversized_tiles(configs, nargs, **_):
     return [config for config in configs if config.kwargs["BLOCK_SIZE"] == floor]
 
 
-# Keyed on OP as well as the vocab: CE streams the row once where the
-# distribution losses stream it three times, so they do not share an optimum.
+# Keyed on OP as well as the vocab: CE and kl_div stream the rows once where
+# the other distribution losses stream them twice, so they do not share an
+# optimum.
 _autotune_tile = triton.autotune(
     configs=_tile_configs(),
     key=["n_cols", "OP"],
@@ -175,6 +176,46 @@ def loss_forward_kernel(  # noqa: C901 -- constexpr OP branches, pruned per inst
     pid = tl.program_id(0).to(tl.int64)
     logits_ptr += pid * n_cols
     targets_ptr += pid * n_cols
+
+    if OP == _OP_KL:
+        # Single pass over both rows. With A = sum(exp(y - m_t) * (y - x)),
+        #   KL = sum(tp * (ltp - ldp)) = A / z_t + lse_d - lse_t,
+        # so A is accumulated online beside the softmax stats (rescaled as
+        # m_t grows) instead of in a second sweep. The stats are updated
+        # exactly as _online_stats does, so backward sees the same values.
+        m_d = float("-inf")
+        z_d = 0.0
+        m_t = float("-inf")
+        z_t = 0.0
+        a_t = 0.0
+        for i in range(0, n_cols, BLOCK_SIZE):
+            offsets = i + tl.arange(0, BLOCK_SIZE)
+            mask = offsets < n_cols
+            x = tl.load(logits_ptr + offsets, mask=mask, other=float("-inf")).cast(
+                tl.float32
+            )
+            y = tl.load(targets_ptr + offsets, mask=mask, other=float("-inf")).cast(
+                tl.float32
+            )
+            m_d_new = tl.maximum(m_d, tl.max(tl.where(mask, x, float("-inf"))))
+            z_d = z_d * tl.exp(m_d - m_d_new) + tl.sum(
+                tl.where(mask, tl.exp(x - m_d_new), 0.0)
+            )
+            m_d = m_d_new
+            m_t_new = tl.maximum(m_t, tl.max(tl.where(mask, y, float("-inf"))))
+            scale_t = tl.exp(m_t - m_t_new)
+            e_y = tl.exp(y - m_t_new)
+            z_t = z_t * scale_t + tl.sum(tl.where(mask, e_y, 0.0))
+            a_t = a_t * scale_t + tl.sum(tl.where(mask, e_y * (y - x), 0.0))
+            m_t = m_t_new
+        loss = a_t / z_t + (m_d + tl.log(z_d)) - (m_t + tl.log(z_t))
+        tl.store(stats_ptr + 0 * stats_row + pid, m_d)
+        tl.store(stats_ptr + 1 * stats_row + pid, z_d)
+        tl.store(stats_ptr + 2 * stats_row + pid, m_t)
+        tl.store(stats_ptr + 3 * stats_row + pid, z_t)
+        tl.store(loss_ptr + pid, loss)
+        tl.store(stats_ptr + 4 * stats_row + pid, loss)
+        return
 
     m_d, z_d = _online_stats(logits_ptr, n_cols, BLOCK_SIZE)
     lse_d = m_d + tl.log(z_d)

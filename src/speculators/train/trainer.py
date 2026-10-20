@@ -57,34 +57,65 @@ def _all_reduce_metrics(metrics: dict[str, torch.Tensor]) -> dict[str, torch.Ten
 
 
 class _StepTimer:
-    # Each mark()/now() forces an accelerator.synchronize to capture true GPU time.
-    # This serialises the CUDA pipeline, so profiled steps are slower; keep
-    # log_freq > 1 in perf-sensitive runs.
+    # A synchronizing mark()/now() forces an accelerator.synchronize to capture
+    # true GPU time. This serialises the CUDA pipeline, so the training loop
+    # synchronizes only on the step's closing mark and uses event marks for
+    # the phases in between.
     # Caveat: with log_freq > 1, "start" falls back to an unsynchronized
     # timestamp from the end of the previous *unlogged* step, so start-relative
     # fields (fetch_ms, step_ms, queue_ms) also absorb any GPU backlog still
     # draining from that step. Phase-relative fields (fwd/bwd/opt/h2d/clip_ms)
-    # are unaffected, as every mark synchronizes.
+    # are unaffected, as every mark resolves against a synchronized one.
+    #
+    # mark(name, sync=False) records a device event instead: the phase boundary
+    # is resolved after the step's closing synchronized mark, by subtracting the
+    # event-to-event device time from that mark's host timestamp. An event
+    # completes when the device reaches it (or when the host records it, if the
+    # device is idle), which is the same instant a synchronize-then-timestamp
+    # observes -- without draining the queue mid-step.
     def __init__(self, enabled: bool = False):
         self.enabled = enabled
         self._marks: dict[str, float] = {}
+        self._events: dict[str, torch.Event] = {}
         self._memory: dict[str, float] = {}
 
     def reset(self, enabled: bool) -> None:
         self.enabled = enabled
         self._marks.clear()
+        self._events.clear()
         self._memory.clear()
 
-    def mark(self, name: str) -> None:
+    def mark(self, name: str, sync: bool = True) -> None:
         if self.enabled:
-            torch.accelerator.synchronize()
-            self._marks[name] = time.perf_counter()
-            if torch.accelerator.is_available():
-                self._memory[name] = torch.accelerator.memory_allocated() / (1024**2)
+            if not torch.accelerator.is_available():
+                self._marks[name] = time.perf_counter()
+                return
+            if sync:
+                anchor = torch.Event(enable_timing=True)
+                anchor.record()
+                torch.accelerator.synchronize()
+                self._marks[name] = time.perf_counter()
+                self._resolve_events(anchor, self._marks[name])
+            else:
+                event = torch.Event(enable_timing=True)
+                event.record()
+                self._events[name] = event
+            self._memory[name] = torch.accelerator.memory_allocated() / (1024**2)
+
+    def _resolve_events(self, anchor: torch.Event, anchor_time: float) -> None:
+        for name, event in self._events.items():
+            self._marks[name] = anchor_time - event.elapsed_time(anchor) / 1000
+        self._events.clear()
 
     def mark_value(self, name: str, value: float) -> None:
         if self.enabled:
             self._marks[name] = value
+
+    def last(self, name: str) -> float | None:
+        # Host timestamp of a synchronized mark, reusable as the next "start".
+        if not self.enabled:
+            return None
+        return self._marks[name]
 
     def now(self) -> float | None:
         if not self.enabled:
@@ -113,6 +144,78 @@ class _StepTimer:
         if self._memory:
             result["memory_mb"] = dict(self._memory)
         return result
+
+
+def _metrics_to_floats(metrics: dict[str, torch.Tensor]) -> dict[str, float]:
+    # One device-to-host transfer for the usual all-float32 scalar metrics,
+    # instead of one per metric; values are identical to ``.item()``.
+    values = list(metrics.values())
+    if values and all(v.dtype == torch.float32 and v.dim() == 0 for v in values):
+        return dict(zip(metrics, torch.stack(values).tolist(), strict=True))
+    return {k: v.item() for k, v in metrics.items()}
+
+
+class _BatchPrefetcher:
+    """Iterate a loader, optionally starting the next batch's H2D copy early.
+
+    ``prefetch()`` fetches the upcoming batch and copies its tensors to the
+    device on a side stream, so the copy overlaps the current step's device
+    work instead of running at the start of the next step. Each item is
+    ``(batch, device_tensors)``; ``device_tensors`` is None when the batch was
+    not prefetched. A loader error raised while prefetching is re-raised when
+    iteration reaches that batch.
+    """
+
+    def __init__(self, loader, device: int, enabled: bool):
+        self._loader = loader
+        self._device = device
+        self._stream = torch.cuda.Stream(device) if enabled else None
+        self._batches = None
+        self._next: tuple[dict, dict[str, torch.Tensor]] | None = None
+        self._error: Exception | None = None
+        self._exhausted = False
+
+    def __iter__(self):
+        self._batches = iter(self._loader)
+        while True:
+            if self._next is not None:
+                batch, staged = self._next
+                self._next = None
+                current = torch.cuda.current_stream(self._device)
+                current.wait_stream(self._stream)  # type: ignore[arg-type]
+                for tensor in staged.values():
+                    tensor.record_stream(current)
+                yield batch, staged
+                continue
+            if self._error is not None:
+                error, self._error = self._error, None
+                raise error
+            if self._exhausted:
+                return
+            try:
+                batch = next(self._batches)
+            except StopIteration:
+                return
+            yield batch, None
+
+    def prefetch(self) -> None:
+        if self._stream is None or self._batches is None or self._next is not None:
+            return
+        try:
+            batch = next(self._batches)
+        except StopIteration:
+            self._exhausted = True
+            return
+        except Exception as e:  # noqa: BLE001 -- re-raised by __iter__
+            self._error = e
+            return
+        with torch.cuda.stream(self._stream):
+            staged = {
+                key: value.to(self._device, non_blocking=True)
+                for key, value in batch.items()
+                if isinstance(value, torch.Tensor)
+            }
+        self._next = (batch, staged)
 
 
 warnings.filterwarnings("ignore", category=TqdmExperimentalWarning)
@@ -509,109 +612,137 @@ class Trainer:
         timer = _StepTimer()
         recovery = BatchRecoveryCoordinator("training")
         remaining_steps = len(self.train_loader)
-        for local_step_rel, batch in enumerate(train_loader, 1):
-            # local_step is 1-based index into the *full* epoch (not the slice).
-            local_step = local_step_rel + skip_steps
-            timer.reset(self.global_step % self.config.log_freq == 0)
+        # A logged step's record is emitted once the next step's backward has
+        # been enqueued, so formatting and handlers run while the device is
+        # busy rather than between steps. Records stay in step order.
+        pending_log: tuple[dict, dict] | None = None
 
-            timer.mark_value("start", t_before_fetch)
-            will_stop = (
-                self.config.max_steps is not None
-                and self.global_step + 1 >= self.config.max_steps
-            )
-            timer.mark("queue")
-            recovery.consume(
-                batch,
-                synchronize=_should_sync_recovery(
-                    local_step_rel,
-                    remaining_steps,
-                    will_stop=will_stop,
-                ),
-            )
-            timer.mark("pre_h2d")
-            gpu_batch = {
-                k: v.to(self.local_rank, non_blocking=True)
-                if isinstance(v, torch.Tensor)
-                else v
-                for k, v in batch.items()
-            }
+        def flush_log() -> None:
+            nonlocal pending_log
+            if pending_log is not None:
+                record, extra = pending_log
+                pending_log = None
+                metric_logger.info(record, extra=extra)
 
-            with torch.autocast(
-                self.device_type, dtype=self.config.hidden_states_dtype
-            ):
-                timer.mark("fetch")
-                _draft_tokens, loss, metrics = self.model(
-                    **gpu_batch, **(self.config.train_call_kwargs or {})
+        batches = _BatchPrefetcher(
+            train_loader, self.local_rank, enabled=self.device_type == "cuda"
+        )
+        try:
+            for local_step_rel, (batch, staged) in enumerate(batches, 1):
+                # local_step is 1-based index into the *full* epoch (not the slice).
+                local_step = local_step_rel + skip_steps
+                timer.reset(self.global_step % self.config.log_freq == 0)
+
+                timer.mark_value("start", t_before_fetch)
+                will_stop = (
+                    self.config.max_steps is not None
+                    and self.global_step + 1 >= self.config.max_steps
+                )
+                timer.mark("queue", sync=False)
+                recovery.consume(
+                    batch,
+                    synchronize=_should_sync_recovery(
+                        local_step_rel,
+                        remaining_steps,
+                        will_stop=will_stop,
+                    ),
+                )
+                timer.mark("pre_h2d", sync=False)
+                gpu_batch = {
+                    k: staged[k]
+                    if staged is not None and k in staged
+                    else v.to(self.local_rank, non_blocking=True)
+                    if isinstance(v, torch.Tensor)
+                    else v
+                    for k, v in batch.items()
+                }
+
+                with torch.autocast(
+                    self.device_type, dtype=self.config.hidden_states_dtype
+                ):
+                    timer.mark("fetch", sync=False)
+                    _draft_tokens, loss, metrics = self.model(
+                        **gpu_batch, **(self.config.train_call_kwargs or {})
+                    )
+
+                timer.mark("fwd", sync=False)
+                self._optimizers_zero_grad()
+                loss.backward()
+                flush_log()
+                timer.mark("pre_clip", sync=False)
+                torch.nn.utils.clip_grad_norm_(self.model.parameters(), 1.0)
+
+                # torch.full fills on the device; torch.tensor would copy the
+                # value from host memory and wait for the queued backward.
+                metrics["error_records_sum"] = torch.full(
+                    (), batch["error_records"], dtype=torch.float32, device=loss.device
+                )
+                metrics["error_records_total"] = torch.full(
+                    (),
+                    1.0 if self.rank == 0 else 0,
+                    dtype=torch.float32,
+                    device=loss.device,
                 )
 
-            timer.mark("fwd")
-            self._optimizers_zero_grad()
-            loss.backward()
-            timer.mark("pre_clip")
-            torch.nn.utils.clip_grad_norm_(self.model.parameters(), 1.0)
+                timer.mark("bwd", sync=False)
+                self._optimizers_step()
 
-            metrics["error_records_sum"] = torch.tensor(
-                batch["error_records"], dtype=torch.float32, device=loss.device
-            )
-            metrics["error_records_total"] = torch.tensor(
-                1.0 if self.rank == 0 else 0,
-                dtype=torch.float32,
-                device=loss.device,
-            )
+                current_lrs = {
+                    type(opt).__name__: opt.param_groups[0]["lr"]
+                    for opt in self.optimizers
+                }
+                self._schedulers_step()
+                if not will_stop:
+                    batches.prefetch()
+                timer.mark("opt")
+                t_before_fetch = timer.last("opt") or time.perf_counter()
 
-            timer.mark("bwd")
-            self._optimizers_step()
+                profile = None
+                if timer.enabled:
+                    num_tokens = int((gpu_batch["document_ids"] != -1).sum().item())
+                    profile = timer.profile(num_tokens)
+                    if self.is_distributed:
+                        metrics = _all_reduce_metrics(metrics)
 
-            current_lrs = {
-                type(opt).__name__: opt.param_groups[0]["lr"] for opt in self.optimizers
-            }
-            self._schedulers_step()
-            timer.mark("opt")
-            t_before_fetch = timer.now() or time.perf_counter()
+                    metrics = _metrics_to_floats(metrics)
+                    world_size = dist.get_world_size() if self.is_distributed else 1
+                    metrics = normalize_counted_metrics(metrics, world_size)
+                    lr_info = (
+                        current_lrs
+                        if len(current_lrs) > 1
+                        else next(iter(current_lrs.values()))
+                    )
+                    pending_log = (
+                        {
+                            "train": metrics,
+                            "profile": profile,
+                            "epoch": epoch,
+                            "lr": lr_info,
+                            "global_step": self.global_step,
+                        },
+                        {"step": self.global_step},
+                    )
+                self.global_step += 1
+                if step_callback is not None:
+                    step_callback()
 
-            profile = None
-            if timer.enabled:
-                num_tokens = int((gpu_batch["document_ids"] != -1).sum().item())
-                profile = timer.profile(num_tokens)
-                if self.is_distributed:
-                    metrics = _all_reduce_metrics(metrics)
+                if (
+                    self.config.max_steps is not None
+                    and self.global_step >= self.config.max_steps
+                ):
+                    break
 
-                metrics = {k: v.item() for k, v in metrics.items()}
-                world_size = dist.get_world_size() if self.is_distributed else 1
-                metrics = normalize_counted_metrics(metrics, world_size)
-                lr_info = (
-                    current_lrs
-                    if len(current_lrs) > 1
-                    else next(iter(current_lrs.values()))
-                )
-                metric_logger.info(
-                    {
-                        "train": metrics,
-                        "profile": profile,
-                        "epoch": epoch,
-                        "lr": lr_info,
-                        "global_step": self.global_step,
-                    },
-                    extra={"step": self.global_step},
-                )
-            self.global_step += 1
-            if step_callback is not None:
-                step_callback()
-
-            if (
-                self.config.max_steps is not None
-                and self.global_step >= self.config.max_steps
-            ):
-                break
-
-            if (
-                step_interval is not None
-                and not self.config.save_best
-                and local_step % step_interval == 0
-                and num_steps - local_step >= step_interval * MIN_STEP_PCT
-                # Avoid saving back to back ay the end of each epoch
-            ):
-                self.maybe_save_checkpoint(epoch, local_step=local_step)
+                if (
+                    step_interval is not None
+                    and not self.config.save_best
+                    and local_step % step_interval == 0
+                    and num_steps - local_step >= step_interval * MIN_STEP_PCT
+                    # Avoid saving back to back ay the end of each epoch
+                ):
+                    flush_log()
+                    self.maybe_save_checkpoint(epoch, local_step=local_step)
+        finally:
+            flush_log()
 
     def _maybe_val_sync(self, batch_index: int) -> None:
         if not self.is_distributed or _VAL_SYNC_INTERVAL <= 0:

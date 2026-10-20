@@ -8,6 +8,7 @@ from transformers import AutoConfig, DynamicCache, PretrainedConfig
 from speculators.config import SpeculatorsConfig, VerifierConfig
 from speculators.losses import LossConfig, resolve_loss_config
 from speculators.model import DraftVocabMixin, SpeculatorModel
+from speculators.models.argmax import argmax_last_dim
 from speculators.models.attention import create_float_mask
 from speculators.models.eagle3 import Eagle3SpeculatorConfig
 from speculators.models.eagle3.attention import (
@@ -23,6 +24,30 @@ from speculators.models.utils import (
     resolve_target_layer_ids,
 )
 from speculators.proposals.greedy import GreedyTokenProposalConfig
+
+
+def _reuse_autocast_weight(linear: torch.nn.Linear):
+    """Return ``linear``, or an equivalent that casts a frozen weight only once.
+
+    Autocast caches its weight casts only for leaf tensors that require grad,
+    so a frozen fp32 lm_head is re-cast to the autocast dtype on every call --
+    once per TTT step. Casting it up front yields the same operand (and so the
+    same logits) for every step.
+    """
+    weight = linear.weight
+    device_type = weight.device.type
+    if weight.requires_grad or not torch.is_autocast_enabled(device_type):
+        return linear
+    autocast_dtype = torch.get_autocast_dtype(device_type)
+    if weight.dtype == autocast_dtype or not weight.is_floating_point():
+        return linear
+    cast_weight = weight.to(autocast_dtype)
+    bias = linear.bias
+
+    def forward(hidden_states: torch.Tensor) -> torch.Tensor:
+        return torch.nn.functional.linear(hidden_states, cast_weight, bias)
+
+    return forward
 
 
 @SpeculatorModel.register("eagle3")
@@ -252,7 +277,10 @@ class Eagle3DraftModel(DraftVocabMixin, SpeculatorModel):
                     self.verifier_norm(verifier_last_hidden_states)
                 )
                 # shape: [1, total_seq_len, draft_vocab_size]
-            loss = torch.tensor(0.0, device=device)
+                # Same for every ttt_step; compute_metrics aligns it per step.
+                target_ids = argmax_last_dim(targets)
+                # shape: [1, total_seq_len]
+            loss = torch.zeros((), device=device)
 
             # prev_correct is a boolean tensor that is True for tokens that have been
             # correctly predicted on all previous ttt_steps.
@@ -265,6 +293,7 @@ class Eagle3DraftModel(DraftVocabMixin, SpeculatorModel):
             )
             metrics = {}
 
+        lm_head = _reuse_autocast_weight(self.lm_head)
         draft_tokens = []
         for ttt_step in range(ttt_steps):
             with torch.no_grad():
@@ -301,10 +330,30 @@ class Eagle3DraftModel(DraftVocabMixin, SpeculatorModel):
 
             if self.config.norm_output:
                 hidden_states = self.norm(hidden_states)
-                logits = self.lm_head(hidden_states)
+                lm_input = hidden_states
             else:
-                logits = self.lm_head(self.norm(hidden_states))
-            # shape: [1, total_seq_len, draft_vocab_size]
+                lm_input = self.norm(hidden_states)
+
+            # The last ttt_step positions have no targets and are dropped from
+            # the loss (see align_for_step). Projecting them separately, without
+            # grad, keeps them out of the autograd graph: slicing them off a
+            # full [1, total_seq_len, V] logits tensor would make backward
+            # zero-fill and scatter a gradient of that full size.
+            logits_aligned = return_loss and ttt_step > 0
+            if logits_aligned:
+                num_aligned = total_seq_len - ttt_step
+                logits = lm_head(lm_input[:, :num_aligned])
+                # shape: [1, total_seq_len - ttt_step, draft_vocab_size]
+                with torch.no_grad():
+                    tail_logits = lm_head(lm_input[:, num_aligned:])
+                input_ids = torch.cat(
+                    [argmax_last_dim(logits), argmax_last_dim(tail_logits)], dim=-1
+                )
+            else:
+                logits = lm_head(lm_input)
+                # shape: [1, total_seq_len, draft_vocab_size]
+                input_ids = argmax_last_dim(logits)
+            # shape: [1, total_seq_len]
 
             if return_loss:
                 s_loss, s_metrics = compute_metrics(
@@ -315,13 +364,14 @@ class Eagle3DraftModel(DraftVocabMixin, SpeculatorModel):
                     ttt_step,
                     ttt_step_loss_decay,
                     loss_config=loss_config,
+                    pred_ids=input_ids,
+                    target_ids=target_ids,
+                    logits_aligned=logits_aligned,
                 )
                 loss += s_loss
                 metrics.update(s_metrics)
 
-            input_ids = torch.argmax(logits, dim=-1)
             draft_tokens.append(input_ids.detach().clone())
-            # shape: [1, total_seq_len]
 
             # Teacher forcing: feed the ground-truth tokens (already in the verifier
             # vocabulary) into the next TTT step instead of the draft's own
@@ -359,7 +409,7 @@ class Eagle3DraftModel(DraftVocabMixin, SpeculatorModel):
 
         if return_loss:
             metrics["loss_sum"] = loss.detach().clone()
-            metrics["loss_total"] = torch.tensor(1.0, device=device)
+            metrics["loss_total"] = torch.ones((), device=device)
             return draft_tokens, loss, metrics
         else:
             return draft_tokens
