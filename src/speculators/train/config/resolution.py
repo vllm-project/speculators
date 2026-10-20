@@ -95,7 +95,7 @@ REQUIRED_FLAGS: dict[str, str] = _required_flags()
 _ALGORITHM_GROUP_USERS: dict[str, frozenset[str]] = {
     "dflash": frozenset({"dflash", "dflash2", "dspark", "xpress", "lilicorr"}),
     "dflash2": frozenset({"dflash2"}),
-    "dspark": frozenset({"dspark"}),
+    "dspark": frozenset({"dspark", "mamba_attn_hybrid"}),
     "xpress": frozenset({"xpress"}),
     "peagle": frozenset({"peagle"}),
     "mamba_attn_hybrid": frozenset({"mamba_attn_hybrid"}),

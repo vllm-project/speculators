@@ -514,22 +514,24 @@ class DFlash2Args(_Group):
 class DSparkArgs(_Group):
     """DSpark-exclusive heads (sequential Markov head + confidence head)."""
 
-    markov_rank: int = Field(
-        default=256,
+    markov_rank: int | None = Field(
+        default=None,
         description="DSpark: low-rank dim of the Markov logit-bias head "
-        "(0 disables it).",
+        "(0 disables it). Default 256 for dspark, 0 elsewhere.",
     )
     markov_head_type: Literal["vanilla", "gated", "rnn"] = Field(
         default="vanilla", description="DSpark: sequential head variant."
     )
-    enable_confidence_head: bool = Field(
-        default=True,
-        description="DSpark: attach the per-position acceptance confidence head.",
+    enable_confidence_head: bool | None = Field(
+        default=None,
+        description="DSpark: attach the per-position acceptance confidence head. "
+        "Default True for dspark, False elsewhere.",
     )
-    confidence_head_with_markov: bool = Field(
-        default=True,
+    confidence_head_with_markov: bool | None = Field(
+        default=None,
         description="DSpark: feed the Markov previous-token embedding into the "
-        "confidence head alongside the backbone hidden state.",
+        "confidence head alongside the backbone hidden state. Default True for "
+        "dspark, False elsewhere.",
     )
     confidence_head_alpha: float = Field(
         default=1.0, description="DSpark: weight of the confidence-head BCE term."
@@ -926,6 +928,12 @@ class TrainConfig(BaseSettings):
             )
         if self.loss.loss_fn is None:
             self.loss.loss_fn = _DEFAULT_LOSS_FN.get(self.speculator_type, "kl_div")
+        if self.dspark.markov_rank is None:
+            self.dspark.markov_rank = 256 if self.speculator_type == "dspark" else 0
+        if self.dspark.enable_confidence_head is None:
+            self.dspark.enable_confidence_head = self.speculator_type == "dspark"
+        if self.dspark.confidence_head_with_markov is None:
+            self.dspark.confidence_head_with_markov = self.speculator_type == "dspark"
         if self.dflash.block_size is None:
             self.dflash.block_size = _DEFAULT_BLOCK_SIZE.get(self.speculator_type, 8)
         return self

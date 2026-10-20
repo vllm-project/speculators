@@ -1,6 +1,7 @@
 """Training implementation behind the ``speculators train`` command."""
 
 import argparse
+import functools
 import gc
 import logging
 import random
@@ -746,7 +747,8 @@ def main(cfg: TrainConfig):  # noqa: C901
         head_dim = getattr(tl_config, "head_dim", None) or (
             tl_config.hidden_size // tl_config.num_attention_heads
         )
-        empty_sample_factory = lambda: create_empty_nkv_mamba_sample(  # noqa: E731
+        empty_sample_factory = functools.partial(
+            create_empty_nkv_mamba_sample,
             hidden_size=tl_config.hidden_size,
             num_fusion_layers=num_fusion_layers,
             num_target_layers=num_kv_layers,
