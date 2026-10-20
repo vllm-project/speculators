@@ -10,7 +10,7 @@ Search for an algorithm or model family using the site search. Each entry carrie
 
 ## How to submit
 
-Copy the template below into `docs/research/<short-title>-<username>.md`, fill it in, and open a pull request. For example, `dspark-qwen3-shanjiaz.md`. New entries appear automatically in this section; no navigation edits are needed.
+Copy the template below into `docs/research/<short-title>-<username>.md`, fill it in, and open a pull request. New entries appear automatically in this section; no navigation edits are needed.
 
 Start the filename with the algorithm and end it with your GitHub handle to group related entries and avoid filename collisions.
 
