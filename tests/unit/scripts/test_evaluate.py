@@ -504,6 +504,7 @@ def test_interrupted_later_dataset_preserves_completed_csv_row(tmp_path, monkeyp
 
 def test_timed_sweep_saves_one_archive_summary_and_plot(tmp_path, monkeypatch):
     monkeypatch.setattr(speedup, "refuse_prefix_caching", lambda target: None)
+    monkeypatch.setattr(speedup, "ServerMetrics", _Metrics)
     messages = [
         {"role": "system", "content": "code"},
         {"role": "user", "content": "solve this"},
@@ -607,6 +608,8 @@ def test_timed_sweep_saves_one_archive_summary_and_plot(tmp_path, monkeypatch):
     assert [row["concurrency"] for row in rows] == ["1", "8"]
     for row in rows:
         assert int(row["repeats"]) == 2
+        assert float(row["acceptance_length"]) == 3
+        assert float(row["waiting_requests_max"]) == 7
         assert row["status"] == "complete"
         assert float(row["interactivity_tok_s_per_user"]) == pytest.approx(50)
         assert float(row["output_throughput_tok_s"]) == pytest.approx(1851)
@@ -626,10 +629,44 @@ def test_timed_sweep_saves_one_archive_summary_and_plot(tmp_path, monkeypatch):
         speedup.run(args, [{"body": body}])
 
 
+class _Metrics:
+    def __init__(self, *args):
+        pass
+
+    def start(self):
+        pass
+
+    def finish(self):
+        return {"waiting_max": 7, "steps": 10, "accepted": 20, "scrape_errors": []}
+
+
 def test_failed_point_is_archived_without_leaving_temporary_files(
     tmp_path, monkeypatch
 ):
+    # Endpoints are empty at both boundaries, but queueing during the point matters.
+    scrapes: list[int] = []
+
+    def metrics(*args, **kwargs):
+        i = len(scrapes)
+        scrapes.append(i)
+        waiting = 7 if i == 1 else 0
+        text = f'vllm:num_requests_waiting{{model_name="served"}} {waiting}\n'
+        text += 'vllm:num_requests_waiting{model_name="other"} 99\n'
+        for key, value in [("num_drafts", 10 + i), ("num_accepted_tokens", 20 + 2 * i)]:
+            text += f'vllm:spec_decode_{key}_total{{model_name="served"}} {value}\n'
+        return httpx.Response(
+            200, text=text, request=httpx.Request("GET", "http://server/metrics")
+        )
+
+    monkeypatch.setattr(speedup.httpx, "get", metrics)
+    observer = speedup.ServerMetrics("http://server", "served")
+    observer.start()
+    observer._sample()
+    diagnostics = observer.finish()
+    assert diagnostics["waiting_max"] == 7
+    assert diagnostics["acceptance_length"] == 3
     monkeypatch.setattr(speedup, "refuse_prefix_caching", lambda target: None)
+    monkeypatch.setattr(speedup, "ServerMetrics", _Metrics)
     calls: list[list[str]] = []
 
     def bench(command, *, check, pass_fds):

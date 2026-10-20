@@ -12,9 +12,11 @@ import re
 import statistics
 import subprocess
 import sys
+import time
 from contextlib import contextmanager
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from threading import Event, Thread
 
 import httpx
 
@@ -33,6 +35,77 @@ def refuse_prefix_caching(target: str) -> None:
     )
     if flag is None or flag[1].lower() != "false":
         raise ValueError("Serve vLLM with --no-enable-prefix-caching for speedup runs")
+
+
+class ServerMetrics:
+    """Observe queue gauges during a point and difference speculative counters."""
+
+    NAMES = {
+        "waiting": "vllm:num_requests_waiting",
+        "steps": "vllm:spec_decode_num_drafts_total",
+        "drafted": "vllm:spec_decode_num_draft_tokens_total",
+        "accepted": "vllm:spec_decode_num_accepted_tokens_total",
+    }
+
+    def __init__(self, target: str, model: str):
+        self.target, self.model = target, model
+        self.samples: list[dict] = []
+        self.errors: list[str] = []
+        self.stopped = Event()
+        self.thread = Thread(target=self._poll, daemon=True)
+
+    def _sample(self) -> None:
+        try:
+            response = httpx.get(self.target + "/metrics", timeout=2, trust_env=False)
+            response.raise_for_status()
+            values: dict[str, float] = {}
+            for line in response.text.splitlines():
+                match = re.match(r"^(vllm:\w+)(?:\{([^}]*)\})?\s+(\S+)", line)
+                if not match:
+                    continue
+                labels = dict(re.findall(r'(\w+)="([^"\\]*)"', match[2] or ""))
+                if labels.get("model_name", self.model) != self.model:
+                    continue
+                for key, name in self.NAMES.items():
+                    if match[1] == name:
+                        value = float(match[3])
+                        if not math.isfinite(value):
+                            raise ValueError(f"Non-finite server metric: {name}")
+                        values[key] = values.get(key, 0) + value
+            self.samples.append({"time": time.time(), **values})
+        except (httpx.HTTPError, ValueError) as exc:
+            self.errors.append(str(exc))
+
+    def _poll(self) -> None:
+        while not self.stopped.wait(2):
+            self._sample()
+
+    def start(self) -> None:
+        self._sample()
+        self.thread.start()
+
+    def finish(self) -> dict:
+        self.stopped.set()
+        self.thread.join()
+        self._sample()
+        result: dict = {
+            "scope": "whole_point_including_warmup_and_client_setup",
+            "samples": self.samples,
+            "scrape_errors": self.errors,
+        }
+        waiting = [s["waiting"] for s in self.samples if "waiting" in s]
+        result["waiting_max"] = max(waiting) if waiting else None
+        result["waiting_mean"] = statistics.fmean(waiting) if waiting else None
+        if self.samples:
+            before, after = self.samples[0], self.samples[-1]
+            for key in ("steps", "drafted", "accepted"):
+                if key in before and key in after and after[key] >= before[key]:
+                    result[key] = after[key] - before[key]
+        steps, accepted = result.get("steps"), result.get("accepted")
+        result["acceptance_length"] = (
+            1 + accepted / steps if steps and accepted is not None else None
+        )
+        return result
 
 
 def summarize_benchmark(report: dict) -> dict:
@@ -114,6 +187,7 @@ def write_summary(
             continue
         good = [r for r in attempts if r.get("status") == "ok"]
         points = [r["summary"] for r in good]
+        diagnostics = [r.get("diagnostics", {}) for r in good]
         row: dict = {
             "concurrency": n,
             "repeats": len(good),
@@ -143,6 +217,19 @@ def write_summary(
             )
         ttfts = [p["mean_ttft_ms"] for p in points if p["mean_ttft_ms"] is not None]
         row["mean_ttft_ms"] = statistics.fmean(ttfts) if ttfts else None
+        waiting = [
+            d["waiting_max"] for d in diagnostics if d.get("waiting_max") is not None
+        ]
+        row["waiting_requests_max"] = max(waiting) if waiting else None
+        specs = [
+            d
+            for d in diagnostics
+            if d.get("steps") is not None and d.get("accepted") is not None
+        ]
+        steps = sum(d["steps"] for d in specs)
+        row["acceptance_length"] = (
+            1 + sum(d["accepted"] for d in specs) / steps if steps else None
+        )
         rows.append(row)
     if rows:
         temporary = path.with_suffix(".csv.tmp")
@@ -222,6 +309,8 @@ def _command(args, backend, dataset_path, result_path, streams) -> list[str]:
 def _collect_point(args, name, command, result_path, archive) -> dict:
     record = {"point": name, "command": command, "status": "started"}
     _append(archive, record)
+    monitor = ServerMetrics(args.target, args.model)
+    monitor.start()
     print(f"Collecting {name}", flush=True)
     try:
         # An orphaned client keeps the lock, preventing a competing resume.
@@ -239,6 +328,7 @@ def _collect_point(args, name, command, result_path, archive) -> dict:
     ) as exc:
         record.update(status="failed", error=f"{type(exc).__name__}: {exc}")
     finally:
+        record["diagnostics"] = monitor.finish()
         if "report" not in record and result_path.exists():
             try:
                 record["report"] = json.loads(result_path.read_text())
@@ -263,6 +353,14 @@ def _warn_point(record: dict) -> None:
             f"only {record['summary']['usable_completions']} usable completions; "
             "increase --max-seconds for a more stable x"
         )
+    waiting = record["diagnostics"]["waiting_max"]
+    if waiting:
+        notices.append(
+            f"waiting requests observed (sampled max={waiting:g}); "
+            "inspect scheduler/KV capacity"
+        )
+    if record["diagnostics"]["scrape_errors"] or waiting is None:
+        notices.append("server diagnostics incomplete; inspect archived scrape errors")
     for notice in notices:
         print(f"Warning: {name}: {notice}", file=sys.stderr, flush=True)
 
