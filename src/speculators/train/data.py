@@ -47,55 +47,6 @@ def create_empty_sample(
     }
 
 
-class BaseDataset(Dataset):
-    def __init__(
-        self,
-        max_len: int,
-        hidden_states_dtype=torch.bfloat16,
-    ):
-        self.max_len = max_len
-        self.hidden_states_dtype = hidden_states_dtype
-        self.approx_lengths = self._compute_approx_lengths()
-
-    def _compute_approx_lengths(self):
-        raise NotImplementedError
-
-    def _get_raw_data(self, index: int) -> BatchType | SampleUnavailable:
-        raise NotImplementedError
-
-    def __getitem__(self, index) -> BatchType | SampleUnavailable:
-        data = self._get_raw_data(index)
-
-        if isinstance(data, SampleUnavailable):
-            return data
-
-        # data structure: {
-        #  "hidden_states": [seq_len, 3 * hidden_size],
-        #  "input_ids": [seq_len],
-        #  "verifier_last_hidden_states": [seq_len, hidden_size],
-        #  "loss_mask": [seq_len],
-        # }
-
-        # Add lengths tensor
-        seq_len = data["input_ids"].shape[0]
-        data["lengths"] = torch.tensor([seq_len], dtype=torch.long)
-        # shape: [1]
-
-        data["position_ids"] = torch.arange(seq_len, dtype=torch.long)
-        # shape: [seq_len]
-
-        # data structure: {
-        #     "hidden_states": [seq_len, 3 * hidden_size],
-        #     "input_ids": [seq_len],
-        #     "verifier_last_hidden_states": [seq_len, hidden_size],
-        #     "loss_mask": [seq_len],
-        #     "lengths": [1],
-        #     "position_ids": [seq_len],
-        # }
-
-        return data
-
-
 class ArrowDataset(Dataset):
     """Load preprocessed Arrow rows and expose them as dataset records."""
 
@@ -140,7 +91,7 @@ class ArrowDataset(Dataset):
         )
 
 
-class SpeculatorsDataset(BaseDataset):
+class SpeculatorsDataset(Dataset):
     """Combine Arrow records with hidden states for training."""
 
     def __init__(
@@ -150,20 +101,16 @@ class SpeculatorsDataset(BaseDataset):
         hidden_states: HiddenStatesSource,
         hidden_states_dtype=torch.bfloat16,
     ):
+        self.max_len = max_len
+        self.hidden_states_dtype = hidden_states_dtype
         self.records = records
         self.hidden_states = hidden_states
-
-        # Delay super init so that `_compute_approx_lengths` has required data
-        super().__init__(max_len, hidden_states_dtype)
+        self.approx_lengths = records.approx_lengths
 
     def __len__(self) -> int:
         return len(self.records)
 
-    def _compute_approx_lengths(self) -> list[int]:
-        """Get lengths of the dataset samples."""
-        return self.records.approx_lengths
-
-    def _get_raw_data(self, index: int) -> BatchType | SampleUnavailable:
+    def __getitem__(self, index: int) -> BatchType | SampleUnavailable:
         record = self.records[index]
         loaded_hs = self.hidden_states.get_one(record)
 
@@ -182,10 +129,10 @@ class SpeculatorsDataset(BaseDataset):
                 stacklevel=1,
             )
             return SampleUnavailable(
-                reason=f"Cached token ids do not match sample {index}"
+                reason=f"Extracted token ids do not match sample {index}"
             )
 
-        return {
+        data = {
             "hidden_states": loaded_hs["hidden_states"][:, :-1].flatten(
                 1
             ),  # [seq_len, 3 * hidden_size]
@@ -195,6 +142,11 @@ class SpeculatorsDataset(BaseDataset):
             ],  # [seq_len, hidden_size]
             "loss_mask": record.loss_mask,  # [seq_len]
         }
+
+        seq_len = data["input_ids"].shape[0]
+        data["lengths"] = torch.tensor([seq_len], dtype=torch.long)
+        data["position_ids"] = torch.arange(seq_len, dtype=torch.long)
+        return data
 
     def close(self) -> None:
         """Close resources owned by the hidden-state source."""
