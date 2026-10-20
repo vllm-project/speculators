@@ -6,7 +6,7 @@ from pathlib import Path
 import torch
 from datasets import Dataset
 
-import speculators.train.data as data_module
+import speculators.train.hidden_states_source as source_module
 from speculators.models.eagle3.data import shift_batch
 from speculators.train.data import (
     ArrowDataset,
@@ -277,8 +277,8 @@ def _make_generation_dataset(
         **kwargs,
     )
     arrow_ds.data.set_format(type="torch")
-    arrow_ds.client = object()  # type: ignore[assignment]
-    arrow_ds.model = "model"
+    arrow_ds.vllm_source.client = object()  # type: ignore[assignment]
+    arrow_ds.vllm_source.model = "model"
     return arrow_ds
 
 
@@ -307,7 +307,7 @@ def test_arrow_dataset_retries_nonfinite_read_then_recovers(
     )
     handles = iter(["bad-handle", "good-handle"])
     monkeypatch.setattr(
-        data_module,
+        source_module,
         "generate_hidden_states",
         lambda *_args, **_kwargs: _next_generation_result(handles),
     )
@@ -320,7 +320,7 @@ def test_arrow_dataset_retries_nonfinite_read_then_recovers(
     assert item["hidden_states"].shape == (3, 4)
     assert torch.isfinite(item["hidden_states"]).all()
     assert transfer.deleted == ["bad-handle", "good-handle"]
-    assert arrow_ds.generation_recovery.consecutive_failures == 0
+    assert arrow_ds.vllm_source.generation_recovery.consecutive_failures == 0
 
 
 def test_exhausted_generation_produces_locally_empty_zero_loss_batch(
@@ -337,7 +337,7 @@ def test_exhausted_generation_produces_locally_empty_zero_loss_batch(
     )
     handles = iter(["bad-1", "bad-2"])
     monkeypatch.setattr(
-        data_module,
+        source_module,
         "generate_hidden_states",
         lambda *_args, **_kwargs: _next_generation_result(handles),
     )
@@ -385,7 +385,7 @@ def test_consecutive_generation_failures_trip_circuit_breaker(
     )
     handles = iter(["bad-1", "bad-2", "bad-3", "bad-4"])
     monkeypatch.setattr(
-        data_module,
+        source_module,
         "generate_hidden_states",
         lambda *_args, **_kwargs: _next_generation_result(handles),
     )
