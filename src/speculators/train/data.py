@@ -2,7 +2,7 @@ import warnings
 from collections.abc import Callable, Sequence
 from os import PathLike
 from pathlib import Path
-from typing import Any, Literal, cast
+from typing import Any, Literal
 
 import torch
 from datasets import load_from_disk
@@ -12,10 +12,8 @@ from hs_connectors import FileTransfer, HiddenStatesTransfer
 from speculators.data_generation.vllm_client import (
     DEFAULT_MAX_RETRIES,
     DEFAULT_REQUEST_TIMEOUT,
-    ClientItem,
-    generate_hidden_states,
-    has_multimodal_content,
 )
+from speculators.train.data_types import DatasetRecord
 from speculators.train.hidden_states_source import (
     OfflineHiddenStatesSource,
     VllmHiddenStatesSource,
@@ -53,38 +51,6 @@ def create_empty_sample(
         "lengths": torch.tensor([0], dtype=torch.long),
         "position_ids": torch.arange(0, dtype=torch.long),
     }
-
-
-def build_client_item(dataset_item: dict) -> ClientItem:
-    """Build a request payload for vLLM hidden-state extraction.
-
-    When ``messages`` is included, ``generate_hidden_states`` uses the Chat
-    Completions API and vLLM **re-tokenizes from the raw messages**, ignoring
-    ``input_ids``.  This is required for multimodal inputs (the Completions
-    API cannot carry image/video/audio references), but harmful for text-only
-    data: preprocessing truncates ``input_ids`` to ``seq_length``, yet the
-    ``messages`` column stores the original un-truncated conversation.
-    Re-tokenizing those messages produces a longer sequence that can exceed
-    ``max_model_len``.
-
-    We therefore only forward ``messages`` when the conversation actually
-    contains multimodal content.  Text-only conversations always go through
-    the Completions API with the pre-truncated ``input_ids``.
-
-    This matters for models like Qwen3.5-0.8B whose ``AutoProcessor`` returns
-    a ``ProcessorMixin`` (``Qwen3VLProcessor``), causing preprocessing to
-    populate the ``messages`` column even for purely text-only datasets.
-    Text-only EAGLE-3 models (e.g. Llama) use a plain tokenizer, so
-    ``messages`` is never created and this guard is a no-op.
-    """
-    out_dict: dict = {"input_ids": dataset_item["input_ids"].tolist()}
-
-    # A text-only source concatenated with a multimodal one has None messages.
-    messages = dataset_item.get("messages")
-    if messages is not None and has_multimodal_content(messages):
-        out_dict["messages"] = messages
-
-    return cast("ClientItem", out_dict)
 
 
 class BaseDataset(Dataset):
@@ -194,6 +160,13 @@ class ArrowDataset(BaseDataset):
     def _map_to_file_idx(self, index: int):
         return index + self.start_file_idx
 
+    def _get_record(self, index: int) -> DatasetRecord:
+        """Convert a local Arrow row into the training data contract."""
+        return DatasetRecord.from_arrow_row(
+            self.data[index],
+            storage_index=self._map_to_file_idx(index),
+        )
+
     def __len__(self):
         return len(self.data)
 
@@ -202,18 +175,11 @@ class ArrowDataset(BaseDataset):
         return list(self.data.with_format(None)["seq_len"])
 
     def _get_raw_data(self, index: int) -> BatchType | SampleUnavailable:
-        file_idx = self._map_to_file_idx(index)
-        cached_hs = self.offline_source.get_one(file_idx)
+        record = self._get_record(index)
+        cached_hs = self.offline_source.get_one(record)
         if cached_hs is None:
             if self.on_missing == "generate":
-                dataset_item = self.data[index]
-                client_item = build_client_item(dataset_item)
-                loaded_hs = self.vllm_source.get_one(
-                    dataset_item,
-                    client_item,
-                    dataset_index=index,
-                    file_index=file_idx,
-                )
+                loaded_hs = self.vllm_source.get_one(record)
             elif self.on_missing == "skip":
                 return SampleUnavailable()
             elif self.on_missing == "warn":
@@ -237,10 +203,10 @@ class ArrowDataset(BaseDataset):
         #   "token_ids": [seq_len]
         # }
 
-        if not torch.equal(loaded_hs["token_ids"], self.data[index]["input_ids"]):
+        if not torch.equal(loaded_hs["token_ids"], record.input_ids):
             warnings.warn(
                 f"Loaded token ids {loaded_hs['token_ids']} for index {index} don't"
-                f"match input ids {self.data[index]['input_ids']}",
+                f"match input ids {record.input_ids}",
                 stacklevel=1,
             )
             return SampleUnavailable(
@@ -272,7 +238,7 @@ class ArrowDataset(BaseDataset):
             "verifier_last_hidden_states": loaded_hs["hidden_states"][
                 :, -1
             ],  # [seq_len, hidden_size]
-            "loss_mask": self.data[index]["loss_mask"],  # [seq_len]
+            "loss_mask": record.loss_mask,  # [seq_len]
         }
 
     def close(self) -> None:

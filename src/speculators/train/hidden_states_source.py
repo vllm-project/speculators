@@ -1,7 +1,7 @@
 """Hidden-state acquisition for training data."""
 
 import logging
-from typing import Any
+from typing import Any, cast
 
 import openai
 import torch
@@ -13,11 +13,27 @@ from speculators.data_generation.vllm_client import (
     DEFAULT_REQUEST_TIMEOUT,
     ClientItem,
     generate_hidden_states,
+    has_multimodal_content,
 )
+from speculators.train.data_types import DatasetRecord
 from speculators.train.recovery import GenerationRecoveryGuard, SampleUnavailable
 
-BatchType = dict[str, Any]
 logger = logging.getLogger("speculators")
+
+
+def build_client_item(record: DatasetRecord) -> ClientItem:
+    """Build a vLLM request payload from a dataset record.
+
+    Text-only records use their preprocessed token IDs. Multimodal records
+    also forward their messages so vLLM can resolve image, video, or audio
+    inputs through the Chat Completions API.
+    """
+    out_dict: dict[str, Any] = {"input_ids": record.input_ids.tolist()}
+
+    if record.messages is not None and has_multimodal_content(record.messages):
+        out_dict["messages"] = record.messages
+
+    return cast("ClientItem", out_dict)
 
 
 class OfflineHiddenStatesSource:
@@ -26,9 +42,9 @@ class OfflineHiddenStatesSource:
     def __init__(self, *, transfer: HiddenStatesTransfer):
         self.transfer = transfer
 
-    def get_one(self, file_index: int) -> dict[str, torch.Tensor] | None:
+    def get_one(self, record: DatasetRecord) -> dict[str, torch.Tensor] | None:
         """Load one cached sample by its storage index."""
-        return self.transfer.get_cached(file_index)
+        return self.transfer.get_cached(record.storage_index)
 
 
 class VllmHiddenStatesSource:
@@ -82,8 +98,7 @@ class VllmHiddenStatesSource:
 
     def _generate_once(
         self,
-        dataset_item: BatchType,
-        client_item: ClientItem,
+        record: DatasetRecord,
     ) -> dict[str, torch.Tensor]:
         handle: str | None = None
         try:
@@ -92,7 +107,7 @@ class VllmHiddenStatesSource:
             handle, hs_transfer_params = generate_hidden_states(
                 self.client,  # type:ignore[arg-type]
                 self.model,  # type:ignore[arg-type]
-                client_item,
+                build_client_item(record),
                 timeout=self.request_timeout,
                 max_retries=self.max_retries,
             )
@@ -103,7 +118,7 @@ class VllmHiddenStatesSource:
 
             # Covers token/shape mismatches and non-finite values. The Mooncake
             # transfer performs manifest validation first.
-            check_hidden_states(loaded_hs, dataset_item["input_ids"].tolist())
+            check_hidden_states(loaded_hs, record.input_ids.tolist())
 
             try:
                 self.transfer.delete(handle)
@@ -129,18 +144,14 @@ class VllmHiddenStatesSource:
 
     def get_one(
         self,
-        dataset_item: BatchType,
-        client_item: ClientItem,
-        *,
-        dataset_index: int,
-        file_index: int,
+        record: DatasetRecord,
     ) -> dict[str, torch.Tensor] | SampleUnavailable:
         """Generate one sample, including full-round-trip recovery."""
         return self.generation_recovery.run(
-            lambda: self._generate_once(dataset_item, client_item),
+            lambda: self._generate_once(record),
             description=(
-                f"Hidden-state round trip failed for dataset index {dataset_index}, "
-                f"file index {file_index}"
+                "Hidden-state round trip failed for storage index "
+                f"{record.storage_index}"
             ),
         )
 
