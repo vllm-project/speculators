@@ -78,6 +78,30 @@ class DraftVocabMixin(nn.Module):
         self.embed_tokens._is_hf_initialized = True  # type: ignore[assignment] # noqa: SLF001
         self.verifier_lm_head._is_hf_initialized = True  # type: ignore[assignment] # noqa: SLF001
 
+    @torch.compiler.disable
+    def _frozen_head_weight(self, head: nn.Linear) -> torch.Tensor:
+        """Return ``head.weight`` in the active autocast dtype, cached when frozen.
+
+        Autocast only caches casts of leaf tensors that require grad, so a frozen
+        fp32 head is re-cast to the autocast dtype on every call. The cast is a
+        pure function of the weight, so reuse it until the weight is replaced or
+        modified in place (tracked by identity and version counter).
+        """
+        weight = head.weight
+        device_type = weight.device.type
+        if weight.requires_grad or not torch.is_autocast_enabled(device_type):
+            return weight
+        dtype = torch.get_autocast_dtype(device_type)
+        if weight.dtype == dtype or not weight.is_floating_point():
+            return weight
+        cache = self.__dict__.setdefault("_frozen_head_weight_cache", {})
+        key = (id(weight), weight._version, dtype)  # noqa: SLF001
+        entry = cache.get(id(head))
+        if entry is None or entry[0] != key:
+            entry = (key, weight.detach().to(dtype))
+            cache[id(head)] = entry
+        return entry[1]
+
     def load_vocab_mappings(self, t2d: torch.Tensor | None, d2t: torch.Tensor | None):
         """Load target-to-draft and draft-to-target vocabulary mapping tensors.
 

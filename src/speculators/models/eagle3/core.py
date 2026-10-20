@@ -2,12 +2,14 @@ import copy
 from typing import ClassVar
 
 import torch
+import torch.nn.functional as F
 from torch.nn.attention.flex_attention import create_block_mask, create_mask
 from transformers import AutoConfig, DynamicCache, PretrainedConfig
 
 from speculators.config import SpeculatorsConfig, VerifierConfig
 from speculators.losses import LossConfig, resolve_loss_config
 from speculators.model import DraftVocabMixin, SpeculatorModel
+from speculators.models.argmax import row_argmax
 from speculators.models.attention import create_float_mask
 from speculators.models.eagle3 import Eagle3SpeculatorConfig
 from speculators.models.eagle3.attention import (
@@ -206,6 +208,10 @@ class Eagle3DraftModel(DraftVocabMixin, SpeculatorModel):
     ):
         device = hidden_states.device
         total_seq_len = hidden_states.shape[1]
+        # Fetch the (cached) autocast-dtype head weights up front: the lookup is
+        # not traceable, and breaking the graph here leaves the rest intact.
+        lm_head_weight = self._frozen_head_weight(self.lm_head)
+        verifier_lm_head_weight = self._frozen_head_weight(self.verifier_lm_head)
 
         if position_ids is None:
             position_ids = 1 + torch.arange(
@@ -248,11 +254,17 @@ class Eagle3DraftModel(DraftVocabMixin, SpeculatorModel):
         return_loss = verifier_last_hidden_states is not None
         if return_loss:
             with torch.no_grad():
-                targets = self.verifier_lm_head(
-                    self.verifier_norm(verifier_last_hidden_states)
+                targets = F.linear(
+                    self.verifier_norm(verifier_last_hidden_states),
+                    verifier_lm_head_weight,
                 )
                 # shape: [1, total_seq_len, draft_vocab_size]
-            loss = torch.tensor(0.0, device=device)
+                # Targets are fixed across ttt_steps; take the argmax once.
+                target_ids = row_argmax(targets)
+                # shape: [1, total_seq_len]
+            # torch.zeros/ones fill on device; torch.tensor(<scalar>, device=...)
+            # is a pageable host-to-device copy that blocks on the stream.
+            loss = torch.zeros((), device=device)
 
             # prev_correct is a boolean tensor that is True for tokens that have been
             # correctly predicted on all previous ttt_steps.
@@ -301,10 +313,30 @@ class Eagle3DraftModel(DraftVocabMixin, SpeculatorModel):
 
             if self.config.norm_output:
                 hidden_states = self.norm(hidden_states)
-                logits = self.lm_head(hidden_states)
+                head_input = hidden_states
             else:
-                logits = self.lm_head(self.norm(hidden_states))
-            # shape: [1, total_seq_len, draft_vocab_size]
+                head_input = self.norm(hidden_states)
+
+            logits_aligned = return_loss and ttt_step > 0
+            if logits_aligned:
+                # The last ttt_step positions have no targets (see align_for_step),
+                # so only the leading rows feed the loss. Projecting those rows
+                # directly keeps the backward from materializing a zero-padded
+                # [total_seq_len, vocab] gradient; the trailing rows are only
+                # needed for their argmax.
+                logits = F.linear(head_input[:, :-ttt_step], lm_head_weight)
+                # shape: [1, total_seq_len - ttt_step, draft_vocab_size]
+                with torch.no_grad():
+                    tail_logits = F.linear(head_input[:, -ttt_step:], lm_head_weight)
+                input_ids = torch.cat(
+                    [row_argmax(logits), row_argmax(tail_logits)],
+                    dim=-1,
+                )
+            else:
+                logits = F.linear(head_input, lm_head_weight)
+                # shape: [1, total_seq_len, draft_vocab_size]
+                input_ids = row_argmax(logits)
+            # shape: [1, total_seq_len]
 
             if return_loss:
                 s_loss, s_metrics = compute_metrics(
@@ -315,11 +347,13 @@ class Eagle3DraftModel(DraftVocabMixin, SpeculatorModel):
                     ttt_step,
                     ttt_step_loss_decay,
                     loss_config=loss_config,
+                    pred_ids=input_ids,
+                    target_ids=target_ids,
+                    logits_aligned=logits_aligned,
                 )
                 loss += s_loss
                 metrics.update(s_metrics)
 
-            input_ids = torch.argmax(logits, dim=-1)
             draft_tokens.append(input_ids.detach().clone())
             # shape: [1, total_seq_len]
 
@@ -359,7 +393,7 @@ class Eagle3DraftModel(DraftVocabMixin, SpeculatorModel):
 
         if return_loss:
             metrics["loss_sum"] = loss.detach().clone()
-            metrics["loss_total"] = torch.tensor(1.0, device=device)
+            metrics["loss_total"] = torch.ones((), device=device)
             return draft_tokens, loss, metrics
         else:
             return draft_tokens

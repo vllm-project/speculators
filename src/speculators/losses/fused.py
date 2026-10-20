@@ -176,6 +176,44 @@ def loss_forward_kernel(  # noqa: C901 -- constexpr OP branches, pruned per inst
     logits_ptr += pid * n_cols
     targets_ptr += pid * n_cols
 
+    if OP == _OP_KL:
+        # Single pass: KL(tp || dp) = sum(tp * (y - x)) + lse_d - lse_t, since
+        # tp sums to one. sum(exp(y - m_t) * (y - x)) rescales online with the
+        # target max like z_t does, so each row is streamed once, not twice.
+        m_d = float("-inf")
+        z_d = 0.0
+        m_t = float("-inf")
+        z_t = 0.0
+        acc = 0.0
+        for i in range(0, n_cols, BLOCK_SIZE):
+            offsets = i + tl.arange(0, BLOCK_SIZE)
+            mask = offsets < n_cols
+            x = tl.load(logits_ptr + offsets, mask=mask, other=float("-inf")).cast(
+                tl.float32
+            )
+            y = tl.load(targets_ptr + offsets, mask=mask, other=float("-inf")).cast(
+                tl.float32
+            )
+            m_d_new = tl.maximum(m_d, tl.max(x))
+            z_d = z_d * tl.exp(m_d - m_d_new) + tl.sum(
+                tl.where(mask, tl.exp(x - m_d_new), 0.0)
+            )
+            m_d = m_d_new
+            m_t_new = tl.maximum(m_t, tl.max(y))
+            scale = tl.exp(m_t - m_t_new)
+            ey = tl.where(mask, tl.exp(y - m_t_new), 0.0)
+            z_t = z_t * scale + tl.sum(ey)
+            acc = acc * scale + tl.sum(tl.where(mask, ey * (y - x), 0.0))
+            m_t = m_t_new
+        kl = acc / z_t + (m_d + tl.log(z_d)) - (m_t + tl.log(z_t))
+        tl.store(stats_ptr + 0 * stats_row + pid, m_d)
+        tl.store(stats_ptr + 1 * stats_row + pid, z_d)
+        tl.store(stats_ptr + 2 * stats_row + pid, m_t)
+        tl.store(stats_ptr + 3 * stats_row + pid, z_t)
+        tl.store(loss_ptr + pid, kl)
+        tl.store(stats_ptr + 4 * stats_row + pid, kl)
+        return
+
     m_d, z_d = _online_stats(logits_ptr, n_cols, BLOCK_SIZE)
     lse_d = m_d + tl.log(z_d)
     tl.store(stats_ptr + 0 * stats_row + pid, m_d)

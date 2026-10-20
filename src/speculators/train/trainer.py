@@ -125,6 +125,10 @@ _RECOVERY_SYNC_INTERVAL = 50
 _VAL_SYNC_INTERVAL = 50
 
 
+# Sentinel returned by next() once the train loader is exhausted.
+_EXHAUSTED = object()
+
+
 def _should_sync_recovery(
     step: int,
     total_steps: int,
@@ -509,7 +513,30 @@ class Trainer:
         timer = _StepTimer()
         recovery = BatchRecoveryCoordinator("training")
         remaining_steps = len(self.train_loader)
-        for local_step_rel, batch in enumerate(train_loader, 1):
+        # The next batch's host-to-device copy runs on a side stream while the
+        # current forward executes, instead of serially at the start of a step.
+        copy_stream = (
+            torch.cuda.Stream(self.local_rank) if self.device_type == "cuda" else None
+        )
+        prefetched: dict[str, torch.Tensor] | None = None
+        # Each step's metric record is emitted during the *next* step, right
+        # after its forward is launched: rendering it (Rich to a piped stdout
+        # costs milliseconds) then overlaps GPU work instead of stalling it.
+        pending_log: dict | None = None
+
+        def flush_pending_log():
+            nonlocal pending_log
+            if pending_log is not None:
+                metric_logger.info(
+                    pending_log, extra={"step": pending_log["global_step"]}
+                )
+                pending_log = None
+
+        batches = iter(train_loader)
+        batch = next(batches, _EXHAUSTED)
+        local_step_rel = 0
+        while batch is not _EXHAUSTED:
+            local_step_rel += 1
             # local_step is 1-based index into the *full* epoch (not the slice).
             local_step = local_step_rel + skip_steps
             timer.reset(self.global_step % self.config.log_freq == 0)
@@ -529,12 +556,16 @@ class Trainer:
                 ),
             )
             timer.mark("pre_h2d")
-            gpu_batch = {
-                k: v.to(self.local_rank, non_blocking=True)
-                if isinstance(v, torch.Tensor)
-                else v
-                for k, v in batch.items()
-            }
+            if prefetched is not None:
+                gpu_batch = self._take_prefetched(batch, prefetched, copy_stream)
+                prefetched = None
+            else:
+                gpu_batch = {
+                    k: v.to(self.local_rank, non_blocking=True)
+                    if isinstance(v, torch.Tensor)
+                    else v
+                    for k, v in batch.items()
+                }
 
             with torch.autocast(
                 self.device_type, dtype=self.config.hidden_states_dtype
@@ -544,17 +575,28 @@ class Trainer:
                     **gpu_batch, **(self.config.train_call_kwargs or {})
                 )
 
+            # Pull the next batch while the forward runs and start its copy. The
+            # final step skips the pull so the loader (and its tqdm bar) never
+            # advances past the last batch that is trained on.
+            next_batch = _EXHAUSTED if will_stop else next(batches, _EXHAUSTED)
+            if copy_stream is not None and next_batch is not _EXHAUSTED:
+                prefetched = self._prefetch_to_device(next_batch, copy_stream)
+            flush_pending_log()
+
             timer.mark("fwd")
             self._optimizers_zero_grad()
             loss.backward()
             timer.mark("pre_clip")
             torch.nn.utils.clip_grad_norm_(self.model.parameters(), 1.0)
 
-            metrics["error_records_sum"] = torch.tensor(
-                batch["error_records"], dtype=torch.float32, device=loss.device
+            # torch.full fills on device; torch.tensor(<scalar>, device=...) is a
+            # pageable host-to-device copy that blocks until the GPU catches up.
+            metrics["error_records_sum"] = torch.full(
+                (), batch["error_records"], dtype=torch.float32, device=loss.device
             )
-            metrics["error_records_total"] = torch.tensor(
-                1.0 if self.rank == 0 else 0,
+            metrics["error_records_total"] = torch.full(
+                (),
+                1.0 if self.rank == 0 else 0.0,
                 dtype=torch.float32,
                 device=loss.device,
             )
@@ -584,16 +626,13 @@ class Trainer:
                     if len(current_lrs) > 1
                     else next(iter(current_lrs.values()))
                 )
-                metric_logger.info(
-                    {
-                        "train": metrics,
-                        "profile": profile,
-                        "epoch": epoch,
-                        "lr": lr_info,
-                        "global_step": self.global_step,
-                    },
-                    extra={"step": self.global_step},
-                )
+                pending_log = {
+                    "train": metrics,
+                    "profile": profile,
+                    "epoch": epoch,
+                    "lr": lr_info,
+                    "global_step": self.global_step,
+                }
             self.global_step += 1
             if step_callback is not None:
                 step_callback()
@@ -612,6 +651,37 @@ class Trainer:
                 # Avoid saving back to back ay the end of each epoch
             ):
                 self.maybe_save_checkpoint(epoch, local_step=local_step)
+            batch = next_batch
+        flush_pending_log()
+
+    def _prefetch_to_device(
+        self, batch: dict, copy_stream: torch.cuda.Stream
+    ) -> dict[str, torch.Tensor]:
+        """Start copying *batch*'s tensors to the device on *copy_stream*."""
+        with torch.cuda.stream(copy_stream):
+            return {
+                k: v.to(self.local_rank, non_blocking=True)
+                for k, v in batch.items()
+                if isinstance(v, torch.Tensor)
+            }
+
+    def _take_prefetched(
+        self,
+        batch: dict,
+        prefetched: dict[str, torch.Tensor],
+        copy_stream: torch.cuda.Stream,
+    ) -> dict:
+        """Order the compute stream after the prefetch and assemble the batch.
+
+        Keys come from *batch* (after recovery metadata was consumed), with
+        tensors replaced by their prefetched device copies.
+        """
+        compute_stream = torch.cuda.current_stream(self.local_rank)
+        compute_stream.wait_stream(copy_stream)
+        for tensor in prefetched.values():
+            # Allocated on copy_stream, used on compute_stream.
+            tensor.record_stream(compute_stream)
+        return {k: prefetched.get(k, v) for k, v in batch.items()}
 
     def _maybe_val_sync(self, batch_index: int) -> None:
         if not self.is_distributed or _VAL_SYNC_INTERVAL <= 0:

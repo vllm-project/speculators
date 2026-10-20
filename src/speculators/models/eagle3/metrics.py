@@ -19,6 +19,7 @@ def align_for_step(
     loss_mask: torch.Tensor | None,  # shape: [1, total_seq_len]
     prev_correct: torch.Tensor | None,  # shape: [1, total_seq_len]
     ttt_step: int,
+    logits_aligned: bool = False,
 ):
     """Align logits, targets, loss_mask, and prev_correct for a given ttt_step.
 
@@ -33,8 +34,12 @@ def align_for_step(
         indices of logits for ttt_step_1 = [2, 3, 4, 5, 6, 7, 8, 9, 10] # shift by 1
         indices of logits for ttt_step_2 = [3, 4, 5, 6, 7, 8, 9, 10, 11] # shift by 2
     The indices for the loss_mask need to be kept in line with the targets indices
+
+    If ``logits_aligned`` is set, ``logits`` already holds only the first
+    ``total_seq_len - ttt_step`` positions and is returned as is.
     """
-    logits = logits[:, :-ttt_step] if ttt_step > 0 else logits
+    if not logits_aligned and ttt_step > 0:
+        logits = logits[:, :-ttt_step]
     # shape: [1, total_seq_len - ttt_step, draft_vocab_size]
     targets = targets[:, ttt_step:]
     # shape: [1, total_seq_len - ttt_step, draft_vocab_size]
@@ -56,6 +61,9 @@ def compute_metrics(
     ttt_step: int,
     ttt_step_loss_decay: float,
     loss_config: LossConfig | None = None,
+    pred_ids: torch.Tensor | None = None,
+    target_ids: torch.Tensor | None = None,
+    logits_aligned: bool = False,
 ) -> tuple[torch.Tensor, dict]:
     """Compute metrics for a given ttt_step.
 
@@ -67,6 +75,12 @@ def compute_metrics(
         ttt_step: The current ttt_step.
         ttt_step_loss_decay: The loss decay for the current ttt_step.
         loss_config: Mapping of ``{name: (loss_fn, weight)}``.
+        pred_ids: Optional precomputed ``argmax(logits, dim=-1)`` (unaligned).
+        target_ids: Optional precomputed ``argmax(targets, dim=-1)`` (unaligned).
+            Each argmax streams a full ``[T, V]`` tensor; callers that already
+            have them avoid recomputing.
+        logits_aligned: ``logits`` already covers only the positions that have
+            targets at this ttt_step (see ``align_for_step``).
 
     Effects:
         Modifies prev_correct in place.
@@ -77,7 +91,7 @@ def compute_metrics(
     if loss_config is None:
         loss_config = {"kl_div": (kl_div_loss, 1.0)}
     s_logits, s_targets, s_loss_mask, s_prev_correct = align_for_step(
-        logits, targets, loss_mask, prev_correct, ttt_step
+        logits, targets, loss_mask, prev_correct, ttt_step, logits_aligned
     )
 
     seq_len = s_logits.shape[1]
@@ -97,8 +111,14 @@ def compute_metrics(
         decay_fn=partial(exp_loss_decay, gamma=ttt_step_loss_decay),
     )
 
-    pred_ids = torch.argmax(s_logits, dim=-1)
-    target_ids = torch.argmax(s_targets, dim=-1)
+    if pred_ids is None:
+        pred_ids = torch.argmax(s_logits, dim=-1)
+    else:
+        pred_ids = pred_ids[:, :-ttt_step] if ttt_step > 0 else pred_ids
+    if target_ids is None:
+        target_ids = torch.argmax(s_targets, dim=-1)
+    else:
+        target_ids = target_ids[:, ttt_step:]
 
     full_correct, full_total, cond_correct, cond_total = compute_accuracy_single_step(
         pred_ids, target_ids, s_loss_mask, s_prev_correct

@@ -55,10 +55,16 @@ def compute_accuracy_single_step(
         cond_total = prev_correct.sum().float()
         correct = torch.logical_and(prev_correct, correct, out=prev_correct)
     if loss_mask is not None:
-        correct = torch.masked_select(correct, loss_mask.to(torch.bool))
-
-    correct_sum = correct.float().sum()
-    full_total = torch.tensor(correct.numel(), dtype=torch.float, device=correct.device)
+        # Count through the mask rather than masked_select: the selected size
+        # depends on tensor data, which forces a host sync and a graph break.
+        mask = loss_mask.to(torch.bool)
+        correct_sum = torch.logical_and(correct, mask).float().sum()
+        full_total = mask.sum().float()
+    else:
+        correct_sum = correct.float().sum()
+        full_total = torch.full(
+            (), correct.numel(), dtype=torch.float, device=correct.device
+        )
 
     return correct_sum, full_total, correct_sum.clone(), cond_total
 

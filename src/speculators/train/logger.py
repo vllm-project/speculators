@@ -49,15 +49,19 @@ Example Usage:
 # SPDX-License-Identifier: Apache-2.0
 
 # Standard
+import atexit
 import contextlib
+import copy
 import importlib
 import json
 import logging
 import os
+import queue
 import warnings
 from collections.abc import Mapping
 from datetime import datetime, timezone
 from logging.config import dictConfig
+from logging.handlers import QueueHandler, QueueListener
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Union
 
@@ -621,19 +625,46 @@ class MLFlowHandler(logging.Handler):
 ### Main functions
 
 
+class _SnapshotQueueHandler(QueueHandler):
+    """Enqueue a snapshot of each record for a background listener.
+
+    Unlike ``QueueHandler.prepare`` this keeps mapping messages as mappings
+    (flattened into a fresh dict) so ``FormatDictFilter`` still applies on the
+    listener side, while freezing their values at log time.
+    """
+
+    def prepare(self, record):
+        record = copy.copy(record)
+        if isinstance(record.msg, Mapping):
+            record.msg = _flatten_dict(record.msg)
+        else:
+            record.msg = record.getMessage()
+            record.args = None
+        return record
+
+
 def setup_root_logger(level="INFO"):
     """Configure the root logger with rich formatting.
 
     This function sets up the root logger with a RichHandler for
     console output and adds the FormatDictFilter for better dictionary message
-    formatting.
+    formatting. The RichHandler runs on a background listener thread: rendering
+    the per-step metric dict to a piped stdout costs milliseconds, which would
+    otherwise be paid synchronously inside every training step.
     """
+    if logging.getLogger().handlers:
+        # basicConfig would be a no-op; don't start an orphaned listener.
+        return
     handler = RichHandler()
+    handler.setFormatter(logging.Formatter("%(message)s", datefmt="[%X]"))
     handler.addFilter(FormatDictFilter())
     handler.addFilter(IsRank0Filter())
-    logging.basicConfig(
-        level=level, format="%(message)s", datefmt="[%X]", handlers=[handler]
-    )
+    log_queue: queue.SimpleQueue = queue.SimpleQueue()
+    listener = QueueListener(log_queue, handler, respect_handler_level=True)
+    listener.start()
+    # Drain pending records at exit (atexit is LIFO, so before logging.shutdown).
+    atexit.register(listener.stop)
+    logging.basicConfig(level=level, handlers=[_SnapshotQueueHandler(log_queue)])
 
     # Disable verbose HTTP response logs from httpx
     logging.getLogger("httpx").propagate = False
