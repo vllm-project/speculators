@@ -53,11 +53,16 @@ def extract_from_kv_cache(
     slot_mapping: torch.Tensor,
     num_tokens: int,
 ) -> torch.Tensor:
-    block_size = kv_cache.shape[-3]
     if kv_cache.dim() == 4:
-        return kv_cache[slot_mapping // block_size, slot_mapping % block_size][
+        # Logical layout [num_blocks, num_heads, block_size, head_size]
+        # (post KV-cache layout refactor, vLLM #51718). Mirror basic_cache's
+        # write indexing: block index on axis 0, in-block position on axis 2
+        # (NOT shape[-3], which is the num_heads axis here).
+        block_size = kv_cache.shape[2]
+        return kv_cache[slot_mapping // block_size, :, slot_mapping % block_size][
             :num_tokens
         ]
+    block_size = kv_cache.shape[-3]
     if kv_cache.shape[0] == 2:
         return kv_cache[:, slot_mapping // block_size, slot_mapping % block_size][
             :, :num_tokens
@@ -310,10 +315,27 @@ class NKVDataConnector(KVConnectorBase_V1, SupportsHMA):
             offset += num_tokens
 
             kv_data = extract_from_kv_cache(kv_layer, req_slot_mapping, num_tokens)
+            # FLASH_ATTN packs K and V into the content dim: the per-layer
+            # cache is [blocks, kv_heads, bs, 2*head_dim] with K first
+            # (flash_attn.py: kv_cache.transpose(1,2).split(head_size, -1)).
+            # Split into [2, T, kv_heads, head_dim] so the saved
+            # kv_caches stack is [L, 2, T, kv_heads, head_dim].
+            assert kv_data.dim() == 3 and kv_data.shape[-1] % 2 == 0, (
+                f"unexpected KV cache layout for attn layer: {kv_data.shape}"
+            )
+            kv_data = (
+                kv_data.view(
+                    num_tokens, kv_data.shape[1], 2, kv_data.shape[-1] // 2
+                )
+                .permute(2, 0, 1, 3)
+                .contiguous()
+            )
             if tp_size > 1:
                 from vllm.distributed.parallel_state import get_tp_group
 
-                kv_data = get_tp_group().all_gather(kv_data.contiguous(), dim=2)
+                # KV heads are sharded across TP ranks; gather on the heads
+                # axis (now dim 3 after the permute).
+                kv_data = get_tp_group().all_gather(kv_data, dim=3)
             self._kv_buffers[request.req_id][layer_id] = kv_data.detach().cpu()
 
     def get_num_new_matched_tokens(
