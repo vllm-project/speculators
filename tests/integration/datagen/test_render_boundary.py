@@ -11,7 +11,9 @@ import time
 from typing import cast
 
 import pytest
+import torch
 from datasets import Dataset as HFDataset
+from datasets import load_from_disk
 
 from speculators.data_generation import preprocessing, render_client
 from speculators.data_generation.preprocessing import (
@@ -19,6 +21,7 @@ from speculators.data_generation.preprocessing import (
     build_speculator_training_dataset,
 )
 from speculators.data_generation.vllm_client import InvalidResponseError
+from speculators.train.data import CollateFn
 
 # Neither build path below reads the processor: the missing-endpoint guard
 # raises before it is used, and speculator-format rows skip rendering entirely.
@@ -163,6 +166,8 @@ def test_append_row_statuses():
     assert preprocessing._append_row(results, [1, 2, 3], [0, 1, 1], 10, 1) == "kept"
     assert len(results["input_ids"]) == 1
     assert results["seq_len"] == [3]
+    assert results["loss_mask"][0].dtype == torch.bool
+    assert results["loss_mask"][0].tolist() == [False, True, True]
 
 
 def test_append_boundary_rows_counts_rows_at_limit_as_maybe_truncated():
@@ -302,3 +307,33 @@ def test_pretokenized_dataset_skips_render():
         HFDataset.from_dict(data), NO_PROCESSOR, num_proc=1
     )
     assert len(ds) == 1
+
+
+@pytest.mark.parametrize("mask", [[0, 0, 1, 1], [False, False, True, True]])
+def test_loss_mask_stays_boolean_after_save_load_and_collation(tmp_path, mask):
+    dataset = build_speculator_training_dataset(
+        HFDataset.from_dict({"input_ids": [[1, 2, 3, 4]], "loss_mask": [mask]}),
+        NO_PROCESSOR,
+        num_proc=1,
+    )
+    assert dataset[0]["loss_mask"].dtype == torch.bool
+    dataset.save_to_disk(tmp_path / "dataset")
+
+    restored = load_from_disk(tmp_path / "dataset")
+    row = restored[0]
+    assert row["loss_mask"].dtype == torch.bool
+    assert row["loss_mask"].tolist() == [False, False, True, True]
+    assert row["input_ids"].dtype == torch.long
+    assert row["input_ids"].tolist() == [1, 2, 3, 4]
+
+    batch = CollateFn(max_len=6, hidden_size=1)(
+        [
+            {
+                "input_ids": row["input_ids"],
+                "loss_mask": row["loss_mask"],
+                "lengths": torch.tensor([4]),
+            }
+        ]
+    )
+    assert batch["loss_mask"].dtype == torch.bool
+    assert batch["loss_mask"].tolist() == [[False, False, True, True, False, False]]
