@@ -21,6 +21,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "scripts" / "evalua
 import acceptance  # type: ignore[import-not-found]
 import evaluate  # type: ignore[import-not-found]
 import request_runner  # type: ignore[import-not-found]
+import speedup  # type: ignore[import-not-found]
+import throughput_interactivity as ti  # type: ignore[import-not-found]
 from acceptance import acceptance_summary  # type: ignore[import-not-found]
 from eval_datasets import basic  # type: ignore[import-not-found]
 from loader import (  # type: ignore[import-not-found]
@@ -430,6 +432,43 @@ def _dataset_results(requests):
     ]
 
 
+def timed_report(n=1, *, constraints=None, errored=None):
+    def request(end, tpot, tokens=4):
+        return {
+            "request_end_time": end,
+            "inter_token_latency_ms": tpot,
+            "output_tokens": tokens,
+        }
+
+    return {
+        "label": "baseline",
+        "benchmarks": [
+            {
+                "config": {"strategy": {"type_": "concurrent", "streams": n}},
+                "scheduler_state": {
+                    "end_processing_constraints": constraints or {"max_duration": {}}
+                },
+                "scheduler_metrics": {
+                    "measure_start_time": 30,
+                    "measure_end_time": 130,
+                },
+                "requests": {
+                    "successful": [
+                        request(20, 999),
+                        request(50, 10),
+                        request(100, 20),
+                        request(110, None, 1),
+                        request(131, 999),
+                    ],
+                    "incomplete": [request(130, None)],
+                    "errored": errored or [],
+                },
+                "metrics": {"output_tokens_per_second": {"total": {"mean": 1234}}},
+            }
+        ],
+    }
+
+
 def test_sample_limit_applies_per_dataset_without_overreading(monkeypatch):
     def source(*args, **kwargs):
         for index in range(128):
@@ -771,3 +810,194 @@ def test_interrupted_later_dataset_preserves_completed_csv_row(tmp_path, monkeyp
     assert summary["overall"]["errored_requests"] == 3
     assert list(summary["by_dataset"]) == ["first", "second"]
     assert len((stopped / "requests.jsonl").read_text().splitlines()) == 3
+
+
+def test_timed_sweep_saves_reports_summary_and_plot(tmp_path, monkeypatch):
+    monkeypatch.setattr(speedup, "refuse_prefix_caching", lambda target: None)
+    messages = [
+        {"role": "system", "content": "code"},
+        {"role": "user", "content": "solve this"},
+    ]
+    body = {
+        "model": "served",
+        "messages": messages,
+        "max_tokens": 8192,
+        "temperature": 0,
+        "chat_template_kwargs": {"enable_thinking": False},
+    }
+    calls: list[list[str]] = []
+
+    def bench(command, *, check):
+        if len(calls) == 2:
+            assert len(list(tmp_path.glob("conc*_r*.json"))) == 2
+        calls.append(command)
+        assert not check
+        assert command[:2] == ["/existing/guidellm", "run"]
+        assert not any("max_error" in arg for arg in command)
+        assert "--max-requests" not in command
+        assert "--num-prompts" not in command
+        assert (
+            command[command.index("--constraint") + 1]
+            == "kind=max_duration,seconds=130"
+        )
+        profile = command[command.index("--profile") + 1]
+        n = int(profile.split("streams=")[1].split(",")[0])
+        assert profile.endswith("warmup=30")
+        backend = json.loads(command[command.index("--backend") + 1])
+        assert backend["max_tokens"] == 8192
+        assert backend["extras"]["body"] == {
+            "temperature": 0,
+            "chat_template_kwargs": {"enable_thinking": False},
+        }
+        data = json.loads(command[command.index("--data") + 1])
+        rows = [
+            json.loads(line) for line in Path(data["path"]).read_text().splitlines()
+        ]
+        assert len(rows) == 5000
+        assert rows[0]["messages"] == messages
+        path = Path(json.loads(command[command.index("--output") + 1])["path"])
+        report = timed_report(n)
+        # Different repeats must be averaged, including inversion before averaging.
+        if len(calls) % 2 == 0:
+            benchmark = report["benchmarks"][0]
+            benchmark["metrics"]["output_tokens_per_second"]["total"]["mean"] = 2468
+            for row in benchmark["requests"]["successful"]:
+                if row["inter_token_latency_ms"] is not None:
+                    row["inter_token_latency_ms"] *= 2
+        path.write_text(json.dumps(report))
+        return speedup.subprocess.CompletedProcess(command, 0)
+
+    monkeypatch.setattr(speedup.subprocess, "run", bench)
+    args = argparse.Namespace(
+        target="http://server",
+        output_dir=tmp_path,
+        model="served",
+        label="baseline",
+        keep_going=False,
+        streams=[1, 8],
+        repeats=2,
+        max_seconds=100,
+        warmup_seconds=30,
+        guidellm_bin="/existing/guidellm",
+        tokenizer="base-tokenizer",
+    )
+    assert speedup.run(args, [{"body": body}]) == 0
+    assert len(calls) == 4
+    assert body["messages"] == messages
+    assert body["max_tokens"] == 8192
+    assert sorted(p.name for p in tmp_path.iterdir()) == [
+        "conc1_r1.json",
+        "conc1_r2.json",
+        "conc8_r1.json",
+        "conc8_r2.json",
+        "summary.csv",
+    ]
+    for command in calls:
+        output = Path(json.loads(command[command.index("--output") + 1])["path"])
+        data = Path(json.loads(command[command.index("--data") + 1])["path"])
+        assert json.loads(output.read_text())["label"] == "baseline"
+        assert not data.exists()
+    rows = list(csv.DictReader((tmp_path / "summary.csv").open()))
+    assert [row["concurrency"] for row in rows] == ["1", "8"]
+    for row in rows:
+        assert int(row["repeats"]) == 2
+        assert float(row["interactivity_tok_s_per_user"]) == pytest.approx(50)
+        assert float(row["output_throughput_tok_s"]) == pytest.approx(1851)
+    plotted = ti._load_series(argparse.Namespace(series=[str(tmp_path)]))[0]["points"]
+    assert [p["x"] for p in plotted] == pytest.approx([50, 50])
+    assert [p["y"] for p in plotted] == pytest.approx([1851, 1851])
+    plot = argparse.Namespace(
+        series=[str(tmp_path)],
+        out=str(tmp_path / "curve.png"),
+        title="HumanEval",
+        subtitle="",
+        note="",
+    )
+    assert ti.plot(plot) == 0
+    assert (tmp_path / "curve.png").read_bytes().startswith(b"\x89PNG")
+    with pytest.raises(ValueError, match="already exists"):
+        speedup.run(args, [{"body": body}])
+
+
+def test_failed_points_stop_by_default_and_keep_going_skips_bad_reports(
+    tmp_path, monkeypatch, capsys
+):
+    check_metrics = speedup.refuse_prefix_caching
+    monkeypatch.setattr(speedup, "refuse_prefix_caching", lambda target: None)
+    calls = []
+
+    def bench(command, *, check):
+        assert not check
+        assert not any("max_error" in arg for arg in command)
+        calls.append(command)
+        path = Path(json.loads(command[command.index("--output") + 1])["path"])
+        n = int(
+            command[command.index("--profile") + 1].split("streams=")[1].split(",")[0]
+        )
+        if n == 4:
+            return speedup.subprocess.CompletedProcess(command, 1)
+        report = timed_report(
+            n, errored=[{"error": "HTTP 500"}] if n in (1, 64) else []
+        )
+        if n == 8:
+            report["benchmarks"][0]["requests"]["successful"] = []
+        path.write_text("invalid JSON" if n == 16 else json.dumps(report))
+        return speedup.subprocess.CompletedProcess(command, int(n in (1, 64)))
+
+    monkeypatch.setattr(speedup.subprocess, "run", bench)
+    args = argparse.Namespace(
+        output_dir=tmp_path,
+        target="http://server",
+        streams=[1, 4, 8, 16, 32, 64, 128],
+        repeats=1,
+        keep_going=False,
+        model="served",
+        label="test",
+        tokenizer=None,
+        guidellm_bin="guidellm",
+        warmup_seconds=30,
+        max_seconds=100,
+    )
+    requests = [
+        {"body": {"messages": [{"role": "user", "content": "test"}], "max_tokens": 16}}
+    ]
+    assert speedup.run(args, requests) == 1
+    assert len(calls) == 1
+    assert (tmp_path / "conc1_r1.json").exists()
+    assert not (tmp_path / "benchmarks.jsonl").exists()
+    with pytest.raises(ValueError, match="already exists"):
+        speedup.run(args, requests)
+
+    args.output_dir = tmp_path / "keep-going"
+    args.output_dir.mkdir()
+    args.keep_going = True
+    calls.clear()
+    assert speedup.run(args, requests) == 1
+    assert len(calls) == 7
+    assert (args.output_dir / "conc1_r1.json").exists()
+    assert (args.output_dir / "conc16_r1.json").read_text() == "invalid JSON"
+    assert not (args.output_dir / "conc4_r1.json").exists()
+    plotted = ti._load_series(argparse.Namespace(series=[str(args.output_dir)]))[0][
+        "points"
+    ]
+    assert [p["streams"] for p in plotted] == [32, 128]
+    rows = list(csv.DictReader((args.output_dir / "summary.csv").open()))
+    assert [r["concurrency"] for r in rows] == ["32", "128"]
+    assert "Warning: skipping conc16_r1.json" in capsys.readouterr().err
+
+    monkeypatch.setattr(speedup, "refuse_prefix_caching", check_metrics)
+    command = calls[-1]
+    path = args.output_dir / "conc128_r1.json"
+    for metrics in (None, 'vllm:cache_config_info{enable_prefix_caching="true"} 1'):
+
+        def get(*_args, metrics=metrics, **_kwargs):
+            if metrics is None:
+                raise httpx.ConnectError("metrics unavailable")
+            return httpx.Response(
+                200, text=metrics, request=httpx.Request("GET", "http://server/metrics")
+            )
+
+        monkeypatch.setattr(speedup.httpx, "get", get)
+        count = len(calls)
+        assert speedup._run_point(command, path, args.target) is False
+        assert len(calls) == count
