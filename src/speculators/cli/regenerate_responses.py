@@ -231,6 +231,24 @@ def load_seen(path: str) -> set[str]:
     return seen
 
 
+def refuse_append_without_resume(outfile: str, resume: bool) -> None:
+    """Fail when a non-resume run would append to a non-empty output file.
+
+    Seen ids are loaded only with ``--resume``. The file is otherwise opened in
+    append mode, so a second run would duplicate every conversation. A missing
+    or empty file is left alone — the run creates or fills it.
+    """
+    if resume:
+        return
+    path = Path(outfile)
+    if not path.is_file() or path.stat().st_size == 0:
+        return
+    raise typer.BadParameter(
+        f"Output file {outfile} already exists and is not empty. "
+        "Pass --resume to continue it, or delete the file."
+    )
+
+
 async def detect_model(endpoint: str) -> str:
     """Automatically detect the model name from the vLLM server."""
     models_endpoint = endpoint.replace("/v1/chat/completions", "/v1/models")
@@ -548,6 +566,17 @@ def sanitize_filename(name: str) -> str:
     return name.strip("._")
 
 
+def _default_outfile(dataset_name: str, model: str) -> str:
+    """Stable ``{dataset}_{model}.jsonl`` path used when ``--outfile`` is omitted."""
+    model_short = model.rsplit("/", maxsplit=1)[-1] if "/" in model else model
+    model_short = sanitize_filename(model_short)
+    if dataset_name in REGEN_DATASETS:
+        source_name = DATASET_CONFIGS[dataset_name].name
+    else:
+        source_name = Path(dataset_name).stem
+    return f"{sanitize_filename(source_name)}_{model_short}.jsonl"
+
+
 def ensure_parent_dirs(*paths: str) -> None:
     """Create parent directories for output files.
 
@@ -707,11 +736,20 @@ async def _run(  # noqa: C901
     seed: int | None,
 ) -> None:
     """Main async function to process dataset through vLLM endpoints."""
+    # Explicit path: reject a non-empty file before any server or tokenizer I/O.
+    if outfile is not None:
+        refuse_append_without_resume(outfile, resume)
+
     typer.echo(f"Using endpoint: {endpoint}")
 
-    # Auto-detect model if not specified
+    # Auto-detect model if not specified. The default outfile name embeds the
+    # model, so this is the only request that can precede that check.
     if model is None:
         model = await detect_model(endpoint)
+
+    if outfile is None:
+        outfile = _default_outfile(dataset_name, model)
+        refuse_append_without_resume(outfile, resume)
 
     typer.echo(f"Using model: {model}")
     if reasoning_effort_dist:
@@ -726,14 +764,6 @@ async def _run(  # noqa: C901
 
     dataset_config, hf_dataset, split = load_input_dataset(dataset_name, split, subset)
     dataset_id = dataset_config.hf_path
-
-    # Generate output filename if not specified
-    if outfile is None:
-        # Extract simple model name from full path
-        model_short = model.split("/")[-1] if "/" in model else model
-        model_short = sanitize_filename(model_short)
-        source_name = sanitize_filename(dataset_config.name)
-        outfile = f"{source_name}_{model_short}.jsonl"
 
     # Failed / partial conversations are written here instead of the training file.
     outpath = Path(outfile)
@@ -968,7 +998,10 @@ def regenerate_responses(
         bool,
         typer.Option(
             "--resume",
-            help="Skip rows already in outfile (by stable primary id)",
+            help=(
+                "Append to an existing outfile, skipping rows already present "
+                "(by stable primary id). Required when that file is non-empty."
+            ),
         ),
     ] = False,
     language_filter: Annotated[
