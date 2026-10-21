@@ -126,6 +126,25 @@ class TestSpeculatorsPatch:
         assert (tmp_path / "train_command.txt").exists()
         assert not (tmp_path / "speculators.patch").exists()
 
+    def test_failed_diff_is_not_recorded_as_clean(self, tmp_path: Path):
+        with (
+            patch("speculators.train.utils.find_repo_root", return_value=tmp_path),
+            patch("speculators.train.utils.git_sha", return_value="abc123"),
+            patch("speculators.train.utils.git_diff", return_value=None),
+        ):
+            save_train_command(str(tmp_path))
+        content = (tmp_path / "speculators.patch").read_text()
+        assert content.startswith(f"# repo: {tmp_path} (abc123)\n")
+        assert "# git diff failed" in content.splitlines()
+
+    def test_clean_diff_has_no_failure_note(self, tmp_path: Path):
+        with patch("speculators.train.utils.git_diff", return_value=""):
+            save_train_command(str(tmp_path))
+        content = (tmp_path / "speculators.patch").read_text()
+        assert content.startswith("# repo: ")
+        assert "# git diff failed" not in content
+        assert "(dirty)" not in content
+
 
 # ---------------------------------------------------------------------------
 # _copy_train_command tests (checkpointer)

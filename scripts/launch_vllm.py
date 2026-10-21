@@ -310,10 +310,13 @@ def _save_vllm_command(
     prov_dir: Path,
     cmd: list[str],
     sha: str,
-    diff: str,
+    diff: str | None,
     vllm_ver: str,
 ) -> None:
-    sha_label = f"{sha} (dirty)" if diff else sha
+    if diff is None:
+        sha_label = f"{sha} (diff unavailable)"
+    else:
+        sha_label = f"{sha} (dirty)" if diff else sha
     ts = datetime.datetime.now(tz=datetime.UTC).isoformat()
     header = "\n".join(
         [
@@ -333,11 +336,12 @@ def _save_vllm_patch(
     prov_dir: Path,
     vllm_repo: str | None,
     sha: str,
-    diff: str,
+    diff: str | None,
     vllm_ver: str,
 ) -> None:
     if vllm_repo:
-        content = f"# repo: {vllm_repo} ({sha})\n{diff}\n"
+        body = "# git diff failed" if diff is None else diff
+        content = f"# repo: {vllm_repo} ({sha})\n{body}\n"
     else:
         content = f"# vllm {vllm_ver} (wheel install, no git repo found)\n"
     atomic_write(prov_dir / "vllm.patch", content)
