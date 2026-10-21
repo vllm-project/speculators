@@ -12,6 +12,7 @@ import torch
 from torch.utils.data import DataLoader
 
 from hs_connectors import FileTransfer, HiddenStatesTransfer
+from speculators.data_generation.vllm_client import validate_vllm_model
 from speculators.train.data import (
     ArrowDataset,
     SpeculatorsDataset,
@@ -144,6 +145,7 @@ def create_train_val_loaders(
     source_transfer = transfer or FileTransfer(train_records.datapath / "hidden_states")
     hidden_states_source: HiddenStatesSource
     if on_missing == "generate":
+        validate_vllm_model(vllm_endpoint, verifier_name_or_path)
         hidden_states_source = VllmHiddenStatesSource(
             transfer=source_transfer,
             vllm_endpoint=vllm_endpoint,

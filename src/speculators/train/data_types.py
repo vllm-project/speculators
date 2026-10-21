@@ -29,3 +29,11 @@ class DatasetRecord:
             storage_index=storage_index,
             messages=row.get("messages"),
         )
+
+
+@dataclass(frozen=True)
+class GenerationReceipt:
+    """Handle and transfer parameters returned by one vLLM request."""
+
+    handle: str
+    transfer_params: dict[str, Any]

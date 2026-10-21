@@ -1,7 +1,10 @@
 """Unit tests for data processing in speculators.train.data."""
 
+import asyncio
 import logging
 from pathlib import Path
+from types import SimpleNamespace
+from typing import cast
 
 import pytest
 import torch
@@ -251,12 +254,39 @@ class _SequenceTransfer:
         self.deleted.append(handle)
 
 
+class _QueuedAsyncOpenAI:
+    """Fake AsyncOpenAI client which returns queued handles in request order."""
+
+    def __init__(self, handles):
+        self.handles = iter(handles)
+        self.requests: list[list[int]] = []
+        self.active_requests = 0
+        self.max_active_requests = 0
+        self.completions = self
+
+    async def create(self, *, prompt, **_kwargs):
+        self.requests.append(prompt)
+        self.active_requests += 1
+        self.max_active_requests = max(self.max_active_requests, self.active_requests)
+        await asyncio.sleep(0)
+        self.active_requests -= 1
+        handle = next(self.handles)
+        return SimpleNamespace(
+            prompt_token_ids=prompt,
+            kv_transfer_params={"handle": handle},
+        )
+
+    async def close(self):
+        return None
+
+
 def _make_generation_dataset(
     tmp_path: Path,
     transfer: _SequenceTransfer,
     num_records: int = 1,
     **kwargs,
 ) -> SpeculatorsDataset:
+    handles = kwargs.pop("handles", ())
     ds = Dataset.from_dict(
         {
             "input_ids": [[1, 2, 3]] * num_records,
@@ -284,7 +314,7 @@ def _make_generation_dataset(
         hidden_size=4,
         num_target_layers=kwargs.pop("num_target_layers", 1),
     )
-    source.client = object()  # type: ignore[assignment]
+    source.client = _QueuedAsyncOpenAI(handles)  # type: ignore[assignment]
     return dataset
 
 
@@ -334,15 +364,35 @@ def _generated_sample(num_layers: int, hidden_size: int = 4) -> dict[str, torch.
     }
 
 
-def test_speculators_dataset_getitems_builds_collated_batch(tmp_path, monkeypatch):
-    transfer = _SequenceTransfer([_valid_generated_sample()])
-    dataset = _make_generation_dataset(tmp_path, transfer)
-    handles = iter(["handle"])
-    monkeypatch.setattr(
-        source_module,
-        "generate_hidden_states",
-        lambda *_args, **_kwargs: _next_generation_result(handles),
+def test_vllm_source_workers_overlap_requests():
+    source = source_module.VllmHiddenStatesSource(
+        transfer=_SequenceTransfer(  # type: ignore[arg-type]
+            [_valid_generated_sample()] * 2
+        ),
+        model="model",
+        generation_validation_retries=0,
     )
+    client = _QueuedAsyncOpenAI(["0", "1"])
+    source.client = client  # type: ignore[assignment]
+    records = [
+        DatasetRecord(
+            input_ids=torch.tensor([1, 2, 3]),
+            loss_mask=torch.ones(3, dtype=torch.bool),
+            seq_len=3,
+            storage_index=index,
+        )
+        for index in range(2)
+    ]
+
+    source.get_batch(records)
+    source.close()
+
+    assert client.max_active_requests == 2
+
+
+def test_speculators_dataset_getitems_builds_collated_batch(tmp_path):
+    transfer = _SequenceTransfer([_valid_generated_sample()])
+    dataset = _make_generation_dataset(tmp_path, transfer, handles=["handle"])
 
     batch = dataset.__getitems__([0])
 
@@ -435,11 +485,12 @@ def test_vllm_hidden_states_source_close_is_idempotent():
         def __init__(self):
             self.close_calls = 0
 
-        def close(self):
+        async def close(self):
             self.close_calls += 1
 
     source = source_module.VllmHiddenStatesSource(
         transfer=object(),  # type: ignore[arg-type]
+        model="model",
     )
     client = CloseableClient()
     source.client = client  # type: ignore[assignment]
@@ -451,14 +502,7 @@ def test_vllm_hidden_states_source_close_is_idempotent():
     assert source.client is None
 
 
-def _next_generation_result(handles):
-    handle = next(handles)
-    return handle, {"handle": handle}
-
-
-def test_arrow_dataset_retries_nonfinite_read_then_recovers(
-    tmp_path, monkeypatch, caplog
-):
+def test_arrow_dataset_retries_nonfinite_read_then_recovers(tmp_path, caplog):
     corrupt = _valid_generated_sample()
     corrupt["hidden_states"][1, 0, 0] = float("nan")
     transfer = _SequenceTransfer([corrupt, _valid_generated_sample()])
@@ -466,12 +510,7 @@ def test_arrow_dataset_retries_nonfinite_read_then_recovers(
         tmp_path,
         transfer,
         generation_validation_retries=1,
-    )
-    handles = iter(["bad-handle", "good-handle"])
-    monkeypatch.setattr(
-        source_module,
-        "generate_hidden_states",
-        lambda *_args, **_kwargs: _next_generation_result(handles),
+        handles=["bad-handle", "good-handle"],
     )
 
     with caplog.at_level(logging.WARNING, logger="speculators"):
@@ -484,22 +523,23 @@ def test_arrow_dataset_retries_nonfinite_read_then_recovers(
     assert transfer.deleted == ["bad-handle", "good-handle"]
     assert isinstance(arrow_ds.hidden_states, source_module.VllmHiddenStatesSource)
     assert arrow_ds.hidden_states.generation_recovery.consecutive_failures == 0
+    client = arrow_ds.hidden_states.client
+    assert isinstance(client, _QueuedAsyncOpenAI)
+    assert client.requests == [[1, 2, 3], [1, 2, 3]]
 
 
 def test_arrow_dataset_payload_matching_target_layers_feeds_all_entries(
-    tmp_path, monkeypatch
+    tmp_path,
 ):
     num_target_layers = 3
     hidden_size = 4
     sample = _generated_sample(num_target_layers, hidden_size)
     transfer = _SequenceTransfer([sample])
     arrow_ds = _make_generation_dataset(
-        tmp_path, transfer, num_target_layers=num_target_layers
-    )
-    monkeypatch.setattr(
-        source_module,
-        "generate_hidden_states",
-        lambda *_args, **_kwargs: ("handle-0", {"handle": "handle-0"}),
+        tmp_path,
+        transfer,
+        num_target_layers=num_target_layers,
+        handles=["handle-0"],
     )
 
     item = arrow_ds[0]
@@ -513,19 +553,17 @@ def test_arrow_dataset_payload_matching_target_layers_feeds_all_entries(
 
 
 def test_arrow_dataset_payload_one_past_target_layers_drops_trailing(
-    tmp_path, monkeypatch
+    tmp_path,
 ):
     num_target_layers = 3
     hidden_size = 4
     sample = _generated_sample(num_target_layers + 1, hidden_size)
     transfer = _SequenceTransfer([sample])
     arrow_ds = _make_generation_dataset(
-        tmp_path, transfer, num_target_layers=num_target_layers
-    )
-    monkeypatch.setattr(
-        source_module,
-        "generate_hidden_states",
-        lambda *_args, **_kwargs: ("handle-0", {"handle": "handle-0"}),
+        tmp_path,
+        transfer,
+        num_target_layers=num_target_layers,
+        handles=["handle-0"],
     )
 
     item = arrow_ds[0]
@@ -540,9 +578,7 @@ def test_arrow_dataset_payload_one_past_target_layers_drops_trailing(
     )
 
 
-def test_exhausted_generation_produces_locally_empty_zero_loss_batch(
-    tmp_path, monkeypatch, caplog
-):
+def test_exhausted_generation_produces_locally_empty_zero_loss_batch(tmp_path, caplog):
     transfer = _SequenceTransfer(
         [ValueError("checksum mismatch"), ValueError("checksum mismatch")]
     )
@@ -551,12 +587,7 @@ def test_exhausted_generation_produces_locally_empty_zero_loss_batch(
         transfer,
         generation_validation_retries=1,
         max_consecutive_generation_failures=10,
-    )
-    handles = iter(["bad-1", "bad-2"])
-    monkeypatch.setattr(
-        source_module,
-        "generate_hidden_states",
-        lambda *_args, **_kwargs: _next_generation_result(handles),
+        handles=["bad-1", "bad-2"],
     )
 
     with caplog.at_level(logging.WARNING, logger="speculators"):
@@ -575,9 +606,7 @@ def test_exhausted_generation_produces_locally_empty_zero_loss_batch(
     assert collated["hidden_states"].dtype == torch.bfloat16
 
 
-def test_consecutive_generation_failures_trip_circuit_breaker(
-    tmp_path, monkeypatch, caplog
-):
+def test_consecutive_generation_failures_trip_circuit_breaker(tmp_path, caplog):
     transfer = _SequenceTransfer(
         [
             ValueError("bad read 1"),
@@ -591,12 +620,7 @@ def test_consecutive_generation_failures_trip_circuit_breaker(
         transfer,
         generation_validation_retries=1,
         max_consecutive_generation_failures=2,
-    )
-    handles = iter(["bad-1", "bad-2", "bad-3", "bad-4"])
-    monkeypatch.setattr(
-        source_module,
-        "generate_hidden_states",
-        lambda *_args, **_kwargs: _next_generation_result(handles),
+        handles=["bad-1", "bad-2", "bad-3", "bad-4"],
     )
 
     with caplog.at_level(logging.WARNING, logger="speculators"):
@@ -613,7 +637,7 @@ def test_consecutive_generation_failures_trip_circuit_breaker(
     assert "bad read 4" in metadata.error
 
 
-def test_getitems_keeps_valid_samples_when_one_generation_fails(tmp_path, monkeypatch):
+def test_getitems_keeps_valid_samples_when_one_generation_fails(tmp_path):
     transfer = _SequenceTransfer(
         [ValueError("transient read"), _valid_generated_sample()]
     )
@@ -622,12 +646,7 @@ def test_getitems_keeps_valid_samples_when_one_generation_fails(tmp_path, monkey
         transfer,
         num_records=2,
         generation_validation_retries=0,
-    )
-    handles = iter(["bad", "good"])
-    monkeypatch.setattr(
-        source_module,
-        "generate_hidden_states",
-        lambda *_args, **_kwargs: _next_generation_result(handles),
+        handles=["bad", "good"],
     )
 
     collated = dataset.__getitems__([0, 1])
@@ -639,3 +658,7 @@ def test_getitems_keeps_valid_samples_when_one_generation_fails(tmp_path, monkey
     assert metadata.failure_count == 1
     assert collated["loss_mask"].sum() == 3
     assert torch.equal(collated["input_ids"][0, :3], torch.tensor([1, 2, 3]))
+    source = cast("source_module.VllmHiddenStatesSource", dataset.hidden_states)
+    client = source.client
+    assert isinstance(client, _QueuedAsyncOpenAI)
+    assert client.requests == [[1, 2, 3], [1, 2, 3]]
