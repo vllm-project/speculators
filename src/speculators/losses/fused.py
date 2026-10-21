@@ -3,10 +3,13 @@
 One kernel pair serves every fused loss configured in ``losses.utils``: forward
 streams the selected reduction from online-softmax statistics; backward
 recomputes probabilities from the saved per-row statistics and applies the
-closed-form gradient. No ``[T, V]`` intermediate is ever materialized or
-saved -- the memory win over the eager losses. ``OP`` picks the reduction at
-Triton specialization time; ``nla`` and ``lk_hybrid`` are ``[1, T]`` torch
-compositions of the primitives instead of kernel branches.
+closed-form gradient. kl_div/rkl reduce to a single cross term over one
+streaming pass (see ``loss_forward_kernel``); ce/jsd/tv need per-element
+quantities that depend on both final normalizers and stream repeatedly. No
+``[T, V]`` intermediate is ever materialized or saved -- the memory win over
+the eager losses. ``OP`` picks the reduction at Triton specialization time;
+``nla`` and ``lk_hybrid`` are ``[1, T]`` torch compositions of the primitives
+instead of kernel branches.
 
 Per-row gradients (dp = softmax(logits), draft; tp = softmax(targets),
 treated as constant), L the row loss:
@@ -183,6 +186,17 @@ def loss_forward_kernel(  # noqa: C901 -- constexpr OP branches, pruned per inst
 ):
     """One row per program: online softmax stats, then the OP's reduction.
 
+    kl_div/rkl stream both tensors exactly once: the divergence reduces to a
+    single cross term over an online-normalized exponential,
+
+        KL = s/z_t + lse_d - lse_t,   s = sum exp(y - m_t) * (y - x)
+        RKL = s/z_d + lse_t - lse_d,  s = sum exp(x - m_d) * (x - y)
+
+    where s rescales by exp(m_old - m_new) exactly like the sum-exp z, so no
+    second pass over the data is needed (the lse difference contributes
+    const * sum(exp) = const * z). ce/jsd/tv need per-element quantities that
+    depend on both final normalizers and keep the multi-pass structure.
+
     Masked tail lanes can hold inf/nan before ``tl.where`` selects; they
     never enter an accumulator.
     """
@@ -190,13 +204,72 @@ def loss_forward_kernel(  # noqa: C901 -- constexpr OP branches, pruned per inst
     logits_ptr += pid * n_cols
     targets_ptr += pid * n_cols
 
-    m_d, z_d, am_d = _online_stats_argmax(logits_ptr, n_cols, BLOCK_SIZE)
-    lse_d = m_d + tl.log(z_d)
-    tl.store(stats_ptr + 0 * stats_row + pid, m_d)
-    tl.store(stats_ptr + 1 * stats_row + pid, z_d)
-    tl.store(stats_ptr + 5 * stats_row + pid, am_d.to(tl.float32))  # type: ignore[attr-defined]
-
-    if OP == _OP_CE:
+    if OP == _OP_KL or OP == _OP_RKL:  # noqa: PLR1714, SIM109
+        m_d = float("-inf")
+        z_d = 0.0
+        am_d = 0
+        m_t = float("-inf")
+        z_t = 0.0
+        am_t = 0
+        s = 0.0
+        for i in range(0, n_cols, BLOCK_SIZE):
+            offsets = i + tl.arange(0, BLOCK_SIZE)
+            mask = offsets < n_cols
+            x = tl.load(logits_ptr + offsets, mask=mask, other=float("-inf")).cast(
+                tl.float32
+            )
+            y = tl.load(targets_ptr + offsets, mask=mask, other=float("-inf")).cast(
+                tl.float32
+            )
+            # draft online stats (max, sum-exp, argmax; strict > keeps the
+            # first occurrence, the torch.argmax convention)
+            bmax_d = tl.max(tl.where(mask, x, float("-inf")))
+            update_d = bmax_d > m_d
+            am_d = tl.where(update_d, i + tl.argmax(x, axis=0), am_d)
+            m_d_new = tl.maximum(m_d, bmax_d)
+            z_d = z_d * tl.exp(m_d - m_d_new) + tl.sum(
+                tl.where(mask, tl.exp(x - m_d_new), 0.0)
+            )
+            # target online stats
+            bmax_t = tl.max(tl.where(mask, y, float("-inf")))
+            update_t = bmax_t > m_t
+            am_t = tl.where(update_t, i + tl.argmax(y, axis=0), am_t)
+            m_t_new = tl.maximum(m_t, bmax_t)
+            z_t = z_t * tl.exp(m_t - m_t_new) + tl.sum(
+                tl.where(mask, tl.exp(y - m_t_new), 0.0)
+            )
+            # the cross term, rescaled to the new running max like z
+            if OP == _OP_KL:
+                s = s * tl.exp(m_t - m_t_new) + tl.sum(
+                    tl.where(mask, tl.exp(y - m_t_new) * (y - x), 0.0)
+                )
+            else:
+                s = s * tl.exp(m_d - m_d_new) + tl.sum(
+                    tl.where(mask, tl.exp(x - m_d_new) * (x - y), 0.0)
+                )
+            m_d = m_d_new
+            m_t = m_t_new
+        lse_d = m_d + tl.log(z_d)
+        lse_t = m_t + tl.log(z_t)
+        tl.store(stats_ptr + 0 * stats_row + pid, m_d)
+        tl.store(stats_ptr + 1 * stats_row + pid, z_d)
+        tl.store(stats_ptr + 2 * stats_row + pid, m_t)
+        tl.store(stats_ptr + 3 * stats_row + pid, z_t)
+        tl.store(stats_ptr + 5 * stats_row + pid, am_d.to(tl.float32))  # type: ignore[attr-defined]
+        tl.store(stats_ptr + 6 * stats_row + pid, am_t.to(tl.float32))  # type: ignore[attr-defined]
+        L = (
+            s / z_t + lse_d - lse_t
+            if OP == _OP_KL
+            else s / z_d + lse_t - lse_d
+        )
+        tl.store(loss_ptr + pid, L)
+        tl.store(stats_ptr + 4 * stats_row + pid, L)
+    elif OP == _OP_CE:
+        m_d, z_d, am_d = _online_stats_argmax(logits_ptr, n_cols, BLOCK_SIZE)
+        lse_d = m_d + tl.log(z_d)
+        tl.store(stats_ptr + 0 * stats_row + pid, m_d)
+        tl.store(stats_ptr + 1 * stats_row + pid, z_d)
+        tl.store(stats_ptr + 5 * stats_row + pid, am_d.to(tl.float32))  # type: ignore[attr-defined]
         # Only the target argmax is needed; no target softmax stats.
         best_val = float("-inf")
         best_idx = 0
@@ -218,6 +291,11 @@ def loss_forward_kernel(  # noqa: C901 -- constexpr OP branches, pruned per inst
         tl.store(stats_ptr + 4 * stats_row + pid, best_idx.to(tl.float32))  # type: ignore[attr-defined]
         tl.store(stats_ptr + 6 * stats_row + pid, best_idx.to(tl.float32))  # type: ignore[attr-defined]
     else:
+        m_d, z_d, am_d = _online_stats_argmax(logits_ptr, n_cols, BLOCK_SIZE)
+        lse_d = m_d + tl.log(z_d)
+        tl.store(stats_ptr + 0 * stats_row + pid, m_d)
+        tl.store(stats_ptr + 1 * stats_row + pid, z_d)
+        tl.store(stats_ptr + 5 * stats_row + pid, am_d.to(tl.float32))  # type: ignore[attr-defined]
         m_t, z_t, am_t = _online_stats_argmax(targets_ptr, n_cols, BLOCK_SIZE)
         lse_t = m_t + tl.log(z_t)
         tl.store(stats_ptr + 2 * stats_row + pid, m_t)
@@ -235,11 +313,7 @@ def loss_forward_kernel(  # noqa: C901 -- constexpr OP branches, pruned per inst
             ltp = y - lse_t
             dp = tl.exp(ldp)
             tp = tl.exp(ltp)
-            if OP == _OP_KL:
-                acc += tl.sum(tl.where(mask, tp * (ltp - ldp), 0.0))
-            elif OP == _OP_RKL:
-                acc += tl.sum(tl.where(mask, dp * (ldp - ltp), 0.0))
-            elif OP == _OP_JSD:
+            if OP == _OP_JSD:
                 lmp = _log_mix(ldp, ltp)
                 acc += tl.sum(tl.where(mask, dp * (ldp - lmp), 0.0))
                 extra += tl.sum(tl.where(mask, tp * (ltp - lmp), 0.0))
@@ -247,11 +321,7 @@ def loss_forward_kernel(  # noqa: C901 -- constexpr OP branches, pruned per inst
                 acc += tl.sum(tl.where(mask, tl.minimum(dp, tp), 0.0))
                 extra += tl.sum(tl.where(mask & (dp <= tp), dp, 0.0))
 
-        # Lint exemptions: `in`/merged compares aren't constexpr-foldable here.
-        if OP == _OP_KL or OP == _OP_RKL:  # noqa: PLR1714, SIM109
-            tl.store(loss_ptr + pid, acc)
-            tl.store(stats_ptr + 4 * stats_row + pid, acc)
-        elif OP == _OP_JSD:
+        if OP == _OP_JSD:
             tl.store(loss_ptr + pid, 0.5 * (acc + extra))
             tl.store(stats_ptr + 4 * stats_row + pid, acc)
         elif OP == _OP_TV:
