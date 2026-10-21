@@ -56,6 +56,20 @@ def _all_reduce_metrics(metrics: dict[str, torch.Tensor]) -> dict[str, torch.Ten
     return dict(zip(keys, stacked, strict=True))
 
 
+def _metrics_to_host(metrics: dict[str, torch.Tensor]) -> dict[str, float]:
+    """Read *metrics* back to Python floats with one device-to-host copy.
+
+    ``v.item()`` per entry is one synchronous copy each, and there are a few
+    dozen per logged step. Stacking first pays for a single transfer; the
+    values are 0-dim floats either way, so the results are identical.
+    """
+    if not metrics:
+        return {}
+    keys = list(metrics)
+    stacked = torch.stack([metrics[k].float().reshape(()) for k in keys])
+    return dict(zip(keys, stacked.tolist(), strict=True))
+
+
 class _StepTimer:
     # Each mark()/now() forces an accelerator.synchronize to capture true GPU time.
     # This serialises the CUDA pipeline, so profiled steps are slower; keep
@@ -581,7 +595,7 @@ class Trainer:
                 if self.is_distributed:
                     metrics = _all_reduce_metrics(metrics)
 
-                metrics = {k: v.item() for k, v in metrics.items()}
+                metrics = _metrics_to_host(metrics)
                 world_size = dist.get_world_size() if self.is_distributed else 1
                 metrics = normalize_counted_metrics(metrics, world_size)
                 lr_info = (
@@ -666,7 +680,7 @@ class Trainer:
         if accumulated:
             if self.is_distributed:
                 accumulated = _all_reduce_metrics(accumulated)
-            val_metrics = {k: v.item() for k, v in accumulated.items()}
+            val_metrics = _metrics_to_host(accumulated)
 
         world_size = dist.get_world_size() if self.is_distributed else 1
         val_metrics = {k: v / num_batches for k, v in val_metrics.items()}
