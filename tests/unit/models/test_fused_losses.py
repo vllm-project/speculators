@@ -149,6 +149,63 @@ def test_compiles_fullgraph(name, eager_fn, fused_name):
     assert logits.grad is not None
     assert torch.isfinite(logits.grad).all()
 
+    # the argmax-returning variant must trace too: the model forward compiles
+    # the metrics path through it. The indices are exact; the loss value can
+    # reassociate the fp ops composed around the kernels (lk_hybrid blends two
+    # kernel outputs), so it gets the loss tolerance rather than equality.
+    compiled_am = torch.compile(
+        lambda a, b: fused_fn(a, b, return_argmax=True), fullgraph=True
+    )
+    loss_am, pred_ids, target_ids = compiled_am(logits, targets)
+    torch.testing.assert_close(loss_am, fused_fn(logits, targets), **LOSS_TOL)
+    assert torch.equal(pred_ids, torch.argmax(logits, dim=-1))
+    assert torch.equal(target_ids, torch.argmax(targets, dim=-1))
+
+
+@requires_accelerator
+@pytest.mark.parametrize(
+    ("name", "eager_fn", "fused_name"), CASES, ids=[c[0] for c in CASES]
+)
+def test_return_argmax_matches_torch(name, eager_fn, fused_name):
+    """``return_argmax`` reproduces torch.argmax exactly, ties included.
+
+    Accuracy metrics consume these indices, so the tie-breaking (first
+    occurrence) has to match torch, and the eager and fused paths have to
+    agree with each other so reported metrics do not depend on the loss
+    implementation.
+    """
+    fused_losses = pytest.importorskip("speculators.losses.fused")
+    fused_fn = getattr(fused_losses, fused_name)
+
+    def check(logits, targets):
+        loss, pred_ids, target_ids = fused_fn(logits, targets, return_argmax=True)
+        assert pred_ids.dtype == torch.int64
+        assert target_ids.dtype == torch.int64
+        torch.testing.assert_close(loss, fused_fn(logits, targets), **LOSS_TOL)
+        assert torch.equal(pred_ids, torch.argmax(logits, dim=-1))
+        assert torch.equal(target_ids, torch.argmax(targets, dim=-1))
+        _, eager_pred, eager_target = eager_fn(logits, targets, return_argmax=True)
+        assert torch.equal(pred_ids, eager_pred)
+        assert torch.equal(target_ids, eager_target)
+
+    # bf16 quantization plus deliberate max ties, within one reduction block
+    # and across blocks (Qwen3's 151936 vocab streams in many blocks)
+    torch.manual_seed(4)
+    logits = (torch.randn(1, 64, 151936, device=DEVICE) * 3).bfloat16()
+    targets = (torch.randn(1, 64, 151936, device=DEVICE) * 3).bfloat16()
+    logits[0, ::4, 100] = logits[0, ::4, 200] = 50.0
+    targets[0, ::4, 300] = targets[0, ::4, 400] = 50.0
+    logits[0, 1::4, 100] = logits[0, 1::4, 60000] = 50.0
+    check(logits, targets)
+
+    # fp32, small vocab (single block), ties at the max
+    torch.manual_seed(5)
+    logits = torch.randn(1, 16, 512, device=DEVICE)
+    targets = torch.randn(1, 16, 512, device=DEVICE)
+    logits[0, ::2, 5] = logits[0, ::2, 6] = 12.0
+    targets[0, ::2, 7] = targets[0, ::2, 8] = 12.0
+    check(logits, targets)
+
 
 @requires_cuda
 def test_ce_releases_targets_before_backward():

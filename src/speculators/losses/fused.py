@@ -2,7 +2,7 @@
 
 One kernel pair serves every fused loss configured in ``losses.utils``: forward
 streams the selected reduction from online-softmax statistics; backward
-recomputes probabilities from five saved scalars per row and applies the
+recomputes probabilities from the saved per-row statistics and applies the
 closed-form gradient. No ``[T, V]`` intermediate is ever materialized or
 saved -- the memory win over the eager losses. ``OP`` picks the reduction at
 Triton specialization time; ``nla`` and ``lk_hybrid`` are ``[1, T]`` torch
@@ -85,8 +85,11 @@ _OP_TV = tl.constexpr(4)
 
 # stats [_N_STATS, n_rows]: [0]/[1] draft row max / sum-exp, [2]/[3] same for
 # targets (unused by ce), [4] per-OP -- kl_div/rkl: row loss L | jsd:
-# KL(dp||mix) | tv: s_s | ce: argmax as float32 (exact: vocab < 2**24).
-_N_STATS = 5
+# KL(dp||mix) | tv: s_s | ce: argmax as float32 (exact: vocab < 2**24),
+# [5]/[6] draft/target argmax as float32 (same exactness; tracked during the
+# stats passes the reduction already pays for, so accuracy metrics need no
+# extra full-vocab reads).
+_N_STATS = 7
 
 
 def _tile_configs():
@@ -133,19 +136,30 @@ _autotune_tile = triton.autotune(
 
 
 @triton.jit
-def _online_stats(row_ptr, n_cols, BLOCK_SIZE: tl.constexpr):
-    """Online max (m) and sum-exp (d) over one row."""
+def _online_stats_argmax(row_ptr, n_cols, BLOCK_SIZE: tl.constexpr):
+    """Online max (m), sum-exp (d), and argmax over one row.
+
+    ``tl.argmax`` keeps the first occurrence of the max and the cross-block
+    update uses strict ``>``, so the result matches ``torch.argmax``'s
+    tie-breaking. Masked tail lanes load as -inf and never win.
+    """
     m = float("-inf")
     d = 0.0
+    best_val = float("-inf")
+    best_idx = 0
     for i in range(0, n_cols, BLOCK_SIZE):
         offsets = i + tl.arange(0, BLOCK_SIZE)
         mask = offsets < n_cols
         x = tl.load(row_ptr + offsets, mask=mask, other=float("-inf")).cast(tl.float32)
         block_max = tl.max(tl.where(mask, x, float("-inf")))
+        block_arg = tl.argmax(x, axis=0)
         m_new = tl.maximum(m, block_max)
         d = d * tl.exp(m - m_new) + tl.sum(tl.where(mask, tl.exp(x - m_new), 0.0))
         m = m_new
-    return m, d
+        update = block_max > best_val
+        best_idx = tl.where(update, i + block_arg, best_idx)
+        best_val = tl.maximum(best_val, block_max)
+    return m, d, best_idx
 
 
 @triton.jit
@@ -176,10 +190,11 @@ def loss_forward_kernel(  # noqa: C901 -- constexpr OP branches, pruned per inst
     logits_ptr += pid * n_cols
     targets_ptr += pid * n_cols
 
-    m_d, z_d = _online_stats(logits_ptr, n_cols, BLOCK_SIZE)
+    m_d, z_d, am_d = _online_stats_argmax(logits_ptr, n_cols, BLOCK_SIZE)
     lse_d = m_d + tl.log(z_d)
     tl.store(stats_ptr + 0 * stats_row + pid, m_d)
     tl.store(stats_ptr + 1 * stats_row + pid, z_d)
+    tl.store(stats_ptr + 5 * stats_row + pid, am_d.to(tl.float32))  # type: ignore[attr-defined]
 
     if OP == _OP_CE:
         # Only the target argmax is needed; no target softmax stats.
@@ -201,11 +216,13 @@ def loss_forward_kernel(  # noqa: C901 -- constexpr OP branches, pruned per inst
         tl.store(loss_ptr + pid, lse_d - logit_at_target)
         # mypy reads traced Triton code as Python and types best_idx as int
         tl.store(stats_ptr + 4 * stats_row + pid, best_idx.to(tl.float32))  # type: ignore[attr-defined]
+        tl.store(stats_ptr + 6 * stats_row + pid, best_idx.to(tl.float32))  # type: ignore[attr-defined]
     else:
-        m_t, z_t = _online_stats(targets_ptr, n_cols, BLOCK_SIZE)
+        m_t, z_t, am_t = _online_stats_argmax(targets_ptr, n_cols, BLOCK_SIZE)
         lse_t = m_t + tl.log(z_t)
         tl.store(stats_ptr + 2 * stats_row + pid, m_t)
         tl.store(stats_ptr + 3 * stats_row + pid, z_t)
+        tl.store(stats_ptr + 6 * stats_row + pid, am_t.to(tl.float32))  # type: ignore[attr-defined]
 
         acc = 0.0
         extra = 0.0
@@ -309,6 +326,12 @@ class _FusedLoss(torch.autograd.Function):
 
     Targets intentionally receive no gradient; use the eager implementation when
     target gradients are required.
+
+    Always returns ``(loss, pred_ids, target_ids)``. The index tensors are
+    by-products of the reduction's streaming passes (stats rows 5/6, exact for
+    vocab < 2**24) and are marked non-differentiable; the thin ``fused_*``
+    wrappers drop them unless ``return_argmax`` is set, so callers that want
+    accuracy metrics get them without re-reading the full-vocab tensors.
     """
 
     @staticmethod
@@ -333,10 +356,13 @@ class _FusedLoss(torch.autograd.Function):
         )
         ctx.op = op
         ctx.shape = (B, T, V)
-        return loss.view(B, T)
+        pred_ids = stats[5].to(torch.int64)
+        target_ids = stats[6].to(torch.int64)
+        ctx.mark_non_differentiable(pred_ids, target_ids)
+        return loss.view(B, T), pred_ids.view(B, T), target_ids.view(B, T)
 
     @staticmethod
-    def backward(ctx, grad_output):
+    def backward(ctx, grad_output, grad_pred_ids, grad_target_ids):  # noqa: ARG004
         logits_flat, targets_flat, stats = ctx.saved_tensors
         B, T, V = ctx.shape
         grad_in = torch.empty_like(logits_flat)
@@ -350,47 +376,70 @@ class _FusedLoss(torch.autograd.Function):
             V,
             OP=ctx.op,
         )
+        # pred_ids/target_ids are marked non-differentiable; their grad slots
+        # arrive as None
         return grad_in.view(B, T, V), None, None
 
 
 _NLA_EPS = 1e-5
 
 
-def fused_kl_div_loss(logits, targets):
-    """Per-position forward KL ``[1, T]``; fused twin of ``kl_div_loss``."""
-    return _FusedLoss.apply(logits, targets, _OP_KL.value)
+def _with_argmax(apply_result, return_argmax):
+    """Slice _FusedLoss output down to the loss unless the argmax was asked for."""
+    loss, pred_ids, target_ids = apply_result
+    if return_argmax:
+        return loss, pred_ids, target_ids
+    return loss
 
 
-def fused_reverse_kl_div_loss(logits, targets):
+def fused_kl_div_loss(logits, targets, return_argmax: bool = False):
+    """Per-position forward KL ``[1, T]``; fused twin of ``kl_div_loss``.
+
+    With ``return_argmax``: ``(loss, pred_ids, target_ids)``, the argmaxes the
+    reduction already computed while streaming both tensors.
+    """
+    return _with_argmax(_FusedLoss.apply(logits, targets, _OP_KL.value), return_argmax)
+
+
+def fused_reverse_kl_div_loss(logits, targets, return_argmax: bool = False):
     """Per-position reverse KL ``[1, T]``; fused twin of ``reverse_kl_div_loss``."""
-    return _FusedLoss.apply(logits, targets, _OP_RKL.value)
+    return _with_argmax(_FusedLoss.apply(logits, targets, _OP_RKL.value), return_argmax)
 
 
-def fused_js_div_loss(logits, targets):
+def fused_js_div_loss(logits, targets, return_argmax: bool = False):
     """Per-position JSD ``[1, T]``; fused twin of ``js_div_loss``."""
-    return _FusedLoss.apply(logits, targets, _OP_JSD.value)
+    return _with_argmax(_FusedLoss.apply(logits, targets, _OP_JSD.value), return_argmax)
 
 
-def fused_ce_loss(logits, targets):
+def fused_ce_loss(logits, targets, return_argmax: bool = False):
     """Per-position CE vs argmax(targets) ``[1, T]``; fused twin of ``ce_loss``."""
-    return _FusedLoss.apply(logits, targets, _OP_CE.value)
+    return _with_argmax(_FusedLoss.apply(logits, targets, _OP_CE.value), return_argmax)
 
 
-def fused_tv_loss(logits, targets):
+def fused_tv_loss(logits, targets, return_argmax: bool = False):
     """Per-position TV distance ``[1, T]`` from draft/target logits (fused Triton)."""
-    return _FusedLoss.apply(logits, targets, _OP_TV.value)
+    return _with_argmax(_FusedLoss.apply(logits, targets, _OP_TV.value), return_argmax)
 
 
-def fused_nla_loss(logits, targets):
+def fused_nla_loss(logits, targets, return_argmax: bool = False):
     """Per-position negative-log-acceptance ``[1, T] = -log(alpha)``; composes on TV."""
-    return -torch.log((1.0 - fused_tv_loss(logits, targets)).clamp_min(_NLA_EPS))
+    res = fused_tv_loss(logits, targets, return_argmax=return_argmax)
+    if return_argmax:
+        tv, pred_ids, target_ids = res
+        return -torch.log((1.0 - tv).clamp_min(_NLA_EPS)), pred_ids, target_ids
+    return -torch.log((1.0 - res).clamp_min(_NLA_EPS))
 
 
-def fused_lk_hybrid_loss(logits, targets, eta: float = 3.0):
+def fused_lk_hybrid_loss(
+    logits, targets, eta: float = 3.0, return_argmax: bool = False
+):
     """Per-position hybrid LK ``[1, T]``; fused KL + TV composed as in
     ``lk_hybrid_loss`` (blend weight detached).
     """
-    kl = fused_kl_div_loss(logits, targets)
+    kl = fused_kl_div_loss(logits, targets, return_argmax=return_argmax)
     tv = fused_tv_loss(logits, targets)
     weight = torch.exp(-eta * (1.0 - tv).detach())
+    if return_argmax:
+        kl, pred_ids, target_ids = kl
+        return weight * kl + (1.0 - weight) * tv, pred_ids, target_ids
     return weight * kl + (1.0 - weight) * tv

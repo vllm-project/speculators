@@ -88,17 +88,23 @@ def compute_metrics(
         (1, seq_len), ttt_step, device=s_logits.device, dtype=torch.long
     )
 
-    s_loss, term_losses = compound_loss(
+    s_loss, term_losses, argmaxes = compound_loss(
         s_logits,
         s_targets,
         s_loss_mask,
         pos_idx,
         loss_config=loss_config,
         decay_fn=partial(exp_loss_decay, gamma=ttt_step_loss_decay),
+        return_argmax=True,
     )
 
-    pred_ids = torch.argmax(s_logits, dim=-1)
-    target_ids = torch.argmax(s_targets, dim=-1)
+    if argmaxes is not None:
+        # The loss kernels track both argmaxes while streaming the full-vocab
+        # tensors; reusing them avoids two extra [1, seq, vocab] reads.
+        pred_ids, target_ids = argmaxes
+    else:
+        pred_ids = torch.argmax(s_logits, dim=-1)
+        target_ids = torch.argmax(s_targets, dim=-1)
 
     full_correct, full_total, cond_correct, cond_total = compute_accuracy_single_step(
         pred_ids, target_ids, s_loss_mask, s_prev_correct

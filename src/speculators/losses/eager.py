@@ -8,53 +8,79 @@ import torch
 _NLA_EPS = 1e-5
 
 
+def _raw_argmaxes(logits, targets, return_argmax):
+    """Argmax of the raw inputs, before any softmax is formed.
+
+    exp can underflow distinct logits to the same float, so argmaxing the
+    softmaxed view could break ties differently than argmaxing the raw input;
+    the fused kernels argmax the raw input, and this matches them.
+    """
+    if return_argmax:
+        return torch.argmax(logits, dim=-1), torch.argmax(targets, dim=-1)
+    return None
+
+
+def _with_argmaxes(elementwise_loss, argmaxes):
+    if argmaxes is not None:
+        return elementwise_loss, argmaxes[0], argmaxes[1]
+    return elementwise_loss
+
+
 def kl_div_loss(
     logits: torch.Tensor,  # shape: [1, seq_len, draft_vocab_size]
     targets: torch.Tensor,  # shape: [1, seq_len, draft_vocab_size]
+    return_argmax: bool = False,
 ):
     """Compute per-position KL divergence from draft logits to target logits.
 
     Args:
         logits: Draft model logits (log-softmax applied internally).
         targets: Target model logits (softmax applied internally).
+        return_argmax: Also return ``(pred_ids, target_ids)`` alongside the loss.
 
     Returns:
-        Per-position KL divergence with shape [1, seq_len].
+        Per-position KL divergence with shape [1, seq_len], plus the argmaxes
+        of both raw inputs when ``return_argmax`` is set.
     """
+    argmaxes = _raw_argmaxes(logits, targets, return_argmax)
     logits = torch.nn.functional.log_softmax(logits, dim=-1, dtype=torch.float32)
     target_p = torch.nn.functional.softmax(targets, dim=-1, dtype=torch.float32)
     elementwise_loss = torch.nn.functional.kl_div(
         logits, target_p, reduction="none", log_target=False
     ).sum(dim=-1)  # shape: [1, seq_len]
 
-    return elementwise_loss  # noqa: RET504
+    return _with_argmaxes(elementwise_loss, argmaxes)
 
 
 def reverse_kl_div_loss(
     logits: torch.Tensor,  # shape: [1, seq_len, draft_vocab_size]
     targets: torch.Tensor,  # shape: [1, seq_len, draft_vocab_size]
+    return_argmax: bool = False,
 ):
     """Compute per-position reverse KL divergence from draft logits to target logits.
 
     Args:
         logits: Draft model logits (log-softmax applied internally).
         targets: Target model logits (log-softmax applied internally).
+        return_argmax: Also return ``(pred_ids, target_ids)`` alongside the loss.
 
     Returns:
         Per-position reverse KL divergence with shape [1, seq_len].
     """
+    argmaxes = _raw_argmaxes(logits, targets, return_argmax)
     draft_logq = torch.nn.functional.log_softmax(logits, dim=-1, dtype=torch.float32)
     target_logp = torch.nn.functional.log_softmax(targets, dim=-1, dtype=torch.float32)
     elementwise_loss = torch.nn.functional.kl_div(
         target_logp, draft_logq, reduction="none", log_target=True
     ).sum(dim=-1)  # shape: [1, seq_len]
 
-    return elementwise_loss  # noqa: RET504
+    return _with_argmaxes(elementwise_loss, argmaxes)
 
 
 def js_div_loss(
     logits: torch.Tensor,  # shape: [1, seq_len, draft_vocab_size]
     targets: torch.Tensor,  # shape: [1, seq_len, draft_vocab_size]
+    return_argmax: bool = False,
 ):
     """Compute per-position Jensen-Shannon divergence between draft and target.
 
@@ -70,10 +96,12 @@ def js_div_loss(
     Args:
         logits: Draft model logits (log-softmax applied internally).
         targets: Target model logits (log-softmax applied internally).
+        return_argmax: Also return ``(pred_ids, target_ids)`` alongside the loss.
 
     Returns:
         Per-position JS divergence with shape [1, seq_len].
     """
+    argmaxes = _raw_argmaxes(logits, targets, return_argmax)
     draft_logq = torch.nn.functional.log_softmax(logits, dim=-1, dtype=torch.float32)
     target_logp = torch.nn.functional.log_softmax(targets, dim=-1, dtype=torch.float32)
     # log m = log((p + q) / 2), computed in log space for stability
@@ -86,24 +114,29 @@ def js_div_loss(
     ).sum(dim=-1)
     elementwise_loss = 0.5 * (kl_target_to_mix + kl_draft_to_mix)  # [1, seq_len]
 
-    return elementwise_loss  # noqa: RET504
+    return _with_argmaxes(elementwise_loss, argmaxes)
 
 
 def ce_loss(
     logits: torch.Tensor,  # shape: [1, seq_len, draft_vocab_size]
     targets: torch.Tensor,  # shape: [1, seq_len, draft_vocab_size]
+    return_argmax: bool = False,
 ):
     """Compute per-position cross-entropy loss using argmax of target logits as labels.
 
     Args:
         logits: Draft model logits.
         targets: Target model logits (argmax taken to produce hard labels).
+        return_argmax: Also return ``(pred_ids, target_ids)`` alongside the loss.
 
     Returns:
         Per-position cross-entropy loss with shape [1, seq_len].
     """
     batch_size, seq_len, draft_vocab_size = logits.shape
-    target_ids = torch.argmax(targets, dim=-1)  # shape: [1, seq_len]
+    argmaxes = _raw_argmaxes(logits, targets, return_argmax)
+    target_ids = (
+        argmaxes[1] if return_argmax else torch.argmax(targets, dim=-1)
+    )  # shape: [1, seq_len]
 
     elementwise_loss = torch.nn.functional.cross_entropy(
         logits.reshape(-1, draft_vocab_size),
@@ -112,12 +145,13 @@ def ce_loss(
         ignore_index=-100,
     ).reshape(batch_size, seq_len)
 
-    return elementwise_loss  # noqa: RET504
+    return _with_argmaxes(elementwise_loss, argmaxes)
 
 
 def tv_loss(
     logits: torch.Tensor,  # shape: [1, seq_len, draft_vocab_size]
     targets: torch.Tensor,  # shape: [1, seq_len, draft_vocab_size]
+    return_argmax: bool = False,
 ):
     """Compute per-position total variation (TV) distance from draft to target.
 
@@ -130,21 +164,24 @@ def tv_loss(
     Args:
         logits: Draft model logits (softmax applied internally to form q).
         targets: Target model logits (softmax applied internally to form p).
+        return_argmax: Also return ``(pred_ids, target_ids)`` alongside the loss.
 
     Returns:
         Per-position TV distance with shape [1, seq_len].
     """
+    argmaxes = _raw_argmaxes(logits, targets, return_argmax)
     draft_p = torch.nn.functional.softmax(logits, dim=-1, dtype=torch.float32)
     target_p = torch.nn.functional.softmax(targets, dim=-1, dtype=torch.float32)
     overlap = torch.minimum(draft_p, target_p).sum(dim=-1)  # shape: [1, seq_len]
     elementwise_loss = 1.0 - overlap
 
-    return elementwise_loss  # noqa: RET504
+    return _with_argmaxes(elementwise_loss, argmaxes)
 
 
 def neg_log_acceptance_loss(
     logits: torch.Tensor,  # shape: [1, seq_len, draft_vocab_size]
     targets: torch.Tensor,  # shape: [1, seq_len, draft_vocab_size]
+    return_argmax: bool = False,
 ):
     """Compute per-position negative log-acceptance (LK) loss.
 
@@ -159,22 +196,25 @@ def neg_log_acceptance_loss(
     Args:
         logits: Draft model logits (softmax applied internally to form q).
         targets: Target model logits (softmax applied internally to form p).
+        return_argmax: Also return ``(pred_ids, target_ids)`` alongside the loss.
 
     Returns:
         Per-position negative log-acceptance with shape [1, seq_len].
     """
+    argmaxes = _raw_argmaxes(logits, targets, return_argmax)
     draft_p = torch.nn.functional.softmax(logits, dim=-1, dtype=torch.float32)
     target_p = torch.nn.functional.softmax(targets, dim=-1, dtype=torch.float32)
     overlap = torch.minimum(draft_p, target_p).sum(dim=-1)  # alpha, shape: [1, seq_len]
     elementwise_loss = -torch.log(overlap.clamp_min(_NLA_EPS))
 
-    return elementwise_loss  # noqa: RET504
+    return _with_argmaxes(elementwise_loss, argmaxes)
 
 
 def lk_hybrid_loss(
     logits: torch.Tensor,  # shape: [1, seq_len, draft_vocab_size]
     targets: torch.Tensor,  # shape: [1, seq_len, draft_vocab_size]
     eta: float = 3.0,
+    return_argmax: bool = False,
 ):
     """Compute per-position hybrid LK loss (adaptive KL/TV blend).
 
@@ -198,10 +238,12 @@ def lk_hybrid_loss(
         targets: Target model logits (softmax applied internally to form p).
         eta: Blend temperature; larger shifts toward TV sooner. Default 3.0
             (the paper's best hybrid setting).
+        return_argmax: Also return ``(pred_ids, target_ids)`` alongside the loss.
 
     Returns:
         Per-position hybrid loss with shape [1, seq_len].
     """
+    argmaxes = _raw_argmaxes(logits, targets, return_argmax)
     draft_p = torch.nn.functional.softmax(logits, dim=-1, dtype=torch.float32)
     target_p = torch.nn.functional.softmax(targets, dim=-1, dtype=torch.float32)
     overlap = torch.minimum(draft_p, target_p).sum(dim=-1)  # alpha, shape: [1, seq_len]
@@ -210,4 +252,4 @@ def lk_hybrid_loss(
     weight = torch.exp(-eta * overlap.detach())  # lambda = exp(-eta * sg[alpha])
     elementwise_loss = weight * kl + (1.0 - weight) * tv
 
-    return elementwise_loss  # noqa: RET504
+    return _with_argmaxes(elementwise_loss, argmaxes)

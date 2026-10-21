@@ -124,36 +124,59 @@ def _fused_kernel(name: str):
     return getattr(mod, name)
 
 
-def kl_div_loss(logits: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
-    return _fused_kernel("fused_kl_div_loss")(logits, targets)
+def kl_div_loss(
+    logits: torch.Tensor, targets: torch.Tensor, return_argmax: bool = False
+) -> torch.Tensor:
+    return _fused_kernel("fused_kl_div_loss")(
+        logits, targets, return_argmax=return_argmax
+    )
 
 
-def reverse_kl_div_loss(logits: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
-    return _fused_kernel("fused_reverse_kl_div_loss")(logits, targets)
+def reverse_kl_div_loss(
+    logits: torch.Tensor, targets: torch.Tensor, return_argmax: bool = False
+) -> torch.Tensor:
+    return _fused_kernel("fused_reverse_kl_div_loss")(
+        logits, targets, return_argmax=return_argmax
+    )
 
 
-def js_div_loss(logits: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
-    return _fused_kernel("fused_js_div_loss")(logits, targets)
+def js_div_loss(
+    logits: torch.Tensor, targets: torch.Tensor, return_argmax: bool = False
+) -> torch.Tensor:
+    return _fused_kernel("fused_js_div_loss")(
+        logits, targets, return_argmax=return_argmax
+    )
 
 
-def ce_loss(logits: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
-    return _fused_kernel("fused_ce_loss")(logits, targets)
+def ce_loss(
+    logits: torch.Tensor, targets: torch.Tensor, return_argmax: bool = False
+) -> torch.Tensor:
+    return _fused_kernel("fused_ce_loss")(logits, targets, return_argmax=return_argmax)
 
 
-def tv_loss(logits: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
-    return _fused_kernel("fused_tv_loss")(logits, targets)
+def tv_loss(
+    logits: torch.Tensor, targets: torch.Tensor, return_argmax: bool = False
+) -> torch.Tensor:
+    return _fused_kernel("fused_tv_loss")(logits, targets, return_argmax=return_argmax)
 
 
 def neg_log_acceptance_loss(
-    logits: torch.Tensor, targets: torch.Tensor
+    logits: torch.Tensor, targets: torch.Tensor, return_argmax: bool = False
 ) -> torch.Tensor:
-    return _fused_kernel("fused_nla_loss")(logits, targets)
+    return _fused_kernel("fused_nla_loss")(
+        logits, targets, return_argmax=return_argmax
+    )
 
 
 def lk_hybrid_loss(
-    logits: torch.Tensor, targets: torch.Tensor, eta: float = 3.0
+    logits: torch.Tensor,
+    targets: torch.Tensor,
+    eta: float = 3.0,
+    return_argmax: bool = False,
 ) -> torch.Tensor:
-    return _fused_kernel("fused_lk_hybrid_loss")(logits, targets, eta=eta)
+    return _fused_kernel("fused_lk_hybrid_loss")(
+        logits, targets, eta=eta, return_argmax=return_argmax
+    )
 
 
 _FUSED_LOSS_FN_MAP: dict[str, Callable[[torch.Tensor, torch.Tensor], torch.Tensor]] = {
@@ -179,6 +202,13 @@ _EAGER_LOSS_FN_MAP: dict[str, Callable[[torch.Tensor, torch.Tensor], torch.Tenso
 
 
 _LOSS_FN_MAPS = {"fused": _FUSED_LOSS_FN_MAP, "eager": _EAGER_LOSS_FN_MAP}
+
+# Every known loss can report the draft/target argmaxes alongside the
+# per-position loss (the fused kernels already track them while streaming;
+# the eager ones argmax the raw inputs). Custom callables wired into a
+# LossConfig may not, which loss_function detects via this attribute.
+for _fn in (*_FUSED_LOSS_FN_MAP.values(), *_EAGER_LOSS_FN_MAP.values()):
+    _fn.supports_argmax = True  # type: ignore[attr-defined]
 
 
 def resolve_loss_config(spec: str, implementation: str = "fused") -> LossConfig:
@@ -237,7 +267,15 @@ def compound_loss(
     pos_idx: torch.Tensor,
     loss_config: LossConfig,
     decay_fn: Callable[..., torch.Tensor] | None = None,
-) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
+    return_argmax: bool = False,
+) -> (
+    tuple[torch.Tensor, dict[str, torch.Tensor]]
+    | tuple[
+        torch.Tensor,
+        dict[str, torch.Tensor],
+        tuple[torch.Tensor, torch.Tensor] | None,
+    ]
+):
     """Compute a weighted sum of loss terms.
 
     Each entry in *loss_config* maps a name to ``(loss_fn, weight)``; the
@@ -246,23 +284,35 @@ def compound_loss(
 
     Returns the total loss and a dict of per-term (unweighted) scalar losses
     keyed as ``"{name}_loss"``.  When the config contains a single term the
-    dict is empty (the overall loss already captures it).
+    dict is empty (the overall loss already captures it).  With
+    ``return_argmax`` a third element is appended: ``(pred_ids, target_ids)``
+    from the first term able to report them, or ``None`` when none can (the
+    caller then falls back to explicit argmaxes).
     """
     total = torch.tensor(0.0, device=logits.device, dtype=torch.float32)
     term_losses: dict[str, torch.Tensor] = {}
+    argmaxes = None
     multi = len(loss_config) > 1
     for name, (fn, weight) in loss_config.items():
-        term = loss_function(
+        want_argmax = return_argmax and argmaxes is None
+        result = loss_function(
             logits,
             targets,
             loss_mask,
             pos_idx,
             loss_fn=fn,
             decay_fn=decay_fn,
+            return_argmax=want_argmax,
         )
+        if want_argmax:
+            term, argmaxes = result
+        else:
+            term = result
         if multi:
             term_losses[f"{name}_loss"] = term.detach()
         total = total + weight * term
+    if return_argmax:
+        return total, term_losses, argmaxes
     return total, term_losses
 
 
@@ -273,6 +323,7 @@ def loss_function(
     pos_idx: torch.Tensor,  # shape: [1, seq_len]
     loss_fn: Callable[[torch.Tensor, torch.Tensor], torch.Tensor] = kl_div_loss,
     decay_fn: Callable[..., torch.Tensor] | None = None,
+    return_argmax: bool = False,
 ):
     """Compute masked, optionally position-decayed training loss.
 
@@ -283,11 +334,24 @@ def loss_function(
         pos_idx: Position indices within each speculative block.
         loss_fn: Per-position loss function (default: kl_div_loss).
         decay_fn: Optional position-dependent decay weighting function.
+        return_argmax: When True (and the loss function supports it, see
+            ``supports_argmax``), also return ``(pred_ids, target_ids)`` --
+            the argmaxes the loss computation already visited -- so accuracy
+            metrics need no extra full-vocabulary reads.
 
     Returns:
-        Scalar mean loss across the batch.
+        Scalar mean loss across the batch, plus ``(pred_ids, target_ids)``
+        (or ``None`` when the loss function cannot report them) if
+        ``return_argmax``.
     """
-    elementwise_loss = loss_fn(logits, targets)  # shape: [1, seq_len]
+    argmaxes: tuple[torch.Tensor, torch.Tensor] | None = None
+    if return_argmax and getattr(loss_fn, "supports_argmax", False):
+        elementwise_loss, pred_ids, target_ids = loss_fn(
+            logits, targets, return_argmax=True
+        )
+        argmaxes = (pred_ids, target_ids)
+    else:
+        elementwise_loss = loss_fn(logits, targets)  # shape: [1, seq_len]
 
     loss_mask = loss_mask.to(elementwise_loss.dtype)
     elementwise_loss = elementwise_loss * loss_mask
@@ -301,4 +365,6 @@ def loss_function(
     denominator = loss_mask.sum(dim=1) + _LOSS_REDUCTION_EPS
 
     batch_loss = torch.sum(elementwise_loss, dim=1) / denominator  # shape: [1]
+    if return_argmax:
+        return batch_loss.mean(), argmaxes  # shape: [], (pred, target) | None
     return batch_loss.mean()  # shape: []
