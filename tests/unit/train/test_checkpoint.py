@@ -1,3 +1,4 @@
+import logging
 import os
 import signal
 from pathlib import Path
@@ -288,3 +289,62 @@ def test_graceful_shutdown_saves_interrupted_checkpoint(
     trainer.run_training()
 
     assert "interrupted" in saved_labels
+
+
+def test_maybe_update_best_ignores_nonfinite_val_loss(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+):
+    trainer = _make_minimal_trainer(tmp_path, checkpoint_freq=3, save_best=True)
+    saved_epochs: list[int] = []
+
+    def fake_cp_save_checkpoint(_model, _opt, epoch: int):
+        saved_epochs.append(epoch)
+        (tmp_path / str(epoch)).mkdir(exist_ok=True)
+
+    monkeypatch.setattr(
+        trainer.checkpointer, "save_checkpoint", fake_cp_save_checkpoint
+    )
+
+    best_path = tmp_path / "checkpoint_best"
+    # Nothing finite has been saved yet: NaN/+Inf/-Inf must leave best at inf
+    # and must not create checkpoint_best.
+    with caplog.at_level(logging.WARNING, logger="speculators"):
+        for loss in (float("nan"), float("inf"), float("-inf")):
+            trainer.maybe_update_best(0, {"loss_epoch": loss})
+
+    assert trainer.best_val_loss == float("inf")
+    assert saved_epochs == []
+    assert not best_path.exists()
+    assert not (tmp_path / "0").exists()
+    assert "non-finite" in caplog.text
+
+    # First finite loss becomes best.
+    trainer.maybe_update_best(1, {"loss_epoch": 0.2})
+    assert trainer.best_val_loss == 0.2
+    assert saved_epochs == [1]
+    assert best_path.is_symlink()
+    assert best_path.resolve() == (tmp_path / "1").resolve()
+
+    # A later non-finite loss must not move the symlink off the finite best.
+    caplog.clear()
+    with caplog.at_level(logging.WARNING, logger="speculators"):
+        for epoch, loss in (
+            (2, float("nan")),
+            (3, float("inf")),
+            (4, float("-inf")),
+        ):
+            trainer.maybe_update_best(epoch, {"loss_epoch": loss})
+
+    assert trainer.best_val_loss == 0.2
+    assert saved_epochs == [1]
+    assert best_path.resolve() == (tmp_path / "1").resolve()
+    assert not (tmp_path / "2").exists()
+    assert "non-finite" in caplog.text
+
+    # Worse finite loss is compared to the previous finite best (0.2), not NaN.
+    trainer.maybe_update_best(5, {"loss_epoch": 0.5})
+    assert trainer.best_val_loss == 0.2
+    assert saved_epochs == [1]
+    assert best_path.resolve() == (tmp_path / "1").resolve()
