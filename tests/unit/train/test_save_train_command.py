@@ -164,6 +164,9 @@ class TestCopyTrainCommand:
 
     def test_cleanup_keep_only_best_preserves_train_command(self, tmp_path: Path):
         (tmp_path / "train_command.txt").write_text("content")
+        (tmp_path / "run.yaml").write_text("train: {}\n")
+        (tmp_path / "speculators.patch").write_text("# repo: test\n")
+        (tmp_path / "stray.txt").write_text("delete me")
         (tmp_path / "0").mkdir()
         (tmp_path / "1").mkdir()
         (tmp_path / "1" / "model.safetensors").touch()
@@ -173,4 +176,9 @@ class TestCopyTrainCommand:
         cp.cleanup_keep_only_best(1)
 
         assert (tmp_path / "train_command.txt").exists()
+        assert (tmp_path / "run.yaml").exists()
+        assert (tmp_path / "speculators.patch").exists()
+        assert (tmp_path / "1").is_dir()
+        assert (tmp_path / "checkpoint_best").is_symlink()
         assert not (tmp_path / "0").exists()
+        assert not (tmp_path / "stray.txt").exists()
