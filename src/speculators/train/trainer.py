@@ -4,7 +4,7 @@ import time
 import warnings
 from collections.abc import Callable
 from pathlib import Path
-from typing import Literal, NamedTuple
+from typing import Any, Literal, NamedTuple
 
 import torch
 import torch.distributed as dist
@@ -150,6 +150,94 @@ def _should_sync_recovery(
         or step == total_steps
         or (_RECOVERY_SYNC_INTERVAL > 0 and step % _RECOVERY_SYNC_INTERVAL == 0)
     )
+
+
+class _PrefetchedBatch(NamedTuple):
+    """A batch whose host-to-device copy is already in flight."""
+
+    cpu: dict[str, Any]
+    gpu: dict[str, Any]
+    event: torch.cuda.Event | None
+
+    def wait(self) -> dict[str, Any]:
+        """Make the copy visible to the current stream and return the batch."""
+        if self.event is None:
+            return self.gpu
+        stream = torch.cuda.current_stream()
+        stream.wait_event(self.event)
+        for value in self.gpu.values():
+            if isinstance(value, torch.Tensor):
+                # The tensors were allocated on the copy stream, so the caching
+                # allocator must be told they are now read somewhere else before
+                # it may hand their blocks out again.
+                value.record_stream(stream)
+        return self.gpu
+
+
+class _H2DPrefetcher:
+    """Copy each batch to the device while the previous step is still running.
+
+    ``batch.to(device, non_blocking=True)`` on the compute stream is only
+    asynchronous with respect to the *host*: the copy is queued behind the
+    previous step's kernels, so the first op that reads the batch waits out the
+    whole transfer. A training batch is the hidden states of a full sequence --
+    tens to hundreds of megabytes -- which is milliseconds of otherwise idle
+    device time per step.
+
+    Issuing the copy on a side stream one step early lets it run concurrently
+    with the compute it used to sit behind. The DataLoader pins its batches, so
+    the transfer is a real DMA that needs no host participation; the CPU batch
+    is kept alive alongside the device one so the pinned source cannot be
+    recycled while the copy is in flight.
+    """
+
+    def __init__(self, loader, device: torch.device | int):
+        self._loader = loader
+        self._device = device
+        on_cuda = torch.cuda.is_available() and torch.device(device).type == "cuda"
+        self._stream = torch.cuda.Stream(device=device) if on_cuda else None
+        self._stop = False
+
+    def __len__(self) -> int:
+        return len(self._loader)
+
+    def stop_prefetch(self) -> None:
+        """Do not read ahead past the batch currently being handed out.
+
+        The caller breaks out of the loop on ``max_steps``; without this the
+        iterator would pull -- and copy -- one batch that is never trained on.
+        """
+        self._stop = True
+
+    def _start(self, batch: dict[str, Any] | None) -> _PrefetchedBatch | None:
+        if batch is None:
+            return None
+        if self._stream is None:
+            gpu = {
+                k: v.to(self._device) if isinstance(v, torch.Tensor) else v
+                for k, v in batch.items()
+            }
+            return _PrefetchedBatch(batch, gpu, None)
+        with torch.cuda.stream(self._stream):
+            gpu = {
+                k: v.to(self._device, non_blocking=True)
+                if isinstance(v, torch.Tensor)
+                else v
+                for k, v in batch.items()
+            }
+            event = torch.cuda.Event()
+            event.record(self._stream)
+        return _PrefetchedBatch(batch, gpu, event)
+
+    def __iter__(self):
+        iterator = iter(self._loader)
+        self._stop = False
+        pending = self._start(next(iterator, None))
+        while pending is not None:
+            yield pending
+            # Queued once the consumer is done issuing its step, so the copy
+            # overlaps the work that step left running on the device.
+            pending = None if self._stop else self._start(next(iterator, None))
 
 
 class TrainerConfig(NamedTuple):
@@ -511,9 +599,10 @@ class Trainer:
         # Determine how many batches to skip for mid-epoch resume.
         skip_steps = self._prepare_resume_skip(epoch)
 
-        train_loader = self.train_loader
+        prefetcher = _H2DPrefetcher(self.train_loader, self.local_rank)
+        train_loader: Any = prefetcher
         if self.rank == 0:
-            train_loader = tqdm(train_loader, desc=f"Epoch {epoch}")  # type: ignore[assignment]
+            train_loader = tqdm(train_loader, desc=f"Epoch {epoch}")
 
         step_interval = (
             max(1, round(num_steps * self.config.checkpoint_freq))
@@ -524,7 +613,8 @@ class Trainer:
         timer = _StepTimer()
         recovery = BatchRecoveryCoordinator("training")
         remaining_steps = len(self.train_loader)
-        for local_step_rel, batch in enumerate(train_loader, 1):
+        for local_step_rel, prefetched in enumerate(train_loader, 1):
+            batch = prefetched.cpu
             # local_step is 1-based index into the *full* epoch (not the slice).
             local_step = local_step_rel + skip_steps
             timer.reset(self.global_step % self.config.log_freq == 0)
@@ -534,6 +624,8 @@ class Trainer:
                 self.config.max_steps is not None
                 and self.global_step + 1 >= self.config.max_steps
             )
+            if will_stop:
+                prefetcher.stop_prefetch()
             timer.mark("queue")
             recovery.consume(
                 batch,
@@ -544,12 +636,7 @@ class Trainer:
                 ),
             )
             timer.mark("pre_h2d")
-            gpu_batch = {
-                k: v.to(self.local_rank, non_blocking=True)
-                if isinstance(v, torch.Tensor)
-                else v
-                for k, v in batch.items()
-            }
+            gpu_batch = prefetched.wait()
 
             with torch.autocast(
                 self.device_type, dtype=self.config.hidden_states_dtype
