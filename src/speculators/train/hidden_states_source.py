@@ -2,6 +2,7 @@
 
 import logging
 import warnings
+from collections.abc import Sequence
 from typing import Any, Literal, Protocol, cast
 
 import openai
@@ -21,14 +22,18 @@ from speculators.train.recovery import GenerationRecoveryGuard, SampleUnavailabl
 logger = logging.getLogger("speculators")
 
 HiddenStateSample = dict[str, torch.Tensor]
+HiddenStateResult = HiddenStateSample | SampleUnavailable
 OfflineMissingPolicy = Literal["skip", "warn", "raise"]
 
 
 class HiddenStatesSource(Protocol):
     """Source of hidden states for one training record."""
 
-    def get_one(self, record: DatasetRecord) -> HiddenStateSample | SampleUnavailable:
+    def get_one(self, record: DatasetRecord) -> HiddenStateResult:
         """Return hidden states or a structured unavailable result."""
+
+    def get_batch(self, records: Sequence[DatasetRecord]) -> list[HiddenStateResult]:
+        """Return one ordered result for each input record."""
 
     def close(self) -> None:
         """Release source resources."""
@@ -66,7 +71,7 @@ class OfflineHiddenStatesSource:
         self.transfer = transfer
         self.on_missing = on_missing
 
-    def get_one(self, record: DatasetRecord) -> HiddenStateSample | SampleUnavailable:
+    def get_one(self, record: DatasetRecord) -> HiddenStateResult:
         """Load one cached sample by its storage index."""
         cached = self.transfer.get_cached(record.storage_index)
         if cached is not None:
@@ -86,6 +91,10 @@ class OfflineHiddenStatesSource:
         raise RuntimeError(
             f"Failed to load hidden states for sample {record.storage_index}."
         )
+
+    def get_batch(self, records: Sequence[DatasetRecord]) -> list[HiddenStateResult]:
+        """Load cached samples in input order."""
+        return [self.get_one(record) for record in records]
 
     def close(self) -> None:
         """Offline transfers do not currently own closeable resources."""
@@ -188,7 +197,7 @@ class VllmHiddenStatesSource:
     def get_one(
         self,
         record: DatasetRecord,
-    ) -> HiddenStateSample | SampleUnavailable:
+    ) -> HiddenStateResult:
         """Generate one sample, including full-round-trip recovery."""
         return self.generation_recovery.run(
             lambda: self._generate_once(record),
@@ -197,6 +206,14 @@ class VllmHiddenStatesSource:
                 f"{record.storage_index}"
             ),
         )
+
+    def get_batch(self, records: Sequence[DatasetRecord]) -> list[HiddenStateResult]:
+        """Generate samples in input order.
+
+        This initial implementation preserves the scalar behavior. The vLLM
+        request fan-out will be added behind this same interface.
+        """
+        return [self.get_one(record) for record in records]
 
     def close(self) -> None:
         """Close the lazily-created vLLM client, if any."""
