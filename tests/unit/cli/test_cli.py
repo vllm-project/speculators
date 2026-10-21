@@ -45,6 +45,7 @@ class TestRootApp:
         result = runner.invoke(app, ["--help"])
         assert result.exit_code == 0
         assert "convert" in unstyled_output(result)
+        assert "evaluate" in unstyled_output(result)
 
 
 class TestConvertCommand:
@@ -216,3 +217,29 @@ class TestTrainCommand:
         result = runner.invoke(app, ["--help"])
         assert result.exit_code == 0
         assert "train" in unstyled_output(result)
+
+
+class TestEvaluateCommand:
+    def test_forwards_evaluator_arguments(self, monkeypatch):
+        from speculators.cli import evaluate  # noqa: PLC0415
+
+        calls = []
+        monkeypatch.setattr(
+            evaluate.os,
+            "execv",
+            lambda executable, argv: calls.append((executable, argv)),
+        )
+        argv = [
+            "acceptance",
+            "--dataset",
+            "basic",
+            "--body",
+            '{"temperature":0}',
+            "--help",
+        ]
+        result = runner.invoke(app, ["evaluate", *argv])
+        assert result.exit_code == 0
+        executable, command = calls[0]
+        assert command[0] == executable
+        assert command[1].endswith("scripts/evaluate/evaluate.py")
+        assert command[2:] == argv

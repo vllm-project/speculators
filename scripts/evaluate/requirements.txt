@@ -1,16 +1,11 @@
-# Core dependencies for performance benchmarking with guidellm
-vllm>=0.12.0
+# Client collection and throughput/interactivity graphs.
+# GuideLLM owns timed scheduling; acceptance needs per-request metrics.
 guidellm==0.8.0
-speculators>0.7.1
-
-# Visualization dependencies
-matplotlib
-numpy
-scikit-learn
-scipy
-
-# Shared dataset loading and acceptance collection.
 httpx>=0.27
 datasets>=3.0
+matplotlib
+
+# NVIDIA SPEED-Bench local preparation.
+numpy
 pandas
 tiktoken

@@ -11,6 +11,7 @@ from importlib.metadata import version as pkg_version
 import typer
 
 from speculators.cli.convert import convert
+from speculators.cli.evaluate import evaluate_command
 from speculators.cli.generate_offline_data import generate_offline_data
 from speculators.cli.prepare_data import prepare_data
 from speculators.cli.regenerate_responses import regenerate_responses
@@ -58,3 +59,14 @@ app.command(
     },
 )(train_command)
 app.command(rich_help_panel="Tools")(convert)
+
+app.command(
+    name="evaluate",
+    rich_help_panel="Tools",
+    context_settings={
+        "allow_extra_args": True,
+        "allow_interspersed_args": False,
+        "ignore_unknown_options": True,
+        "help_option_names": [],
+    },
+)(evaluate_command)
