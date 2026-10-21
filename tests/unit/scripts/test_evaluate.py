@@ -950,6 +950,7 @@ def test_timed_sweep_saves_reports_summary_and_plot(tmp_path, monkeypatch):
         model="served",
         label="baseline",
         keep_going=False,
+        overwrite=False,
         streams=[1, 8],
         repeats=2,
         max_seconds=100,
@@ -991,8 +992,15 @@ def test_timed_sweep_saves_reports_summary_and_plot(tmp_path, monkeypatch):
     )
     assert ti.plot(plot) == 0
     assert (tmp_path / "curve.png").read_bytes().startswith(b"\x89PNG")
-    with pytest.raises(ValueError, match="already exists"):
-        speedup.run(args, [{"body": body}])
+    assert speedup.run(args, [{"body": body}]) == 0
+    assert len(calls) == 4  # Existing points were skipped.
+    args.streams.append(16)
+    assert speedup.run(args, [{"body": body}]) == 0
+    assert len(calls) == 6  # Only the new concurrency ran.
+    args.streams = [1]
+    args.overwrite = True
+    assert speedup.run(args, [{"body": body}]) == 0
+    assert len(calls) == 8
 
 
 def test_failed_points_stop_by_default_and_keep_going_skips_bad_reports(
@@ -1027,6 +1035,7 @@ def test_failed_points_stop_by_default_and_keep_going_skips_bad_reports(
         streams=[1, 4, 8, 16, 32, 64, 128],
         repeats=1,
         keep_going=False,
+        overwrite=False,
         model="served",
         label="test",
         tokenizer=None,
@@ -1041,8 +1050,6 @@ def test_failed_points_stop_by_default_and_keep_going_skips_bad_reports(
     assert len(calls) == 1
     assert (tmp_path / "conc1_r1.json").exists()
     assert not (tmp_path / "benchmarks.jsonl").exists()
-    with pytest.raises(ValueError, match="already exists"):
-        speedup.run(args, requests)
 
     args.output_dir = tmp_path / "keep-going"
     args.output_dir.mkdir()

@@ -126,16 +126,6 @@ def _write_results(args: argparse.Namespace, failures: int) -> int:
 
 
 def run(args: argparse.Namespace, requests: list[dict]) -> int:
-    artifacts = args.output_dir / "artifacts"
-    archive_path = args.output_dir / "benchmarks.jsonl"
-    if (
-        archive_path.exists()
-        or artifacts.exists()
-        or any(args.output_dir.glob("conc*_r*.json"))
-    ):
-        raise ValueError(
-            f"{args.output_dir} already exists; use a fresh output directory"
-        )
     with TemporaryDirectory(prefix="speculators-speedup-") as temporary:
         dataset_path = Path(temporary) / "prompts.jsonl"
         # This is an input supply, not a quota: max_duration ends each point.
@@ -166,10 +156,9 @@ def run(args: argparse.Namespace, requests: list[dict]) -> int:
             for repeat in range(1, args.repeats + 1):
                 name = f"conc{streams}_r{repeat}"
                 result_path = args.output_dir / f"{name}.json"
-                if result_path.exists():
-                    raise ValueError(
-                        f"{result_path} already exists; use a fresh output directory"
-                    )
+                if result_path.exists() and not args.overwrite:
+                    continue
+                result_path.unlink(missing_ok=True)
                 command = [
                     args.guidellm_bin,
                     "run",
