@@ -922,6 +922,80 @@ def test_regenerate_truncates_on_tool_name_mismatch():
     assert len(sent) == 1  # no splice, no follow-up request
 
 
+def test_regenerate_continues_when_only_the_prompt_exceeds_max_tokens():
+    # --max-tokens caps the completion. A prompt longer than the cap, a short
+    # completion, and finish_reason=stop must still request the next turn.
+    max_tokens = 8
+    item = {
+        "idx": 0,
+        "primary_id": "u",
+        "turns": [
+            {"role": "user", "content": "q1"},
+            {"role": "user", "content": "q2"},
+        ],
+    }
+    responses = [
+        _response(
+            prompt_token_ids=list(range(max_tokens + 4)),
+            token_ids=[100, 101],
+            content="done",
+            finish="stop",
+        ),
+        _response(
+            prompt_token_ids=list(range(max_tokens + 6)),
+            token_ids=[102],
+            content="also done",
+            finish="stop",
+        ),
+    ]
+    samples, truncated, sent = _regen(item, responses, max_tokens=max_tokens)
+
+    assert len(sent) == 2
+    assert not truncated
+    assert len(samples) == 2
+
+
+@pytest.mark.parametrize(
+    ("token_ids", "finish"),
+    [
+        pytest.param([10, 11, 12, 13], "stop", id="completion_length"),
+        pytest.param([10, 11], "length", id="finish_reason_length"),
+    ],
+)
+def test_regenerate_truncates_on_completion_cap(token_ids, finish):
+    # At least max_tokens completion ids, or finish_reason length, ends the
+    # conversation. The partial row is kept; the next turn is not requested.
+    max_tokens = 4
+    item = {
+        "idx": 0,
+        "primary_id": "u",
+        "turns": [
+            {"role": "user", "content": "q1"},
+            {"role": "user", "content": "q2"},
+        ],
+    }
+    # Prompt stays within the cap, so only the completion condition can cut.
+    responses = [
+        _response(
+            prompt_token_ids=[1, 2],
+            token_ids=token_ids,
+            content="cut",
+            finish=finish,
+        ),
+        _response(
+            prompt_token_ids=[1, 2, 3],
+            token_ids=[9],
+            content="next",
+            finish="stop",
+        ),
+    ]
+    samples, truncated, sent = _regen(item, responses, max_tokens=max_tokens)
+
+    assert truncated
+    assert len(sent) == 1
+    assert len(samples) == 1
+
+
 # ---------------------------------------------------------------------------
 # 6. Every text-only shared-registry preset works in on-policy regeneration.
 # ---------------------------------------------------------------------------
