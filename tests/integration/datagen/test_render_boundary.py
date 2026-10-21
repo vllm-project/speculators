@@ -21,7 +21,7 @@ from speculators.data_generation.preprocessing import (
     build_speculator_training_dataset,
 )
 from speculators.data_generation.vllm_client import InvalidResponseError
-from speculators.train.data import CollateFn
+from speculators.train.data import _add_document_ids, _pad_samples
 
 # Neither build path below reads the processor: the missing-endpoint guard
 # raises before it is used, and speculator-format rows skip rendering entirely.
@@ -326,14 +326,17 @@ def test_loss_mask_stays_boolean_after_save_load_and_collation(tmp_path, mask):
     assert row["input_ids"].dtype == torch.long
     assert row["input_ids"].tolist() == [1, 2, 3, 4]
 
-    batch = CollateFn(max_len=6, hidden_size=1)(
+    batch = _pad_samples(
         [
             {
                 "input_ids": row["input_ids"],
                 "loss_mask": row["loss_mask"],
                 "lengths": torch.tensor([4]),
             }
-        ]
+        ],
+        max_len=6,
+        dtype=torch.bfloat16,
     )
+    _add_document_ids(batch, 6)
     assert batch["loss_mask"].dtype == torch.bool
     assert batch["loss_mask"].tolist() == [[False, False, True, True, False, False]]

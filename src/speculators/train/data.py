@@ -1,5 +1,5 @@
 import warnings
-from collections.abc import Callable, Sequence
+from collections.abc import Callable
 from os import PathLike
 from pathlib import Path
 from typing import Any, Literal
@@ -21,29 +21,28 @@ from speculators.train.recovery import (
 BatchType = dict[str, Any]
 
 
-def create_empty_sample(
-    hidden_size: int, num_target_layers: int = 3, dtype: torch.dtype = torch.bfloat16
+def create_empty_batch(
+    seq_len: int, hidden_size: int, num_target_layers: int, dtype: torch.dtype
 ):
     # data structure: {
     #     "hidden_states": [seq_len, num_target_layers * hidden_size],
     #     "input_ids": [seq_len],
     #     "verifier_last_hidden_states": [seq_len, hidden_size],
     #     "loss_mask": [seq_len],
-    #     "lengths": [1],
     #     "position_ids": [seq_len],
     # }
-    # Default dtype is bfloat16 to match the hidden_states dtype used downstream.
-    # When this fallback is used (e.g. vLLM hidden-state extraction times out and
-    # we substitute an empty sample), the implicit float32 placeholders crashed
-    # bf16 EAGLE-3 layers (fc, verifier_lm_head) with a dtype mismatch.
 
     return {
-        "hidden_states": torch.empty(0, num_target_layers * hidden_size, dtype=dtype),
-        "input_ids": torch.empty(0, dtype=torch.long),
-        "verifier_last_hidden_states": torch.empty(0, hidden_size, dtype=dtype),
-        "loss_mask": torch.empty(0, dtype=torch.bool),
-        "lengths": torch.tensor([0], dtype=torch.long),
-        "position_ids": torch.arange(0, dtype=torch.long),
+        "hidden_states": torch.zeros(
+            1, seq_len, num_target_layers * hidden_size, dtype=dtype
+        ),
+        "input_ids": torch.zeros(1, seq_len, dtype=torch.long),
+        "verifier_last_hidden_states": torch.zeros(
+            1, seq_len, hidden_size, dtype=dtype
+        ),
+        "loss_mask": torch.zeros(1, seq_len, dtype=torch.bool),
+        "position_ids": torch.zeros(1, seq_len, dtype=torch.long),
+        "document_ids": -1 * torch.ones(1, seq_len, dtype=torch.long),
     }
 
 
@@ -140,10 +139,10 @@ class SpeculatorsDataset(Dataset):
 
         seq_len = loaded_hs["token_ids"].shape[0]
 
-        return {
-            "hidden_states": loaded_hs["hidden_states"][:, :-1].flatten(
-                1
-            ),  # [seq_len, num_layers * hidden_size]
+        sample = {
+            "hidden_states": loaded_hs["hidden_states"][
+                :, : self.num_target_layers
+            ].flatten(1),  # [seq_len, num_layers * hidden_size]
             "input_ids": loaded_hs["token_ids"],  # [seq_len]
             "verifier_last_hidden_states": loaded_hs["hidden_states"][
                 :, -1
@@ -153,39 +152,49 @@ class SpeculatorsDataset(Dataset):
             "position_ids": torch.arange(seq_len, dtype=torch.long),
         }
 
+        return self.preprocess(sample) if self.preprocess else sample
+
     def __getitems__(self, indices: list[int]) -> BatchType:
         """Fetch and collate a DataLoader batch into its final representation."""
         samples = [self[index] for index in indices]
-        return _collate_samples(
-            samples,
-            max_len=self.max_len,
-            hidden_size=self.hidden_size,
-            num_target_layers=self.num_target_layers,
-            dtype=self.hidden_states_dtype,
-            preprocess=self.preprocess,
+
+        unavailable: list[SampleUnavailable] = []
+        valid_samples: list[BatchType] = []
+        for item in samples:
+            if isinstance(item, SampleUnavailable):
+                unavailable.append(item)
+            else:
+                valid_samples.append(item)
+
+        if valid_samples:
+            batch = _pad_samples(valid_samples, self.max_len, self.hidden_states_dtype)
+            _add_document_ids(batch, self.max_len)
+            locally_empty = False
+        else:
+            # Create empty batch which then gets padded to full batch size if no
+            # valid samples are found. Match the configured dtype so the placeholder
+            # doesn't crash downstream layers loaded at a different precision.
+            batch = create_empty_batch(
+                self.max_len,
+                self.hidden_size,
+                self.num_target_layers,
+                dtype=self.hidden_states_dtype,
+            )
+            locally_empty = True
+
+        batch["error_records"] = len(unavailable)
+        metadata = RecoveryMetadata.from_unavailable(
+            unavailable,
+            locally_empty=locally_empty,
         )
+        if metadata.failure_count or metadata.locally_empty:
+            batch[RECOVERY_METADATA_KEY] = metadata
+
+        return batch
 
     def close(self) -> None:
         """Close resources owned by the hidden-state source."""
         self.hidden_states.close()
-
-
-def _clean_batch(
-    batch: Sequence[BatchType | SampleUnavailable],
-    preprocess: Callable[[BatchType], BatchType] | None,
-) -> tuple[list[BatchType], list[SampleUnavailable], int]:
-    """Preprocess valid samples and collect unavailable or dropped samples."""
-    unavailable = []
-    num_dropped = 0
-    valid_batch: list[BatchType] = []
-    for item in batch:
-        if isinstance(item, SampleUnavailable):
-            unavailable.append(item)
-            num_dropped += 1
-            continue
-
-        valid_batch.append(preprocess(item) if preprocess else item)
-    return valid_batch, unavailable, num_dropped
 
 
 def _pad_samples(batch: list[BatchType], max_len: int, dtype: torch.dtype) -> BatchType:
@@ -240,67 +249,3 @@ def _add_document_ids(collated_data: BatchType, max_len: int) -> None:
         ]
     ).unsqueeze(0)
     collated_data["document_ids"] = document_ids
-
-
-def _collate_samples(
-    batch: Sequence[BatchType | SampleUnavailable],
-    *,
-    max_len: int,
-    hidden_size: int,
-    num_target_layers: int,
-    dtype: torch.dtype,
-    preprocess: Callable[[BatchType], BatchType] | None,
-) -> BatchType:
-    """Pack per-sample results into the fixed-shape training batch."""
-    valid_batch, unavailable, num_dropped = _clean_batch(batch, preprocess)
-
-    if not valid_batch:
-        # Create empty sample which then gets padded to full batch size if no
-        # valid samples are found. Match the configured dtype so the placeholder
-        # doesn't crash downstream layers loaded at a different precision.
-        empty = create_empty_sample(hidden_size, num_target_layers, dtype=dtype)
-        valid_batch = [preprocess(empty) if preprocess else empty]
-        locally_empty = True
-    else:
-        locally_empty = False
-
-    collated_data = _pad_samples(valid_batch, max_len, dtype)
-    _add_document_ids(collated_data, max_len)
-
-    collated_data["error_records"] = num_dropped
-    metadata = RecoveryMetadata.from_unavailable(
-        unavailable,
-        locally_empty=locally_empty,
-    )
-    if metadata.failure_count or metadata.locally_empty:
-        collated_data[RECOVERY_METADATA_KEY] = metadata
-
-    return collated_data
-
-
-class CollateFn:
-    """Compatibility wrapper for callers that collate samples directly."""
-
-    def __init__(
-        self,
-        max_len: int,
-        hidden_size: int,
-        num_target_layers: int = 3,
-        dtype: torch.dtype = torch.bfloat16,
-        preprocess: Callable[[BatchType], BatchType] | None = None,
-    ):
-        self.max_len = max_len
-        self.hidden_size = hidden_size
-        self.num_target_layers = num_target_layers
-        self.dtype = dtype
-        self.preprocess = preprocess
-
-    def __call__(self, batch: Sequence[BatchType | SampleUnavailable]) -> BatchType:
-        return _collate_samples(
-            batch,
-            max_len=self.max_len,
-            hidden_size=self.hidden_size,
-            num_target_layers=self.num_target_layers,
-            dtype=self.dtype,
-            preprocess=self.preprocess,
-        )

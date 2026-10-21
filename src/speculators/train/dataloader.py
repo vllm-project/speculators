@@ -55,8 +55,10 @@ def _worker_init_fn(worker_id: int) -> None:  # noqa: ARG001
     if torch.accelerator.is_available():
         torch.accelerator.set_device_index(local_rank)
 
+
 def identity_fn(x):
     return x
+
 
 def _setup_dataloader(
     dataset: SpeculatorsDataset,
