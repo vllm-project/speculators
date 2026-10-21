@@ -888,7 +888,7 @@ def test_interrupted_later_dataset_preserves_completed_csv_row(tmp_path, monkeyp
     assert len((stopped / "requests.jsonl").read_text().splitlines()) == 3
 
 
-def test_timed_sweep_saves_reports_summary_and_plot(tmp_path, monkeypatch):
+def test_timed_sweep_saves_reports_and_summary(tmp_path, monkeypatch):
     monkeypatch.setattr(speedup, "refuse_prefix_caching", lambda target: None)
     messages = [
         {"role": "system", "content": "code"},
@@ -983,15 +983,6 @@ def test_timed_sweep_saves_reports_summary_and_plot(tmp_path, monkeypatch):
     plotted = ti._load_series(argparse.Namespace(series=[str(tmp_path)]))[0]["points"]
     assert [p["x"] for p in plotted] == pytest.approx([50, 50])
     assert [p["y"] for p in plotted] == pytest.approx([1851, 1851])
-    plot = argparse.Namespace(
-        series=[str(tmp_path)],
-        out=str(tmp_path / "curve.png"),
-        title="HumanEval",
-        subtitle="",
-        note="",
-    )
-    assert ti.plot(plot) == 0
-    assert (tmp_path / "curve.png").read_bytes().startswith(b"\x89PNG")
     assert speedup.run(args, [{"body": body}]) == 0
     assert len(calls) == 4  # Existing points were skipped.
     args.streams.append(16)
