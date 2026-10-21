@@ -16,6 +16,10 @@ Fill in the PR template's **Purpose** and **Tests** sections (see [PULL_REQUEST_
 - No emoji headings, no "comprehensive"/"robust"/"production-ready", no per-file summary tables.
 - Leave the "I (a human) have written or reviewed the code" checkbox unchecked.
 
+## Evaluation reports
+
+For acceptance-rate/length sections and speedup curve graphs, use [the evaluation skill](.claude/skills/speculators-evaluation/SKILL.md). It covers server setup, measurement, and reporting.
+
 ## Provenance
 
 Training, eval, and vLLM-launch scripts write reproducibility artifacts so runs can be recreated later.
