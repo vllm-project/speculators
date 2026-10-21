@@ -717,6 +717,9 @@ class Trainer:
             self.checkpointer.save_checkpoint(self.model, self.optimizers, epoch)
             if self.schedulers:
                 self.checkpointer.save_scheduler_state_dict(self.schedulers, epoch)
+            # maybe_save_checkpoint returns early when save_best is set, so the
+            # end-of-epoch cursor has to be written here or resume restarts at 0.
+            self._save_training_state(epoch, 0)
         elif self.config.checkpoint_freq >= 1 and not (
             epoch == 0 or (epoch + 1) % int(self.config.checkpoint_freq) == 0
         ):
