@@ -1,5 +1,5 @@
 import warnings
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from os import PathLike
 from pathlib import Path
 from typing import Any, Literal
@@ -10,6 +10,7 @@ from torch.utils.data import Dataset
 
 from speculators.train.data_types import DatasetRecord
 from speculators.train.hidden_states_source import (
+    HiddenStateSample,
     HiddenStatesSource,
 )
 from speculators.train.recovery import (
@@ -89,6 +90,10 @@ class ArrowDataset(Dataset):
             storage_index=self._map_to_storage_index(index),
         )
 
+    def __getitems__(self, indices: Sequence[int]) -> list[DatasetRecord]:
+        """Load records in the same order as the requested dataset indices."""
+        return [self[index] for index in indices]
+
 
 class SpeculatorsDataset(Dataset):
     """Combine Arrow records with hidden states for training."""
@@ -118,6 +123,16 @@ class SpeculatorsDataset(Dataset):
     def __getitem__(self, index: int) -> BatchType | SampleUnavailable:
         record = self.records[index]
         loaded_hs = self.hidden_states.get_one(record)
+
+        return self._build_sample(index, record, loaded_hs)
+
+    def _build_sample(
+        self,
+        index: int,
+        record: DatasetRecord,
+        loaded_hs: HiddenStateSample | SampleUnavailable,
+    ) -> BatchType | SampleUnavailable:
+        """Combine one record with its loaded hidden states."""
 
         if isinstance(loaded_hs, SampleUnavailable):
             return loaded_hs
@@ -173,7 +188,14 @@ class SpeculatorsDataset(Dataset):
 
     def __getitems__(self, indices: list[int]) -> BatchType:
         """Fetch and collate a DataLoader batch into its final representation."""
-        samples = [self[index] for index in indices]
+        records = self.records.__getitems__(indices)
+        loaded_hs = self.hidden_states.get_batch(records)
+        samples = [
+            self._build_sample(index, record, hidden_states)
+            for index, record, hidden_states in zip(
+                indices, records, loaded_hs, strict=True
+            )
+        ]
 
         unavailable: list[SampleUnavailable] = []
         valid_samples: list[BatchType] = []

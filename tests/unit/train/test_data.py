@@ -300,6 +300,24 @@ def test_arrow_dataset_builds_explicit_dataset_record(tmp_path):
     assert record.messages is None
 
 
+def test_arrow_dataset_getitems_preserves_order_and_storage_indices(tmp_path):
+    ds = Dataset.from_dict(
+        {
+            "input_ids": [[1, 2], [3, 4], [5, 6]],
+            "loss_mask": [[1, 1], [1, 0], [0, 1]],
+            "seq_len": [2, 2, 2],
+        }
+    )
+    ds.save_to_disk(str(tmp_path / "data"))
+    records = ArrowDataset(datapath=str(tmp_path / "data"))
+    records.data.set_format(type="torch")
+
+    loaded = records.__getitems__([2, 0])
+
+    assert [record.storage_index for record in loaded] == [2, 0]
+    assert [record.input_ids.tolist() for record in loaded] == [[5, 6], [1, 2]]
+
+
 def _valid_generated_sample() -> dict[str, torch.Tensor]:
     return {
         "hidden_states": torch.ones(3, 2, 4, dtype=torch.bfloat16),
@@ -359,6 +377,11 @@ def test_offline_hidden_states_source_loads_cached_sample():
     )
     assert source.get_one(record) is cached
     assert transfer.requested_indices == [17]
+
+    batch = source.get_batch([record, record])
+    assert batch[0] is cached
+    assert batch[1] is cached
+    assert transfer.requested_indices == [17, 17, 17]
 
 
 @pytest.mark.parametrize("on_missing", ["skip", "warn"])
