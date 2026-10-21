@@ -383,7 +383,7 @@ def _warn_mismatched_algorithm_blocks(cfg: TrainConfig, provided: set[str]) -> N
 
 
 def _warn_deprecated(cfg: TrainConfig, provided: set[str]) -> None:
-    """Warn when a deprecated option or algorithm is selected."""
+    """Warn when deprecated training config options are selected."""
     if "on_generate" in provided:
         warnings.warn(
             "--on-generate is deprecated and has no effect: generated hidden states "
