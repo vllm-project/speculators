@@ -2,6 +2,9 @@
 
 Speculators currently supports six speculative decoding algorithms: **Eagle-3**, **P-EAGLE**, **DFlash**, **DFlash2**, **DSpark**, and **MTP**. All are lossless -- they produce output from the same distribution as the target model.
 
+!!! warning "P-EAGLE is deprecated"
+    P-EAGLE training is scheduled for removal in Speculators 0.11. Selecting it emits a `FutureWarning`.
+
 ## How They Differ
 
 **Eagle-3** predicts draft tokens autoregressively, one at a time.
@@ -32,7 +35,7 @@ Eagle-3 has been available longer and has broader support in both Speculators an
 
 ## Which Should I Use?
 
-If you're unsure, start with Eagle-3 -- it has the most mature tooling and documentation. If you want parallel multi-token prediction with an Eagle-3-based architecture, try P-EAGLE. If you want to experiment with DFlash's single-forward-pass block prediction approach, the training workflow is the same. DFlash2 adds local convolution and candidate reranking, while DSpark adds intra-block dependencies and confidence scheduling. If your model already has native MTP layers (e.g. Qwen3-Next, Qwen3.5), MTP finetuning lets you improve the existing MTP head on domain-specific data without training a separate draft model.
+If you're unsure, start with Eagle-3 -- it has the most mature tooling and documentation. P-EAGLE offers parallel multi-token prediction with an Eagle-3-based architecture, but it is deprecated; see its [guide](peagle.md) for the removal timeline. DFlash offers single-forward-pass block prediction. DFlash2 adds local convolution and candidate reranking, while DSpark adds intra-block dependencies and confidence scheduling. If your model already has native MTP layers (e.g. Qwen3-Next, Qwen3.5), MTP finetuning lets you improve the existing MTP head on domain-specific data without training a separate draft model.
 
 For more details on each algorithm, see:
 
