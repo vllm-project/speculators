@@ -576,7 +576,14 @@ class Trainer:
                 if self.is_distributed:
                     metrics = _all_reduce_metrics(metrics)
 
-                metrics = {k: v.item() for k, v in metrics.items()}
+                # Single stacked D2H copy instead of one device sync per
+                # metric; the values are 0-dim float tensors, so the
+                # resulting Python floats are identical to v.item().
+                metric_keys = list(metrics)
+                metrics_host = torch.stack(
+                    [metrics[k].float().reshape(()) for k in metric_keys]
+                ).cpu()
+                metrics = dict(zip(metric_keys, metrics_host.tolist()))
                 world_size = dist.get_world_size() if self.is_distributed else 1
                 metrics = normalize_counted_metrics(metrics, world_size)
                 lr_info = (

@@ -49,15 +49,18 @@ Example Usage:
 # SPDX-License-Identifier: Apache-2.0
 
 # Standard
+import atexit
 import contextlib
 import importlib
 import json
 import logging
 import os
+import queue
 import warnings
 from collections.abc import Mapping
 from datetime import datetime, timezone
 from logging.config import dictConfig
+from logging.handlers import QueueHandler, QueueListener
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Union
 
@@ -621,19 +624,47 @@ class MLFlowHandler(logging.Handler):
 ### Main functions
 
 
+class _PassthroughQueueHandler(QueueHandler):
+    """A QueueHandler that enqueues the record object unmodified.
+
+    The default ``prepare`` stringifies ``record.msg`` before enqueuing, which
+    would defeat FormatDictFilter's dict flattening on the listener side (the
+    message would arrive as a pre-rendered repr string). The record is shared
+    with the listener thread rather than copied; that is safe here because the
+    listener's handler is the record's only consumer and the emitting thread
+    never touches it after ``logging`` returns.
+    """
+
+    def prepare(self, record):
+        return record
+
+
 def setup_root_logger(level="INFO"):
     """Configure the root logger with rich formatting.
 
     This function sets up the root logger with a RichHandler for
     console output and adds the FormatDictFilter for better dictionary message
     formatting.
+
+    Rendering happens on a background thread: the handler work is queued and a
+    QueueListener formats + emits records off the caller's thread. Rich's render
+    costs milliseconds per record, and with ``log_freq=1`` the Trainer emits a
+    metrics dict every step, so a synchronous handler lands inside the measured
+    train step. The listener is stopped by an atexit hook that drains the queue,
+    so every record still reaches the console before the process exits.
     """
-    handler = RichHandler()
-    handler.addFilter(FormatDictFilter())
-    handler.addFilter(IsRank0Filter())
-    logging.basicConfig(
-        level=level, format="%(message)s", datefmt="[%X]", handlers=[handler]
-    )
+    if not logging.getLogger().handlers:
+        handler = RichHandler()
+        handler.addFilter(FormatDictFilter())
+        handler.addFilter(IsRank0Filter())
+        record_queue: queue.SimpleQueue = queue.SimpleQueue()
+        queue_handler = _PassthroughQueueHandler(record_queue)
+        listener = QueueListener(record_queue, handler)
+        listener.start()
+        atexit.register(listener.stop)
+        logging.basicConfig(
+            level=level, format="%(message)s", datefmt="[%X]", handlers=[queue_handler]
+        )
 
     # Disable verbose HTTP response logs from httpx
     logging.getLogger("httpx").propagate = False
