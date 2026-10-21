@@ -12,8 +12,8 @@ from subprocess import CalledProcessError
 from unittest.mock import Mock
 
 import httpx
-import pyarrow as pa
-import pyarrow.parquet as pq
+import pyarrow as pa  # type: ignore[import-untyped]
+import pyarrow.parquet as pq  # type: ignore[import-untyped]
 import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "scripts" / "evaluate"))
