@@ -130,6 +130,37 @@ class ClientItem(TypedDict):
     instead of passing `token_ids` to Completions API."""
 
 
+def validate_vllm_model(
+    endpoint: str,
+    requested_model: str,
+) -> None:
+    """Validate that a vLLM endpoint exposes the requested model.
+
+    This synchronous startup check is intended to run in the training process
+    before DataLoader workers are created. Generation workers do not repeat
+    endpoint discovery.
+    """
+    client = openai.OpenAI(
+        base_url=endpoint,
+        api_key="EMPTY",
+        max_retries=0,
+    )
+    try:
+        list_models = client.models.list()
+        if not list_models.data:
+            raise RuntimeError("No models found on the vLLM server")
+        model_id = list_models.data[0].id
+        if requested_model != model_id:
+            raise ValueError(
+                f"An explicit model name was passed ({requested_model}) which "
+                f"doesn't match found model_id {model_id}."
+                "Please make sure --endpoint is set to the correct vllm "
+                "instance."
+            )
+    finally:
+        client.close()
+
+
 async def _poll_lock_async(fd, poll_interval):
     while True:
         try:

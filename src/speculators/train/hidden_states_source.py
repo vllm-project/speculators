@@ -1,8 +1,10 @@
 """Hidden-state acquisition for training data."""
 
+import asyncio
 import logging
 import warnings
 from collections.abc import Sequence
+from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Literal, Protocol, cast
 
 import openai
@@ -14,9 +16,9 @@ from speculators.data_generation.vllm_client import (
     DEFAULT_MAX_RETRIES,
     DEFAULT_REQUEST_TIMEOUT,
     ClientItem,
-    generate_hidden_states,
+    generate_hidden_states_async,
 )
-from speculators.train.data_types import DatasetRecord
+from speculators.train.data_types import DatasetRecord, GenerationReceipt
 from speculators.train.recovery import GenerationRecoveryGuard, SampleUnavailable
 
 logger = logging.getLogger("speculators")
@@ -112,112 +114,182 @@ class VllmHiddenStatesSource:
         self,
         *,
         transfer: HiddenStatesTransfer,
+        model: str,
         vllm_endpoint: str = "http://localhost:8000/v1",
-        model: str | None = None,
         request_timeout: float | None = DEFAULT_REQUEST_TIMEOUT,
         max_retries: int = DEFAULT_MAX_RETRIES,
         generation_validation_retries: int = 2,
         max_consecutive_generation_failures: int = 20,
+        max_transfer_workers: int = 4,
     ):
+        if max_transfer_workers <= 0:
+            raise ValueError("max_transfer_workers must be > 0")
+
         self.transfer = transfer
         self.vllm_endpoint = vllm_endpoint
         self.model = model
         self.request_timeout = request_timeout
         self.max_retries = max_retries
-        self.client: openai.OpenAI | None = None
+        self.max_transfer_workers = max_transfer_workers
+        self.client: openai.AsyncOpenAI | None = None
+        self._runner: asyncio.Runner | None = None
+        self._transfer_executor: ThreadPoolExecutor | None = None
+        self._is_setup = False
         self.generation_recovery = GenerationRecoveryGuard(
             retries=generation_validation_retries,
             max_consecutive_failures=max_consecutive_generation_failures,
         )
 
-    def _setup_client(self) -> None:
-        client = openai.OpenAI(
-            base_url=self.vllm_endpoint, api_key="EMPTY", max_retries=0
-        )
-        list_models = client.models.list()
-        model_id = list_models.data[0].id
-        if self.model and self.model != model_id:
-            raise ValueError(
-                f"An explicit model name was passed ({self.model}) which doesn't match"
-                f" found model_id {model_id}."
-                "Please make sure --endpoint is set to the correct vllm instance."
-            )
-        self.model = model_id
-        self.transfer.setup()
-        # Do not retain a half-initialized client if model discovery or Mooncake
-        # setup failed; the outer full-round-trip retry should redo initialization.
-        self.client = client
+    def _setup(self) -> None:
+        if self._is_setup:
+            return
 
-    def _generate_once(
+        if self.client is None:
+            self.transfer.setup()
+            self.client = openai.AsyncOpenAI(
+                base_url=self.vllm_endpoint,
+                api_key="EMPTY",
+                max_retries=0,
+            )
+        if self._runner is None:
+            self._runner = asyncio.Runner()
+        if self._transfer_executor is None:
+            self._transfer_executor = ThreadPoolExecutor(
+                max_workers=self.max_transfer_workers,
+                thread_name_prefix="speculators-hidden-state-transfer",
+            )
+        self._is_setup = True
+
+    def _load_generated(
         self,
         record: DatasetRecord,
+        receipt: GenerationReceipt,
     ) -> dict[str, torch.Tensor]:
-        handle: str | None = None
         try:
-            if not self.client:
-                self._setup_client()
-            handle, hs_transfer_params = generate_hidden_states(
-                self.client,  # type:ignore[arg-type]
-                self.model,  # type:ignore[arg-type]
-                build_client_item(record),
-                timeout=self.request_timeout,
-                max_retries=self.max_retries,
-            )
-
-            loaded_hs = self.transfer.get_generated(hs_transfer_params)
+            loaded_hs = self.transfer.get_generated(receipt.transfer_params)
             if loaded_hs is None:
-                raise ValueError(f"Failed to load hidden states for handle {handle}")
+                raise ValueError(
+                    f"Failed to load hidden states for handle {receipt.handle}"
+                )
 
             # Covers token/shape mismatches and non-finite values. The Mooncake
             # transfer performs manifest validation first.
             check_hidden_states(loaded_hs, record.input_ids.tolist())
 
             try:
-                self.transfer.delete(handle)
-            except Exception as cleanup_error:  # noqa: BLE001
+                self.transfer.delete(receipt.handle)
+            except Exception as cleanup_error:  # noqa: BLE001 - cleanup is best effort
                 logger.warning(
                     "Loaded a valid hidden-state sample but failed to delete "
                     "handle %s: %s",
-                    handle,
+                    receipt.handle,
                     cleanup_error,
                 )
             return loaded_hs
         except Exception:
-            if handle is not None:
-                try:
-                    self.transfer.delete(handle)
-                except Exception as cleanup_error:  # noqa: BLE001
-                    logger.warning(
-                        "Failed to clean generated hidden-state handle %s: %s",
-                        handle,
-                        cleanup_error,
-                    )
+            try:
+                self.transfer.delete(receipt.handle)
+            except Exception as cleanup_error:  # noqa: BLE001 - cleanup is best effort
+                logger.warning(
+                    "Failed to clean generated hidden-state handle %s: %s",
+                    receipt.handle,
+                    cleanup_error,
+                )
             raise
 
     def get_one(
         self,
         record: DatasetRecord,
     ) -> HiddenStateResult:
-        """Generate one sample, including full-round-trip recovery."""
-        return self.generation_recovery.run(
-            lambda: self._generate_once(record),
-            description=(
-                "Hidden-state round trip failed for storage index "
-                f"{record.storage_index}"
-            ),
-        )
+        """Generate one sample through the batch path."""
+        return self.get_batch([record])[0]
 
     def get_batch(self, records: Sequence[DatasetRecord]) -> list[HiddenStateResult]:
-        """Generate samples in input order.
+        """Generate samples concurrently and return results in input order."""
+        if not records:
+            return []
+        if not self._is_setup:
+            self._setup()
+        runner = cast("asyncio.Runner", self._runner)
+        return runner.run(self._get_batch_async(records))
 
-        This initial implementation preserves the scalar behavior. The vLLM
-        request fan-out will be added behind this same interface.
-        """
-        return [self.get_one(record) for record in records]
+    async def _get_batch_async(
+        self,
+        records: Sequence[DatasetRecord],
+    ) -> list[HiddenStateResult]:
+        """Run one independent worker for each record in the batch."""
+        if self.client is None or self._transfer_executor is None:
+            raise RuntimeError("Hidden-state source was not set up")
+        tasks = [
+            asyncio.create_task(
+                self._worker(
+                    self.client,
+                    record,
+                    self._transfer_executor,
+                )
+            )
+            for record in records
+        ]
+        try:
+            results = await asyncio.gather(*tasks, return_exceptions=True)
+        except asyncio.CancelledError:
+            for task in tasks:
+                task.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
+            raise
+
+        for result in results:
+            if isinstance(result, BaseException):
+                raise result
+        return cast("list[HiddenStateResult]", results)
+
+    async def _worker(
+        self,
+        client: openai.AsyncOpenAI,
+        record: DatasetRecord,
+        transfer_executor: ThreadPoolExecutor,
+    ) -> HiddenStateResult:
+        """Generate, transfer, and validate one sample with recovery."""
+        description = (
+            f"Hidden-state round trip failed for storage index {record.storage_index}"
+        )
+
+        async def generate_and_transfer() -> dict[str, torch.Tensor]:
+            handle, transfer_params = await generate_hidden_states_async(
+                client,
+                self.model,
+                build_client_item(record),
+                timeout=self.request_timeout,
+                max_retries=self.max_retries,
+            )
+            receipt = GenerationReceipt(handle, transfer_params)
+            future = transfer_executor.submit(self._load_generated, record, receipt)
+            while not future.done():  # noqa: ASYNC110 - keep request tasks running
+                await asyncio.sleep(0.001)
+            return future.result()
+
+        return await self.generation_recovery.run_async(
+            generate_and_transfer,
+            description=description,
+        )
 
     def close(self) -> None:
         """Close the lazily-created vLLM client, if any."""
-        if self.client is None:
+        if (
+            self.client is None
+            and self._runner is None
+            and self._transfer_executor is None
+        ):
             return
-        self.client.close()
+
+        if self._runner is None:
+            self._runner = asyncio.Runner()
+        if self.client is not None:
+            self._runner.run(self.client.close())
+        if self._transfer_executor is not None:
+            self._transfer_executor.shutdown(wait=True, cancel_futures=True)
         self.client = None
+        self._transfer_executor = None
+        self._is_setup = False
+        self._runner.close()
+        self._runner = None
