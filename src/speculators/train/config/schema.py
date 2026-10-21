@@ -222,6 +222,11 @@ class DataArgs(_Group):
     )
     num_workers: int = Field(default=12, description="Number of dataloader workers.")
     prefetch_factor: int = Field(default=4, description="Dataloader prefetch factor.")
+    max_transfer_workers: int = Field(
+        default=1,
+        gt=0,
+        description="Maximum concurrent hidden-state transfers per dataloader worker.",
+    )
     max_anchors: int = Field(
         default=512,
         description="Maximum anchor positions for DFlash-family and P-EAGLE training "
