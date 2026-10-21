@@ -104,7 +104,7 @@ def compute_metrics(
         pred_ids, target_ids, s_loss_mask, s_prev_correct
     )
 
-    ones = torch.tensor(1.0, device=s_loss.device)
+    ones = torch.ones((), device=s_loss.device)
     s_metrics = {}
     s_metrics[f"loss_{ttt_step}_sum"] = s_loss.detach().clone()
     s_metrics[f"loss_{ttt_step}_total"] = ones
