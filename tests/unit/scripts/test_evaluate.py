@@ -324,3 +324,41 @@ def test_throughput_succeeds_with_empty_sampled_requests(
     evaluate.run_benchmark(benchmark_args)
 
     assert (tmp_path / "artifacts" / "run_qa.json").is_file()
+
+
+def _engine_spec_metrics(engine: str, drafts: int, first: int, second: int) -> str:
+    rows = []
+    for line in _spec_metrics(drafts, first, second).splitlines():
+        if "{" in line:
+            line = line.replace("{", f'{{engine="{engine}",', 1)
+        else:
+            name, value = line.split(" ", 1)
+            line = f'{name}{{engine="{engine}"}} {value}'
+        rows.append(line)
+    return "\n".join(rows)
+
+
+@pytest.mark.parametrize("mode", ["throughput", "sweep"])
+def test_counter_discontinuity_keeps_benchmark_results(
+    benchmark_args, benchmark_io, tmp_path, caplog, mode
+):
+    benchmark_args.mode = mode
+    _, fetch = benchmark_io
+    fetch.side_effect = [
+        _engine_spec_metrics("a", 100, 80, 20)
+        + "\n"
+        + _engine_spec_metrics("b", 100, 80, 20),
+        _engine_spec_metrics("a", 20, 10, 2)
+        + "\n"
+        + _engine_spec_metrics("b", 220, 170, 40),
+    ]
+
+    evaluate.run_benchmark(benchmark_args)
+
+    assert "counter decreased" in caplog.text
+    assert not (tmp_path / "acceptance.csv").exists()
+    assert (tmp_path / "artifacts" / "run_qa.json").is_file()
+    if mode == "sweep":
+        columns, rows = _read_csv(tmp_path / "perf_results.csv")
+        assert columns == evaluate.BASE_CSV_COLUMNS
+        assert [float(row["target_rate"]) for row in rows] == [1, 5]

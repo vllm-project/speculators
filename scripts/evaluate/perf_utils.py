@@ -13,7 +13,7 @@ import subprocess
 import sys
 import time
 from collections import defaultdict
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from itertools import zip_longest
 from pathlib import Path
 from urllib.error import URLError
@@ -106,6 +106,10 @@ BASE_CSV_COLUMNS = [
 @dataclass
 class Metric:
     name: str
+    # Keep scrape identity for interval checks without changing aggregate values.
+    series: dict[tuple[tuple[str, str], ...], float] = field(
+        default_factory=dict, kw_only=True, repr=False, compare=False
+    )
 
 
 @dataclass
@@ -266,6 +270,15 @@ def parse_gen_len_file(filepath: Path) -> dict:
 _RE_SIMPLE = re.compile(r"^([a-zA-Z_:][a-zA-Z0-9_:]*)\s+([0-9.eE+-]+)$")
 _RE_LABELED = re.compile(r"^([a-zA-Z_:][a-zA-Z0-9_:]*)\{([^}]+)\}\s+([0-9.eE+-]+)$")
 _SPEC = "vllm:spec_decode"
+_COUNTER_NAMES = {
+    f"{_SPEC}_{suffix}"
+    for suffix in (
+        "num_drafts",
+        "num_draft_tokens",
+        "num_accepted_tokens",
+        "num_accepted_tokens_per_pos",
+    )
+}
 
 
 def parse_prometheus_metrics(raw_text: str) -> list[Metric]:
@@ -275,6 +288,7 @@ def parse_prometheus_metrics(raw_text: str) -> list[Metric]:
 
     metrics: list[Metric] = []
     vector_data: dict[str, list[tuple[int, float]]] = {}
+    vector_series: dict[str, dict[tuple[tuple[str, str], ...], float]] = {}
 
     for raw_line in raw_text.strip().split("\n"):
         line = raw_line.strip()
@@ -286,23 +300,31 @@ def parse_prometheus_metrics(raw_text: str) -> list[Metric]:
             continue
 
         groups = m.groups()
+        has_labels = m.re is _RE_LABELED
         name = groups[0].replace("_total", "")
         value = float(groups[-1])
+        labels = (
+            tuple(sorted(re.findall(r'(\w+)="((?:\\.|[^"\\])*)"', groups[1])))
+            if has_labels
+            else ()
+        )
 
         if "per_pos" not in name:
-            metrics.append(Counter(name=name, value=value))
-        elif len(groups) == 3:  # noqa: PLR2004
+            metrics.append(Counter(name=name, value=value, series={labels: value}))
+        elif has_labels:
             pos_match = re.search(r'position="(\d+)"', groups[1])
             if pos_match:
                 pos = int(pos_match.group(1))
                 vector_data.setdefault(name, []).append((pos, value))
+                series = vector_series.setdefault(name, {})
+                series[labels] = series.get(labels, 0.0) + value
 
     for name, pos_values in vector_data.items():
         pos_values.sort()
         values = [0.0] * (pos_values[-1][0] + 1)
         for pos, val in pos_values:
             values[pos] += val
-        metrics.append(Vector(name=name, values=values))
+        metrics.append(Vector(name=name, values=values, series=vector_series[name]))
 
     return metrics
 
@@ -323,11 +345,34 @@ def _accumulate(metrics: list[Metric]) -> tuple[float, float, float, list[float]
     )
 
 
+def _counter_series(metrics: list[Metric]) -> dict:
+    values: dict = defaultdict(float)
+    for metric in metrics:
+        if metric.name in _COUNTER_NAMES:
+            for labels, value in metric.series.items():
+                values[(metric.name, labels)] += value
+    return values
+
+
 def extract_spec_decode_metrics(
     raw_metrics: list[Metric],
     baseline_metrics: list[Metric] | None = None,
 ) -> dict[str, float]:
-    """Extract speculative decoding metrics and calculate acceptance rates."""
+    """Extract acceptance rates, omitting intervals with counter discontinuities.
+
+    Parsed series must be present at both endpoints and must not decrease. Two
+    scrapes cannot detect a reset whose final counter already exceeds its baseline.
+    """
+    if baseline_metrics is not None:
+        current_series = _counter_series(raw_metrics)
+        baseline_series = _counter_series(baseline_metrics)
+        if current_series.keys() != baseline_series.keys():
+            logger.warning("Skipping acceptance metrics: counter series changed")
+            return {}
+        if any(value < baseline_series[key] for key, value in current_series.items()):
+            logger.warning("Skipping acceptance metrics: counter decreased")
+            return {}
+
     drafts, draft_tok, accepted, counts = _accumulate(raw_metrics)
 
     if baseline_metrics:
