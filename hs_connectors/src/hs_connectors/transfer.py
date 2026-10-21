@@ -204,6 +204,38 @@ class FileBackend(HiddenStatesBackend):
         }
 
 
+@HiddenStatesBackend.register("file_kv")
+class FileKVBackend(FileBackend):
+    @staticmethod
+    def add_launch_args(parser: argparse.ArgumentParser) -> None:
+        FileBackend.add_launch_args(parser)
+        _add_argument_if_absent(
+            parser,
+            "--kv-cache-layer-ids",
+            type=int,
+            nargs="+",
+            default=None,
+            help="Verifier layer ids whose KV cache is saved with the hidden "
+            "states. Used with backend=file_kv.",
+        )
+
+    @staticmethod
+    def build_kv_transfer_config(args: argparse.Namespace) -> dict[str, Any]:
+        if not args.kv_cache_layer_ids:
+            raise ValueError("--kv-cache-layer-ids is required with backend=file_kv")
+        return {
+            "kv_connector": "KVCacheHiddenStatesConnector",
+            "kv_role": "kv_producer",
+            "kv_connector_module_path": (
+                "hs_connectors.kv_cache_hidden_states_connector"
+            ),
+            "kv_connector_extra_config": {
+                "shared_storage_path": args.hidden_states_path,
+                "kv_cache_layer_ids": args.kv_cache_layer_ids,
+            },
+        }
+
+
 # ---------------------------------------------------------------------------
 # FP8 backend (shared filesystem, quantized hidden states)
 # ---------------------------------------------------------------------------

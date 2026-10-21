@@ -30,7 +30,10 @@ logger = logging.getLogger("speculators")
 
 
 def create_empty_sample(
-    hidden_size: int, num_target_layers: int = 3, dtype: torch.dtype = torch.bfloat16
+    hidden_size: int,
+    num_target_layers: int = 3,
+    dtype: torch.dtype = torch.bfloat16,
+    kv_cache_shape: tuple[int, ...] | None = None,
 ):
     # data structure: {
     #     "hidden_states": [seq_len, num_target_layers * hidden_size],
@@ -45,7 +48,7 @@ def create_empty_sample(
     # we substitute an empty sample), the implicit float32 placeholders crashed
     # bf16 EAGLE-3 layers (fc, verifier_lm_head) with a dtype mismatch.
 
-    return {
+    sample = {
         "hidden_states": torch.empty(0, num_target_layers * hidden_size, dtype=dtype),
         "input_ids": torch.empty(0, dtype=torch.long),
         "verifier_last_hidden_states": torch.empty(0, hidden_size, dtype=dtype),
@@ -53,6 +56,9 @@ def create_empty_sample(
         "lengths": torch.tensor([0], dtype=torch.long),
         "position_ids": torch.arange(0, dtype=torch.long),
     }
+    if kv_cache_shape is not None:
+        sample["kv_cache"] = torch.empty(0, *kv_cache_shape, dtype=dtype)
+    return sample
 
 
 def _has_multimodal_content(messages: list[dict]) -> bool:
@@ -321,7 +327,7 @@ class ArrowDataset(BaseDataset):
                 reason=f"Cached token ids do not match sample {index}"
             )
 
-        return {
+        sample = {
             "hidden_states": loaded_hs["hidden_states"][:, :-1].flatten(
                 1
             ),  # [seq_len, 3 * hidden_size]
@@ -331,6 +337,9 @@ class ArrowDataset(BaseDataset):
             ],  # [seq_len, hidden_size]
             "loss_mask": self.data[index]["loss_mask"],  # [seq_len]
         }
+        if "kv_cache" in loaded_hs:
+            sample["kv_cache"] = loaded_hs["kv_cache"]
+        return sample
 
 
 class CollateFn:
@@ -343,12 +352,14 @@ class CollateFn:
         num_target_layers: int = 3,
         dtype: torch.dtype = torch.bfloat16,
         preprocess: Callable[[BatchType], BatchType] | None = None,
+        kv_cache_shape: tuple[int, ...] | None = None,
     ):
         self.max_len = max_len
         self.hidden_size = hidden_size
         self.num_target_layers = num_target_layers
         self.dtype = dtype
         self.preprocess = preprocess
+        self.kv_cache_shape = kv_cache_shape
 
     def _clean_batch(
         self, batch: Sequence[BatchType | SampleUnavailable | None]
@@ -386,7 +397,10 @@ class CollateFn:
             # downstream layers loaded at a different precision (e.g. bf16
             # weights vs fp32 default placeholders).
             empty = create_empty_sample(
-                self.hidden_size, self.num_target_layers, dtype=dtype
+                self.hidden_size,
+                self.num_target_layers,
+                dtype=dtype,
+                kv_cache_shape=self.kv_cache_shape,
             )
             if self.preprocess:
                 empty = self.preprocess(empty)
