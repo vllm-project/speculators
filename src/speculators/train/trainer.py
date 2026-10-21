@@ -146,6 +146,7 @@ class TrainerConfig(NamedTuple):
     train_call_kwargs: dict | None = None
     val_call_kwargs: dict | None = None
     optimizer: Literal["adamw", "muon"] = "adamw"
+    optimizer_implementation: Literal["fused", "eager"] = "fused"
     weight_decay: float = 0.01
     muon_lr: float = 0.02
     muon_momentum: float = 0.95

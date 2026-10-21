@@ -14,9 +14,17 @@ Stream hidden states between separate extraction and training nodes with the Moo
 
 Regenerate dataset responses using your target model for improved drafter alignment. Recommended before training.
 
+## [RAG Training Data](rag.md)
+
+Prepare retrieved context and target-model answers for training, budget sequence lengths, and inspect the resulting loss masks.
+
 ## [Evaluating Model Performance](evaluating_performance.md)
 
 Benchmark and evaluate your trained speculator models.
+
+## [Throughput vs. Interactivity](throughput_interactivity.md)
+
+Measure output-token throughput against per-user speed for a server with one or more speculators, the way InferenceX does, on real prompts.
 
 ## [Serve in vLLM](serve_vllm.md)
 

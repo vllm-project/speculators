@@ -11,7 +11,7 @@ name = "hs-connectors"
 description = "Pluggable backends for transferring hidden states between vLLM and Speculators during online and offline training."
 dynamic = ["version"]
 readme = { file = "README.md", content-type = "text/markdown" }
-requires-python = ">=3.10"
+requires-python = ">=3.11"
 keywords = [
     "hidden states",
     "speculative decoding",

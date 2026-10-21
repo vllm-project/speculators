@@ -1,7 +1,7 @@
 """E2E smoke test for the Mooncake hidden-states producer/consumer loop.
 
 Sends a single completion to a vLLM server running the Mooncake connector,
-retrieves the ``mooncake_key`` from the response, then reads the hidden states
+retrieves the transfer manifest from the response, then reads the hidden states
 back from a separate MooncakeHiddenStatesStore client (standing in for a
 trainer on another node).  Validates shape and token-id alignment.
 
@@ -69,11 +69,12 @@ def test_mooncake_hidden_states_roundtrip(tmp_path: Path):
     ):
         resp = _send_completion(f"http://127.0.0.1:{VLLM_PORT}", MODEL, prompt)
 
-        key = resp["kv_transfer_params"]["handle"]
+        transfer_manifest = resp["kv_transfer_params"]
         ptids = resp["choices"][0].get("prompt_token_ids") or resp.get(
             "prompt_token_ids"
         )
-        assert key, "handle missing from response"
+        assert transfer_manifest, "transfer manifest missing from response"
+        assert transfer_manifest["handle"], "handle missing from transfer manifest"
         assert ptids, "prompt_token_ids missing from response"
 
         store = MooncakeHiddenStatesStore(
@@ -87,7 +88,7 @@ def test_mooncake_hidden_states_roundtrip(tmp_path: Path):
             )
         ).setup()
 
-        out = store.get_sample(key, timeout=30.0)
+        out = store.get_sample(transfer_manifest, timeout=30.0)
         hs, ids = out["hidden_states"], out["token_ids"]
 
         assert hs.ndim == 3, f"expected 3-d hidden_states, got shape {hs.shape}"

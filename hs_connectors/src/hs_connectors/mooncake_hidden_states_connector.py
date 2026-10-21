@@ -1,10 +1,10 @@
 """Mooncake-backed sibling of vLLM's ``ExampleHiddenStatesConnector``.
 
-Stores the same ``{"hidden_states", "token_ids"}`` payload in a Mooncake store
-keyed by request id instead of safetensors files, so the vLLM target and the
-trainer don't need a shared filesystem. Loaded out-of-tree via
-``kv_connector_module_path``; must be used with the ``extract_hidden_states``
-speculative method.
+Stores the tensor payload as packed bytes in a
+Mooncake object keyed by request id. The versioned transfer manifest is
+returned separately through vLLM, so the vLLM target and trainer don't need a
+shared filesystem. Loaded out-of-tree via ``kv_connector_module_path``; must
+be used with the ``extract_hidden_states`` speculative method.
 """
 
 from __future__ import annotations
@@ -33,9 +33,11 @@ from vllm.v1.core.sched.output import SchedulerOutput
 
 from hs_connectors.device import accelerator_module
 from hs_connectors.mooncake_store import (
+    VERSION,
     MooncakeHiddenStatesStore,
     MooncakeStoreConfig,
     assert_finite,
+    packed_layout,
 )
 
 if TYPE_CHECKING:
@@ -58,6 +60,7 @@ class PendingSave:
     mooncake_key: str
     token_ids: torch.Tensor
     block_ids: list[int]
+    transfer_manifest: dict[str, Any]
 
 
 @dataclass
@@ -101,6 +104,39 @@ class MooncakeHiddenStatesConnector(KVConnectorBase_V1, SupportsHMA):
         )
 
     @staticmethod
+    def _get_hidden_state_layout(
+        vllm_config: VllmConfig,
+    ) -> tuple[int, int, torch.dtype]:
+        """Return the logical shape and dtype written by vLLM's extractor.
+
+        ``ExtractHiddenStatesProposer`` creates a buffer with shape
+        ``[tokens, num_hidden_states, hidden_size]`` before passing it to
+        ``CacheOnlyAttentionLayer``. The final scheduler KV-cache group can
+        contain a lossy representative spec for mixed attention groups, so
+        its ``num_heads``/``head_size`` fields are not a reliable description
+        of this payload.
+        """
+        speculative_config = vllm_config.speculative_config
+        if speculative_config is None or speculative_config.draft_model_config is None:
+            raise ValueError(
+                "MooncakeHiddenStatesConnector requires a draft model config"
+            )
+
+        draft_hf_config = speculative_config.draft_model_config.hf_config
+        layer_ids = getattr(draft_hf_config, "eagle_aux_hidden_state_layer_ids", None)
+        if not layer_ids:
+            raise ValueError(
+                "eagle_aux_hidden_state_layer_ids must be set for hidden-state "
+                "extraction"
+            )
+
+        return (
+            len(layer_ids),
+            vllm_config.model_config.get_hidden_size(),
+            vllm_config.model_config.dtype,
+        )
+
+    @staticmethod
     def _get_cache_block_size(
         vllm_config: VllmConfig,
         kv_cache_config: KVCacheConfig | None,
@@ -131,6 +167,11 @@ class MooncakeHiddenStatesConnector(KVConnectorBase_V1, SupportsHMA):
         self._block_size = self._get_cache_block_size(
             vllm_config, kv_cache_config, self._hs_group_idx
         )
+        (
+            self._num_hidden_states,
+            self._hidden_size,
+            self._hidden_state_dtype,
+        ) = self._get_hidden_state_layout(vllm_config)
 
         if (
             self._vllm_config.speculative_config is None
@@ -252,13 +293,13 @@ class MooncakeHiddenStatesConnector(KVConnectorBase_V1, SupportsHMA):
                 # The DtoH copy into the store's registered staging buffer runs
                 # on the copy stream and completes before the put.
                 self._store.put_sample(
-                    pending.mooncake_key,
+                    pending.transfer_manifest,
                     {"hidden_states": hidden_states, "token_ids": pending.token_ids},
                 )
         except Exception as exc:
             try:
                 # Store error marker instead of the sample, so consumer can re-request
-                self._store.put_error(pending.mooncake_key, str(exc))
+                self._store.put_error(pending.transfer_manifest, str(exc))
             except Exception:
                 logger.exception(
                     "Failed to publish Mooncake error marker for %s",
@@ -348,14 +389,39 @@ class MooncakeHiddenStatesConnector(KVConnectorBase_V1, SupportsHMA):
         else:
             token_ids = torch.tensor([], dtype=torch.long)
 
+        # Produce transfer manifest
+        num_tokens = token_ids.numel()
+        tensor_spec, total_bytes = packed_layout(
+            {
+                "hidden_states": (
+                    [num_tokens, self._num_hidden_states, self._hidden_size],
+                    self._hidden_state_dtype,
+                ),
+                "token_ids": (list(token_ids.shape), token_ids.dtype),
+            }
+        )
+        transfer_manifest = {
+            "handle": mooncake_key,
+            "version": VERSION,
+            "tensors": tensor_spec,
+            "metadata": {
+                "num_tokens": num_tokens,
+                "total_aligned_bytes": total_bytes,
+                "extract_mode": "all"
+                if kv_params.get("include_output_tokens", False)
+                else "prompt_only",
+            },
+        }
+
         self._pending_saves[req_id] = PendingSave(
             req_id=req_id,
             mooncake_key=mooncake_key,
             token_ids=token_ids,
             block_ids=list(block_ids),
+            transfer_manifest=transfer_manifest,
         )
-        # Returning True delays block freeing until get_finished extracts.
-        return True, {"handle": mooncake_key}
+
+        return True, transfer_manifest
 
     def request_finished_all_groups(
         self, request: Request, block_ids: tuple[list[int], ...]

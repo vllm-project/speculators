@@ -1,4 +1,4 @@
-"""Training entrypoint — core logic moved from scripts/train.py."""
+"""Training implementation behind the ``speculators train`` command."""
 
 import argparse
 import gc
@@ -719,7 +719,6 @@ def main(cfg: TrainConfig):  # noqa: C901
         data_path=args.data_path,
         total_seq_len=args.total_seq_len,
         hidden_states_dtype=hidden_states_dtype,
-        noise_std=args.noise_std,
         transfer=transfer,
         vllm_endpoint=args.vllm_endpoint,
         on_missing=args.on_missing,
@@ -748,6 +747,7 @@ def main(cfg: TrainConfig):  # noqa: C901
         train_call_kwargs=train_call_kwargs,
         val_call_kwargs=val_call_kwargs,
         optimizer=args.optimizer,
+        optimizer_implementation=args.optimizer_implementation,
         weight_decay=args.weight_decay,
         muon_lr=args.muon_lr,
         muon_momentum=args.muon_momentum,
