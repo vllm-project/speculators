@@ -46,7 +46,7 @@ torchrun --standalone --nproc_per_node=4 -m speculators.train \
 
 - **`--trust-remote-code`** (flag) Allow executing code from HF Hub when loading the verifier's tokenizer.
 
-- **`--speculator-type`** (str, default: `"eagle3"`) Type of speculator model to train. Options: `eagle3`, `dflash`, `dflash2`, `dspark`, `peagle`, `mtp`
+- **`--speculator-type`** (str, default: `"eagle3"`) Type of speculator model to train. Options: `eagle3`, `dflash`, `dflash2`, `dspark`, `peagle`, `mtp`. `peagle` is deprecated and scheduled for removal in Speculators 0.11.
 
 - **`--from-pretrained`** (str, default: `""`) Path or HF id of an existing draft checkpoint to load weights from and train — either a previously trained draft or the initialized-but-untrained checkpoint produced by `--dry-run`. May also point to a local directory containing only a `config.json`, in which case a fresh draft is initialized from that full speculator config. Takes precedence over all other model-definition options: it is mutually exclusive with `--draft-config` and the decoder-shaping flags (`--num-layers`, `--draft-arch`, `--draft-hidden-act`, `--sliding-window`, `--full-attention-indices`).
 
@@ -202,6 +202,8 @@ DFlash2 builds on DFlash, so all DFlash-specific arguments apply as well. It def
 - **`--selector-top-k`** (int, default: `16`) Number of candidates retained per position.
 
 - **`--selector-loss-alpha`** (float, default: `1.0`) Weight of the candidate-selector K-way cross-entropy term.
+
+- **`--selector-miss-policy`** (str, default: `"replace"`) DFlash2 selector target-miss policy. `replace` inserts the gold token into the training candidates when it's missing from the unary top-K; `strict` leaves top-K unchanged and excludes that position from the selector cross-entropy. The unary loss remains active either way. Options: `replace`, `strict`.
 
 ### DSpark-Specific Arguments
 
