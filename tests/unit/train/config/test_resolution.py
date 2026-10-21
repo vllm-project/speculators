@@ -484,6 +484,14 @@ def test_resolve_flag_overrides_config_file(tmp_path):
     assert cfg.flatten()["lr"] == 0.5
 
 
+def test_resolve_max_transfer_workers():
+    cfg = TrainConfig.resolve(
+        ["--verifier-name-or-path", "m", "--max-transfer-workers", "1"]
+    )
+
+    assert cfg.flatten()["max_transfer_workers"] == 1
+
+
 def test_help_is_grouped_by_concern():
     titles = {group.title for group in build_parser()._action_groups}
     assert {

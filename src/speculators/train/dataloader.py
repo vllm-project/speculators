@@ -112,6 +112,7 @@ def create_train_val_loaders(
     train_data_ratio: float = 0.9,
     max_train_batches: int | None = None,
     seed: int = 0,
+    max_transfer_workers: int = 1,
 ) -> tuple[DataLoader, DataLoader]:
     """Create training and validation DataLoaders.
 
@@ -154,6 +155,7 @@ def create_train_val_loaders(
             max_retries=max_retries,
             generation_validation_retries=generation_validation_retries,
             max_consecutive_generation_failures=max_consecutive_generation_failures,
+            max_transfer_workers=max_transfer_workers,
         )
     else:
         hidden_states_source = OfflineHiddenStatesSource(
