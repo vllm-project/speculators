@@ -8,3 +8,9 @@ matplotlib
 numpy
 scikit-learn
 scipy
+
+# Shared dataset loading and acceptance collection.
+httpx>=0.27
+datasets>=3.0
+pandas
+tiktoken
