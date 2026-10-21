@@ -306,14 +306,31 @@ class Eagle3DraftModel(DraftVocabMixin, SpeculatorModel):
 
             if self.config.norm_output:
                 hidden_states = self.norm(hidden_states)
-                logits = self.lm_head(hidden_states)
+                head_input = hidden_states
             else:
-                logits = self.lm_head(self.norm(hidden_states))
-            # shape: [1, total_seq_len, draft_vocab_size]
+                head_input = self.norm(hidden_states)
 
-            # Taken before the metrics so they can reuse it: the accuracy
-            # metrics need argmax over the same logits.
-            input_ids = torch.argmax(logits, dim=-1)
+            if return_loss and ttt_step > 0:
+                # The last ttt_step positions have no target and are sliced
+                # back out of the loss (see align_for_step). Projecting them
+                # inside the graph anyway makes the backward materialize a
+                # zero-filled [1, total_seq_len, draft_vocab_size] gradient
+                # just to copy the kept rows into it, so they are projected
+                # without grad; only their argmax is used, for the returned
+                # draft tokens.
+                logits = self.lm_head(head_input[:, :-ttt_step])
+                # shape: [1, total_seq_len - ttt_step, draft_vocab_size]
+                with torch.no_grad():
+                    tail_ids = torch.argmax(
+                        self.lm_head(head_input[:, -ttt_step:]), dim=-1
+                    )
+                # Taken before the metrics so they can reuse it: the accuracy
+                # metrics need argmax over the same logits.
+                input_ids = torch.cat([torch.argmax(logits, dim=-1), tail_ids], dim=-1)
+            else:
+                logits = self.lm_head(head_input)
+                # shape: [1, total_seq_len, draft_vocab_size]
+                input_ids = torch.argmax(logits, dim=-1)
             # shape: [1, total_seq_len]
 
             if return_loss:
@@ -327,6 +344,7 @@ class Eagle3DraftModel(DraftVocabMixin, SpeculatorModel):
                     loss_config=loss_config,
                     pred_ids=input_ids,
                     target_ids=target_ids,
+                    logits_aligned=True,
                 )
                 loss += s_loss
                 metrics.update(s_metrics)
