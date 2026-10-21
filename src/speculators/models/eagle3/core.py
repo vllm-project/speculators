@@ -252,7 +252,7 @@ class Eagle3DraftModel(DraftVocabMixin, SpeculatorModel):
                     self.verifier_norm(verifier_last_hidden_states)
                 )
                 # shape: [1, total_seq_len, draft_vocab_size]
-            loss = torch.tensor(0.0, device=device)
+            loss = torch.zeros((), device=device)
 
             # prev_correct is a boolean tensor that is True for tokens that have been
             # correctly predicted on all previous ttt_steps.
@@ -359,7 +359,7 @@ class Eagle3DraftModel(DraftVocabMixin, SpeculatorModel):
 
         if return_loss:
             metrics["loss_sum"] = loss.detach().clone()
-            metrics["loss_total"] = torch.tensor(1.0, device=device)
+            metrics["loss_total"] = torch.ones((), device=device)
             return draft_tokens, loss, metrics
         else:
             return draft_tokens
