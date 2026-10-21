@@ -358,6 +358,14 @@ def _build_train_loader(
             dtype=hidden_states_dtype,
             device="cpu",
         )
+        if torch.cuda.is_available():
+            # The real loader runs with pin_memory=True. Pageable memory cannot
+            # DMA, so leaving the synthetic batch unpinned would measure a
+            # host-to-device path training never takes.
+            synth_batch = {
+                k: v.pin_memory() if isinstance(v, torch.Tensor) else v
+                for k, v in synth_batch.items()
+            }
         return _SyntheticLoader(synth_batch, total_steps), True
 
     preprocess_fns = {
