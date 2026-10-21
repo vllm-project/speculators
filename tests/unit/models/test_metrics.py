@@ -369,6 +369,75 @@ class TestComputeAccuracySingleStep:
         assert cond_correct_1.item() == pytest.approx(2, abs=1e-4)
         assert cond_total_1.item() == pytest.approx(3, abs=1e-4)
 
+    @pytest.mark.parametrize("with_prev_correct", [False, True])
+    def test_masked_counts_match_masked_select(self, with_prev_correct):
+        """Masked counts match selecting the masked positions first.
+
+        The mask is applied with a reduction instead of ``masked_select``,
+        whose output size depends on the mask's values. The counts have to be
+        the ones ``masked_select`` would have produced.
+        """
+        torch.manual_seed(0)
+        pred = torch.randint(0, 4, (1, 64))
+        target = torch.randint(0, 4, (1, 64))
+        loss_mask = torch.randint(0, 2, (1, 64), dtype=torch.bool)
+        prev_correct = (
+            torch.randint(0, 2, (1, 64), dtype=torch.bool)
+            if with_prev_correct
+            else None
+        )
+
+        expected_correct = pred == target
+        expected_cond_total = (
+            prev_correct.sum().float().item()
+            if prev_correct is not None
+            else pred.numel()
+        )
+        if prev_correct is not None:
+            expected_correct = torch.logical_and(prev_correct.clone(), expected_correct)
+        expected_sum = torch.masked_select(expected_correct, loss_mask).sum().item()
+
+        full_correct, full_total, cond_correct, cond_total = (
+            compute_accuracy_single_step(pred, target, loss_mask, prev_correct)
+        )
+
+        assert full_correct.item() == pytest.approx(expected_sum)
+        assert full_total.item() == pytest.approx(loss_mask.sum().item())
+        assert cond_correct.item() == pytest.approx(expected_sum)
+        assert cond_total.item() == pytest.approx(expected_cond_total)
+
+    def test_empty_mask_counts_zero(self):
+        """A mask selecting nothing gives zero counted positions, not a crash."""
+        pred = torch.tensor([[1, 2, 3]])
+        target = torch.tensor([[1, 2, 3]])
+        loss_mask = torch.zeros(1, 3, dtype=torch.bool)
+
+        full_correct, full_total, _cond_correct, _cond_total = (
+            compute_accuracy_single_step(pred, target, loss_mask, prev_correct=None)
+        )
+
+        assert full_correct.item() == 0.0
+        assert full_total.item() == 0.0
+
+    def test_totals_are_separate_tensors(self):
+        """``full_total`` and ``cond_total`` are not the same tensor.
+
+        Callers put both in a metrics dict and reduce them; sharing one storage
+        would make a single in-place reduction count twice.
+        """
+        pred = torch.tensor([[1, 2, 3]])
+        target = torch.tensor([[1, 2, 0]])
+
+        _full_correct, full_total, _cond_correct, cond_total = (
+            compute_accuracy_single_step(
+                pred, target, loss_mask=None, prev_correct=None
+            )
+        )
+
+        assert full_total is not cond_total
+        full_total.add_(1.0)
+        assert cond_total.item() == 3.0
+
 
 class TestDecayFunctions:
     def test_dflash_anchor_zero_and_exp_values(self):
