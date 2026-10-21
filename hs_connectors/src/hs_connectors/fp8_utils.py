@@ -4,13 +4,15 @@ Uses per-token scaling: one float32 scale per token, computed over all
 non-token dimensions (e.g. ``num_layers`` and ``hidden_size`` combined for a
 ``[seq_len, num_layers, hidden_size]`` hidden-states tensor).
 
-Quantize: scale = amax / FP8_MAX; fp8 = (tensor / scale).to(fp8_dtype)
+Quantize: scale = amax / FP8_MAX; fp8 = clamp(tensor / scale, ±FP8_MAX).to(fp8)
 Dequantize: restored = fp8.to(target_dtype) * scale
 """
 
 from __future__ import annotations
 
 import torch
+
+from hs_connectors.mooncake_store import assert_finite
 
 SCALES_KEY = "hidden_states_scales"
 
@@ -40,14 +42,22 @@ def quantize_tensor_to_fp8(
         Tuple of ``(fp8_tensor, scale)`` where ``scale`` has the same rank as
         ``tensor`` but every dimension except dim 0 is 1 (e.g.
         ``[seq_len, 1, 1]``), so it broadcasts directly against ``tensor``.
+
+    Raises:
+        NonFiniteTensorError: If ``tensor`` is a non-empty floating tensor
+            containing NaN or infinity. Nothing is quantized in that case.
     """
+    # Same gate Mooncake uses before publish: do not quantize NaN or Inf.
+    assert_finite("hidden_states", tensor)
     fp8_dtype = _fp8_dtype()
     fp8_max = torch.finfo(fp8_dtype).max
     fp32 = tensor.float()
     reduce_dims = tuple(range(1, fp32.dim()))
     amax = fp32.abs().amax(dim=reduce_dims, keepdim=True)
     scale = (amax / fp8_max).clamp(min=1e-12)
-    fp8_tensor = (fp32 / scale).to(fp8_dtype)
+    # e4m3 has no infinity. amax / scale can round slightly above fp8_max,
+    # and that overflow becomes NaN instead of saturating.
+    fp8_tensor = (fp32 / scale).clamp(-fp8_max, fp8_max).to(fp8_dtype)
     return fp8_tensor, scale
 
 
