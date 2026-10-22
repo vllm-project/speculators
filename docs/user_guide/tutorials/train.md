@@ -2,6 +2,10 @@
 
 This tutorial walks you through training a speculator model end to end, from raw data to a checkpoint served in vLLM. It covers **Eagle-3**, **P-EAGLE**, **DFlash**, **DFlash2**, **DSpark**, and **MTP**, in both online and offline training modes.
 
+> ⚠️ **Warning: P-EAGLE is deprecated**
+>
+> P-EAGLE training is scheduled for removal in Speculators 0.11. Selecting it emits a `FutureWarning`.
+
 Pick an algorithm and a training mode below; the rest of the walkthrough is the same for every combination. The examples use `Qwen/Qwen3-8B` as the target model -- except for MTP, which needs a verifier with native MTP layers and so uses `Qwen/Qwen3.5-9B`. The process is the same for other models.
 
 ## Choose Your Setup
@@ -91,7 +95,7 @@ Note: if you are using an experiment tracker (e.g. trackio, wandb, tensorboard, 
 
 **Prerequisites:**
 
-- Python 3.10+
+- Python 3.11+
 - One or more accelerators (NVIDIA GPU, AMD GPU, or Ascend NPU)
 - For offline mode, disk space for the cached hidden states -- see [Estimating Disk Space](#estimating-disk-space-requirements)
 - For MTP, a verifier with native MTP layers (e.g. `Qwen/Qwen3.5-9B`, `Qwen/Qwen3.5-0.8B`)

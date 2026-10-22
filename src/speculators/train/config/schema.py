@@ -341,6 +341,12 @@ class OptimizerArgs(_Group):
         description="Optimizer to use. 'muon' applies Muon to 2D weight matrices and "
         "AdamW to the remaining params (norms, biases, embeddings, lm_head).",
     )
+    optimizer_implementation: Literal["fused", "eager"] = Field(
+        default="fused",
+        description="AdamW implementation to use; 'fused' runs the update in a single "
+        "kernel, 'eager' falls back to PyTorch's default (foreach) path for "
+        "accelerators or dtypes where the fused kernel is unsupported.",
+    )
     lr: float = Field(default=1e-3, description="Learning rate (AdamW / base group).")
     weight_decay: float = Field(
         default=0.01,
@@ -502,6 +508,14 @@ class DFlash2Args(_Group):
         default=1.0,
         ge=0.0,
         description="DFlash2: weight of the candidate-selector K-way CE term.",
+    )
+    selector_miss_policy: Literal["replace", "strict"] = Field(
+        default="replace",
+        description=(
+            "DFlash2 selector target-miss policy. 'replace' inserts the gold token "
+            "into the training candidates; 'strict' leaves top-K unchanged and "
+            "excludes that position from selector CE. Unary loss remains active."
+        ),
     )
 
 
@@ -887,7 +901,7 @@ class TrainConfig(BaseSettings):
         """The impure CLI boundary: parse argv, layer, validate.
 
         Turns any configuration error into a clean ``SystemExit(2)``. This is what
-        ``scripts/train.py`` calls.
+        the ``speculators train`` command calls.
         """
         from speculators.train.config import resolution  # noqa: PLC0415
 

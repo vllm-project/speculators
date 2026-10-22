@@ -1,7 +1,7 @@
 """Resolution seam tests plus the example-recipe back-compat suite.
 
 The recipe suite is the central backward-compatibility guard: each real
-``examples/train/*.sh`` recipe's ``train.py`` invocation is extracted (bash does
+``examples/train/*.sh`` recipe's training invocation is extracted (bash does
 the variable expansion and word-splitting, exactly as a user's shell would) and
 run through :meth:`TrainConfig.resolve`; the flags it sets must resolve to their
 expected values in the flat dict. A renamed, dropped, or retyped flag breaks a
@@ -345,6 +345,24 @@ def test_on_generate_yaml_warns_deprecated(tmp_path):
         )
 
 
+def test_peagle_flag_warns_deprecated():
+    with pytest.warns(FutureWarning, match="P-EAGLE is deprecated"):
+        TrainConfig.from_sources(
+            cli={"verifier_name_or_path": "m", "speculator_type": "peagle"},
+            argv=["train.py"],
+        )
+
+
+def test_peagle_yaml_warns_deprecated(tmp_path):
+    config_path = _write(tmp_path, "train:\n  speculator_type: peagle\n")
+    with pytest.warns(FutureWarning, match="P-EAGLE is deprecated"):
+        TrainConfig.from_sources(
+            cli={"verifier_name_or_path": "m"},
+            config_path=config_path,
+            argv=["train.py"],
+        )
+
+
 def test_default_on_generate_does_not_warn():
     with warnings.catch_warnings():
         warnings.simplefilter("error")
@@ -402,6 +420,8 @@ def test_resolve_dflash2_flags_and_derived_defaults():
             "12",
             "--selector-loss-alpha",
             "0.3",
+            "--selector-miss-policy",
+            "strict",
         ]
     )
     flat = cfg.flatten()
@@ -414,6 +434,7 @@ def test_resolve_dflash2_flags_and_derived_defaults():
     assert flat["selector_rank"] == 128
     assert flat["selector_top_k"] == 12
     assert flat["selector_loss_alpha"] == pytest.approx(0.3)
+    assert flat["selector_miss_policy"] == "strict"
 
 
 def test_resolve_dflash2_allows_explicit_causal_override():
@@ -526,7 +547,7 @@ def _train_invocation_args(lines: list[str]) -> str:
 
 
 def _recipe_argv(path: Path) -> list[str]:
-    """Extract the argv a recipe threads into ``train.py`` via a real shell."""
+    """Extract the argv a recipe threads into training via a real shell."""
     lines = path.read_text().splitlines()
     script = (
         "\n".join(_config_block(lines))

@@ -3,9 +3,9 @@
 Exercises the full offline pipeline:
   1. Prepare data (pre-tokenized download or render-boundary tokenization)
   2. Launch a vLLM server for hidden-state extraction (scripts/launch_vllm.py)
-  3. Generate hidden states offline (scripts/data_generation_offline.py)
+  3. Generate hidden states offline (speculators generate-offline-data)
   4. Stop the vLLM server
-  5. Train a draft model using pre-generated hidden states (scripts/train.py)
+  5. Train a draft model using pre-generated hidden states (speculators train)
   6. Validate the trained checkpoint via vLLM inference (run_vllm_engine)
 """
 
