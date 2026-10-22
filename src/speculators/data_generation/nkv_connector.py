@@ -324,9 +324,7 @@ class NKVDataConnector(KVConnectorBase_V1, SupportsHMA):
                 f"unexpected KV cache layout for attn layer: {kv_data.shape}"
             )
             kv_data = (
-                kv_data.view(
-                    num_tokens, kv_data.shape[1], 2, kv_data.shape[-1] // 2
-                )
+                kv_data.view(num_tokens, kv_data.shape[1], 2, kv_data.shape[-1] // 2)
                 .permute(2, 0, 1, 3)
                 .contiguous()
             )
@@ -334,8 +332,8 @@ class NKVDataConnector(KVConnectorBase_V1, SupportsHMA):
                 from vllm.distributed.parallel_state import get_tp_group
 
                 # KV heads are sharded across TP ranks; gather on the heads
-                # axis (now dim 3 after the permute).
-                kv_data = get_tp_group().all_gather(kv_data, dim=3)
+                # axis (dim 2 of [2, T, kv_heads, head_dim]).
+                kv_data = get_tp_group().all_gather(kv_data, dim=2)
             self._kv_buffers[request.req_id][layer_id] = kv_data.detach().cpu()
 
     def get_num_new_matched_tokens(

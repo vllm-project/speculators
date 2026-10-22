@@ -410,8 +410,7 @@ class MambaAttnHybridDraftModel(DraftVocabMixin, SpeculatorModel):
             topk = config.lilicorr_candidate_topk
             if topk < 1 or topk > 16 or topk & (topk - 1):  # noqa: PLR2004
                 raise ValueError(
-                    "lilicorr_candidate_topk must be a power of two <= 16; "
-                    f"got {topk}."
+                    f"lilicorr_candidate_topk must be a power of two <= 16; got {topk}."
                 )
             if config.block_size < 2:
                 raise ValueError(
@@ -831,7 +830,7 @@ class MambaAttnHybridDraftModel(DraftVocabMixin, SpeculatorModel):
 
         return full_attn_mask, sw_masks, anchor_positions, anchor_valid
 
-    @torch.compile
+    @torch.compiler.disable
     def forward(
         self,
         kv_caches: torch.Tensor,
