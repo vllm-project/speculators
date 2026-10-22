@@ -1,5 +1,8 @@
 [build-system]
-requires = ["setuptools >= 82.0.1", "setuptools-git-versioning>=2.0,<3"]
+requires = [
+    "setuptools >= 84.0.0",
+    "setuptools-git-versioning>=2.0,<3",
+]
 build-backend = "setuptools.build_meta"
 
 [tool.uv.workspace]
@@ -17,11 +20,11 @@ include = ["*"]
 # ************************************************
 
 [project]
-dynamic = ["version"]
+dynamic = ["version", "dependencies"]
 name = "speculators"
 description = "A unified library for creating, representing, and storing speculative decoding algorithms for LLM serving such as in vLLM."
 readme = { file = "README.md", content-type = "text/markdown" }
-requires-python = ">=3.10"
+requires-python = ">=3.11"
 license = "Apache-2.0"
 license-files = ["LICENSE"]
 authors = [ { name = "Red Hat"} ]
@@ -41,13 +44,23 @@ keywords = [
     "decoding algorithms",
     "inference server"
 ]
-dependencies = [
+
+# Base (non-hs-connectors) dependencies live in [tool.speculators.dependencies]
+# below rather than here, since `hs-connectors` itself must be resolved at build
+# time (see get_hs_connectors_requirement() in setup.py) based on build type
+# (dev/nightly/release), which requires the whole `dependencies` field to be
+# dynamic per PEP 621. setup.py reads the base list back out of this file and
+# appends the computed hs-connectors requirement before calling setup().
+
+[tool.speculators.dependencies]
+base = [
+    "aiohttp",
     "click",
-    "datasets>=4.0.0,<=5.0.0",
-    "hs-connectors",
+    "datasets>=4.0.0,<=5.1.0",
+    "httpx",
     "huggingface-hub",
     "loguru>=0.7.2,<=0.7.3",
-    "numpy>=2.0.0,<=2.4.6",
+    "numpy>=2.0.0,<=2.5.4",
     "openai>=2.0.0",
     "protobuf",
     "psutil",
@@ -55,35 +68,42 @@ dependencies = [
     "pydantic-settings>=2.0.0",
     "rich",
     "safetensors",
-    "torch>=2.9.0,<=2.12.1",
+    "torch>=2.9.0,<=2.14.1",
     "torchaudio",
     "torchvision",
-    "tqdm>=4.66.3,<=4.69.0",
-    "transformers>=4.56.1,<5.15.0",
+    "tqdm>=4.66.3,<=4.70.1",
+    "transformers>=5.0.0,<=5.19.0",
     "typer>=0.12.0",
 ]
 
 [project.optional-dependencies]
+mooncake-cuda = [
+    "mooncake-transfer-engine>=0.3.12",
+]
+mooncake-cuda13 = [
+    "mooncake-transfer-engine-cuda13>=0.3.13.post1",
+]
 dev = [
     # build
-    "build>=1.5.0",
-    "setuptools>=61.0",
+    "build>=1.6.1",
+    "setuptools>=84.0.0",
     "setuptools-git-versioning>=2.0,<3",
 
     # docs build
     "mike~=2.2.0",
     "mkdocs~=1.6.1",
-    "mkdocs-material[imaging]~=9.7.6",
+    "mkdocs-material[imaging]~=9.7.7",
     "markdown~=3.10.2",
-    "pymdown-extensions~=11.0.0",
+    "pymdown-extensions~=12.1.0",
     "mkdocs-section-index~=0.3.12",
     "mkdocs-minify-plugin~=0.8.0",
     "mkdocs-api-autonav~=0.4.0",
     "mkdocs-awesome-nav~=3.3",
-    "mkdocstrings-python~=2.0.5",
+    "mkdocstrings-python~=2.0.9",
     "mkdocs-gen-files~=0.6.1",
     "mkdocs-nav-weight~=0.3.0",
-    "pygments<2.20.0",
+    "mkdocs-redirects~=1.2.3",
+    "pygments<2.22.0",
 
     # general and configurations
     "sphinx~=8.1.3",
@@ -92,12 +112,17 @@ dev = [
     "pytest~=9.1.1",
     "pytest-asyncio~=1.4.0",
     "pytest-cov~=7.1.0",
-    "pytest-mock~=3.15.1",
-    "pytest-rerunfailures~=16.4",
+    "pytest-mock~=3.16.0",
+    "pytest-rerunfailures~=16.7",
+
+    # benchmarking (scripts/benchmark.py statistics and report charts)
+    "scipy",
+    "plotly",
 
     # code quality
     "mypy~=2.1.0",
     "ruff~=0.15.20",
+    "pre-commit~=4.6",
 
     # docs quality
     "mdformat~=1.0.0",
@@ -132,7 +157,6 @@ issues = "https://github.com/vllm-project/speculators/issues"
 
 [tool.mypy]
 files = ["src/speculators", "tests"]
-python_version = "3.10"
 warn_redundant_casts = true
 warn_unused_ignores = false
 show_error_codes = true
@@ -144,7 +168,7 @@ exclude = ["venv", "build", "dist"]
 follow_imports = 'silent'
 
 [[tool.mypy.overrides]]
-module = ["datasets.*", "transformers.*", "setuptools.*", "setuptools_git_versioning.*", "vllm.*", "triton.*"]
+module = ["datasets.*", "transformers.*", "setuptools.*", "setuptools_git_versioning.*", "vllm.*", "triton.*", "hs_connectors.*", "mooncake.*"]
 ignore_missing_imports=true
 
 [tool.ruff]
@@ -240,7 +264,6 @@ select = [
 "src/speculators/convert/**/*.py" = [
     "BLE001", # allow catching Exception for conversion errors
 ]
-
 "src/speculators/data_generation/**/*.py" = [
     "S106", # false positives for chat template tokens
     "S324", # MD5 is used for cache keys, not security
@@ -262,12 +285,18 @@ select = [
 ]
 
 "examples/**/*.py" = [
-    "INP001", # allow implicit namespace packages in examples
+    "INP001",   # allow implicit namespace packages in examples
+    "T201",     # print() is the UI in demos
+    "BLE001",   # broad except is fine for demo error display
+    "S310",     # URL schemes are user-provided server addresses
+    "PLR2004",  # magic numbers are fine in demos
+    "B905",     # zip(strict=) not needed in demos
 ]
 
 "hs_connectors/**/*.py" = [
     "INP001", # separate package
     "PTH", # os.path acceptable
+    "S101", # assert for internal invariants is acceptable
 ]
 
 [tool.ruff.lint.isort]

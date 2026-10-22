@@ -1,5 +1,6 @@
 """Vocabulary mapping utilities for draft model training."""
 
+import logging
 from collections import Counter
 from pathlib import Path
 
@@ -8,8 +9,12 @@ from datasets import Dataset as HFDataset
 from tqdm import tqdm  # type: ignore[import-untyped]
 from transformers import AutoConfig
 
+logger = logging.getLogger("speculators")
+
 __all__ = [
     "build_vocab_mappings_from_distribution",
+    "combine_token_frequency_distributions",
+    "get_target_vocab_size",
     "save_token_frequency_distribution",
 ]
 
@@ -17,7 +22,7 @@ __all__ = [
 def save_token_frequency_distribution(
     dataset: HFDataset,
     output_path: Path | str = "./token_freq.pt",
-):
+) -> Path:
     """Save token frequency distribution from the dataset.
 
     Args:
@@ -29,7 +34,14 @@ def save_token_frequency_distribution(
     """
     path = Path(output_path)
     if path.exists():
-        return
+        logger.warning(
+            f"Reusing existing token frequency distribution at '{path}' without "
+            "recounting. The d2t/t2d vocab mappings derived from it will reflect "
+            "the dataset and tokenizer of the run that wrote that file; delete "
+            "it (or pass a different output path) when the dataset or target "
+            "model changed."
+        )
+        return path
 
     token_freq: Counter[int] = Counter()
     for item in tqdm(dataset, desc="Counting token frequencies"):
@@ -44,6 +56,7 @@ def save_token_frequency_distribution(
     token_freq_dict = dict(token_freq)
     Path(path).parent.mkdir(parents=True, exist_ok=True)
     torch.save(token_freq_dict, path)
+    return path
 
 
 def combine_token_frequency_distributions(
@@ -54,7 +67,7 @@ def combine_token_frequency_distributions(
     token_freq_dicts = [
         torch.load(path, weights_only=True) for path in token_freq_paths
     ]
-    combined_token_freq: Counter[str] = Counter()
+    combined_token_freq: Counter[int] = Counter()
     for token_freq_dict in token_freq_dicts:
         combined_token_freq.update(token_freq_dict)
     combined_token_freq_dict = dict(combined_token_freq)
@@ -96,7 +109,27 @@ def build_vocab_mappings_from_distribution(
     return draft_to_target, target_to_draft
 
 
-def get_target_vocab_size(target_vocab_size, target_model_path):
+def get_target_vocab_size(
+    target_vocab_size: int | None,
+    target_model_path: str | Path | None,
+    trust_remote_code: bool = False,
+) -> int:
+    """Resolve the target vocabulary size.
+
+    Args:
+        target_vocab_size: Explicitly configured target vocabulary size, if any.
+        target_model_path: HuggingFace model path to read the vocabulary size
+            from when ``target_vocab_size`` is not given.
+        trust_remote_code: Whether to trust remote code when loading the model
+            config.
+
+    Returns:
+        The resolved target vocabulary size.
+
+    Raises:
+        ValueError: If both or neither of ``target_vocab_size`` and
+            ``target_model_path`` are provided.
+    """
     has_vocab = target_vocab_size is not None
     has_model = target_model_path is not None
 
@@ -106,10 +139,18 @@ def get_target_vocab_size(target_vocab_size, target_model_path):
     if not has_vocab and not has_model:
         raise ValueError("Must specify either target-vocab-size or target-model-path")
 
-    if has_vocab:
+    if target_vocab_size is not None:
         return target_vocab_size
 
-    config = AutoConfig.from_pretrained(target_model_path)
+    if target_model_path is None:
+        # Unreachable: validated above, but needed for mypy narrowing since
+        # it cannot narrow through the has_model boolean.
+        raise ValueError("Must specify either target-vocab-size or target-model-path")
+
+    config = AutoConfig.from_pretrained(
+        target_model_path,
+        trust_remote_code=trust_remote_code,
+    )
 
     # For multimodal models (Qwen3VL, etc.), extract text_config
     if hasattr(config, "text_config"):

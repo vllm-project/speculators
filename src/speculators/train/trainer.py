@@ -2,6 +2,7 @@ import json
 import logging
 import time
 import warnings
+from collections.abc import Callable
 from pathlib import Path
 from typing import Literal, NamedTuple
 
@@ -34,28 +35,52 @@ from speculators.train.distributed import (
 )
 from speculators.train.graceful_shutdown import with_graceful_shutdown
 from speculators.train.optimizers import build_optimizers
+from speculators.train.recovery import BatchRecoveryCoordinator
 from speculators.train.utils import normalize_counted_metrics
 
 root_logger = logging.getLogger("speculators")
 metric_logger = logging.getLogger("speculators.metrics")
 
 
+def _all_reduce_metrics(metrics: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
+    """Sum *metrics* across ranks with a single collective.
+
+    Used by both the training and validation metric reductions. Values are
+    returned as float tensors in the same key order.
+    """
+    if not metrics:
+        return {}
+    keys = list(metrics)
+    stacked = torch.stack([metrics[k].float().reshape(()) for k in keys])
+    dist.all_reduce(stacked, op=dist.ReduceOp.SUM)
+    return dict(zip(keys, stacked, strict=True))
+
+
 class _StepTimer:
     # Each mark()/now() forces an accelerator.synchronize to capture true GPU time.
     # This serialises the CUDA pipeline, so profiled steps are slower; keep
     # log_freq > 1 in perf-sensitive runs.
+    # Caveat: with log_freq > 1, "start" falls back to an unsynchronized
+    # timestamp from the end of the previous *unlogged* step, so start-relative
+    # fields (fetch_ms, step_ms, queue_ms) also absorb any GPU backlog still
+    # draining from that step. Phase-relative fields (fwd/bwd/opt/h2d/clip_ms)
+    # are unaffected, as every mark synchronizes.
     def __init__(self, enabled: bool = False):
         self.enabled = enabled
         self._marks: dict[str, float] = {}
+        self._memory: dict[str, float] = {}
 
     def reset(self, enabled: bool) -> None:
         self.enabled = enabled
         self._marks.clear()
+        self._memory.clear()
 
     def mark(self, name: str) -> None:
         if self.enabled:
             torch.accelerator.synchronize()
             self._marks[name] = time.perf_counter()
+            if torch.accelerator.is_available():
+                self._memory[name] = torch.accelerator.memory_allocated() / (1024**2)
 
     def mark_value(self, name: str, value: float) -> None:
         if self.enabled:
@@ -67,31 +92,50 @@ class _StepTimer:
         torch.accelerator.synchronize()
         return time.perf_counter()
 
-    def profile(self, num_tokens: int) -> dict[str, float] | None:
+    def profile(self, num_tokens: int) -> dict | None:
         if not self.enabled:
             return None
         m = self._marks
-        has_start = "start" in m
-        fwd_ms = (m["fwd"] - m["fetch"]) * 1000
-        bwd_ms = (m["bwd"] - m["fwd"]) * 1000
-        opt_ms = (m["opt"] - m["bwd"]) * 1000
-        fetch_ms = (m["fetch"] - m["start"]) * 1000 if has_start else 0.0
-        step_ms = (m["opt"] - m["start"]) * 1000 if has_start else 0.0
-        tokens_per_s = num_tokens / (step_ms / 1000) if step_ms > 0 else 0.0
-        fetch_frac = fetch_ms / step_ms if step_ms > 0 else 0.0
-        return {
+        fetch_ms = (m["fetch"] - m["start"]) * 1000
+        step_ms = (m["opt"] - m["start"]) * 1000
+        result: dict = {
             "fetch_ms": fetch_ms,
-            "fwd_ms": fwd_ms,
-            "bwd_ms": bwd_ms,
-            "opt_ms": opt_ms,
+            "fwd_ms": (m["fwd"] - m["fetch"]) * 1000,
+            "bwd_ms": (m["bwd"] - m["fwd"]) * 1000,
+            "opt_ms": (m["opt"] - m["bwd"]) * 1000,
             "step_ms": step_ms,
-            "tokens_per_s": tokens_per_s,
-            "fetch_frac": fetch_frac,
+            "tokens_per_s": num_tokens / (step_ms / 1000) if step_ms > 0 else 0.0,
+            "fetch_frac": fetch_ms / step_ms if step_ms > 0 else 0.0,
+            "queue_ms": (m["queue"] - m["start"]) * 1000,
+            "h2d_ms": (m["fetch"] - m["pre_h2d"]) * 1000,
+            "clip_ms": (m["bwd"] - m["pre_clip"]) * 1000,
         }
+        if self._memory:
+            result["memory_mb"] = dict(self._memory)
+        return result
 
 
 warnings.filterwarnings("ignore", category=TqdmExperimentalWarning)
 MIN_STEP_PCT = 0.25
+
+# Bound circuit-breaker detection latency without synchronizing every batch.
+_RECOVERY_SYNC_INTERVAL = 50
+
+# Bound rank skew before the validation metrics reduction.
+_VAL_SYNC_INTERVAL = 50
+
+
+def _should_sync_recovery(
+    step: int,
+    total_steps: int,
+    *,
+    will_stop: bool = False,
+) -> bool:
+    return (
+        will_stop
+        or step == total_steps
+        or (_RECOVERY_SYNC_INTERVAL > 0 and step % _RECOVERY_SYNC_INTERVAL == 0)
+    )
 
 
 class TrainerConfig(NamedTuple):
@@ -102,6 +146,7 @@ class TrainerConfig(NamedTuple):
     train_call_kwargs: dict | None = None
     val_call_kwargs: dict | None = None
     optimizer: Literal["adamw", "muon"] = "adamw"
+    optimizer_implementation: Literal["fused", "eager"] = "fused"
     weight_decay: float = 0.01
     muon_lr: float = 0.02
     muon_momentum: float = 0.95
@@ -118,6 +163,8 @@ class TrainerConfig(NamedTuple):
     hidden_states_dtype: torch.dtype = torch.bfloat16
     log_freq: int = 1
     fsdp_shard: bool = False
+    gradient_checkpointing: bool = False
+    max_steps: int | None = None
 
 
 def _resolve_scheduler_steps(
@@ -129,9 +176,13 @@ def _resolve_scheduler_steps(
     Explicit ``scheduler_warmup_steps`` wins; otherwise ``scheduler_warmup_ratio``
     (a fraction of total steps, validated to ``[0, 1]``) is used; otherwise the
     default of 1% of the resolved total steps. ``scheduler_total_steps`` defaults
-    to ``num_epochs * train_loader_len``.
+    to ``max_steps`` when set, else ``num_epochs * train_loader_len``.
     """
     default_total_steps = config.num_epochs * train_loader_len
+    # max_steps bounds the training loop, so the LR schedule must decay over the
+    # same horizon; otherwise the LR endpoint is never reached.
+    if config.max_steps is not None:
+        default_total_steps = config.max_steps
     scheduler_total_steps = (
         config.scheduler_total_steps
         if config.scheduler_total_steps is not None
@@ -276,6 +327,20 @@ class Trainer:
         # Verify model is compatible with training infrastructure
         SpeculatorModel.verify_training_compatible(self.model)
 
+        # Enable gradient checkpointing BEFORE FSDP/DDP wrapping to save
+        # activation memory at the cost of recomputation during backward.
+        # Each decoder layer's forward is checkpointed: only the layer input
+        # is saved for backward; intermediate activations (MLP, attention)
+        # are recomputed. Saves ~10 GB for 5-layer DSpark with 32K seq.
+        if self.config.gradient_checkpointing:
+            if not self.model.supports_gradient_checkpointing:
+                raise ValueError(
+                    f"{type(self.model).__name__} does not support "
+                    "gradient checkpointing"
+                )
+            self.model.gradient_checkpointing_enable()
+            root_logger.info("Gradient checkpointing enabled")
+
         load_checkpoint = (
             self.resume_from_checkpoint and self.checkpointer.previous_epoch != -1
         )
@@ -418,7 +483,12 @@ class Trainer:
             )
         return resume_local_step, fast_skipped_steps
 
-    def train_epoch(self, epoch: int):
+    def train_epoch(
+        self,
+        epoch: int,
+        *,
+        step_callback: Callable[[], None] | None = None,
+    ):
         self.model.train()
         if hasattr(self.train_loader.batch_sampler, "set_epoch"):
             self.train_loader.batch_sampler.set_epoch(epoch)  # type: ignore[union-attr]
@@ -445,12 +515,28 @@ class Trainer:
         )
         t_before_fetch = time.perf_counter()
         timer = _StepTimer()
+        recovery = BatchRecoveryCoordinator("training")
+        remaining_steps = len(self.train_loader)
         for local_step_rel, batch in enumerate(train_loader, 1):
             # local_step is 1-based index into the *full* epoch (not the slice).
             local_step = local_step_rel + resume_local_step
             timer.reset(self.global_step % self.config.log_freq == 0)
 
             timer.mark_value("start", t_before_fetch)
+            will_stop = (
+                self.config.max_steps is not None
+                and self.global_step + 1 >= self.config.max_steps
+            )
+            timer.mark("queue")
+            recovery.consume(
+                batch,
+                synchronize=_should_sync_recovery(
+                    local_step_rel,
+                    remaining_steps,
+                    will_stop=will_stop,
+                ),
+            )
+            timer.mark("pre_h2d")
             gpu_batch = {
                 k: v.to(self.local_rank, non_blocking=True)
                 if isinstance(v, torch.Tensor)
@@ -469,7 +555,17 @@ class Trainer:
             timer.mark("fwd")
             self._optimizers_zero_grad()
             loss.backward()
+            timer.mark("pre_clip")
             torch.nn.utils.clip_grad_norm_(self.model.parameters(), 1.0)
+
+            metrics["error_records_sum"] = torch.tensor(
+                batch["error_records"], dtype=torch.float32, device=loss.device
+            )
+            metrics["error_records_total"] = torch.tensor(
+                1.0 if self.rank == 0 else 0,
+                dtype=torch.float32,
+                device=loss.device,
+            )
 
             timer.mark("bwd")
             self._optimizers_step()
@@ -486,8 +582,7 @@ class Trainer:
                 num_tokens = int((gpu_batch["document_ids"] != -1).sum().item())
                 profile = timer.profile(num_tokens)
                 if self.is_distributed:
-                    for v in metrics.values():
-                        dist.reduce(v, dst=0, op=dist.ReduceOp.SUM)
+                    metrics = _all_reduce_metrics(metrics)
 
                 metrics = {k: v.item() for k, v in metrics.items()}
                 world_size = dist.get_world_size() if self.is_distributed else 1
@@ -508,6 +603,14 @@ class Trainer:
                     extra={"step": self.global_step},
                 )
             self.global_step += 1
+            if step_callback is not None:
+                step_callback()
+
+            if (
+                self.config.max_steps is not None
+                and self.global_step >= self.config.max_steps
+            ):
+                break
 
             if (
                 step_interval is not None
@@ -517,6 +620,12 @@ class Trainer:
                 # Avoid saving back to back ay the end of each epoch
             ):
                 self.maybe_save_checkpoint(epoch, local_step=local_step)
+
+    def _maybe_val_sync(self, batch_index: int) -> None:
+        if not self.is_distributed or _VAL_SYNC_INTERVAL <= 0:
+            return
+        if batch_index > 0 and batch_index % _VAL_SYNC_INTERVAL == 0:
+            dist.barrier()
 
     @torch.no_grad()
     def val_epoch(self, epoch: int) -> dict[str, float] | None:
@@ -531,7 +640,13 @@ class Trainer:
 
         accumulated: dict[str, torch.Tensor] = {}
         num_batches = len(val_loader)
-        for batch in val_loader:
+        recovery = BatchRecoveryCoordinator("validation")
+        for i, batch in enumerate(val_loader):
+            self._maybe_val_sync(i)
+            recovery.consume(
+                batch,
+                synchronize=_should_sync_recovery(i, num_batches - 1),
+            )
             gpu_batch = {
                 k: v.to(self.local_rank, non_blocking=True)
                 if isinstance(v, torch.Tensor)
@@ -552,10 +667,9 @@ class Trainer:
 
         val_metrics: dict[str, float] = {}
         if accumulated:
-            stacked = torch.stack(list(accumulated.values()))
             if self.is_distributed:
-                dist.all_reduce(stacked, op=dist.ReduceOp.SUM)
-            val_metrics = dict(zip(accumulated, stacked.tolist(), strict=True))
+                accumulated = _all_reduce_metrics(accumulated)
+            val_metrics = {k: v.item() for k, v in accumulated.items()}
 
         world_size = dist.get_world_size() if self.is_distributed else 1
         val_metrics = {k: v / num_batches for k, v in val_metrics.items()}

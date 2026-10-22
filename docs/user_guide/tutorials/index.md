@@ -2,48 +2,30 @@
 
 Step-by-step tutorials to guide you through complete workflows, from data preparation to serving trained models in production.
 
-## [Serve in vLLM](serve_vllm.md)
+## [Train a Speculator](train.md)
 
-Deploy your trained speculator models in vLLM for production inference.
+The main end-to-end walkthrough: prepare data, generate hidden states, train, and serve. Covers Eagle-3, P-EAGLE, DFlash, DFlash2, DSpark, and MTP in online or offline mode -- pick your algorithm and mode at the top of the page.
 
-**Time required:** ~5 minutes
+## [Multi-Node Training](multi_node_training.md)
 
-## [Train Eagle-3 Model Online](train_eagle3_online.md)
-
-Learn how to train an Eagle-3 speculator using online training, where hidden states are generated on-demand during training.
-
-**Time required:** ~30 mins
-
-## [Train Eagle-3 Model Offline](train_eagle3_offline.md)
-
-Learn how to train an Eagle-3 speculator using offline training with pre-generated hidden states.
-
-**Time required:** ~3 hours
-
-## [Train DFlash Model Online](train_dflash_online.md)
-
-Learn how to train a DFlash speculator model with block-based token generation.
-
-**Time required:** ~25 mins
-
-## [Train P-eagle Model offline](train_peagle_offline.md)
-
-Learn how to train a P-eagle speculator model with COD sampling.
-
-**Time required:** ~50 mins
-
-## [Train MTP Model Online](train_mtp_online.md)
-
-Learn how to finetune a model's native MTP head on domain-specific data using online training.
-
-**Time required:** ~8 mins for Qwen3.5-9B on 2x H200 GPUs (varies by model size)
+Stream hidden states between separate extraction and training nodes with the Mooncake backend when the target model does not fit on one node or shared storage is unavailable.
 
 ## [Response Regeneration](response_regeneration.md)
 
-Regenerate dataset responses using your target model for improved drafter alignment.
+Regenerate dataset responses using your target model for improved drafter alignment. Recommended before training.
 
-**Time required:** ~10 minutes
+## [RAG Training Data](rag.md)
+
+Prepare retrieved context and target-model answers for training, budget sequence lengths, and inspect the resulting loss masks.
 
 ## [Evaluating Model Performance](evaluating_performance.md)
 
 Benchmark and evaluate your trained speculator models.
+
+## [Throughput vs. Interactivity](throughput_interactivity.md)
+
+Measure output-token throughput against per-user speed for a server with one or more speculators, the way InferenceX does, on real prompts.
+
+## [Serve in vLLM](serve_vllm.md)
+
+Deploy your trained speculator models in vLLM for production inference.

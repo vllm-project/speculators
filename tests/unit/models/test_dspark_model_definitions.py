@@ -4,6 +4,7 @@ import pytest
 import torch
 
 from speculators.models.dspark.model_definitions import ConfidenceHead, MarkovHead
+from speculators.train.optimizers import split_named_params_for_muon
 
 
 class TestMarkovHead:
@@ -45,6 +46,25 @@ class TestMarkovHead:
             prev_token_ids=torch.tensor([[2]]), hidden_states=hidden
         )
         assert not torch.allclose(bias_a, bias_b)
+
+    def test_lookup_embedding_has_small_initialization(self):
+        head = self._head("vanilla")
+
+        assert head.markov_w1.weight.std().item() == pytest.approx(0.01, rel=0.2)
+
+    def test_vocab_factors_use_adamw_under_muon_optimizer(self):
+        head = self._head("gated")
+
+        muon, adamw = split_named_params_for_muon(head)
+        muon_names = {name for name, _ in muon}
+        adamw_names = {name for name, _ in adamw}
+
+        assert muon_names == {"gate_proj.weight"}
+        assert adamw_names == {
+            "markov_w1.weight",
+            "markov_w2.weight",
+            "gate_proj.bias",
+        }
 
     def test_invalid_rank_raises(self):
         with pytest.raises(ValueError):

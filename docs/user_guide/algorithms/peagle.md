@@ -2,6 +2,10 @@
 
 P-EAGLE (Parallel EAGLE) extends Eagle-3 with parallel multi-token prediction. Instead of drafting tokens autoregressively one at a time, P-EAGLE predicts multiple tokens in parallel. It uses Conditional Drop-token (COD) sampling during training for memory efficiency, and Llama-style transformer layers inherited from Eagle-3. It can be paired with any supported verifier model.
 
+> ⚠️ **Warning: P-EAGLE is deprecated**
+>
+> P-EAGLE training is scheduled for removal in Speculators 0.11. A `FutureWarning` is emitted when selecting P-EAGLE for training.
+
 ## How It Works
 
 ### Architecture
@@ -56,4 +60,4 @@ P-EAGLE is based on research from AWS AI Labs: [arXiv Paper](https://arxiv.org/a
 
 ## See Also
 
-- [Train P-EAGLE Offline](../tutorials/train_peagle_offline.md) -- Offline training tutorial
+- [Train a Speculator](../tutorials/train.md) -- Step-by-step training guide (select P-EAGLE, then online or offline)

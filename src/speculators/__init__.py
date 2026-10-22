@@ -27,19 +27,46 @@ from .config import (
     reload_schemas,
 )
 from .model import SpeculatorModel
-from .models import Eagle3DraftModel, Eagle3SpeculatorConfig
+from .models import (
+    DFlash2DraftModel,
+    DFlash2SpeculatorConfig,
+    DFlashDraftModel,
+    DFlashSpeculatorConfig,
+    DSparkDraftModel,
+    DSparkSpeculatorConfig,
+    Eagle3DraftModel,
+    Eagle3SpeculatorConfig,
+    MTPDraftModel,
+    MTPSpeculatorConfig,
+    PEagleDraftModel,
+    PEagleSpeculatorConfig,
+    XPressDraftModel,
+    XPressSpeculatorConfig,
+)
 from .proposals import TokenProposalConfig
 
 __all__ = [
+    "DFlash2DraftModel",
+    "DFlash2SpeculatorConfig",
+    "DFlashDraftModel",
+    "DFlashSpeculatorConfig",
+    "DSparkDraftModel",
+    "DSparkSpeculatorConfig",
     "Eagle3DraftModel",
     "Eagle3SpeculatorConfig",
+    "MTPDraftModel",
+    "MTPSpeculatorConfig",
+    "PEagleDraftModel",
+    "PEagleSpeculatorConfig",
     "SpeculatorModel",
     "SpeculatorModelConfig",
     "SpeculatorsConfig",
     "TokenProposalConfig",
     "VerifierConfig",
+    "XPressDraftModel",
+    "XPressSpeculatorConfig",
     "reload_schemas",
 ]
 
-# base imports complete, run auto loading for base classes
+# Imports have registered built-ins; rebuild the config schemas with those classes.
 reload_schemas()

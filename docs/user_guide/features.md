@@ -14,9 +14,9 @@ Draft models use a reduced vocabulary for faster inference. Speculators automati
 
 Training metrics can be logged to TensorBoard, Weights & Biases, TrackIO, and MLflow — individually or simultaneously, so that you can use your preferred experiment tracking tool.
 
-## Automatic Chat Template Detection
+## Automatic Loss Masking
 
-During data preparation, Speculators automatically detects assistant response boundaries to build loss masks. It first tries HuggingFace's native `assistant_tokens_mask` support, then falls back to regex-based pattern detection — including stripping `<think>` blocks from reasoning models. No manual template configuration is needed for most models.
+Loss masks come from the target model's vLLM `/render` endpoint. Each assistant turn is rendered with the serving chat template, and the tokens it adds are supervised. No template configuration is needed. See [prepare_data.py](../cli/prepare_data.md).
 
 ## Performant Flex Attention
 
@@ -29,6 +29,10 @@ The multipack batch sampler uses an LPT (Longest Processing Time First) bin-pack
 ## Checkpoint Resume
 
 Training automatically resumes from the latest checkpoint, restoring model weights, optimizer state, and scheduler state. The checkpointer tracks the best validation loss and maintains a symlink to the best checkpoint for easy model selection.
+
+## Multi-Node Hidden-States Transfer
+
+The `hs_connectors` package provides a pluggable backend system for transferring hidden states between vLLM and the trainer. The default **filesystem** backend uses safetensors files on a shared filesystem for single-node setups. For multi-node training — where the target model spans multiple nodes or extraction and training run on separate machines — the **Mooncake** backend streams hidden states over TCP or RDMA through a distributed key-value store, with no shared filesystem required. See [Multi-Node Training](tutorials/multi_node_training.md) for setup details.
 
 ## Seamless Integration with vLLM
 

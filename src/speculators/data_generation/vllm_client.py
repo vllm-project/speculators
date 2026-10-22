@@ -4,12 +4,11 @@ import functools
 import logging
 import os
 import time
-from typing import TYPE_CHECKING, Any, TypedDict
+from typing import TYPE_CHECKING, Any, NotRequired, TypedDict
 
 import openai
 from openai.types.chat import ChatCompletion, ChatCompletionMessageParam
 from openai.types.completion import Completion
-from typing_extensions import NotRequired
 
 if TYPE_CHECKING:
     from collections.abc import Coroutine
@@ -94,7 +93,7 @@ def with_retries(fn):
 def extract_output(
     response: Completion | ChatCompletion,
     token_ids: list[int],
-) -> str:
+) -> tuple[str, dict[str, Any]]:
     if isinstance(response, Completion):
         prompt_token_ids = getattr(response.choices[0], "prompt_token_ids", None)
     else:
@@ -112,7 +111,14 @@ def extract_output(
     if kv_transfer_params is None:
         raise InvalidResponseError("Response missing kv_transfer_params")
 
-    return kv_transfer_params.get("hidden_states_path")
+    handle = kv_transfer_params.get("hidden_states_path") or kv_transfer_params.get(
+        "handle"
+    )
+    if handle is None:
+        raise InvalidResponseError(
+            "Response kv_transfer_params missing both 'hidden_states_path' and 'handle'"
+        )
+    return handle, kv_transfer_params
 
 
 class ClientItem(TypedDict):
@@ -133,10 +139,15 @@ async def _poll_lock_async(fd, poll_interval):
             await asyncio.sleep(poll_interval)
 
 
-async def wait_for_lock_async(lock_path, timeout=10.0, poll_interval=0.1):
-    fd = os.open(lock_path, os.O_RDONLY)
+async def wait_for_lock_async(
+    lock_path,
+    timeout=10.0,  # noqa: ASYNC109
+    poll_interval=0.1,
+):
+    fd = os.open(lock_path, os.O_RDWR)
     try:
-        await asyncio.wait_for(_poll_lock_async(fd, poll_interval), timeout=timeout)
+        async with asyncio.timeout(timeout):
+            await _poll_lock_async(fd, poll_interval)
     except BaseException:
         os.close(fd)
         raise
@@ -145,7 +156,7 @@ async def wait_for_lock_async(lock_path, timeout=10.0, poll_interval=0.1):
 
 
 def wait_for_lock(lock_path, timeout=10.0, poll_interval=0.1):
-    fd = os.open(lock_path, os.O_RDONLY)
+    fd = os.open(lock_path, os.O_RDWR)
     try:
         deadline = time.monotonic() + timeout
         while True:
@@ -185,11 +196,11 @@ async def generate_hidden_states_async(
     model: str,
     client_item: ClientItem,
     *,
-    timeout: float | None = DEFAULT_REQUEST_TIMEOUT,
-) -> str:
+    timeout: float | None = DEFAULT_REQUEST_TIMEOUT,  # noqa: ASYNC109
+) -> tuple[str, dict[str, Any]]:
     """
-    Runs decode w/ max_tokens 1 to generate hidden states and returns path to
-    hidden states file.
+    Runs decode with ``max_tokens=1`` and returns the generation handle together
+    with the complete ``kv_transfer_params`` returned by vLLM.
 
     Args:
         client: The async OpenAI client.
@@ -225,7 +236,8 @@ async def generate_hidden_states_async(
 
     res: Completion | ChatCompletion
     if timeout is not None:
-        res = await asyncio.wait_for(coro, timeout=timeout)
+        async with asyncio.timeout(timeout):
+            res = await coro
     else:
         res = await coro
 
@@ -239,10 +251,10 @@ def generate_hidden_states(
     client_item: ClientItem,
     *,
     timeout: float | None = DEFAULT_REQUEST_TIMEOUT,
-) -> str:
+) -> tuple[str, dict[str, Any]]:
     """
-    Runs decode w/ max_tokens 1 to generate hidden states and returns path to
-    hidden states file.
+    Runs decode with ``max_tokens=1`` and returns the generation handle together
+    with the complete ``kv_transfer_params`` returned by vLLM.
     """
     token_ids = client_item["input_ids"]
     messages = client_item.get("messages")

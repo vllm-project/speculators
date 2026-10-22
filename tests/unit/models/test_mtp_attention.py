@@ -47,8 +47,15 @@ def test_packed_batch_attention_is_document_local(mtp_model, monkeypatch):
     assert isinstance(mask, torch.Tensor)  # dense mask path, not BlockMask/None
     # [batch, 1, q, kv]: broadcast over heads, so head 0 is authoritative
     assert mask.shape == (1, 1, n, n)
-    allow = mask[0, 0] == 0  # additive mask -> "may attend"
+    # bool mask (sdpa) vs float-additive mask (eager) — assert the invariant.
+    allow = mask[0, 0] if mask.dtype == torch.bool else mask[0, 0] == 0
     idx = torch.arange(n)
     doc = document_ids
     expected = (idx[:, None] >= idx[None, :]) & (doc[:, None] == doc[None, :])
     assert torch.equal(allow, expected)
+
+
+def test_default_attn_impl_is_sdpa_not_eager(mtp_model):
+    """MTP must default to SDPA, not eager — eager OOMs on long sequences (#886)."""
+    tlc = mtp_model.config.transformer_layer_config
+    assert tlc._attn_implementation == "sdpa"

@@ -18,6 +18,10 @@ Examples:
     python evaluate.py --target http://localhost:8000/v1 throughput \\
         --dataset speedbench/qualitative/coding \\
         --speedbench-data-dir ./speedbench_data
+
+    # MRCR long-context (first run renders and caches data in ./mrcr_data):
+    python evaluate.py --target http://localhost:8000/v1 throughput \\
+        --dataset openai/mrcr --mrcr-needles 2 --mrcr-buckets 1,2
 """
 
 from __future__ import annotations
@@ -25,12 +29,20 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import shlex
 import sys
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 from urllib.error import URLError
 from urllib.request import urlopen
 
+from mrcr import (
+    BUCKETS,
+    MRCR_DATASET,
+    parse_buckets,
+    parse_needles,
+    prepare_mrcr,
+)
 from perf_utils import (
     BASE_CSV_COLUMNS,
     CsvWriter,
@@ -44,6 +56,13 @@ from perf_utils import (
     parse_sweep_results,
     print_acceptance_report,
     run_guidellm,
+)
+
+from speculators.provenance import (
+    atomic_write,
+    find_package_repo,
+    git_sha,
+    package_versions,
 )
 
 logger = logging.getLogger("evaluate")
@@ -88,6 +107,30 @@ def _fetch_model_name(target: str) -> str | None:
 
 def _sanitize_dir_name(name: str) -> str:
     return name.replace("/", "_").replace(" ", "_")
+
+
+def save_eval_provenance(output_dir: Path) -> None:
+    """Write ``eval_command.txt`` into *output_dir*.
+
+    Records the full command line, timestamp, and package versions so the
+    eval can be reproduced.  Best-effort — never blocks the eval on failure.
+    """
+    try:
+        sha = git_sha(find_package_repo("speculators"))
+        versions = package_versions()
+        header = "\n".join(
+            [
+                f"# Timestamp: {datetime.now(UTC).isoformat()}",
+                f"# Git SHA: {sha}",
+                *versions,
+            ]
+        )
+        atomic_write(
+            output_dir / "eval_command.txt",
+            f"{header}\n{shlex.join(sys.argv)}\n",
+        )
+    except OSError:
+        logger.warning("Failed to save eval_command.txt", exc_info=True)
 
 
 def _require_metrics(metrics_url: str) -> list:
@@ -146,6 +189,23 @@ def _resolve_speedbench(
     return results
 
 
+def _validate_throughput_results(run_output: Path, subset: str) -> None:
+    """Require a readable throughput report with successful requests."""
+    try:
+        with run_output.open() as stream:
+            benchmarks = json.load(stream)["benchmarks"]
+
+        successful = sum(
+            benchmark["metrics"]["request_totals"]["successful"]
+            for benchmark in benchmarks
+        )
+        if successful <= 0:
+            raise ValueError("No successful throughput requests")
+    except (OSError, ValueError, KeyError, TypeError) as exc:
+        logger.error("[%s] Invalid throughput results: %s", subset, exc)
+        sys.exit(1)
+
+
 def _run_subset(
     subset: str,
     args: argparse.Namespace,
@@ -171,6 +231,13 @@ def _run_subset(
     safe = subset.replace("/", "_").replace(" ", "_")
     max_tokens = 4096
 
+    # Dataset-provided request-body defaults (MRCR sets add_special_tokens)
+    # merged under user-supplied --gen-kwargs.
+    gen_kwargs = {
+        **guidellm_common.pop("gen_kwargs", {}),
+        **parse_gen_kwargs(args.gen_kwargs),
+    }
+
     # For local JSONL files (SPEED-Bench) the dataset path IS the file —
     # no --data-args needed.  For HF datasets subset name doubles as the filter.
     guidellm_subset = None if Path(guidellm_common["dataset"]).exists() else subset
@@ -187,7 +254,7 @@ def _run_subset(
             max_requests=None,
             output_path=gen_len_output,
             max_tokens=4096,
-            gen_kwargs=parse_gen_kwargs(args.gen_kwargs),
+            gen_kwargs=gen_kwargs,
         )
         mapping = parse_gen_len_results(
             [gen_len_output],
@@ -208,9 +275,12 @@ def _run_subset(
         max_requests=args.max_requests,
         output_path=run_output,
         max_tokens=max_tokens,
-        gen_kwargs=parse_gen_kwargs(args.gen_kwargs),
+        gen_kwargs=gen_kwargs,
     )
     current = _require_metrics(metrics_url)
+
+    if not is_sweep:
+        _validate_throughput_results(run_output, subset)
 
     spec = extract_spec_decode_metrics(
         current,
@@ -220,6 +290,7 @@ def _run_subset(
 
     if has_spec:
         spec["subset"] = subset
+        logger.info("[%s] Acceptance metrics cover the entire %s run", subset, profile)
         print_acceptance_report(spec)
         if acceptance_csv is None:
             acceptance_csv = CsvWriter(
@@ -231,22 +302,84 @@ def _run_subset(
         logger.warning("[%s] No speculative decoding metrics found", subset)
 
     if is_sweep:
-        rows = parse_sweep_results(
-            run_output,
-            spec if has_spec else None,
-        )
-        if rows:
-            if perf_csv is None:
-                acc_cols = acceptance_csv_columns(spec) if has_spec else []
-                cols = BASE_CSV_COLUMNS + acc_cols
-                perf_csv = CsvWriter(
-                    output_dir / "perf_results.csv",
-                    cols,
-                )
-            perf_csv.append_rows(rows)
+        rows = parse_sweep_results(run_output, spec if has_spec else None)
+        if not rows:
+            logger.error("[%s] No performance results collected", subset)
+            sys.exit(1)
+        for row in rows:
+            row["subset"] = subset
+        if perf_csv is None:
+            acc_cols = acceptance_csv_columns(spec) if has_spec else []
+            cols = BASE_CSV_COLUMNS + acc_cols
+            perf_csv = CsvWriter(output_dir / "perf_results.csv", cols)
+        perf_csv.append_rows(rows)
 
     logger.info("[%s] Complete", subset)
     return acceptance_csv, perf_csv, max_tokens if is_sweep else None
+
+
+def _speedbench_run_items(args: argparse.Namespace) -> list[tuple[str, dict]]:
+    """Resolve a ``speedbench/`` spec into ``(label, guidellm_common)`` pairs."""
+    if not getattr(args, "speedbench_data_dir", None):
+        logger.error(
+            "--speedbench-data-dir is required for speedbench/ datasets.\n"
+            "Run scripts/evaluate/prepare_speedbench.py first, then add"
+            " --speedbench-data-dir <dir>.",
+        )
+        sys.exit(1)
+    return [
+        (
+            label,
+            {
+                "target": args.target,
+                "dataset": str(local_path),
+                "data_column_mapper": _SPEEDBENCH_COLUMN_MAPPER,
+                "max_concurrency": args.max_concurrency,
+            },
+        )
+        for label, local_path in _resolve_speedbench(
+            args.dataset, Path(args.speedbench_data_dir)
+        )
+    ]
+
+
+def _mrcr_run_items(
+    args: argparse.Namespace, artifacts_dir: Path
+) -> list[tuple[str, dict]]:
+    """Prepare MRCR data and build its ``(label, guidellm_common)`` pairs."""
+    if args.mrcr_max_samples is not None and args.mrcr_max_samples < 1:
+        logger.error("--mrcr-max-samples must be at least 1")
+        sys.exit(1)
+    pairs = prepare_mrcr(
+        target=args.target,
+        needles=args.mrcr_needles,
+        buckets=args.mrcr_buckets,
+        data_dir=args.mrcr_data_dir,
+        artifacts_dir=artifacts_dir,
+        max_samples=args.mrcr_max_samples,
+        gen_budget=parse_gen_kwargs(args.gen_kwargs).get("max_tokens", 4096),
+        retry_failed=args.mrcr_retry_failed,
+    )
+    if not pairs:
+        logger.error("No MRCR buckets could run on this server")
+        sys.exit(1)
+    return [
+        (
+            label,
+            {
+                "target": args.target,
+                "dataset": str(bucket_path),
+                "data_column_mapper": args.data_column_mapper,
+                "max_concurrency": args.max_concurrency,
+                "request_format": "/v1/completions",
+                # Prevents a repeated BOS on models whose tokenizer
+                # adds one (e.g. Llama); a no-op on models that
+                # don't (e.g. Qwen).
+                "gen_kwargs": {"add_special_tokens": False},
+            },
+        )
+        for label, bucket_path in pairs
+    ]
 
 
 def run_benchmark(args: argparse.Namespace) -> None:
@@ -258,6 +391,15 @@ def run_benchmark(args: argparse.Namespace) -> None:
     artifacts_dir = output_dir / "artifacts"
     artifacts_dir.mkdir(parents=True, exist_ok=True)
 
+    save_eval_provenance(output_dir)
+
+    if not (output_dir / "vllm_command.txt").exists():
+        logger.info(
+            "No vllm_command.txt found. To co-locate vLLM provenance "
+            "with eval results: launch_vllm.py --provenance-dir %s",
+            output_dir,
+        )
+
     acceptance_csv = None
     perf_csv = None
     all_max_tokens: dict[str, int] = {}
@@ -267,27 +409,10 @@ def run_benchmark(args: argparse.Namespace) -> None:
     dataset_spec = args.dataset
     run_items: list[tuple[str, dict]] = []
 
-    if dataset_spec.startswith("speedbench/"):
-        if not getattr(args, "speedbench_data_dir", None):
-            logger.error(
-                "--speedbench-data-dir is required for speedbench/ datasets.\n"
-                "Run scripts/evaluate/prepare_speedbench.py first, then add"
-                " --speedbench-data-dir <dir>.",
-            )
-            sys.exit(1)
-        pairs = _resolve_speedbench(dataset_spec, Path(args.speedbench_data_dir))
-        for label, local_path in pairs:
-            run_items.append(
-                (
-                    label,
-                    {
-                        "target": args.target,
-                        "dataset": str(local_path),
-                        "data_column_mapper": _SPEEDBENCH_COLUMN_MAPPER,
-                        "max_concurrency": args.max_concurrency,
-                    },
-                )
-            )
+    if dataset_spec == MRCR_DATASET:
+        run_items = _mrcr_run_items(args, artifacts_dir)
+    elif dataset_spec.startswith("speedbench/"):
+        run_items = _speedbench_run_items(args)
     else:
         guidellm_common = {
             "target": args.target,
@@ -297,6 +422,10 @@ def run_benchmark(args: argparse.Namespace) -> None:
         }
         for subset in [s.strip() for s in args.subsets.split(",") if s.strip()]:
             run_items.append((subset, guidellm_common))
+
+    if not run_items:
+        logger.error("No subsets selected for benchmarking")
+        sys.exit(1)
 
     logger.info(
         "Mode: %s | %d subsets | Output: %s", args.mode, len(run_items), output_dir
@@ -317,8 +446,10 @@ def run_benchmark(args: argparse.Namespace) -> None:
             all_max_tokens[label] = mt
 
     if acceptance_csv is None:
-        logger.error("No acceptance metrics collected from any subset")
-        sys.exit(1)
+        logger.info(
+            "No acceptance metrics collected; GuideLLM results are saved in %s",
+            artifacts_dir,
+        )
 
     if is_sweep and all_max_tokens:
         with (output_dir / "max_tokens.json").open("w") as f:
@@ -401,7 +532,11 @@ def main() -> None:
     parser.add_argument(
         "--gen-kwargs",
         default="",
-        help="Flat JSON with generation kwargs, e.g. '{\"temperature\":0.6}'",
+        help=(
+            "JSON with generation kwargs, e.g. '{\"temperature\":0.6}'. "
+            "Nested values are supported, e.g. "
+            '\'{"chat_template_kwargs":{"enable_thinking":false}}\'.'
+        ),
     )
     parser.add_argument(
         "--data-column-mapper",
@@ -418,7 +553,41 @@ def main() -> None:
             "Required when --dataset is a speedbench/ spec."
         ),
     )
-
+    parser.add_argument(
+        "--mrcr-needles",
+        type=parse_needles,
+        default=[2, 4, 8],
+        help="MRCR needle counts: comma list of 2, 4, 8 (default: 2,4,8)",
+    )
+    parser.add_argument(
+        "--mrcr-buckets",
+        type=parse_buckets,
+        default=list(BUCKETS),
+        help=(
+            "MRCR context-length buckets as a comma list of numbers or"
+            " labels, e.g. 1,4,8 or 4096-8192,32769-65536,524289-1048576"
+            " (default: all buckets): "
+            + ", ".join(f"{i}={label}" for i, (label, _, _) in enumerate(BUCKETS, 1))
+        ),
+    )
+    parser.add_argument(
+        "--mrcr-data-dir",
+        type=Path,
+        default=Path("mrcr_data"),
+        help="Cache directory for rendered MRCR data (default: ./mrcr_data)",
+    )
+    parser.add_argument(
+        "--mrcr-max-samples",
+        type=int,
+        default=None,
+        help="Maximum samples per MRCR bucket (default: no limit)",
+    )
+    parser.add_argument(
+        "--mrcr-retry-failed",
+        action="store_true",
+        help="Retry MRCR rows whose render previously failed (default: reuse "
+        "the partial cache as-is)",
+    )
     args = parser.parse_args()
 
     if args.output_dir is None:

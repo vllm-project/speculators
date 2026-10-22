@@ -1,4 +1,4 @@
-"""Tests for the draft-model initialization sources in ``scripts/train.py``.
+"""Tests for the draft-model initialization sources in ``speculators train``.
 
 Covers the three mutually exclusive init paths and their guard rails:
 - ``--draft-config``: decoder ``transformer_layer_config`` loaded from a file,
@@ -11,6 +11,7 @@ Covers the three mutually exclusive init paths and their guard rails:
   ``--draft-config`` is mutually exclusive with the decoder-shaping flags.
 """
 
+import argparse
 import json
 from pathlib import Path
 from types import SimpleNamespace
@@ -18,20 +19,23 @@ from typing import Any
 from unittest.mock import patch
 
 import pytest
+from transformers.integrations.heterogeneity.configuration_utils import (
+    AmbiguousGlobalPerLayerAttributeError,
+)
 from transformers.models.llama.configuration_llama import LlamaConfig
 from transformers.models.qwen3.configuration_qwen3 import Qwen3Config
 
-from scripts.train import (
-    DECODER_SHAPING_FLAGS,
+from speculators import SpeculatorsConfig, VerifierConfig
+from speculators.models.eagle3 import Eagle3DraftModel, Eagle3SpeculatorConfig
+from speculators.proposals.greedy import GreedyTokenProposalConfig
+from speculators.train.cli import (
     _build_from_config_only,
     build_draft_model,
     create_transformer_layer_config,
     load_draft_transformer_layer_config,
-    parse_args,
 )
-from speculators import SpeculatorsConfig, VerifierConfig
-from speculators.models.eagle3 import Eagle3DraftModel, Eagle3SpeculatorConfig
-from speculators.proposals.greedy import GreedyTokenProposalConfig
+from speculators.train.config import TrainConfig
+from speculators.train.config.resolution import DECODER_SHAPING_FLAGS
 from speculators.utils.loading import is_config_only_dir
 
 # ---------------------------------------------------------------------------
@@ -51,11 +55,9 @@ TINY_LLAMA_KWARGS: dict[str, Any] = {
 }
 
 
-def _parse(monkeypatch, extra: list[str]):
-    monkeypatch.setattr(
-        "sys.argv", ["train.py", "--verifier-name-or-path", "dummy"] + extra
-    )
-    return parse_args()
+def _parse(monkeypatch, extra: list[str]) -> argparse.Namespace:
+    cfg = TrainConfig.resolve(["--verifier-name-or-path", "dummy", *extra])
+    return argparse.Namespace(**cfg.flatten())
 
 
 def _make_eagle3_config(verifier_name_or_path: str | None = "some-verifier"):
@@ -205,7 +207,9 @@ def test_create_layer_config_layer_types(
     """full_attention_indices selects per-layer attention; sliding window stays
     enabled unless every layer opts into full attention."""
     verifier = _make_verifier_namespace()
-    with patch("scripts.train.AutoConfig.from_pretrained", return_value=verifier):
+    with patch(
+        "speculators.train.cli.AutoConfig.from_pretrained", return_value=verifier
+    ):
         config = create_transformer_layer_config(
             "target",
             num_layers=num_layers,
@@ -223,7 +227,9 @@ def test_create_layer_config_rejects_out_of_range_indices(bad_indices):
     """full_attention_indices outside [0, num_layers) is a hard error."""
     verifier = _make_verifier_namespace()
     with (
-        patch("scripts.train.AutoConfig.from_pretrained", return_value=verifier),
+        patch(
+            "speculators.train.cli.AutoConfig.from_pretrained", return_value=verifier
+        ),
         pytest.raises(ValueError, match="valid draft layer ids"),
     ):
         create_transformer_layer_config(
@@ -315,8 +321,10 @@ def test_mtp_with_from_pretrained_parses(monkeypatch):
 
 def _patch_verifier(monkeypatch, hidden_size: int, vocab_size: int):
     monkeypatch.setattr(
-        "scripts.train.get_verifier_config",
-        lambda _path: SimpleNamespace(hidden_size=hidden_size, vocab_size=vocab_size),
+        "speculators.train.cli.get_verifier_config",
+        lambda _path, **_kwargs: SimpleNamespace(
+            hidden_size=hidden_size, vocab_size=vocab_size
+        ),
     )
 
 
@@ -472,13 +480,18 @@ def test_build_draft_model_mtp_from_scratch_uses_verifier_decoder(monkeypatch):
     """MTP without --from-pretrained reuses the verifier's own decoder config and
     must not synthesize a decoder or resolve a draft mask token."""
     verifier_cfg = object()
-    monkeypatch.setattr("scripts.train.get_verifier_config", lambda _p: verifier_cfg)
+    monkeypatch.setattr(
+        "speculators.train.cli.get_verifier_config",
+        lambda _p, **_kwargs: verifier_cfg,
+    )
 
     def _must_not_call(*_a, **_k):
         raise AssertionError("not expected for MTP-from-scratch")
 
-    monkeypatch.setattr("scripts.train.create_transformer_layer_config", _must_not_call)
-    monkeypatch.setattr("scripts.train.resolve_mask_token_id", _must_not_call)
+    monkeypatch.setattr(
+        "speculators.train.cli.create_transformer_layer_config", _must_not_call
+    )
+    monkeypatch.setattr("speculators.train.cli.resolve_mask_token_id", _must_not_call)
 
     captured = {}
 
@@ -525,8 +538,12 @@ def _capture_full_attention_indices(
         captured["full_attention_indices"] = full_attention_indices
         return SimpleNamespace(vocab_size=128)
 
-    monkeypatch.setattr("scripts.train.create_transformer_layer_config", _fake_create)
-    monkeypatch.setattr("scripts.train.resolve_mask_token_id", lambda *_a, **_k: 0)
+    monkeypatch.setattr(
+        "speculators.train.cli.create_transformer_layer_config", _fake_create
+    )
+    monkeypatch.setattr(
+        "speculators.train.cli.resolve_mask_token_id", lambda *_a, **_k: 0
+    )
 
     class _FakeModel:
         @classmethod
@@ -579,7 +596,9 @@ def test_build_draft_model_routing(
 
 
 def _create_layer_config_for(verifier: SimpleNamespace):
-    with patch("scripts.train.AutoConfig.from_pretrained", return_value=verifier):
+    with patch(
+        "speculators.train.cli.AutoConfig.from_pretrained", return_value=verifier
+    ):
         return create_transformer_layer_config(
             "target",
             num_layers=2,
@@ -612,3 +631,121 @@ def test_create_layer_config_infers_moe_intermediate_size():
         config = _create_layer_config_for(verifier)
 
     assert config.intermediate_size == 3 * 32
+
+
+# ---------------------------------------------------------------------------
+# Heterogeneous per-layer verifier configs (e.g. Gemma 4)
+# ---------------------------------------------------------------------------
+
+
+_HETERO_PER_LAYER = frozenset({"head_dim", "num_key_value_heads"})
+
+
+class _FakeHeterogeneousConfig:
+    """Stand-in for a transformers heterogeneous config (e.g. Gemma4TextConfig).
+
+    Reading a per-layer attribute (head_dim / num_key_value_heads) off the global
+    config raises Transformers' AmbiguousGlobalPerLayerAttributeError. Per-layer
+    values live in ``per_layer_config``; other attributes are global.
+    """
+
+    def __init__(self, per_layer_config: list[SimpleNamespace], **globals_):
+        """Store global attrs plus a list of per-layer configs."""
+        base = {
+            "vocab_size": 128,
+            "hidden_size": 32,
+            "intermediate_size": 128,
+            "num_attention_heads": 4,
+            "head_dim": 8,
+            "num_key_value_heads": 2,
+            "hidden_act": "silu",
+            "max_position_embeddings": 128,
+            "initializer_range": 0.02,
+            "rms_norm_eps": 1e-6,
+            "is_heterogeneous": True,
+            "per_layer_attributes": set(_HETERO_PER_LAYER),
+            "per_layer_config": per_layer_config,
+            "allow_global_per_layer_attribute_access": False,
+        }
+        base.update(globals_)
+        object.__setattr__(self, "_d", base)
+
+    def __setattr__(self, name, value):
+        if name == "allow_global_per_layer_attribute_access":
+            self._d[name] = value
+        else:
+            object.__setattr__(self, name, value)
+
+    def __getattribute__(self, name):
+        """Raise for per-layer attrs unless global fallback was enabled."""
+        d = object.__getattribute__(self, "__dict__").get("_d", {})
+        if name in _HETERO_PER_LAYER and not d.get(
+            "allow_global_per_layer_attribute_access", False
+        ):
+            raise AmbiguousGlobalPerLayerAttributeError(
+                f"'{name}' is a per-layer attribute and may vary across layers."
+            )
+        if name in d:
+            return d[name]
+        return object.__getattribute__(self, name)
+
+
+def _hetero_verifier(layers: list[tuple[int, int]], **globals_):
+    """Build a fake heterogeneous verifier from (head_dim, num_kv_heads) layers."""
+    layer_globals = {
+        "vocab_size": 128,
+        "hidden_size": 32,
+        "intermediate_size": 128,
+        "num_attention_heads": 4,
+        "hidden_act": "silu",
+        "max_position_embeddings": 128,
+        "initializer_range": 0.02,
+        "rms_norm_eps": 1e-6,
+    }
+    layer_globals.update(
+        {key: globals_[key] for key in layer_globals if key in globals_}
+    )
+    per_layer = [
+        SimpleNamespace(head_dim=hd, num_key_value_heads=nkv, **layer_globals)
+        for hd, nkv in layers
+    ]
+    return _FakeHeterogeneousConfig(per_layer, **globals_)
+
+
+def test_hetero_verifier_uses_global_values_with_warning():
+    """Use global values as the automatic fallback for ambiguous attributes."""
+    # The modal layer differs from the global values; automatic initialization
+    # intentionally uses the global config rather than inspecting layer layouts.
+    verifier = _hetero_verifier(
+        [(8, 2), (8, 2), (8, 2), (16, 1)],
+        head_dim=16,
+        num_key_value_heads=1,
+    )
+
+    with pytest.warns(UserWarning, match="global verifier values") as caught:
+        config = _create_layer_config_for(verifier)
+
+    assert len(caught) == 1
+    assert config.head_dim == 16
+    assert config.num_key_value_heads == 1
+    assert config.num_attention_heads == 4  # global, unambiguous
+    assert config.hidden_size == 32  # global (homogeneous), the real constraint
+
+
+def test_hetero_verifier_does_not_read_global_per_layer_attr():
+    """Sanity-check the fixture raises before global fallback is enabled."""
+    verifier = _hetero_verifier([(8, 2)])
+    with pytest.raises(AmbiguousGlobalPerLayerAttributeError):
+        _ = verifier.head_dim
+    with pytest.raises(AmbiguousGlobalPerLayerAttributeError):
+        _ = verifier.num_key_value_heads
+
+
+def test_hetero_verifier_rejects_inconsistent_geometry():
+    """If global fallback geometry is inconsistent, fail loudly."""
+    verifier = _hetero_verifier(
+        [(8, 3), (8, 3)],
+        num_key_value_heads=3,
+    )
+    with pytest.raises(ValueError, match="Inconsistent draft attention geometry"):
+        _create_layer_config_for(verifier)

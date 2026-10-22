@@ -2,6 +2,7 @@
 
 import json
 import tempfile
+from collections.abc import Callable
 from pathlib import Path
 from typing import Protocol, cast
 
@@ -89,7 +90,12 @@ class _MockTrainer(Trainer):
         self.scheduler = None
         self.schedulers = []
 
-    def train_epoch(self, epoch: int) -> None:
+    def train_epoch(
+        self,
+        epoch: int,
+        *,
+        step_callback: Callable[[], None] | None = None,
+    ) -> None:
         if hasattr(self.train_loader.batch_sampler, "set_epoch"):
             batch_sampler = cast(
                 "_BatchSamplerWithSetEpoch", self.train_loader.batch_sampler
@@ -404,7 +410,12 @@ def _make_progress_test_trainer(
 
 
 class _FastSkipMockTrainer(_MockTrainer):
-    def train_epoch(self, epoch: int) -> None:
+    def train_epoch(
+        self,
+        epoch: int,
+        *,
+        step_callback: Callable[[], None] | None = None,
+    ) -> None:
         if hasattr(self.train_loader.batch_sampler, "set_epoch"):
             batch_sampler = cast(
                 "_BatchSamplerWithSetEpoch", self.train_loader.batch_sampler

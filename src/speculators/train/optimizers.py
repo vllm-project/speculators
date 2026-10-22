@@ -10,6 +10,10 @@ embedding / LM-head matrices, following standard Muon practice).
 Muon works transparently for both single-GPU and multi-GPU (FSDP2) training: when the
 model is sharded with ``fully_shard`` the parameters become ``DTensor``s and Muon's
 Newton-Schulz orthogonalization dispatches across ranks automatically.
+
+AdamW runs its update in a single fused kernel by default. ``--optimizer-implementation
+eager`` selects PyTorch's default (foreach) path instead, for accelerators or dtypes
+where the fused kernel is unsupported.
 """
 
 import logging
@@ -21,9 +25,16 @@ from torch.nn import Module
 logger = logging.getLogger("speculators")
 
 # Names of parameters that are 2D but should still be optimized with AdamW rather than
-# Muon, following the convention from Keller Jordan's Muon (embeddings and the output
-# head are excluded from the orthogonalized update).
-_ADAMW_NAME_HINTS = ("embed_tokens", "lm_head")
+# Muon, following the convention from Keller Jordan's Muon (embeddings, embedding-like
+# codebooks, Markov vocabulary factors, and output heads are excluded from the
+# orthogonalized update).
+_ADAMW_NAME_HINTS = (
+    "embed_tokens",
+    "lm_head",
+    "codebook",
+    "markov_w1",
+    "markov_w2",
+)
 
 # Muon only orthogonalizes 2D weight matrices.
 _MATRIX_NDIM = 2
@@ -35,9 +46,10 @@ def split_named_params_for_muon(
     """Split a model's trainable parameters into Muon and AdamW groups.
 
     A parameter goes to Muon iff it requires gradients, is a 2D matrix with both
-    dimensions > 1, and is not an embedding or LM-head weight; everything else goes to
-    AdamW. Degenerate 2D weights (``[1, N]`` / ``[N, 1]`` vectors) route to AdamW --
-    Muon orthogonalizes matrices, not vectors, and crashes on them under FSDP2.
+    dimensions > 1, and is not an embedding, codebook, or vocabulary-output weight;
+    everything else goes to AdamW. Degenerate 2D weights (``[1, N]`` / ``[N, 1]``
+    vectors) route to AdamW -- Muon orthogonalizes matrices, not vectors, and crashes
+    on them under FSDP2.
 
     :param model: The model whose parameters should be partitioned.
     :return: A ``(muon_params, adamw_params)`` tuple of named parameter lists.
@@ -66,12 +78,15 @@ def build_optimizers(model: Module, config) -> list[torch.optim.Optimizer]:
     :return: A list of optimizers for the trainer to step in tandem. The default
         "adamw" returns a single optimizer; "muon" returns ``[Muon, AdamW]``.
     """
+    fused = config.optimizer_implementation == "fused"
+
     if config.optimizer == "adamw":
         return [
             torch.optim.AdamW(
                 model.named_parameters(),
                 lr=config.lr,
                 weight_decay=config.weight_decay,
+                fused=fused,
             )
         ]
 
@@ -101,6 +116,7 @@ def build_optimizers(model: Module, config) -> list[torch.optim.Optimizer]:
                     adamw_params,
                     lr=config.lr,
                     weight_decay=config.weight_decay,
+                    fused=fused,
                 )
             )
         if not optimizers:

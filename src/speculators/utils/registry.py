@@ -1,20 +1,4 @@
-"""
-Registry system for classes in the Speculators library.
-
-This module provides a flexible class registration and discovery system used
-throughout the Speculators library. It enables automatic registration of classes
-and discovery of implementations through class decorators and module imports.
-
-The registry system is used to track different implementations of token proposal
-methods, speculative decoding algorithms, and speculator models, allowing for
-dynamic discovery and instantiation based on configuration parameters.
-
-Classes:
-    ClassRegistryMixin: Base mixin for creating class registries with decorators
-        and optional auto-discovery capabilities through registry_auto_discovery flag.
-    AutoClassRegistryMixin: A backward-compatible version of ClassRegistryMixin with
-        auto-discovery enabled by default
-"""
+"""Class registries populated by decorators when implementation modules import."""
 
 from collections.abc import Callable
 from typing import Any, ClassVar
@@ -25,19 +9,16 @@ __all__ = ["ClassRegistryMixin"]
 class ClassRegistryMixin:
     """
     A mixin class that provides a registration system for tracking class
-    implementations with optional auto-discovery capabilities.
+    implementations registered explicitly through decorators.
 
     This mixin allows classes to maintain a registry of subclasses that can be
-    dynamically discovered and instantiated. Classes that inherit from this mixin
+    looked up and instantiated. Classes that inherit from this mixin
     can use the @register decorator to add themselves to the registry.
 
     The registry is class-specific, meaning each class that inherits from this mixin
     will have its own separate registry of implementations.
 
-    The mixin can also be configured to automatically discover and register classes
-    from specified packages by setting registry_auto_discovery=True and defining
-    an auto_package class variable to specify which package(s) should be automatically
-    imported to discover implementations.
+    Import implementation modules before looking up their registered classes.
 
     Example:
     ```python
@@ -56,23 +37,9 @@ class ClassRegistryMixin:
     algorithms = BaseAlgorithm.registered_classes()
     ```
 
-    Example with auto-discovery:
-    ```python
-    class TokenProposal(ClassRegistryMixin):
-        registry_auto_discovery = True
-        auto_package = "speculators.proposals"
-
-    # This will automatically import all modules in the proposals package
-    # and register any classes decorated with @TokenProposal.register()
-    proposals = TokenProposal.registered_classes()
-    ```
-
-    :cvar registry: A dictionary mapping class names to classes that have been
-        registered to the extending subclass through the @subclass.register() decorator
-    :cvar registry_auto_discovery: A flag that enables automatic discovery and import of
-        modules from the auto_package when set to True. Default is False.
-    :cvar registry_populated: A flag that tracks whether the registry has been
-        populated with classes from the specified package(s).
+    :cvar registry: Maps registration names to implementation classes.
+    :cvar registry_auto_discovery: Legacy compatibility flag; does not trigger imports.
+    :cvar registry_populated: Legacy compatibility state; unused by registration.
     """
 
     registry: ClassVar[dict[str, type[Any]] | None] = None
@@ -149,7 +116,10 @@ class ClassRegistryMixin:
                 f"Got imporoper name arg {name}."
             )
 
-        if cls.registry is None:
+        # A subclass inherits its parent's registry attribute until it writes its
+        # own. Allocate a new registry before registering so a subclass cannot
+        # mutate its parent's registrations.
+        if "registry" not in cls.__dict__ or cls.registry is None:
             cls.registry = {}
 
         if name in cls.registry:
@@ -167,13 +137,9 @@ class ClassRegistryMixin:
         """
         Returns a tuple of all classes that have been registered with this registry.
 
-        If registry_auto_discovery is True, this method will first call
-        auto_populate_registry to ensure that all available implementations from
-        the specified auto_package are discovered and registered before returning
-        the list.
+        Implementation modules must already have been imported.
 
-        :return: A tuple containing all registered class implementations, including
-            those discovered through auto-importing when registry_auto_discovery==True.
+        :return: A tuple containing all registered implementation classes.
         :raises ValueError: If called before any classes have been registered.
         """
 

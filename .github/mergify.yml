@@ -70,7 +70,7 @@ pull_request_rules:
   - name: remove quality-failed label
     conditions:
       - label != stale
-      - "check-success = quality-checks (3.10)"
+      - "check-success = quality-checks (3.11)"
       - "check-success = quality-checks (3.13)"
       - -closed
     actions:
@@ -78,14 +78,62 @@ pull_request_rules:
         remove:
           - quality-failed
 
+  - name: add dco-failed label
+    conditions:
+      - label != stale
+      - check-failure = @dco/DCO
+      - -label = dco-failed
+      - -closed
+    actions:
+      label:
+        add:
+          - dco-failed
+      comment:
+        message: |
+          The DCO check has failed. Every commit must include a valid
+          `Signed-off-by` trailer matching the commit author.
+
+          To sign off the latest commit, run:
+
+          ```bash
+          git commit --amend --signoff
+          ```
+
+          For multiple unsigned commits, see the [DCO signoff instructions](https://github.com/vllm-project/speculators/blob/main/CONTRIBUTING.md#dco-signoff).
+
+  - name: remove dco-failed label
+    conditions:
+      - label != stale
+      - check-success = @dco/DCO
+      - -closed
+    actions:
+      label:
+        remove:
+          - dco-failed
+
 merge_protections:
+  - name: Require approval from approved reviewers list
+    description: >-
+      All pull requests must have at least one approving review from a
+      member of the approved reviewers list before merging.
+    if: []
+    success_conditions:
+      - &approved_reviewer_check
+        or:
+          - approved-reviews-by = fynnsu
+          - approved-reviews-by = shanjiaz
+          - approved-reviews-by = dsikka
+          - approved-reviews-by = rahul-tuli
+          - approved-reviews-by = orestis-z
+
   - name: Require two reviews
     description: >-
-      PRs labelled "two-reviews" must have at least two approving reviews
-      before merging.
+      PRs labelled "two-reviews" must have at least two approving reviews,
+      with at least one from the approved reviewers list, before merging.
     if:
       - label = two-reviews
     success_conditions:
       - "#approved-reviews-by >= 2"
+      - *approved_reviewer_check
 merge_protections_settings:
   reporting_method: check-runs

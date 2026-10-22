@@ -19,7 +19,6 @@ from loguru import logger
 
 from tests.conftest import requires_multi_gpu
 from tests.e2e.utils import (
-    SCRIPTS_DIR,
     launch_vllm_server_context,
     run_data_generation_offline,
     run_prepare_data,
@@ -44,7 +43,8 @@ def _run_distributed_training(
         "torch.distributed.run",
         "--nproc_per_node",
         str(nproc),
-        str(SCRIPTS_DIR / "train.py"),
+        "--module",
+        "speculators.train",
         "--verifier-name-or-path",
         MODEL,
         "--speculator-type",
@@ -82,7 +82,11 @@ def test_resume_after_checkpoint_best(tmp_path: Path):
     save_path = tmp_path / "checkpoints"
 
     # Step 1: Prepare data
-    run_prepare_data(MODEL, "sharegpt", data_path)
+    run_prepare_data(
+        MODEL,
+        "hf:inference-optimization/speculators-ci-datasets:smoke_regen",
+        data_path,
+    )
 
     # Step 2: Generate hidden states offline
     with launch_vllm_server_context(

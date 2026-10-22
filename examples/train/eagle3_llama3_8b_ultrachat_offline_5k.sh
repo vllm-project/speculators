@@ -1,14 +1,14 @@
 #!/bin/bash
 # Offline Eagle3 Training Script
 #
-# Runs the full offline training pipeline: data preparation, vLLM server launch,
+# Runs the full offline training pipeline: response regeneration, data preparation,
 # hidden states generation, and training (with pre-generated hidden states).
 #
 # Usage: Copy this script, modify the configuration variables below, then run:
 #   bash examples/train/eagle3_llama3_8b_ultrachat_offline_5k.sh
 #
 # For a detailed walkthrough, see
-# https://docs.vllm.ai/projects/speculators/en/latest/user_guide/tutorials/train_eagle3_offline/
+# https://docs.vllm.ai/projects/speculators/en/latest/user_guide/tutorials/train/
 
 ### Example E2E run for Llama 3.1 8B on 5k samples from UltraChat ###
 
@@ -17,6 +17,7 @@
 # is learning something. This is a good sanity check when creating a drafter for a new
 # target model.
 
+# Reference timings/results below used the original, unregenerated UltraChat data.
 # Timing (on 2x NVIDIA H100 80GB GPUs, DP=2)
 # Data Preprocessing: 16 seconds
 # vLLM Server Startup: 60 seconds (1 min)
@@ -37,7 +38,8 @@ set -euo pipefail
 
 # ============ Configuration ============
 MODEL="meta-llama/Llama-3.1-8B-Instruct"
-DATASET="ultrachat"                # sharegpt, ultrachat, or path to custom data
+# Output JSONL from response regeneration (Step 0).
+DATASET="./ultrachat_Llama-3.1-8B-Instruct.jsonl"
 OUTPUT_DIR="./output"
 HIDDEN_STATES_DIR="$OUTPUT_DIR/hidden_states"
 VLLM_PORT=8000
@@ -53,17 +55,18 @@ GPUS="0,1"
 NUM_GPUS=2
 # =======================================
 
-# Step 1: Prepare data
-echo "=== Step 1: Preparing data ==="
-python scripts/prepare_data.py \
-    --model "$MODEL" \
-    --data "$DATASET" \
-    --max-samples "$MAX_SAMPLES" \
-    --output "$OUTPUT_DIR" \
-    --seq-length "$SEQ_LENGTH"
+# Step 0: Regenerate target responses; the helper starts and stops its server
+bash scripts/response_regeneration/run_all.sh \
+    --model "$MODEL" --dataset ultrachat \
+    --gpus "$GPUS" --dp-size "$NUM_GPUS" --port "$VLLM_PORT" \
+    --limit "$MAX_SAMPLES" --max-tokens "$SEQ_LENGTH" \
+    --outfile "$DATASET" --resume
 
-# Step 2: Launch vLLM server in the background
-echo "=== Step 2: Launching vLLM server ==="
+# Step 1: Launch vLLM server in the background
+# The same server serves two purposes: its render endpoint tokenizes the
+# natural-language dataset in Step 2, and it produces the verifier hidden
+# states extracted in Step 3.
+echo "=== Step 1: Launching vLLM server ==="
 CUDA_VISIBLE_DEVICES="$GPUS" python scripts/launch_vllm.py "$MODEL" \
     -- --data-parallel-size 2 --port "$VLLM_PORT" --gpu-memory-utilization 0.85 &
 VLLM_PID=$!
@@ -74,9 +77,20 @@ until curl -sf "http://localhost:${VLLM_PORT}/health" > /dev/null 2>&1; do
 done
 echo "vLLM server ready."
 
+# Step 2: Prepare data
+# Pretokenized JSONL skips rendering; conversation-only JSONL uses the live server.
+echo "=== Step 2: Preparing data ==="
+speculators prepare-data \
+    --model "$MODEL" \
+    --data "$DATASET" \
+    --render-endpoint "http://localhost:${VLLM_PORT}" \
+    --max-samples "$MAX_SAMPLES" \
+    --output "$OUTPUT_DIR" \
+    --seq-length "$SEQ_LENGTH"
+
 # Step 3: Generate hidden states
 echo "=== Step 3: Generating hidden states ==="
-python scripts/data_generation_offline.py \
+speculators generate-offline-data \
     --preprocessed-data "$OUTPUT_DIR" \
     --endpoint "http://localhost:${VLLM_PORT}/v1" \
     --output "$HIDDEN_STATES_DIR" \
@@ -94,7 +108,7 @@ echo "vLLM server stopped. GPUs freed for training."
 echo "=== Step 5: Training ==="
 CUDA_VISIBLE_DEVICES="$GPUS" torchrun \
     --standalone --nproc_per_node "$NUM_GPUS" \
-    scripts/train.py \
+    -m speculators.train \
     --verifier-name-or-path "$MODEL" \
     --data-path "$OUTPUT_DIR" \
     --hidden-states-path "$HIDDEN_STATES_DIR" \

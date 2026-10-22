@@ -54,7 +54,7 @@ reviews:
     - label: "refactor"
       instructions: "Issues or PRs that restructure or clean up existing code without changing external behavior. Match case-insensitively — 'refactor', 'Refactor', 'REFACTOR' all qualify."
     - label: "training"
-      instructions: "Apply to PRs that modify core training infrastructure under src/speculators/train/, including the training loop (trainer.py), checkpointing (checkpointer.py), distributed batch sampling, loss computation, learning rate scheduling, noise transforms, or vocabulary mapping. Also applies to changes in training configuration or training-specific utilities."
+      instructions: "Apply to PRs that modify core training infrastructure under src/speculators/train/, including the training loop (trainer.py), checkpointing (checkpointer.py), distributed batch sampling, loss computation, learning rate scheduling, or vocabulary mapping. Also applies to changes in training configuration or training-specific utilities."
     - label: "data-generation"
       instructions: "Apply to PRs that modify the data generation pipeline under src/speculators/data_generation/, including hidden state extraction (vllm_hidden_states_generator.py), the vLLM client, data generation configs, preprocessing, or custom worker logic. Also applies to changes affecting how training data is produced from vLLM."
     - label: "eagle3"
@@ -80,4 +80,3 @@ chat:
 issue_enrichment:
   auto_enrich:
     enabled: true
-    

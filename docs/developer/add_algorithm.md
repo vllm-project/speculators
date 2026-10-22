@@ -14,7 +14,7 @@ Adding a new algorithm requires:
 
 4. **Training factory methods** as classmethods on the model
 
-5. **CLI arguments** in `train.py`
+5. **CLI arguments** in `src/speculators/train/cli.py`
 
 ## Step-by-Step Guide
 
@@ -99,14 +99,14 @@ __all__ = [
 
 Add algorithm-specific command-line arguments to the training script. If your algorithm has unique hyperparameters (like Eagle3's `--ttt-steps` or a custom `--block-size`), users need a way to configure them from the command line. These arguments are passed to your `from_training_args()` method. Only add arguments if your algorithm needs parameters beyond the common ones (verifier path, number of layers, etc.).
 
-**Reference:** See `scripts/train.py`
+**Reference:** See `src/speculators/train/cli.py`
 
 ### 6. Train Your Model
 
 The training script should automatically works with your new algorithm:
 
 ```bash
-torchrun --nnodes=1 --nproc_per_node=8 scripts/train.py \
+torchrun --nnodes=1 --nproc_per_node=8 -m speculators.train \
     --speculator-type myalgo \
     --verifier-name-or-path meta-llama/Llama-3.1-8B \
     --num-layers 1 \
@@ -120,7 +120,7 @@ torchrun --nnodes=1 --nproc_per_node=8 scripts/train.py \
 
 **The flow during training:**
 
-1. User runs: `python train.py --speculator-type myalgo`
+1. User runs: `speculators train --speculator-type myalgo`
 2. Training script calls: `model_class = SpeculatorModel.get_class("myalgo")`
 3. Registry returns: `MyAlgoDraftModel` class
 4. Script converts args to dict: `vars(args)` and calls: `model_class.from_training_args(verifier_config, **vars(args))`
@@ -129,7 +129,7 @@ torchrun --nnodes=1 --nproc_per_node=8 scripts/train.py \
 
 This pattern is similar to how `transformers` uses `.from_pretrained()` - each model owns its own instantiation logic.
 
-**Reference:** See `scripts/train.py`
+**Reference:** See `src/speculators/train/cli.py`
 
 ## Using Base Components
 

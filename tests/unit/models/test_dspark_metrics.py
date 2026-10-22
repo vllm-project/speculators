@@ -1,11 +1,17 @@
 """Unit tests for the DSpark loss and metrics."""
 
+from functools import partial
+
+import pytest
 import torch
+from torch.nn.functional import binary_cross_entropy_with_logits
 
-from speculators.models.dspark.metrics import compute_metrics
-from speculators.models.metrics import resolve_loss_config
+from speculators.losses import resolve_loss_config
+from speculators.losses.eager import tv_loss
+from speculators.models.dspark.metrics import compute_metrics as _compute_metrics
 
-_DEFAULT_LOSS = resolve_loss_config('{"ce": 0.1, "tv": 0.9}')
+compute_metrics = partial(_compute_metrics, tv_loss_fn=tv_loss)
+_DEFAULT_LOSS = resolve_loss_config('{"ce": 0.1, "tv": 0.9}', "eager")
 
 
 def _ids_to_logits(ids: torch.Tensor, vocab_size: int) -> torch.Tensor:
@@ -15,6 +21,33 @@ def _ids_to_logits(ids: torch.Tensor, vocab_size: int) -> torch.Tensor:
 
 
 class TestComputeMetrics:
+    @pytest.mark.parametrize("per_position_loss_weight", ["fixed-exp-decay", "dpace"])
+    def test_empty_loss_mask_keeps_backward_graph_with_zero_gradients(
+        self, per_position_loss_weight
+    ):
+        """An empty mask must keep both gradient paths and produce zero loss."""
+        logits = torch.randn(1, 8, 16, requires_grad=True)
+        targets = torch.randn(1, 8, 16)
+        confidence_logits = torch.randn(1, 8, requires_grad=True)
+        loss_mask = torch.zeros(1, 8)
+
+        loss, _ = compute_metrics(
+            logits,
+            targets,
+            confidence_logits,
+            loss_mask,
+            block_size=2,
+            loss_config=_DEFAULT_LOSS,
+            per_position_loss_weight=per_position_loss_weight,
+        )
+        loss.backward()
+
+        assert loss.item() == 0
+        assert logits.grad is not None
+        assert confidence_logits.grad is not None
+        assert torch.count_nonzero(logits.grad) == 0
+        assert torch.count_nonzero(confidence_logits.grad) == 0
+
     def test_perfect_draft_low_loss_high_accept(self):
         # block_size=2; with sample_from_anchor=False, position 0 is the anchor
         # (masked) and position 1 supervised.
@@ -37,9 +70,11 @@ class TestComputeMetrics:
         assert float(loss) < 1e-2
         accept = metrics["accept_rate_sum"] / metrics["accept_rate_total"]
         assert float(accept) > 0.99
-        # One draft slot per block accepted w.p. ~1, plus the anchor token -> ~2.
+        # One draft slot per block accepted w.p. ~1, plus the bonus token -> ~2.
         accept_len = metrics["accept_len_sum"] / metrics["accept_len_total"]
         assert abs(float(accept_len) - 2.0) < 1e-2
+        eal = metrics["eal_sum"] / metrics["eal_total"]
+        assert abs(float(eal) - 2.0) < 1e-2
 
     def test_perfect_draft_anchor_sampled_includes_slot0(self):
         # sample_from_anchor=True (default): slot 0 is the first real prediction,
@@ -61,9 +96,25 @@ class TestComputeMetrics:
         assert float(loss) < 1e-2
         accept = metrics["accept_rate_sum"] / metrics["accept_rate_total"]
         assert float(accept) > 0.99
-        # Two draft slots per block accepted w.p. ~1, plus the anchor token -> ~3.
+        # Two draft slots per block accepted w.p. ~1, plus the bonus token -> ~3.
         accept_len = metrics["accept_len_sum"] / metrics["accept_len_total"]
         assert abs(float(accept_len) - 3.0) < 1e-2
+        eal = metrics["eal_sum"] / metrics["eal_total"]
+        assert abs(float(eal) - 3.0) < 1e-2
+
+    def test_accept_rate_equals_softmax_overlap(self):
+        """accept_rate (now 1 - tv) matches the explicit softmax-overlap formula."""
+        torch.manual_seed(0)
+        logits = torch.randn(1, 4, 32) * 3
+        targets = torch.randn(1, 4, 32) * 3
+        loss_mask = torch.ones(1, 4, dtype=torch.float32)
+        _, metrics = compute_metrics(
+            logits, targets, None, loss_mask, 2, loss_config=_DEFAULT_LOSS
+        )
+        draft_p = torch.softmax(logits.float(), dim=-1)
+        target_p = torch.softmax(targets.float(), dim=-1)
+        overlap = torch.minimum(draft_p, target_p).sum(dim=-1)
+        assert torch.isclose(metrics["accept_rate_sum"], overlap.sum(), atol=1e-5)
 
     def test_confidence_target_is_overlap(self):
         # When draft == target, accept rate == 1, so a confidence logit that is
@@ -115,6 +166,54 @@ class TestComputeMetrics:
         )
         assert float(loss_conf) > float(loss_no_conf)
 
+    @pytest.mark.parametrize("sample_from_anchor", [False, True])
+    @pytest.mark.parametrize("gamma", [1.0, 4.0])
+    def test_confidence_loss_keeps_fixed_decay(self, seed, sample_from_anchor, gamma):
+        """Drafter weights must not change the confidence loss or its gradients."""
+        logits = torch.randn(1, 8, 16)
+        targets = torch.randn(1, 8, 16)
+        confidence_logits = torch.randn(1, 8, requires_grad=True)
+        loss_mask = torch.tensor([[1, 1, 0, 1, 1, 1, 1, 0]], dtype=torch.float32)
+        if not sample_from_anchor:
+            loss_mask[:, ::4] = 0
+
+        accept_rate = torch.minimum(
+            logits.softmax(dim=-1), targets.softmax(dim=-1)
+        ).sum(dim=-1)
+        bce = binary_cross_entropy_with_logits(
+            confidence_logits, accept_rate, reduction="none"
+        )
+        positions = torch.arange(8) % 4
+        offset = 0 if sample_from_anchor else 1
+        weights = torch.exp(-(positions - offset).clamp_min(0) / gamma)
+        expected_loss = (bce * loss_mask * weights).sum() / loss_mask.sum()
+        confidence_head_alpha = 0.3
+        expected_grad = torch.autograd.grad(
+            confidence_head_alpha * expected_loss, confidence_logits
+        )[0]
+
+        draft_losses = []
+        for mode in ("fixed-exp-decay", "dpace"):
+            loss, metrics = compute_metrics(
+                logits,
+                targets,
+                confidence_logits,
+                loss_mask,
+                block_size=4,
+                loss_config=_DEFAULT_LOSS,
+                gamma=gamma,
+                confidence_head_alpha=confidence_head_alpha,
+                per_position_loss_weight=mode,
+                sample_from_anchor=sample_from_anchor,
+            )
+            torch.testing.assert_close(metrics["confidence_loss_sum"], expected_loss)
+            actual_grad = torch.autograd.grad(loss, confidence_logits)[0]
+            torch.testing.assert_close(actual_grad, expected_grad)
+            draft_losses.append(metrics["ce_loss_sum"])
+
+        # The option must still change the drafter's loss.
+        assert not torch.isclose(draft_losses[0], draft_losses[1])
+
     def test_confidence_cumprod_bias_sign(self):
         # Draft != target so accept rate is ~0; an over-confident head (predicts
         # accept ~1) must show a positive cumulative-product calibration bias.
@@ -150,7 +249,7 @@ class TestComputeMetrics:
             None,
             loss_mask,
             block_size=2,
-            loss_config=resolve_loss_config('{"tv": 0.1}'),
+            loss_config=resolve_loss_config('{"tv": 0.1}', "eager"),
         )
         loss_large, _ = compute_metrics(
             logits,
@@ -158,7 +257,7 @@ class TestComputeMetrics:
             None,
             loss_mask,
             block_size=2,
-            loss_config=resolve_loss_config('{"tv": 1.0}'),
+            loss_config=resolve_loss_config('{"tv": 1.0}', "eager"),
         )
         assert float(loss_large) > float(loss_small)
 

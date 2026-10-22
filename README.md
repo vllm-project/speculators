@@ -1,12 +1,8 @@
 <div align="center">
 
-<picture>
-    <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/vllm-project/speculators/main/docs/assets/branding/speculators-logo-white.svg" />
-    <source media="(prefers-color-scheme: light)" srcset="https://raw.githubusercontent.com/vllm-project/speculators/main/docs/assets/branding/speculators-logo-black.svg" />
-    <img alt="Speculators logo" src="https://raw.githubusercontent.com/vllm-project/speculators/main/docs/assets/branding/speculators-logo-black.svg" height="64" />
-  </picture>
+![Speculators logo](./docs/assets/branding/speculators-logo-white.svg#gh-dark-mode-only) ![Speculators logo](./docs/assets/branding/speculators-logo-black.svg#gh-light-mode-only)
 
-[![License](https://img.shields.io/github/license/vllm-project/speculators.svg)](https://github.com/vllm-project/speculators/blob/main/LICENSE) [![Python Versions](https://img.shields.io/badge/Python-3.10--3.13-orange)](https://pypi.org/project/speculators/) [![docs](https://img.shields.io/badge/docs-Speculators-blue)](https://docs.vllm.ai/projects/speculators/en/latest/) [![PyPI](https://img.shields.io/pypi/v/speculators.svg)](https://pypi.org/project/speculators/) [![tests](https://badge.buildkite.com/ec24a960c7238e18953364f4e7117a5301185b37e60283b5b0.svg?branch=main)](https://buildkite.com/vllm/speculators)
+[![License](https://img.shields.io/github/license/vllm-project/speculators.svg)](https://github.com/vllm-project/speculators/blob/main/LICENSE) [![Python Versions](https://img.shields.io/badge/Python-3.11--3.13-orange)](https://pypi.org/project/speculators/) [![docs](https://img.shields.io/badge/docs-Speculators-blue)](https://docs.vllm.ai/projects/speculators/en/latest/) [![PyPI](https://img.shields.io/pypi/v/speculators.svg)](https://pypi.org/project/speculators/) [![tests](https://badge.buildkite.com/ec24a960c7238e18953364f4e7117a5301185b37e60283b5b0.svg?branch=main)](https://buildkite.com/vllm/speculators)
 
 </div>
 
@@ -26,7 +22,7 @@ Speculators standardizes this process by providing a productionized end-to-end f
 
 ______________________________________________________________________
 
-💬 Join us on the [vLLM Community Slack](https://communityinviter.com/apps/vllm-dev/join-vllm-developers-slack) and share your questions, thoughts, or ideas in:
+💬 Join us on the [vLLM Community Slack](https://inviter.co/vllm-slack) and share your questions, thoughts, or ideas in:
 
 - `#speculators`
 - `#feat-spec-decode`
@@ -41,13 +37,12 @@ Big updates have landed in Speculators! To get a more in-depth look, check out t
 
 Some of the exciting new features include:
 
+- **Multi-Node Online Training via hs_connectors**: Added the [`hs_connectors`](https://github.com/vllm-project/speculators/tree/main/hs_connectors) plugin package with pluggable backends for transferring hidden states between vLLM and the trainer across nodes. The file-based backend uses a shared filesystem, while the Mooncake backend leverages a distributed store for environments without shared storage, enabling online speculator training at multi-node scale.
+- **DSpark Training Algorithm**: Added support for the DSpark training algorithm, which extends DFlash's anchored-block drafting with a Markov head that conditions each draft position on the previous token within the block, plus a confidence head that predicts per-position acceptance probability. DSpark checkpoints can warm-start from existing DFlash checkpoints.
 - **P-EAGLE Training Support**: Added support for the [P-EAGLE training algorithm](https://docs.vllm.ai/projects/speculators/en/latest/user_guide/algorithms/peagle), which extends EAGLE-3's architecture with parallel multi-token prediction via Conditional-On-Distribution (COD) sampling. Rather than generating draft tokens sequentially, P-EAGLE predicts multiple tokens in a single forward pass, reducing drafting latency. The Red Hat team published a [P-EAGLE speculator for Qwen3-8B](https://huggingface.co/RedHatAI/Qwen3-8B-speculator.peagle).
 - **MTP Finetuning Support**: Added support for finetuning the native Multi-Token Prediction (MTP) heads of models like Qwen3-Next on domain-specific data, following the [FastMTP](https://arxiv.org/abs/2509.18362) approach. Because the MTP head is small (~100M–400M params), it can be trained on pre-extracted hidden states without loading the full verifier
 - **Sliding Window Attention for DFlash and DSpark**: DFlash and DSpark speculators use sliding window attention on all draft layers by default. Use `--sliding-window` to set the window size and `--full-attention-indices` to opt specific layers into full attention. Sliding window attention reduces KV cache allocation for long-context sequences and can improve per-position acceptance rates compared to full attention.
-- **Qwen3-8B DFlash Speculator**: The RedHat team published a [DFlash speculator for Qwen3-8B](https://huggingface.co/RedHatAI/Qwen3-8B-speculator.dflash), achieving average speculative token acceptance lengths of up to 3.74 on `math_reasoning`.
-- **Gemma 4 Speculators**: The RedHat team published speculators for Gemma 4 31B-it, including both [DFlash](https://huggingface.co/RedHatAI/gemma-4-31B-it-speculator.dflash) and [EAGLE-3](https://huggingface.co/RedHatAI/gemma-4-31B-it-speculator.eagle3) checkpoints, enabling production-grade speculative decoding for Gemma 4 models.
 - **DFlash Training Algorithm**: Added support for the DFlash training algorithm with anchored-block drafting, using auxiliary hidden states from multiple verifier layers. Includes CLI options for block size and max anchors, plus DFlash metrics, utilities, and draft model. DFlash models trained through Speculators can now run seamlessly in vLLM as of [vLLM PR #38300](https://github.com/vllm-project/vllm/pull/38300).
-- **Online Training Support**: Added support for online training using the new [vLLM hidden extraction system](https://github.com/vllm-project/vllm/pull/33736), enabling real-time hidden state generation during training without requiring separate offline data generation steps.
 
 ______________________________________________________________________
 
@@ -63,113 +58,7 @@ ______________________________________________________________________
 
 ## Supported Models
 
-The following table summarizes the models that have been trained end-to-end by our team as well as others in the roadmap:
-
-<table>
-<thead>
-<tr>
-<th>Verifier Architecture</th>
-<th>Verifier Size</th>
-<th>Training Support</th>
-<th>vLLM Deployment Support</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td rowspan="3">Llama</td>
-<td>8B-Instruct</td>
-<td><a href="https://huggingface.co/RedHatAI/Llama-3.1-8B-Instruct-speculator.eagle3">EAGLE-3</a> ✅</td>
-<td>✅</td>
-</tr>
-<tr>
-<td>70B-Instruct</td>
-<td><a href="https://huggingface.co/RedHatAI/Llama-3.3-70B-Instruct-speculator.eagle3">EAGLE-3</a> ✅</td>
-<td>✅</td>
-</tr>
-<tr>
-</tr>
-<tr>
-<td rowspan="3">Qwen3</td>
-<td>8B</td>
-<td><a href="https://huggingface.co/RedHatAI/Qwen3-8B-speculator.eagle3">EAGLE-3</a> ✅<br/><a href="https://huggingface.co/RedHatAI/Qwen3-8B-speculator.dflash">DFlash</a> ✅<br/><a href="https://huggingface.co/RedHatAI/Qwen3-8B-speculator.peagle">P-EAGLE</a> ✅</td>
-<td>✅</td>
-</tr>
-<tr>
-<td>14B</td>
-<td><a href="https://huggingface.co/RedHatAI/Qwen3-14B-speculator.eagle3">EAGLE-3</a> ✅</td>
-<td>✅</td>
-</tr>
-<tr>
-<td>32B</td>
-<td><a href="https://huggingface.co/RedHatAI/Qwen3-32B-speculator.eagle3">EAGLE-3</a> ✅</td>
-<td>✅</td>
-</tr>
-<tr>
-<td rowspan="2">gpt-oss</td>
-<td>20b</td>
-<td><a href="https://huggingface.co/RedHatAI/gpt-oss-20b-speculator.eagle3">EAGLE-3</a> ✅</td>
-<td>✅</td>
-</tr>
-<tr>
-<td>120b</td>
-<td><a href="https://huggingface.co/RedHatAI/gpt-oss-120b-speculator.eagle3">
-      EAGLE-3
-    </a> ✅</td>
-<td>✅</td>
-</tr>
-<tr>
-  <td rowspan="3">Qwen3 MoE</td>
-  <td>30B-Instruct</td>
-  <td><a href="https://huggingface.co/RedHatAI/Qwen3-30B-A3B-Instruct-2507-speculator.eagle3">
-      EAGLE-3
-    </a> ✅</td>
-  <td>✅</td>
-</tr>
-<tr>
-  <td>235B-Instruct</td>
-  <td>
-    <a href="https://huggingface.co/RedHatAI/Qwen3-235B-A22B-Instruct-2507-speculator.eagle3">
-      EAGLE-3
-    </a> ✅
-  </td>
-  <td>✅</td>
-</tr>
-<tr>
-  <td>235B</td>
-  <td><a href="https://huggingface.co/RedHatAI/Qwen3-235B-A22B-speculator.eagle3">
-      EAGLE-3
-    </a> ✅</td>
-  <td>✅</td>
-</tr>
-<td>Qwen3-VL</td>
-<td>235B-A22B</td>
-<td><a href="https://huggingface.co/RedHatAI/Qwen3-VL-235B-A22B-Instruct-speculator.eagle3">
-      EAGLE-3
-    </a> ✅</td>
-<td>✅</td>
-</tr>
-<tr>
-<td>Mistral 3 Large</td>
-<td>675B-Instruct</td>
-<td>EAGLE-3 ⏳</td>
-<td>⏳</td>
-</tr>
-<tr>
-<td>Gemma 4</td>
-<td>31B-it</td>
-<td><a href="https://huggingface.co/RedHatAI/gemma-4-31B-it-speculator.eagle3">EAGLE-3</a> ✅<br/><a href="https://huggingface.co/RedHatAI/gemma-4-31B-it-speculator.dflash">DFlash</a> ✅</td>
-<td>✅</td>
-</tr>
-<tr>
-<td>Gemma 4 MoE</td>
-<td>26B-A4B-it</td>
-<td><a href="https://huggingface.co/RedHatAI/gemma-4-26B-A4B-it-speculator.eagle3">EAGLE-3</a> ✅</td>
-<td>✅</td>
-</tr>
-</tbody>
-</table>
-
-✅ = Supported, ⏳ = In Progress, ❌ = Not Yet Supported
+Browse trained speculators and their evaluation results on the [Speculators dashboard](https://neuralmagic.github.io/speculators-dashboard/).
 
 ## vLLM Inference
 
@@ -179,13 +68,16 @@ Models trained through Speculators can run seamlessly in vLLM using a simple `vl
 vllm serve RedHatAI/Qwen3-8B-speculator.eagle3
 ```
 
-Served models can then be benchmarked using [GuideLLM](https://github.com/vllm-project/guidellm). Below, we show sample benchmark results where we compare our speculator with its dense counterpart. We also additionally compare [quantization](https://github.com/vllm-project/llm-compressor) to explore additional performance improvements by swapping the dense verifier, `Qwen/Qwen3-8B` with the quantized FP8 model, [RedHatAI/Qwen3-8B-FP8-dynamic](https://huggingface.co/RedHatAI/Qwen3-8B-FP8-dynamic) in the `speculator_config`.
+### Performance Benchmarking
+
+Served models can then be benchmarked using [GuideLLM](https://github.com/vllm-project/guidellm), enabled by the benchmarking tooling in [`scripts/evaluate`](https://github.com/vllm-project/speculators/tree/main/scripts/evaluate). Below, we show sample benchmark results for [NVIDIA-Nemotron-3.5-Super-VL-120B-A12B-BF16](https://huggingface.co/nvidia/NVIDIA-Nemotron-3.5-Super-VL-120B-A12B-BF16) with a trained DSpark speculator, [RedHatAI/NVIDIA-Nemotron-3.5-Super-VL-120B-A12B.dspark](https://huggingface.co/RedHatAI/NVIDIA-Nemotron-3.5-Super-VL-120B-A12B.dspark), and show further optimization by combining it with the quantized FP8 verifier, [RedHatAI/NVIDIA-Nemotron-3.5-Super-VL-120B-A12B-FP8](https://huggingface.co/RedHatAI/NVIDIA-Nemotron-3.5-Super-VL-120B-A12B-FP8), on Hopper GPUs.
 
 <p align="center">
-  <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/vllm-project/speculators/main/docs/assets/qwen_quant_benchmark.png">
-    <img alt="GuideLLM Logo" src="https://raw.githubusercontent.com/vllm-project/speculators/main/docs/assets/qwen_quant_benchmark.png" width=180%>
-  </picture>
+  <img alt="HumanEval benchmark results comparing DSpark and FP8+DSpark speculative decoding" src="docs/assets/humaneval_dspark_fp8_dspark.png" width=180%>
+</p>
+
+<p align="center">
+  <img alt="Math reasoning benchmark results comparing DSpark and FP8+DSpark speculative decoding" src="docs/assets/math_reasoning_dspark_fp8_dspark.png" width=180%>
 </p>
 
 ## Additional Utility Scripts
@@ -201,7 +93,7 @@ Served models can then be benchmarked using [GuideLLM](https://github.com/vllm-p
 Before installing, ensure you have the following:
 
 - **Operating System:** Linux or macOS
-- **Python:** 3.10 or higher
+- **Python:** 3.11 or higher
 - **Package Manager:** pip (recommended) or conda
 
 #### Install from PyPI (Recommended)

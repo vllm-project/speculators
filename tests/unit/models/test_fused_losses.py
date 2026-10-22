@@ -1,0 +1,368 @@
+"""Fused Triton losses vs their eager references (speculators.losses.fused).
+
+One test per loss, comparing loss value and logits-gradient against eager in
+the three regimes that catch distinct bugs: fp32 with saturated point-mass
+rows (gradient formula, log-space underflow), bf16 (the training dtype), and
+the 151936-wide vocab (multi-block streaming, non-power-of-2 tail). The
+upstream gradient contains exact zeros, so masked rows take the backward
+kernel's early-out and must return exact zeros from an uninitialized buffer.
+
+The accelerator is auto-detected: CUDA when present, otherwise Ascend NPU
+(via triton-ascend). The 151936-wide leg also exercises the smaller NPU
+BLOCK_SIZE cap (MAX_FUSED_SIZE_NPU = 4096), which forces the tighter
+multi-block streaming loop.
+"""
+
+import pytest
+import torch
+import triton
+
+from speculators.losses import eager, resolve_loss_config
+from speculators.utils.util import is_npu_available
+
+
+def _accelerator_device() -> str | None:
+    """Pick the accelerator the fused kernels can run on, or None to skip."""
+    if torch.cuda.is_available():
+        return "cuda"
+    if is_npu_available():
+        return "npu"
+    return None
+
+
+DEVICE = _accelerator_device()
+requires_accelerator = pytest.mark.skipif(
+    DEVICE is None,
+    reason="fused Triton losses require a CUDA or Ascend NPU accelerator",
+)
+requires_cuda = pytest.mark.skipif(
+    not torch.cuda.is_available(),
+    reason="memory accounting test uses torch.cuda APIs",
+)
+
+# (name, eager fn, fused fn name); fused resolved lazily so this file
+# collects on machines without Triton
+CASES = [
+    ("kl_div", eager.kl_div_loss, "fused_kl_div_loss"),
+    ("rkl", eager.reverse_kl_div_loss, "fused_reverse_kl_div_loss"),
+    ("jsd", eager.js_div_loss, "fused_js_div_loss"),
+    ("ce", eager.ce_loss, "fused_ce_loss"),
+    ("tv", eager.tv_loss, "fused_tv_loss"),
+    ("nla", eager.neg_log_acceptance_loss, "fused_nla_loss"),
+    ("lk_hybrid", eager.lk_hybrid_loss, "fused_lk_hybrid_loss"),
+]
+
+# Loss values are fp32 on both paths; gradients allow bf16 1-ulp rounding
+# (both paths quantize at the leaf). A wrong gradient formula errs by orders
+# of magnitude more than either bound.
+LOSS_TOL = {"atol": 1e-4, "rtol": 1e-3}
+GRAD_TOL = {"atol": 1e-3, "rtol": 1e-2}
+# eager ce computes cross_entropy in bf16, so its bf16 legs are bounded by
+# eager's own rounding, not by the (fp32) fused kernel
+CE_BF16_LOSS_TOL = {"atol": 0.2, "rtol": 1e-2}
+CE_BF16_GRAD_TOL = {"atol": 1e-2, "rtol": 2e-2}
+
+
+def _assert_fused_matches_eager(
+    eager_fn, fused_fn, logits, targets, loss_tol, grad_tol
+):
+    le = logits.detach().clone().requires_grad_(True)
+    lf = logits.detach().clone().requires_grad_(True)
+    out_e = eager_fn(le, targets)
+    out_f = fused_fn(lf, targets)
+    assert out_f.dtype == torch.float32  # like the eager fp32 softmax (#788)
+    torch.testing.assert_close(out_f, out_e.float(), **loss_tol)
+
+    go = torch.randn_like(out_e, dtype=torch.float32)
+    go[:, ::3] = 0.0  # rows taking the go == 0 early-out
+    (out_e.float() * go).sum().backward()
+    (out_f * go).sum().backward()
+    assert le.grad is not None
+    assert lf.grad is not None
+    torch.testing.assert_close(lf.grad.float(), le.grad.float(), **grad_tol)
+
+
+@requires_accelerator
+@pytest.mark.parametrize(
+    ("name", "eager_fn", "fused_name"), CASES, ids=[c[0] for c in CASES]
+)
+def test_fused_matches_eager(name, eager_fn, fused_name):
+    """Fused == eager (value + gradient) across the three failure-mode regimes."""
+    fused_losses = pytest.importorskip("speculators.losses.fused")
+    fused_fn = getattr(fused_losses, fused_name)
+
+    # fp32, with saturated +-30 point-mass rows (one agreeing, one disagreeing)
+    torch.manual_seed(0)
+    logits = torch.randn(1, 32, 512, device=DEVICE) * 3
+    targets = torch.randn(1, 32, 512, device=DEVICE) * 3
+    logits[0, -2:] = -30.0
+    targets[0, -2:] = -30.0
+    logits[0, -2:, 0] = 30.0
+    targets[0, -2, 0] = 30.0  # last two rows: draft==target, then disagree
+    targets[0, -1, 7] = 30.0
+    _assert_fused_matches_eager(eager_fn, fused_fn, logits, targets, LOSS_TOL, GRAD_TOL)
+    # the map dispatcher is bitwise-equal to fused -> the fused path really ran
+    dispatcher = resolve_loss_config(name)[name][0]
+    assert torch.equal(dispatcher(logits, targets), fused_fn(logits, targets))
+
+    # bf16, the training dtype
+    torch.manual_seed(1)
+    logits = (torch.randn(1, 64, 512, device=DEVICE) * 3).bfloat16()
+    targets = (torch.randn(1, 64, 512, device=DEVICE) * 3).bfloat16()
+    _assert_fused_matches_eager(
+        eager_fn,
+        fused_fn,
+        logits,
+        targets,
+        CE_BF16_LOSS_TOL if name == "ce" else LOSS_TOL,
+        CE_BF16_GRAD_TOL if name == "ce" else GRAD_TOL,
+    )
+
+    # Qwen3's 151936 vocab exceeds MAX_FUSED_SIZE (and MAX_FUSED_SIZE_NPU):
+    # multi-block streaming plus a non-power-of-2 masked tail. On NPU the
+    # per-block cap is 4096, so this leg also covers the tighter block loop.
+    torch.manual_seed(2)
+    logits = torch.randn(1, 3, 151936, device=DEVICE) * 3
+    targets = torch.randn(1, 3, 151936, device=DEVICE) * 3
+    _assert_fused_matches_eager(eager_fn, fused_fn, logits, targets, LOSS_TOL, GRAD_TOL)
+
+
+@requires_accelerator
+@pytest.mark.parametrize(
+    ("name", "eager_fn", "fused_name"), CASES, ids=[c[0] for c in CASES]
+)
+def test_compiles_fullgraph(name, eager_fn, fused_name):
+    """torch.compile(fullgraph=True) must trace the fused losses.
+
+    The OP selector crosses the autograd.Function boundary, and Dynamo cannot
+    represent a tl.constexpr object there -- passing one graph-breaks (or
+    fails under fullgraph). Model forwards are wrapped in torch.compile, so
+    this guards the compiled training path.
+    """
+    fused_losses = pytest.importorskip("speculators.losses.fused")
+    fused_fn = getattr(fused_losses, fused_name)
+    logits = torch.randn(1, 8, 512, device=DEVICE, requires_grad=True)
+    targets = torch.randn(1, 8, 512, device=DEVICE)
+
+    compiled = torch.compile(lambda a, b: fused_fn(a, b).sum(), fullgraph=True)
+    compiled(logits, targets).backward()
+    assert logits.grad is not None
+    assert torch.isfinite(logits.grad).all()
+
+
+@requires_cuda
+def test_ce_releases_targets_before_backward():
+    """CE releases targets after forward; distribution losses retain them."""
+    fused_losses = pytest.importorskip("speculators.losses.fused")
+
+    def held_vs_target_bytes(fused_fn) -> tuple[int, int]:
+        """(bytes the graph still holds after the forward, size of targets)."""
+        logits = torch.randn(1, 1024, 4096, device="cuda", requires_grad=True)
+        torch.cuda.synchronize()
+        base = torch.cuda.memory_allocated()
+        targets = torch.randn_like(logits)
+        loss = fused_fn(logits, targets).sum()
+        nbytes = targets.nbytes
+        del targets
+        held = torch.cuda.memory_allocated() - base
+        loss.backward()  # backward must still run without the targets
+        return held, nbytes
+
+    held, nbytes = held_vs_target_bytes(fused_losses.fused_ce_loss)
+    assert held < nbytes // 2
+    held, nbytes = held_vs_target_bytes(fused_losses.fused_kl_div_loss)
+    assert held >= nbytes
+
+
+def test_eager_implementation_supports_differentiable_targets():
+    """The explicit eager implementation preserves target gradients."""
+    torch.manual_seed(3)
+    for name in ("kl_div", "rkl", "jsd", "tv", "nla", "lk_hybrid"):
+        logits = torch.randn(1, 4, 64, requires_grad=True)
+        targets = torch.randn(1, 4, 64, requires_grad=True)
+        loss_fn = resolve_loss_config(name, "eager")[name][0]
+        loss_fn(logits, targets).sum().backward()
+        assert logits.grad is not None, name
+        assert targets.grad is not None, name
+
+
+def test_tile_configs_stay_register_resident():
+    """Every autotune candidate sits in the measured non-spilling region.
+
+    This is the invariant that matters: the tile the autotuner ends up on is
+    machine-dependent and not worth asserting, but a candidate that spills to
+    local memory is never competitive on any device. The fixed
+    BLOCK_SIZE=131072 this module used to select was 512 elements/thread and
+    ran the forward kernel ~17x slower than a register-resident tile.
+    """
+    fused_losses = pytest.importorskip("speculators.losses.fused")
+
+    configs = fused_losses._tile_configs()
+    assert configs, "the autotuner needs at least one candidate"
+
+    warp_size = 64 if getattr(torch.version, "hip", None) is not None else 32
+    for config in configs:
+        block = config.kwargs["BLOCK_SIZE"]
+        threads = config.num_warps * warp_size
+        assert block == triton.next_power_of_2(block)
+        if fused_losses.is_npu_available():
+            assert block <= fused_losses.MAX_FUSED_SIZE_NPU
+            continue
+        elems_per_thread = block // threads
+        assert (
+            fused_losses._MIN_ELEMS_PER_THREAD
+            <= elems_per_thread
+            <= fused_losses._MAX_ELEMS_PER_THREAD
+        ), f"BLOCK_SIZE={block} at {threads} threads is {elems_per_thread} elems/thread"
+
+
+# Widen the search past the register-resident bound so the bound is measured
+# rather than assumed: these are the tiles _tile_configs() deliberately never
+# offers, at 128+ elements per thread where Triton starts spilling.
+_SPILLING_BLOCK_SIZES = (65536, 131072)
+_SWEEP_VOCAB = 151936  # Qwen3, the shape this module was tuned against
+_SWEEP_ROWS = 256
+
+
+# A tile that spills should be losing outright, not by a hair; anything less
+# and bounding the search space up front would not be worth the lost coverage.
+_SPILL_PENALTY = 2.0
+
+
+def _time_tile(launch, block, warps):
+    """Compile one tile, then time it. Returns (ms, spill bytes per thread).
+
+    ``launch`` takes the tile and enqueues the kernel, returning the compiled
+    kernel that Triton hands back -- that object is where ``n_spills`` lives.
+    """
+    compiled = launch(block, warps)
+    ms = triton.testing.do_bench(lambda: launch(block, warps), warmup=10, rep=25)
+    return ms, compiled.n_spills
+
+
+@requires_cuda
+@pytest.mark.slow
+def test_autotuner_never_picks_a_spilling_tile():
+    """Tune over the *unbounded* space and show a spilling tile never wins.
+
+    ``_tile_configs()`` prunes the search to the register-resident region up
+    front, which is only sound if nothing worth having lives outside it. So
+    time the whole space -- spilling tiles included -- and assert the winner
+    both spills nothing and came from the pruned space.
+
+    Deliberately not asserted: that every spilling tile loses to every
+    register-resident one. It does not. 8192 at 4 warps spills 6 B/thread and
+    is still 1.4x faster than 16384 at 4 warps, which is inside the bound and
+    spills nothing. What holds, and what pruning actually rests on, is that the
+    winner is never one of them.
+    """
+    fused_losses = pytest.importorskip("speculators.losses.fused")
+
+    cap = triton.next_power_of_2(_SWEEP_VOCAB)
+    offered = {
+        (config.kwargs["BLOCK_SIZE"], config.num_warps)
+        for config in fused_losses._tile_configs()
+        if config.kwargs["BLOCK_SIZE"] <= cap
+    }
+    widened = sorted(
+        offered
+        | {
+            (block, warps)
+            for block in _SPILLING_BLOCK_SIZES
+            for warps in (4, 8, 16, 32)
+            if block <= cap
+        }
+    )
+
+    rows, vocab = _SWEEP_ROWS, _SWEEP_VOCAB
+    logits = torch.randn(rows, vocab, device="cuda", dtype=torch.bfloat16)
+    targets = torch.randn(rows, vocab, device="cuda", dtype=torch.bfloat16)
+    loss = torch.empty(rows, device="cuda", dtype=torch.float32)
+    stats = torch.empty(fused_losses._N_STATS, rows, device="cuda", dtype=torch.float32)
+    grad_in = torch.empty_like(logits)
+    grad_out = torch.ones(rows, device="cuda", dtype=torch.float32)
+    op = fused_losses._OP_KL.value
+
+    def run_forward(block, warps):
+        return fused_losses.loss_forward_kernel.fn[(rows,)](
+            logits,
+            targets,
+            loss,
+            stats,
+            stats.stride(0),
+            vocab,
+            OP=op,
+            BLOCK_SIZE=block,
+            num_warps=warps,
+        )
+
+    def run_backward(block, warps):
+        return fused_losses.loss_backward_kernel.fn[(rows,)](
+            logits,
+            targets,
+            grad_in,
+            grad_out,
+            stats,
+            stats.stride(0),
+            vocab,
+            OP=op,
+            BLOCK_SIZE=block,
+            num_warps=warps,
+        )
+
+    timings = {}
+    for block, warps in widened:
+        fwd_ms, fwd_spills = _time_tile(run_forward, block, warps)
+        bwd_ms, bwd_spills = _time_tile(run_backward, block, warps)
+        timings[block, warps] = (fwd_ms + bwd_ms, fwd_spills + bwd_spills)
+
+    spilling = {tile for tile, (_, spills) in timings.items() if spills}
+    assert spilling, (
+        "the widened space compiled without a single spill, so this test "
+        "proves nothing -- raise _SPILLING_BLOCK_SIZES for this GPU"
+    )
+
+    winner = min(timings, key=lambda tile: timings[tile][0])
+    winner_ms, winner_spills = timings[winner]
+    assert winner_spills == 0, (
+        f"the fastest tile {winner[0]}/{winner[1]}w spills {winner_spills} "
+        f"B/thread; the pruned search space assumes that never happens"
+    )
+    assert winner in offered, (
+        f"the fastest tile {winner[0]}/{winner[1]}w is outside the pruned "
+        f"space, so _tile_configs() is leaving performance on the table"
+    )
+
+    # Spilling hard has to be a cliff rather than a slope, or bounding the
+    # space up front would not be worth the coverage it gives up. The worst
+    # tile in the widened space is 131072 at 4 warps -- 1024 elements/thread,
+    # the shape this module used to hardcode for any vocab past 65536.
+    worst_ms, worst_spills = max(timings.values(), key=lambda entry: entry[0])
+    assert worst_spills > 0, "the slowest tile in the widened space did not spill"
+    assert worst_ms > _SPILL_PENALTY * winner_ms, (
+        f"the worst spilling tile is only {worst_ms / winner_ms:.2f}x the "
+        f"winner, which makes the register-resident bound unmotivated here"
+    )
+
+
+def test_prune_oversized_tiles_never_empties_the_space():
+    """Pruning narrows the space for small vocabs but always leaves a candidate.
+
+    A vocab narrower than every candidate tile (the 512-wide test shapes) must
+    still get a config -- an empty list would make the launch unschedulable --
+    and it should get only the narrowest, so tiny shapes do not pay to compile
+    the whole space.
+    """
+    fused_losses = pytest.importorskip("speculators.losses.fused")
+
+    configs = fused_losses._tile_configs()
+    blocks = {config.kwargs["BLOCK_SIZE"] for config in configs}
+
+    for vocab in (128, 512, 4096, 32000, 151936):
+        pruned = fused_losses._prune_oversized_tiles(configs, {"n_cols": vocab})
+        assert pruned, f"vocab={vocab} pruned every candidate"
+        cap = triton.next_power_of_2(vocab)
+        if any(block <= cap for block in blocks):
+            assert all(config.kwargs["BLOCK_SIZE"] <= cap for config in pruned)
+        else:
+            assert {config.kwargs["BLOCK_SIZE"] for config in pruned} == {min(blocks)}
