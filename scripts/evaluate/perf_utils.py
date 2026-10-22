@@ -558,6 +558,8 @@ def run_guidellm(
     max_tokens: int,
     gen_kwargs: dict | None = None,
     request_format: str | None = None,
+    dataset_load_kwargs: dict | None = None,
+    data_preprocessors: list[str] | None = None,
 ) -> None:
     # Building the backend as a JSON object to support nested gen_kwargs for guidellm.
     backend: dict[str, object] = {
@@ -571,7 +573,15 @@ def run_guidellm(
         backend["extras"] = {"body": gen_kwargs}
     cmd = ["guidellm", "run", "--backend", json.dumps(backend)]
 
-    if subset is not None:
+    if dataset_load_kwargs is not None:
+        data = json.dumps(
+            {
+                "kind": "huggingface",
+                "source": dataset,
+                "load_kwargs": dataset_load_kwargs,
+            }
+        )
+    elif subset is not None:
         data = f"kind=huggingface,source={dataset}"
         data += f",load_kwargs.data_files={subset}.jsonl,load_kwargs.split=train"
     else:
@@ -579,6 +589,8 @@ def run_guidellm(
     cmd.extend(["--data", data])
 
     cmd.extend(["--data-column-mapper", data_column_mapper])
+    for preprocessor in data_preprocessors or []:
+        cmd.extend(["--data-preprocessor", preprocessor])
 
     profile_str = f"kind={profile},max_concurrency={max_concurrency}"
     if profile == "sweep":

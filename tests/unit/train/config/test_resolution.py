@@ -565,6 +565,23 @@ def _recipe_argv(path: Path) -> list[str]:
 
 
 RECIPES: dict[str, dict] = {
+    "dflash_qwen3_asr_online.sh": {
+        "verifier_name_or_path": "Qwen/Qwen3-ASR-0.6B-hf",
+        "data_path": "./output/dflash_qwen3_asr/data",
+        "hidden_states_path": "./output/dflash_qwen3_asr/hidden_states",
+        "vllm_endpoint": "http://localhost:8000/v1",
+        "save_path": "./output/dflash_qwen3_asr/checkpoints",
+        "speculator_type": "dflash",
+        "block_size": 8,
+        "max_anchors": 3072,
+        "num_layers": 5,
+        "draft_vocab_size": 32000,
+        "target_layer_ids": [2, 14, 25],
+        "epochs": 2,
+        "lr": 3e-4,
+        "total_seq_len": 4096,
+        "on_missing": "generate",
+    },
     "dflash_qwen3_8b_ultrachat_online_5k.sh": {
         "verifier_name_or_path": "Qwen/Qwen3-8B",
         "data_path": "./output/dflash_qwen3_8b_ultrachat_200k_regen",

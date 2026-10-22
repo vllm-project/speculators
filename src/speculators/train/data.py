@@ -58,11 +58,18 @@ def create_empty_sample(
 def _has_multimodal_content(messages: list[dict]) -> bool:
     """True when any turn carries non-text content (images, video, audio).
 
-    Text-only turns store ``content`` as a plain string.  Multimodal turns
-    (produced by ``_adapt_conv_for_vllm``) store it as a list of typed parts,
-    e.g. ``[{"type": "text", ...}, {"type": "image_url", ...}]``.
+    Typed content lists can also contain only text. Only non-text parts
+    require the Chat Completions API to reprocess media.
     """
-    return any(isinstance(m.get("content"), list) for m in messages)
+    for message in messages:
+        content = message.get("content")
+        if isinstance(content, list) and any(
+            not isinstance(part, str)
+            and (not isinstance(part, dict) or part.get("type") != "text")
+            for part in content
+        ):
+            return True
+    return False
 
 
 def build_client_item(dataset_item: dict) -> ClientItem:
@@ -74,8 +81,8 @@ def build_client_item(dataset_item: dict) -> ClientItem:
     API cannot carry image/video/audio references), but harmful for text-only
     data: preprocessing truncates ``input_ids`` to ``seq_length``, yet the
     ``messages`` column stores the original un-truncated conversation.
-    Re-tokenizing those messages produces a longer sequence that can exceed
-    ``max_model_len``.
+    Hidden-state requests apply the same right-truncation bound and validate
+    the returned token IDs.
 
     We therefore only forward ``messages`` when the conversation actually
     contains multimodal content.  Text-only conversations always go through
@@ -89,8 +96,9 @@ def build_client_item(dataset_item: dict) -> ClientItem:
     """
     out_dict: dict = {"input_ids": dataset_item["input_ids"].tolist()}
 
-    if "messages" in dataset_item and _has_multimodal_content(dataset_item["messages"]):
-        out_dict["messages"] = dataset_item["messages"]
+    messages = dataset_item.get("messages")
+    if messages and _has_multimodal_content(messages):
+        out_dict["messages"] = messages
 
     return cast("ClientItem", out_dict)
 

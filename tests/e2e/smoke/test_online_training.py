@@ -14,6 +14,7 @@ from typing import Any
 import pytest
 
 from tests.e2e.utils import (
+    ChatPrompts,
     launch_vllm_server_context,
     run_prepare_data,
     run_training,
@@ -39,7 +40,7 @@ def test_online_smoke(
     tmp_path: Path,
     model: str,
     dataset: str,
-    prompts: list[list[dict[str, str]]],
+    prompts: ChatPrompts,
 ):
     if dataset == "sharegpt4v_coco":
         coco_dir = tmp_path / "coco"
@@ -74,7 +75,7 @@ def run_online_e2e(
     draft_vocab_size: int = 8192,
     epochs: int = 1,
     lr: float = 3e-4,
-    prompts: list[list[dict[str, str]]] | None = None,
+    prompts: ChatPrompts | None = None,
     disable_compile_cache: bool = False,
     max_tokens: int = 50,
     ignore_eos: bool = True,

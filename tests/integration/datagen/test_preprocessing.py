@@ -3,6 +3,8 @@ Unit tests for the preprocessing module in the Speculators data generation.
 """
 
 import json
+from copy import deepcopy
+from pathlib import Path
 from typing import Any
 from unittest.mock import patch
 
@@ -150,11 +152,14 @@ def test_normalize_conversation_tool_calls_not_leaked():
 
 # Tests for _adapt_conv_for_vllm
 @pytest.mark.sanity
-def test_adapt_conv_for_vllm_all_content_formats():
+@pytest.mark.parametrize("modality", ["image", "video", "audio"])
+def test_adapt_conv_for_vllm_all_content_formats(tmp_path, modality):
     """
     Test converting from normalized conversation to vLLM format
     with each supported content format.
     """
+    path = tmp_path / "音声 #1?.wav"
+    url_type = f"{modality}_url"
     conv: list[dict] = [
         {
             "role": "system",
@@ -165,11 +170,12 @@ def test_adapt_conv_for_vllm_all_content_formats():
             "content": [  # Content as list
                 "Hello,",  # Text as string
                 {"type": "text", "text": "I am"},  # Text as dictionary
-                {"type": "image", "path": "/path/to/img"},  # Image file path
-                {"type": "image", "url": "http://path/to/img"},  # Image URL
+                {"type": modality, "path": str(path)},  # Local media path
+                {"type": modality, "url": "http://path/to/media"},  # Media URL
             ],
         },
     ]
+    original = deepcopy(conv)
     result = _adapt_conv_for_vllm(conv)
 
     assert len(result) == 2
@@ -182,14 +188,15 @@ def test_adapt_conv_for_vllm_all_content_formats():
         {"type": "text", "text": "Hello,"},
         {"type": "text", "text": "I am"},
         {
-            "type": "image_url",
-            "image_url": {"url": "file:///path/to/img"},
+            "type": url_type,
+            url_type: {"url": path.as_uri()},
         },
         {
-            "type": "image_url",
-            "image_url": {"url": "http://path/to/img"},
+            "type": url_type,
+            url_type: {"url": "http://path/to/media"},
         },
     ]
+    assert conv == original
 
 
 @pytest.mark.sanity
@@ -312,6 +319,28 @@ def test_load_raw_dataset_local_file(tmp_path):
 
     assert len(dataset) == 2
     assert normalize_fn is None
+
+
+@pytest.mark.sanity
+def test_documented_audio_conversation_loads_as_arrow(tmp_path):
+    """The copyable JSONL example must use one content schema for all roles."""
+    tutorial = (
+        Path(__file__).resolve().parents[3] / "docs/user_guide/tutorials/qwen3_asr.md"
+    )
+    example = json.loads(
+        tutorial.read_text().split("```json\n", 1)[1].split("```", 1)[0]
+    )
+    path = tmp_path / "conversations.jsonl"
+    _write_jsonl(path, [example])
+    dataset, normalize = load_raw_dataset(str(path))
+    assert normalize is None
+    assert len(dataset) == 1
+    actual = dataset[0]["conversations"]
+    expected = example["conversations"]
+    assert [turn["role"] for turn in actual] == ["system", "user", "assistant"]
+    assert actual[0]["content"][0]["text"] == ""
+    assert actual[1]["content"][0]["path"] == expected[1]["content"][0]["path"]
+    assert actual[2]["content"][0]["text"] == expected[2]["content"][0]["text"]
 
 
 @pytest.mark.sanity

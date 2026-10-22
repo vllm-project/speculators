@@ -30,6 +30,12 @@ speculators prepare-data \
 
 `--render-endpoint` is not needed when every input row already contains `input_ids` and `loss_mask`.
 
+## Multimodal inputs
+
+Image, video, and audio conversations use typed content parts. A part such as `{"type":"audio","path":"/data/utterance.wav"}` becomes an OpenAI-compatible `audio_url`; `image` and `video` work the same way. The vLLM server must have access to local media via `--allowed-local-media-path`.
+
+See [Qwen3-ASR training](../user_guide/tutorials/qwen3_asr.md) for audio examples and serving prerequisites.
+
 ## Arguments
 
 ### Model Arguments
