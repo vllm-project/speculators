@@ -7,9 +7,12 @@ scaffold fallback (needs a template that pre-fills ``<think>``), the unstable
 guard (needs a template that rewrites history), and the client's error paths.
 """
 
+import json
+import os
 import time
 from typing import cast
 
+import httpx
 import pytest
 import torch
 from datasets import Dataset as HFDataset
@@ -337,3 +340,55 @@ def test_loss_mask_stays_boolean_after_save_load_and_collation(tmp_path, mask):
     )
     assert batch["loss_mask"].dtype == torch.bool
     assert batch["loss_mask"].tolist() == [[False, False, True, True, False, False]]
+
+
+@pytest.mark.parametrize("status", [404, 405])
+def test_preprocess_aborts_when_render_route_disappears(monkeypatch, status):
+    requests = []
+
+    def handle(request):
+        body = json.loads(request.content)
+        requests.append(body)
+        if body["messages"][0]["content"] == "missing":
+            return httpx.Response(status, text="render route unavailable")
+        ids = [1, 2] if body["add_generation_prompt"] else [1, 2, 3]
+        return httpx.Response(200, json={"token_ids": ids})
+
+    conversations = [
+        [{"role": "user", "content": text}, {"role": "assistant", "content": "ok"}]
+        for text in ["good", "missing"]
+    ]
+    with httpx.Client(transport=httpx.MockTransport(handle)) as client:
+        monkeypatch.setattr(render_client, "_client", client)
+        monkeypatch.setattr(render_client, "_client_pid", os.getpid())
+        with pytest.raises(InvalidResponseError, match=str(status)):
+            preprocessing._preprocess_batch(
+                {"conversations": conversations}, False, "http://render.test", 2048
+            )
+    assert len(requests) == 3  # two valid renders, then one permanent route failure
+
+
+@pytest.mark.parametrize("status", [200, 400, 422])
+def test_preprocess_keeps_conversation_specific_render_error_policy(
+    monkeypatch, status
+):
+    def handle(request):
+        body = json.loads(request.content)
+        if status != 200 and body["messages"][0]["content"] == "bad":
+            return httpx.Response(status, text="bad conversation")
+        ids = [1, 2] if body["add_generation_prompt"] else [1, 2, 3]
+        return httpx.Response(200, json={"token_ids": ids})
+
+    conversations = [
+        [{"role": "user", "content": text}, {"role": "assistant", "content": "ok"}]
+        for text in ["good", "bad"]
+    ]
+    with httpx.Client(transport=httpx.MockTransport(handle)) as client:
+        monkeypatch.setattr(render_client, "_client", client)
+        monkeypatch.setattr(render_client, "_client_pid", os.getpid())
+        result = preprocessing._preprocess_batch(
+            {"conversations": conversations}, False, "http://render.test", 2048
+        )
+    assert len(result["input_ids"]) == (2 if status == 200 else 1)
+    assert result["input_ids"][0].tolist() == [1, 2, 3]
+    assert result["loss_mask"][0].tolist() == [False, False, True]
