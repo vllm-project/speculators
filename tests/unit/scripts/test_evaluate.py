@@ -565,6 +565,47 @@ def test_speedbench_jsonl_all_null_metadata_then_strings(tmp_path):
     assert all("unused_metadata" not in r["body"] for r in requests)
 
 
+@pytest.mark.parametrize(
+    ("categories", "expected"),
+    [
+        ([], ["high_entropy", "high_entropy"]),
+        (["high_entropy"], ["high_entropy", "high_entropy"]),
+        (["low_entropy"], ["low_entropy", "low_entropy"]),
+        (["mixed"], ["mixed", "mixed"]),
+        (["low_entropy", "mixed"], ["low_entropy", "mixed"]),
+        (["unknown"], []),
+    ],
+)
+def test_category_filter_precedes_sample_limit(tmp_path, categories, expected):
+    source = tmp_path / "throughput_8k.jsonl"
+    labels = [
+        "high_entropy",
+        "high_entropy",
+        "low_entropy",
+        "mixed",
+        "low_entropy",
+        "mixed",
+    ]
+    source.write_text(
+        "".join(
+            json.dumps(
+                {"messages": [{"role": "user", "content": label}], "category": label}
+            )
+            + "\n"
+            for label in labels
+        )
+    )
+    flags = ["--category", *categories] if categories else []
+    args = _args(
+        "speedbench", "--data-files", str(source), "--max-samples", "2", *flags
+    )
+    if expected:
+        assert [r["category"] for r in load_evaluation_requests(args)] == expected
+    else:
+        with pytest.raises(ValueError, match="no requests"):
+            load_evaluation_requests(args)
+
+
 def test_position_rates_count_steps_accepting_through_each_position():
     summary = acceptance_summary(
         [

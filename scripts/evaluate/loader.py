@@ -22,6 +22,11 @@ def add_dataset_arguments(parser: argparse.ArgumentParser) -> None:
         "--data-files", nargs="+", help="Source file paths or HF file patterns"
     )
     group.add_argument("--revision", help="Hugging Face dataset revision")
+    group.add_argument(
+        "--category",
+        nargs="+",
+        help="Category labels to select before --max-samples",
+    )
     columns = group.add_mutually_exclusive_group()
     columns.add_argument(
         "--prompt-column",
@@ -91,7 +96,12 @@ def _requests(datasets: dict, args: argparse.Namespace):
             dataset_body["max_tokens"] = (
                 args.max_tokens if args.max_tokens is not None else 8192
             )
-        for index, sample in enumerate(islice(conversations, args.max_samples)):
+        selected = (
+            sample
+            for sample in conversations
+            if not args.category or sample["category"] in args.category
+        )
+        for index, sample in enumerate(islice(selected, args.max_samples)):
             yield {
                 "id": f"{name}:{index}",
                 "dataset": name,
