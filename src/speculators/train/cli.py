@@ -119,6 +119,7 @@ def create_transformer_layer_config(  # noqa: C901
     full_attention_indices: list[int],
     mrope_full_head_hack: bool = True,
     trust_remote_code: bool = False,
+    draft_num_key_value_heads: int | None = None,
 ) -> PretrainedConfig:
     """Build the draft decoder ``transformer_layer_config`` from shaping flags.
 
@@ -128,6 +129,11 @@ def create_transformer_layer_config(  # noqa: C901
     heterogeneous verifiers, global values are used as a reasonable automatic
     default when Transformers reports an ambiguous per-layer attribute; users
     can provide ``--draft-config`` for explicit values.
+
+    ``draft_num_key_value_heads`` overrides the seeded ``num_key_value_heads``
+    (grouped-query draft). Without it, a warning is emitted for verifiers using
+    Multi-head Latent Attention (detected by ``kv_lora_rank``), whose
+    ``num_key_value_heads`` is nominal and yields a full multi-head draft.
     """
     if draft_arch not in DRAFT_ARCH_CONFIGS:
         raise ValueError(
@@ -192,6 +198,36 @@ def create_transformer_layer_config(  # noqa: C901
         if num_attention_heads % num_key_value_heads != 0:
             num_key_value_heads = num_attention_heads
     resolved_head_dim = head_dim or resolved_hidden_size // num_attention_heads
+
+    kv_lora_rank = getattr(verifier_config, "kv_lora_rank", None)
+    if draft_num_key_value_heads is not None:
+        if (
+            draft_num_key_value_heads <= 0
+            or num_attention_heads % draft_num_key_value_heads != 0
+        ):
+            raise ValueError(
+                f"--draft-num-key-value-heads={draft_num_key_value_heads} must be a "
+                "positive divisor of the draft num_attention_heads "
+                f"({num_attention_heads})."
+            )
+        num_key_value_heads = draft_num_key_value_heads
+    elif kv_lora_rank:
+        # MLA verifiers (DeepSeek-V3, GLM-5, ...) cache a compressed
+        # latent of width kv_lora_rank; their num_key_value_heads is a nominal
+        # value (== num_attention_heads) that does not describe that cache.
+        warnings.warn(
+            f"Verifier '{verifier_name_or_path}' uses Multi-head Latent Attention "
+            f"(kv_lora_rank={kv_lora_rank}); its num_key_value_heads "
+            f"({num_key_value_heads}) is a nominal value that does not describe its "
+            "KV cache. The synthesized draft copies it, giving "
+            f"{num_key_value_heads} KV heads for {num_attention_heads} attention "
+            f"heads ({2 * num_key_value_heads * resolved_head_dim} KV cache elements "
+            "per token per draft layer). Pass --draft-num-key-value-heads (e.g. 8) "
+            "or --draft-config to train a grouped-query draft with a smaller KV "
+            "cache.",
+            UserWarning,
+            stacklevel=2,
+        )
 
     # Ensure global fallback values are GQA-consistent.
     if num_key_value_heads and num_attention_heads % num_key_value_heads != 0:
@@ -574,6 +610,9 @@ def build_draft_model(
                 full_attention_indices=full_attention_indices,
                 mrope_full_head_hack=args.draft_mrope_full_head_hack,
                 trust_remote_code=args.trust_remote_code,
+                draft_num_key_value_heads=getattr(
+                    args, "draft_num_key_value_heads", None
+                ),
             )
 
         args.mask_token_id = resolve_mask_token_id(
