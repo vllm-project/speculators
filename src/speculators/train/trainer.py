@@ -323,9 +323,50 @@ class Trainer:
                     f"Restored best_val_loss={self.best_val_loss:.6f} from checkpoint"
                 )
 
+    def _precast_frozen_linear_weights(self):
+        """Store frozen linear weights in the autocast dtype.
+
+        Autocast casts an fp32 weight to the low-precision dtype on the way
+        into every matmul, and its cast cache only covers weights that
+        require grad -- a frozen weight is converted again on every call.
+        ``lm_head`` and ``verifier_lm_head`` are both frozen and both
+        [draft_vocab_size, hidden_size], so each call moves the whole head
+        through memory for a result that is the same every time.
+
+        Trainable weights keep their fp32 master copy; rounding the tensor
+        the optimizer updates in place would change what training does.
+        """
+        if self.is_distributed and self.config.fsdp_shard:
+            # FSDP2 all-gathers parameters in the autocast dtype anyway, and
+            # every parameter in a group has to share one original dtype.
+            return
+
+        dtype = self.config.hidden_states_dtype
+        converted = 0
+        for module in self.model.modules():
+            if not isinstance(module, torch.nn.Linear):
+                continue
+            for name in ("weight", "bias"):
+                param = getattr(module, name, None)
+                if (
+                    param is None
+                    or param.requires_grad
+                    or not param.is_floating_point()
+                    or param.dtype == dtype
+                ):
+                    continue
+                param.data = param.data.to(dtype)
+                converted += param.numel()
+        if converted:
+            root_logger.info(f"Cast {converted:,} frozen linear parameters to {dtype}")
+
     def setup_model(self):
         # Verify model is compatible with training infrastructure
         SpeculatorModel.verify_training_compatible(self.model)
+
+        # Before any wrapping or checkpoint load: the parameters are still
+        # plain tensors here, and a load copies into whatever dtype they have.
+        self._precast_frozen_linear_weights()
 
         # Enable gradient checkpointing BEFORE FSDP/DDP wrapping to save
         # activation memory at the cost of recomputation during backward.
