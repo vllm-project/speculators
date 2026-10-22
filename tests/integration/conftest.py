@@ -18,7 +18,7 @@ from speculators.models.mtp.core import MTPDraftModel
 from speculators.models.peagle.config import PEagleSpeculatorConfig
 from speculators.models.peagle.core import PEagleDraftModel
 from speculators.proposals.greedy import GreedyTokenProposalConfig
-from speculators.train.data import CollateFn
+from speculators.train.data import _add_document_ids, _pad_samples, create_empty_batch
 
 # ---------------------------------------------------------------------------
 # Tiny verifier configs
@@ -260,7 +260,7 @@ def make_sample(
 ) -> dict[str, torch.Tensor]:
     """Generate a single synthetic sample (no batch dim, seq_len on dim 0).
 
-    Matches the per-sample format produced by BaseDataset.__getitem__:
+    Matches the per-sample format produced by SpeculatorsDataset.__getitem__:
         hidden_states: [seq_len, hidden_multiplier * hidden_size]
         input_ids: [seq_len]
         verifier_last_hidden_states: [seq_len, hidden_size]
@@ -313,10 +313,7 @@ def make_batch(
     preprocess: Callable | None = None,
     device: str = "cuda:0",
 ) -> dict[str, torch.Tensor]:
-    """Collate a list of samples into a single batch using the real collate_fn.
-
-    Uses ``CollateFn`` from ``speculators.train.data`` to pack and pad
-    samples exactly the way the training pipeline does.
+    """Pack synthetic samples using the dataset's batching operations.
 
     Args:
         max_len: Target sequence length to pad/truncate to.
@@ -330,13 +327,18 @@ def make_batch(
     Returns:
         Dict with keys matching model forward() signatures, all on ``device``.
     """
-    collate_fn = CollateFn(
-        max_len=max_len,
-        hidden_size=hidden_size,
-        num_target_layers=num_target_layers,
-        preprocess=preprocess,
-    )
-    batch = collate_fn(samples)
+    valid_samples = [preprocess(sample) if preprocess else sample for sample in samples]
+    if valid_samples:
+        batch = _pad_samples(valid_samples, max_len, torch.bfloat16)
+        _add_document_ids(batch, max_len)
+    else:
+        batch = create_empty_batch(
+            max_len,
+            hidden_size,
+            num_target_layers,
+            dtype=torch.bfloat16,
+        )
+    batch["error_records"] = 0
     return {
         k: v.to(device) if isinstance(v, torch.Tensor) else v for k, v in batch.items()
     }
