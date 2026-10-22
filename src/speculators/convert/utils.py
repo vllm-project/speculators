@@ -140,7 +140,9 @@ def _load_sharded_weights(
                 for key in keys:
                     weights[key] = f.get_tensor(key)
         else:
-            shard_weights = torch.load(shard_path, map_location="cpu")
+            shard_weights = torch.load(
+                shard_path, map_location="cpu", weights_only=True
+            )
             missing = set(keys) - set(shard_weights)
             if missing:
                 raise ValueError(
@@ -185,7 +187,7 @@ def load_checkpoint_weights(checkpoint_dir: Path) -> dict[str, torch.Tensor]:
     pytorch_path = checkpoint_dir / "pytorch_model.bin"
     if pytorch_path.exists():
         logger.debug(f"Loading PyTorch weights from: {pytorch_path}")
-        return torch.load(pytorch_path, map_location="cpu")
+        return torch.load(pytorch_path, map_location="cpu", weights_only=True)
 
     index_path = checkpoint_dir / "pytorch_model.bin.index.json"
     if index_path.exists():
