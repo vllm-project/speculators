@@ -1,5 +1,6 @@
 from hs_connectors.transfer import (
     FileBackend,
+    FileKVBackend,
     FileTransfer,
     FP8Backend,
     FP8Transfer,
@@ -13,6 +14,7 @@ __all__ = [
     "FP8Backend",
     "FP8Transfer",
     "FileBackend",
+    "FileKVBackend",
     "FileTransfer",
     "HiddenStatesBackend",
     "HiddenStatesTransfer",

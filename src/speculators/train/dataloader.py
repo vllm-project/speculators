@@ -62,6 +62,7 @@ def _setup_dataloader(
     preprocess: Callable[[BatchType], BatchType] | None = None,
     max_batches: int | None = None,
     seed: int = 0,
+    kv_cache_shape: tuple[int, ...] | None = None,
 ) -> DataLoader:
     batch_sampler = MultipackDistributedBatchSamplerV2(
         batch_max_length=total_seq_len,
@@ -84,6 +85,7 @@ def _setup_dataloader(
             num_target_layers=num_target_layers,
             dtype=dataset.hidden_states_dtype,
             preprocess=preprocess,
+            kv_cache_shape=kv_cache_shape,
         ),
         persistent_workers=use_workers,
         multiprocessing_context="spawn" if use_workers else None,
@@ -112,6 +114,7 @@ def create_train_val_loaders(
     train_data_ratio: float = 0.9,
     max_train_batches: int | None = None,
     seed: int = 0,
+    kv_cache_shape: tuple[int, ...] | None = None,
 ) -> tuple[DataLoader, DataLoader]:
     """Create training and validation DataLoaders.
 
@@ -169,6 +172,7 @@ def create_train_val_loaders(
         preprocess=preprocess,
         max_batches=max_train_batches,
         seed=seed,
+        kv_cache_shape=kv_cache_shape,
     )
     val_loader = _setup_dataloader(
         val_dataset,
@@ -178,6 +182,7 @@ def create_train_val_loaders(
         num_workers=num_workers,
         prefetch_factor=prefetch_factor,
         preprocess=preprocess,
+        kv_cache_shape=kv_cache_shape,
     )
 
     return train_loader, val_loader

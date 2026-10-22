@@ -544,6 +544,27 @@ class DSparkArgs(_Group):
     )
 
 
+class MambaAttnHybridArgs(_Group):
+    block_pattern: list[str] = [
+        "mamba",
+        "mlp",
+        "mamba",
+        "attention",
+        "mlp",
+        "mamba",
+        "attention",
+        "mlp",
+        "mamba",
+        "attention",
+        "mlp",
+    ]
+    attn_kv_layer_ids: list[int] | None = None
+    mamba_num_heads: int = 48
+    mamba_head_dim: int = 64
+    mamba_d_state: int = 4
+    mamba_n_groups: int = 4
+
+
 class XPressArgs(_Group):
     """XPress-exclusive knobs (causal-refiner head + Jacobi consistency)."""
 
@@ -636,6 +657,7 @@ _GROUPS: dict[str, type[_Group]] = {
     "dflash": DFlashArgs,
     "dflash2": DFlash2Args,
     "dspark": DSparkArgs,
+    "mamba_attn_hybrid": MambaAttnHybridArgs,
     "xpress": XPressArgs,
     "peagle": PEagleArgs,
     "mtp": MTPArgs,
@@ -730,7 +752,7 @@ class TrainConfig(BaseSettings):
     speculator_type: str = Field(
         default="eagle3",
         description="Type of speculator model to train "
-        "(eagle3, dflash, dflash2, dspark, xpress, peagle, mtp).",
+        "(eagle3, dflash, dflash2, dspark, mamba_attn_hybrid, xpress, peagle, mtp).",
     )
     dry_run: bool = Field(
         default=False,
@@ -757,6 +779,7 @@ class TrainConfig(BaseSettings):
     dflash: DFlashArgs = Field(default_factory=DFlashArgs)
     dflash2: DFlash2Args = Field(default_factory=DFlash2Args)
     dspark: DSparkArgs = Field(default_factory=DSparkArgs)
+    mamba_attn_hybrid: MambaAttnHybridArgs = Field(default_factory=MambaAttnHybridArgs)
     xpress: XPressArgs = Field(default_factory=XPressArgs)
     peagle: PEagleArgs = Field(default_factory=PEagleArgs)
     mtp: MTPArgs = Field(default_factory=MTPArgs)
@@ -836,6 +859,15 @@ class TrainConfig(BaseSettings):
                 raise ValueError(
                     f"--dpace-alpha must be in (0, 1], got {self.dflash.dpace_alpha}"
                 )
+        return self
+
+    @model_validator(mode="after")
+    def _resolve_mamba_attn_hybrid(self) -> "TrainConfig":
+        if self.speculator_type != "mamba_attn_hybrid":
+            return self
+        if not self.mamba_attn_hybrid.attn_kv_layer_ids:
+            raise ValueError("--attn-kv-layer-ids is required for mamba_attn_hybrid")
+        self.draft.num_layers = self.mamba_attn_hybrid.block_pattern.count("attention")
         return self
 
     def flatten(self) -> dict[str, Any]:
