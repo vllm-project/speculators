@@ -619,6 +619,14 @@ class MTPArgs(_Group):
         description="Exponential decay factor for MTP step weights; higher weights "
         "earlier prediction steps more. Only used with MTP.",
     )
+    mtp_train_forward: Literal["fastmtp", "vllm"] = Field(
+        default="fastmtp",
+        description="MTP training forward. 'fastmtp' is the FastMTP-style "
+        "sequence-wide recursion on pre-norm hidden states. 'vllm' matches vLLM's MTP "
+        "proposer: the head sees the verifier's final-norm hidden states, and draft "
+        "step k attends to the context plus only its own draft chain, at position "
+        "anchor + k. Only used with MTP.",
+    )
 
 
 # Group attribute name -> group model. Order defines both the flatten() key order
