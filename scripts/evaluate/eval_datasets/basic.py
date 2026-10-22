@@ -98,15 +98,17 @@ def _column(row: dict, name: str):
 
 def _conversations(name: str, args: argparse.Namespace):
     options = {"dataset": name, "split": "train", **DATASET_PRESETS.get(name, {})}
-    for key in ("dataset_config", "split", "data_files"):
-        if (value := getattr(args, key)) is not None:
-            options[key] = value
-    if any(
-        getattr(args, key) is not None
-        for key in ("messages_column", "prompt_column", "prompt_template")
+    for key in (
+        "dataset_config",
+        "split",
+        "data_files",
+        "messages_column",
+        "prompt_column",
+        "prompt_template",
     ):
-        for key in ("messages_column", "prompt_column", "prompt_template"):
-            options[key] = getattr(args, key)
+        value = getattr(args, key)
+        if value is not None:
+            options[key] = value
     rows = dataset_rows(
         options["dataset"],
         dataset_config=options.get("dataset_config"),
