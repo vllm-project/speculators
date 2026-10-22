@@ -13,6 +13,7 @@ Usage::
 """
 
 import asyncio
+import contextlib
 import logging
 import os
 import shutil
@@ -85,6 +86,51 @@ def _drop_unreadable_cached_files(
     return [i for i in existing_file_indices if i not in corrupt]
 
 
+def _clean_or_warn_orphaned_staging_files(
+    hidden_states_dir: Path, world_size: int, rank: int
+) -> None:
+    """Inspect and clean or warn about leftover temporary files from abnormal exits.
+
+    Hard kills (e.g. SIGKILL, node eviction, OOM) prevent in-run cleanup from
+    executing, leaving '.hs_*.safetensors.tmp' files on disk. If world_size == 1,
+    it is safe to clean them up. Under multi-rank execution, ranks could be
+    starting concurrently and actively writing, so we emit a warning without
+    unlinking to avoid data races.
+    """
+    tmp_files = list(hidden_states_dir.glob(".hs_*.safetensors.tmp"))
+    if not tmp_files:
+        return
+
+    total_bytes = 0
+    for f in tmp_files:
+        with contextlib.suppress(OSError):
+            total_bytes += f.stat().st_size
+    total_mb = total_bytes / (1024 * 1024)
+
+    if world_size == 1:
+        for f in tmp_files:
+            try:
+                f.unlink(missing_ok=True)
+            except OSError as e:
+                logger.warning("Failed to remove orphaned staging file %s: %s", f, e)
+        logger.warning(
+            "Found and removed %d orphaned staging file(s) (%.1f MB total) "
+            "from a previous interrupted run",
+            len(tmp_files),
+            total_mb,
+        )
+    elif rank == 0:
+        logger.warning(
+            "Found %d orphaned staging file(s) (%.1f MB total) in %s. "
+            "Under multi-rank execution (world_size=%d), automatic cleanup "
+            "is skipped to avoid races",
+            len(tmp_files),
+            total_mb,
+            hidden_states_dir,
+            world_size,
+        )
+
+
 class _FailureTracker:
     """Tracks consecutive sample failures across async workers.
 
@@ -136,6 +182,9 @@ async def _worker(  # noqa: C901
             queue.task_done()
             continue
 
+        staging_hidden_states_path = (
+            hidden_states_output_dir / f".hs_{idx}.safetensors.tmp"
+        )
         target_hidden_states_path = hidden_states_output_dir / f"hs_{idx}.safetensors"
 
         try:
@@ -155,21 +204,35 @@ async def _worker(  # noqa: C901
 
             async with write_semaphore:
                 t_write = time.perf_counter()
-                await asyncio.to_thread(
-                    shutil.move, hidden_states_path, target_hidden_states_path
+                move_coro = asyncio.to_thread(
+                    shutil.move, hidden_states_path, staging_hidden_states_path
                 )
-                write_s = time.perf_counter() - t_write
+                move_task = asyncio.create_task(move_coro)
+                try:
+                    await asyncio.shield(move_task)
+                except asyncio.CancelledError:
+                    await move_task
+                    staging_hidden_states_path.unlink(missing_ok=True)
+                    raise
+
                 if validate_outputs:
 
                     def _load_and_check(
-                        path=target_hidden_states_path,
+                        path=staging_hidden_states_path,
                         tokens=item["input_ids"],
                     ):
                         loaded = load_file(path)
                         check_hidden_states(loaded, tokens)
 
                     await asyncio.to_thread(_load_and_check)
+
+                staging_hidden_states_path.replace(target_hidden_states_path)
+                write_s = time.perf_counter() - t_write
+        except asyncio.CancelledError:
+            staging_hidden_states_path.unlink(missing_ok=True)
+            raise
         except Exception as e:
+            staging_hidden_states_path.unlink(missing_ok=True)
             if fail_on_error:
                 logger.exception(
                     "Fatal: sample %d aborted with --fail-on-error: %s", idx, e
@@ -269,6 +332,7 @@ async def _generate_and_save_hidden_states(
     else:
         hidden_states_dir = Path(output)
     hidden_states_dir.mkdir(parents=True, exist_ok=True)
+    _clean_or_warn_orphaned_staging_files(hidden_states_dir, world_size, rank)
 
     existing_file_indices = get_existing_hidden_state_indices(hidden_states_dir)
     existing_file_indices = _drop_unreadable_cached_files(
