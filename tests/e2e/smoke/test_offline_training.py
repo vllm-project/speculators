@@ -57,6 +57,13 @@ MM_MODEL = "Qwen/Qwen3-VL-2B-Instruct"
             8192,
         ),  # DFlash with 3 layers + verifier last layer
         (
+            MM_MODEL,
+            "sharegpt4v_coco",
+            "dflash",
+            ["--block-size", "8", "--max-anchors", "256", "--num-layers", "3"],
+            [1, 13, 25],
+        ),  # Multimodal DFlash: plain-rope draft on a VL verifier
+        (
             TEXT_MODEL,
             "hf:inference-optimization/speculators-ci-datasets:smoke_regen",
             "dflash2",
