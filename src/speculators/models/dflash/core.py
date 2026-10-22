@@ -382,6 +382,7 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
         verifier_last_hidden_states: torch.Tensor,  # [1, total_seq_len, hidden_size]
         document_ids: torch.Tensor,  # [1, total_seq_len]
         position_ids: torch.Tensor | None = None,  # [1, total_seq_len]
+        compute_heads: bool = True,
         **kwargs,
     ):
         """Run the anchored-block draft transformer up to the draft logits.
@@ -389,6 +390,11 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
         Returns ``(hidden, logits, targets, aligned_loss_mask,
         anchored_block_indices)``. DSpark reuses this and adds its Markov and
         confidence heads before computing its own loss.
+
+        With ``compute_heads=False`` the ``logits``/``targets`` outputs are
+        ``None``; callers that chunk the head projections over anchor groups
+        (to bound the ``[anchors*block, vocab]`` memory) compute them per
+        chunk from the returned ``hidden`` and ``anchored_block_indices``.
         """
         device = hidden_states.device
         total_seq_len = hidden_states.shape[1]
@@ -434,7 +440,9 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
         )  # shape: [num_anchors*block_size]
 
         with torch.no_grad():
-            if anchored_block_indices.numel() < total_seq_len:
+            if not compute_heads:
+                targets = None
+            elif anchored_block_indices.numel() < total_seq_len:
                 target_indices = (
                     anchored_block_indices
                     if self.config.sample_from_anchor
@@ -466,7 +474,8 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
             )
 
         hidden = self.norm(noise_embedding)
-        logits = self.lm_head(hidden)
+        # shape: [1, num_anchors*block_size, hidden_size]
+        logits = self.lm_head(hidden) if compute_heads else None
         # shape: [1, num_anchors*block_size, vocab_size]
 
         aligned_loss_mask = loss_mask.clone()[:, anchored_block_indices]

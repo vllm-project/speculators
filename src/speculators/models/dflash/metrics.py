@@ -30,6 +30,7 @@ def compute_metrics(
     per_position_loss_weight: str = "fixed-exp-decay",
     dpace_alpha: float = 0.5,
     sample_from_anchor: bool = False,
+    denominator: torch.Tensor | None = None,
 ) -> tuple[torch.Tensor, dict]:
     """Compute loss and accuracy metrics for draft model predictions.
 
@@ -42,6 +43,11 @@ def compute_metrics(
         loss_config: Mapping of ``{name: (loss_fn, weight)}``
         per_position_loss_weight: Weighting option for per-position block-drafting loss
         dpace_alpha: Smoothing constant for D-Pace loss weighting
+        sample_from_anchor: Whether position 0 is a prediction (DSpark) or the
+            anchor input (DFlash).
+        denominator: Optional precomputed normalizer for the loss reduction;
+            callers pooling several chunks of anchor blocks pass the *global*
+            mask sum so per-chunk losses add up to the unchunked value.
 
     Returns:
         Tuple of (loss, metrics_dict) where metrics_dict contains:
@@ -76,6 +82,7 @@ def compute_metrics(
         pos_idx,
         loss_config=loss_config,
         decay_fn=decay_fn,
+        denominator=denominator,
     )
 
     pred_ids = torch.argmax(logits, dim=-1)

@@ -2,9 +2,11 @@ from typing import ClassVar
 
 import torch
 import torch.nn.functional as F  # noqa: N812
+import torch.utils.checkpoint
 from transformers import PretrainedConfig
 
 from speculators.losses import LossConfig
+from speculators.losses.utils import _LOSS_REDUCTION_EPS
 from speculators.model import SpeculatorModel
 from speculators.models.dflash.core import DFlashDraftModel
 from speculators.models.dflash.metrics import compute_metrics
@@ -86,55 +88,31 @@ class LiLiCorrDraftModel(DFlashDraftModel):
         for call_kwargs in (train_kwargs, val_kwargs):
             call_kwargs["lilicorr_w_ce"] = kwargs.get("lilicorr_w_ce", 0.25)
             call_kwargs["lilicorr_w_pen"] = kwargs.get("lilicorr_w_pen", 0.25)
+            call_kwargs["loss_chunk_anchors"] = kwargs.get("loss_chunk_anchors")
         return train_kwargs, val_kwargs
 
-    @conditional_torch_compile
-    def forward(
+    def _lattice_terms(
         self,
-        hidden_states: torch.Tensor,  # [1, total_seq_len, num_aux*hidden_size]
-        input_ids: torch.Tensor,  # [1, total_seq_len]
-        loss_mask: torch.Tensor,  # [1, total_seq_len]
-        verifier_last_hidden_states: torch.Tensor,  # [1, total_seq_len, hidden_size]
+        logits: torch.Tensor,  # [1, n_blocks*block, V]
+        targets: torch.Tensor,  # [1, n_blocks*block, V]
+        hidden: torch.Tensor,  # [1, n_blocks*block, H]
+        aligned_loss_mask: torch.Tensor,  # [1, n_blocks*block]
+        block_indices: torch.Tensor,  # [n_blocks*block], absolute positions
+        hidden_states: torch.Tensor,  # [1, total_seq_len, num_aux*H]
         document_ids: torch.Tensor,  # [1, total_seq_len]
-        position_ids: torch.Tensor | None = None,  # [1, total_seq_len]
-        loss_config: LossConfig | None = None,
-        gamma: float = 4.0,
-        max_anchors: int = 512,
-        per_position_loss_weight: str = "fixed-exp-decay",
-        dpace_alpha: float = 0.5,
-        lilicorr_w_ce: float = 0.25,
-        lilicorr_w_pen: float = 0.25,
-        **kwargs,
     ):
-        hidden, logits, targets, aligned_loss_mask, block_indices = (
-            self._backbone_forward(
-                hidden_states,
-                input_ids,
-                loss_mask,
-                verifier_last_hidden_states,
-                document_ids,
-                position_ids,
-                max_anchors=max_anchors,
-                **kwargs,
-            )
-        )
-        dflash_loss, metrics = compute_metrics(
-            logits,
-            targets,
-            aligned_loss_mask,
-            self.block_size,
-            gamma=gamma,
-            loss_config=loss_config,
-            per_position_loss_weight=per_position_loss_weight,
-            dpace_alpha=dpace_alpha,
-            sample_from_anchor=False,
-        )
+        """LiLiCorr head terms for one contiguous group of anchor blocks.
 
-        num_blocks, block, topk = (
-            max_anchors,
-            self.block_size,
-            self.lilicorr.candidate_topk,
-        )
+        The tensor arguments must cover exactly that group's rows (the
+        monolithic path passes the full sequence of blocks; the chunked path
+        passes one chunk). Returns *raw* (unnormalized) numerators and counts —
+        ``(ce_num, pen_num, supervised_count, eal, top1_eal, oracle_eal)`` — so
+        callers can pool several groups before dividing by the pooled
+        denominators, which is what the unchunked computation does.
+        """
+        block = self.block_size
+        topk = self.lilicorr.candidate_topk
+        num_blocks = logits.shape[1] // block
         # Block position 0 is the anchor token; the lattice covers positions 1..B-1.
         logits_s = logits.view(num_blocks, block, -1)[:, 1:]
         targets_s = targets.view(num_blocks, block, -1)[:, 1:]
@@ -184,18 +162,16 @@ class LiLiCorrDraftModel(DFlashDraftModel):
         supervised = (
             gt_in_lattice.long().cumprod(-1).bool() & valid_block[:, None]
         ).float()
-        denom = supervised.sum().clamp_min(1.0)
         ce = -log_p.gather(-1, gt_index.unsqueeze(-1)).squeeze(-1)
-        ce_loss = (ce * supervised).sum() / denom
+        ce_num = (ce * supervised).sum()
 
         # Distractor penalty: the head's mass on each candidate, weighted by how far
         # below the ground truth the target's logit puts it.
         cand_target_logits = targets_s.gather(-1, candidate_ids).float()
         gt_target_logit = cand_target_logits.gather(-1, gt_index.unsqueeze(-1))
         rejection = (gt_target_logit - cand_target_logits).clamp_min(0.0)
-        pen_loss = ((log_p.exp() * rejection).sum(-1) * supervised).sum() / denom
-
-        loss = dflash_loss + lilicorr_w_ce * ce_loss + lilicorr_w_pen * pen_loss
+        pen_num = ((log_p.exp() * rejection).sum(-1) * supervised).sum()
+        supervised_count = supervised.sum()
 
         with torch.no_grad():
             # Greedy left-to-right walk, as served.
@@ -211,6 +187,272 @@ class LiLiCorrDraftModel(DFlashDraftModel):
                 -1, torch.stack(picks, dim=1).unsqueeze(-1)
             ).squeeze(-1)
             eval_mask = slot_mask & valid_block[:, None]
+            # Same blocks for all three, so lilicorr_eal - lilicorr_top1_eal is the
+            # head's gain and lilicorr_oracle_eal bounds what any walk could reach.
+            eal_counts = [
+                compute_accepted_length_counts(correct, eval_mask)
+                for correct in (
+                    selected_ids == gt_ids,
+                    candidate_ids[..., 0] == gt_ids,
+                    gt_in_lattice,
+                )
+            ]
+        return ce_num, pen_num, supervised_count, *eal_counts
+
+    def _chunk_terms(
+        self,
+        hidden: torch.Tensor,  # [1, max_anchors*block, H], trunk output
+        verifier_last_hidden_states: torch.Tensor,
+        hidden_states: torch.Tensor,
+        document_ids: torch.Tensor,
+        aligned_loss_mask: torch.Tensor,
+        block_indices: torch.Tensor,
+        r0: int,
+        r1: int,
+        dflash_denominator: torch.Tensor,
+        loss_config: LossConfig | None,
+        gamma: float,
+        per_position_loss_weight: str,
+        dpace_alpha: float,
+    ):
+        """Head projections + dflash/lattice terms for mask-token rows [r0, r1).
+
+        Wrapped in a checkpoint by the caller: the ``[chunk, vocab]`` logits and
+        targets this materializes are dropped after the forward pass and
+        recomputed chunk-by-chunk during backward, which is what bounds memory.
+        """
+        block = self.block_size
+        seq_len = verifier_last_hidden_states.shape[1]
+        rows = block_indices[r0:r1]
+        target_indices = (rows - 1) % seq_len
+        with torch.no_grad():
+            targets_c = self.verifier_lm_head(
+                self.verifier_norm(verifier_last_hidden_states[:, target_indices])
+            )
+        hidden_c = hidden[:, r0:r1]
+        logits_c = self.lm_head(hidden_c)
+
+        # Dividing by the *global* denominator makes the per-chunk losses and
+        # term metrics directly additive across chunks.
+        dflash_loss_c, metrics_c = compute_metrics(
+            logits_c,
+            targets_c,
+            aligned_loss_mask[:, r0:r1],
+            block,
+            gamma=gamma,
+            loss_config=loss_config,
+            per_position_loss_weight=per_position_loss_weight,
+            dpace_alpha=dpace_alpha,
+            sample_from_anchor=False,
+            denominator=dflash_denominator,
+        )
+        ce_num_c, pen_num_c, sup_count_c, eal, top1_eal, oracle_eal = (
+            self._lattice_terms(
+                logits_c,
+                targets_c,
+                hidden_c,
+                aligned_loss_mask[:, r0:r1],
+                rows,
+                hidden_states,
+                document_ids,
+            )
+        )
+
+        # Keep only count-type "_total" keys; the scalar-loss markers are set
+        # once by the chunk combiner after pooling.
+        count_totals = {"full_acc_total", "eal_total"} | {
+            f"position_{pos}_acc_total" for pos in range(1, block)
+        }
+        metrics_c = {
+            key: val
+            for key, val in metrics_c.items()
+            if not key.endswith("_total") or key in count_totals
+        }
+        metrics_c["dflash_loss_sum"] = metrics_c.pop("loss_sum")
+        metrics_c["lilicorr_eal_sum"], metrics_c["lilicorr_eal_total"] = eal
+        metrics_c["lilicorr_top1_eal_sum"], metrics_c["lilicorr_top1_eal_total"] = (
+            top1_eal
+        )
+        metrics_c["lilicorr_oracle_eal_sum"], metrics_c["lilicorr_oracle_eal_total"] = (
+            oracle_eal
+        )
+        # Raw numerators; the combiner divides by the pooled lattice denominator.
+        metrics_c["lilicorr_ce_sum"] = ce_num_c.detach()
+        metrics_c["lilicorr_penalty_sum"] = pen_num_c.detach()
+        return dflash_loss_c, ce_num_c, pen_num_c, sup_count_c.detach(), metrics_c
+
+    # The chunk loop's recompute-inside-backward (custom autograd Functions,
+    # Triton kernels, data-dependent Python) is not dynamo-traceable in any
+    # useful sense; run it eagerly even when the entry forward is compiled.
+    @torch.compiler.disable
+    def _chunked_forward(
+        self,
+        hidden_states: torch.Tensor,
+        input_ids: torch.Tensor,
+        loss_mask: torch.Tensor,
+        verifier_last_hidden_states: torch.Tensor,
+        document_ids: torch.Tensor,
+        position_ids: torch.Tensor | None,
+        loss_config: LossConfig | None,
+        gamma: float,
+        max_anchors: int,
+        per_position_loss_weight: str,
+        dpace_alpha: float,
+        lilicorr_w_ce: float,
+        lilicorr_w_pen: float,
+        loss_chunk_anchors: int,
+        **kwargs,
+    ):
+        block = self.block_size
+        hidden, _, _, aligned_loss_mask, block_indices = self._backbone_forward(
+            hidden_states,
+            input_ids,
+            loss_mask,
+            verifier_last_hidden_states,
+            document_ids,
+            position_ids,
+            max_anchors=max_anchors,
+            compute_heads=False,
+            **kwargs,
+        )
+        # The denominator the unchunked reduction would use, so chunk losses
+        # add up to exactly the monolithic value.
+        dflash_denominator = (
+            aligned_loss_mask.sum(dim=1) + _LOSS_REDUCTION_EPS
+        ).detach()
+
+        dflash_loss = None
+        ce_num = pen_num = sup_count = None
+        metrics: dict[str, torch.Tensor] = {}
+        ones = torch.ones((), device=hidden.device)
+        for b0 in range(0, max_anchors, loss_chunk_anchors):
+            b1 = min(b0 + loss_chunk_anchors, max_anchors)
+            dflash_loss_c, ce_num_c, pen_num_c, sup_count_c, metrics_c = (
+                torch.utils.checkpoint.checkpoint(
+                    self._chunk_terms,
+                    hidden,
+                    verifier_last_hidden_states,
+                    hidden_states,
+                    document_ids,
+                    aligned_loss_mask,
+                    block_indices,
+                    b0 * block,
+                    b1 * block,
+                    dflash_denominator,
+                    loss_config,
+                    gamma,
+                    per_position_loss_weight,
+                    dpace_alpha,
+                    use_reentrant=False,
+                )
+            )
+            dflash_loss = (
+                dflash_loss_c if dflash_loss is None else dflash_loss + dflash_loss_c
+            )
+            ce_num = ce_num_c if ce_num is None else ce_num + ce_num_c
+            pen_num = pen_num_c if pen_num is None else pen_num + pen_num_c
+            sup_count = sup_count_c if sup_count is None else sup_count + sup_count_c
+            for key, val in metrics_c.items():
+                if key in metrics:
+                    metrics[key] = metrics[key] + val.detach()
+                else:
+                    metrics[key] = val.detach()
+
+        # The loop body always runs (max_anchors >= 1), so the accumulators
+        # are always assigned.
+        denom = sup_count.clamp_min(1.0)  # type: ignore[union-attr]
+        ce_loss = ce_num / denom
+        pen_loss = pen_num / denom
+        loss = dflash_loss + lilicorr_w_ce * ce_loss + lilicorr_w_pen * pen_loss
+
+        metrics["lilicorr_ce_sum"] = ce_loss.detach()
+        metrics["lilicorr_penalty_sum"] = pen_loss.detach()
+        metrics["loss_sum"] = loss.detach().clone()
+        # Every accumulated "_sum" without a count-type "_total" is a pooled
+        # scalar loss; give it the standard 1.0 marker denominator.
+        for key in [k for k in metrics if k.endswith("_sum")]:
+            if f"{key[:-4]}_total" not in metrics:
+                metrics[f"{key[:-4]}_total"] = ones.clone()
+        return None, loss, metrics
+
+    @conditional_torch_compile
+    def forward(
+        self,
+        hidden_states: torch.Tensor,  # [1, total_seq_len, num_aux*hidden_size]
+        input_ids: torch.Tensor,  # [1, total_seq_len]
+        loss_mask: torch.Tensor,  # [1, total_seq_len]
+        verifier_last_hidden_states: torch.Tensor,  # [1, total_seq_len, hidden_size]
+        document_ids: torch.Tensor,  # [1, total_seq_len]
+        position_ids: torch.Tensor | None = None,  # [1, total_seq_len]
+        loss_config: LossConfig | None = None,
+        gamma: float = 4.0,
+        max_anchors: int = 512,
+        per_position_loss_weight: str = "fixed-exp-decay",
+        dpace_alpha: float = 0.5,
+        lilicorr_w_ce: float = 0.25,
+        lilicorr_w_pen: float = 0.25,
+        loss_chunk_anchors: int | None = None,
+        **kwargs,
+    ):
+        if loss_chunk_anchors:
+            return self._chunked_forward(
+                hidden_states,
+                input_ids,
+                loss_mask,
+                verifier_last_hidden_states,
+                document_ids,
+                position_ids,
+                loss_config=loss_config,
+                gamma=gamma,
+                max_anchors=max_anchors,
+                per_position_loss_weight=per_position_loss_weight,
+                dpace_alpha=dpace_alpha,
+                lilicorr_w_ce=lilicorr_w_ce,
+                lilicorr_w_pen=lilicorr_w_pen,
+                loss_chunk_anchors=loss_chunk_anchors,
+                **kwargs,
+            )
+
+        hidden, logits, targets, aligned_loss_mask, block_indices = (
+            self._backbone_forward(
+                hidden_states,
+                input_ids,
+                loss_mask,
+                verifier_last_hidden_states,
+                document_ids,
+                position_ids,
+                max_anchors=max_anchors,
+                **kwargs,
+            )
+        )
+        dflash_loss, metrics = compute_metrics(
+            logits,
+            targets,
+            aligned_loss_mask,
+            self.block_size,
+            gamma=gamma,
+            loss_config=loss_config,
+            per_position_loss_weight=per_position_loss_weight,
+            dpace_alpha=dpace_alpha,
+            sample_from_anchor=False,
+        )
+
+        ce_num, pen_num, sup_count, eal, top1_eal, oracle_eal = self._lattice_terms(
+            logits,
+            targets,
+            hidden,
+            aligned_loss_mask,
+            block_indices,
+            hidden_states,
+            document_ids,
+        )
+        denom = sup_count.clamp_min(1.0)
+        ce_loss = ce_num / denom
+        pen_loss = pen_num / denom
+
+        loss = dflash_loss + lilicorr_w_ce * ce_loss + lilicorr_w_pen * pen_loss
+
+        with torch.no_grad():
             ones = torch.ones((), device=loss.device)
             metrics["dflash_loss_sum"] = metrics.pop("loss_sum")
             metrics["dflash_loss_total"] = metrics.pop("loss_total")
@@ -220,15 +462,12 @@ class LiLiCorrDraftModel(DFlashDraftModel):
             metrics["lilicorr_ce_total"] = ones.clone()
             metrics["lilicorr_penalty_sum"] = pen_loss.detach()
             metrics["lilicorr_penalty_total"] = ones.clone()
-            # Same blocks for all three, so lilicorr_eal - lilicorr_top1_eal is the
-            # head's gain and lilicorr_oracle_eal bounds what any walk could reach.
-            for name, correct in (
-                ("lilicorr_eal", selected_ids == gt_ids),
-                ("lilicorr_top1_eal", candidate_ids[..., 0] == gt_ids),
-                ("lilicorr_oracle_eal", gt_in_lattice),
-            ):
-                eal_sum, eal_total = compute_accepted_length_counts(correct, eval_mask)
-                metrics[f"{name}_sum"] = eal_sum
-                metrics[f"{name}_total"] = eal_total
+            metrics["lilicorr_eal_sum"], metrics["lilicorr_eal_total"] = eal
+            metrics["lilicorr_top1_eal_sum"], metrics["lilicorr_top1_eal_total"] = (
+                top1_eal
+            )
+            metrics["lilicorr_oracle_eal_sum"], metrics["lilicorr_oracle_eal_total"] = (
+                oracle_eal
+            )
 
         return None, loss, metrics

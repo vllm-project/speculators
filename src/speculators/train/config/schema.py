@@ -480,6 +480,17 @@ class DFlashArgs(_Group):
         description="Smoothing constant for the D-PACE loss (default: 0.5). Must be in "
         "(0, 1] when --per-position-loss-weight=dpace.",
     )
+    loss_chunk_anchors: int | None = Field(
+        default=None,
+        ge=1,
+        description="LiLiCorr only: compute the draft/verifier head projections and "
+        "losses in checkpointed chunks of this many anchor blocks. The "
+        "[anchors*block, vocab] logits/targets otherwise dominate memory at "
+        "large anchor counts and vocab sizes (e.g. 1024 anchors x 248K vocab "
+        "retains ~16 GiB per loss copy on top of everything else); chunking "
+        "bounds them to one chunk at a time with exact loss/gradient parity. "
+        "None (default) runs the monolithic path.",
+    )
 
 
 class DFlash2Args(_Group):

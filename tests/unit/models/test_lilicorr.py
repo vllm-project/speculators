@@ -96,6 +96,49 @@ def test_forward_loss_metrics_and_gradients():
     assert model.lm_head.weight.grad is None
 
 
+def test_chunked_forward_matches_monolithic():
+    """loss_chunk_anchors must not change losses, metrics, or gradients."""
+    kwargs = dict(
+        CALL_KWARGS,
+        loss_config=resolve_loss_config('{"ce": 0.1, "tv": 0.9}', "eager"),
+        per_position_loss_weight="fixed-exp-decay",
+        gamma=7.0,
+        lilicorr_w_ce=0.25,
+        lilicorr_w_pen=0.25,
+    )
+    torch.manual_seed(0)
+    model = _tiny_model()
+    batch = _batch()
+    # Re-seed so both calls pick the same random anchors (select_anchors
+    # consumes RNG).
+    torch.manual_seed(1)
+    _, loss_ref, metrics_ref = model(**batch, **kwargs)
+    loss_ref.backward()
+    grads_ref = {
+        name: p.grad.detach().clone()
+        for name, p in model.named_parameters()
+        if p.grad is not None
+    }
+
+    model.zero_grad(set_to_none=True)
+    torch.manual_seed(1)
+    _, loss_chunk, metrics_chunk = model(**batch, loss_chunk_anchors=2, **kwargs)
+    loss_chunk.backward()
+    grads_chunk = {
+        name: p.grad.detach().clone()
+        for name, p in model.named_parameters()
+        if p.grad is not None
+    }
+
+    assert set(metrics_chunk) == set(metrics_ref)
+    assert set(grads_chunk) == set(grads_ref)
+    torch.testing.assert_close(loss_chunk, loss_ref, rtol=1e-4, atol=1e-5)
+    for name, grad in grads_ref.items():
+        torch.testing.assert_close(grads_chunk[name], grad, rtol=1e-4, atol=1e-6)
+    for name, value in metrics_ref.items():
+        torch.testing.assert_close(metrics_chunk[name], value, rtol=1e-4, atol=1e-5)
+
+
 def test_lattice_terms_alone_reach_the_backbone():
     torch.manual_seed(0)
     model = _tiny_model()
