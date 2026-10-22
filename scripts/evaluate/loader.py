@@ -44,9 +44,8 @@ def add_dataset_arguments(parser: argparse.ArgumentParser) -> None:
     group.add_argument(
         "--body",
         type=json.loads,
-        default='{"temperature":0,"chat_template_kwargs":{"enable_thinking":true}}',
-        help="Generation settings (default: temperature=0, enable_thinking=true); "
-        "--body replaces this default",
+        help="Generation settings (default: temperature=0, enable_thinking=true, "
+        "max_completion_tokens=32768); --body replaces this default",
     )
     group.add_argument(
         "--max-samples",
@@ -58,15 +57,6 @@ def add_dataset_arguments(parser: argparse.ArgumentParser) -> None:
 
 def _load_datasets(args: argparse.Namespace) -> dict:
     """Select loaders and merge their named, lazy conversation iterators."""
-    has_mrcr = any(name in {"mrcr", "openai/mrcr"} for name in args.dataset)
-    if has_mrcr and (
-        args.max_tokens is not None
-        or "max_tokens" in args.body
-        or "max_completion_tokens" in args.body
-    ):
-        raise ValueError(
-            "MRCR does not allow --max-tokens or output-token limits in --body"
-        )
     datasets: dict = {}
     for source in args.dataset:
         match source:
@@ -84,18 +74,14 @@ def _load_datasets(args: argparse.Namespace) -> dict:
 def _requests(datasets: dict, args: argparse.Namespace):
     """Build API requests once, after dataset-specific prompt preparation."""
     body = {
-        **args.body,
-        "model": args.model,
-        "stream": True,
-        "stream_options": {"include_usage": True},
+        "temperature": 0,
+        "chat_template_kwargs": {"enable_thinking": True},
+        "max_completion_tokens": 32768,
     }
+    if args.body is not None:
+        body = dict(args.body)
+    body.update(model=args.model, stream=True, stream_options={"include_usage": True})
     for name, conversations in datasets.items():
-        dataset_body = dict(body)
-        if name != "mrcr":
-            dataset_body.pop("max_completion_tokens", None)
-            dataset_body["max_tokens"] = (
-                args.max_tokens if args.max_tokens is not None else 8192
-            )
         selected = (
             sample
             for sample in conversations
@@ -106,7 +92,7 @@ def _requests(datasets: dict, args: argparse.Namespace):
                 "id": f"{name}:{index}",
                 "dataset": name,
                 "category": sample["category"],
-                "body": {**dataset_body, "messages": sample["messages"]},
+                "body": {**body, "messages": sample["messages"]},
             }
 
 

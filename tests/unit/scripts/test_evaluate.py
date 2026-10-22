@@ -344,7 +344,6 @@ def _args(source, *flags):
     parser.add_argument("--dataset", required=True, nargs="+")
     parser.add_argument("--model", default="test-model")
     parser.add_argument("--target", default="http://server")
-    parser.add_argument("--max-tokens", type=int)
     parser.add_argument("--timeout", type=float, default=1)
     add_dataset_arguments(parser)
     return parser.parse_args(["--dataset", str(source), *flags])
@@ -490,14 +489,19 @@ def test_mrcr_parquet_preserves_the_full_conversation(tmp_path, monkeypatch):
         source,
     )
     requests = load_evaluation_requests(
-        _args(source, "--messages-column", "prompt", "--max-tokens", "16")
+        _args(
+            source,
+            "--messages-column",
+            "prompt",
+            "--body",
+            '{"max_completion_tokens":16}',
+        )
     )
     body = requests[0]["body"]
     assert body["messages"] == _conversation()
     assert "answer" not in body
-    assert body["max_tokens"] == 16
-    assert body["temperature"] == 0
-    assert body["chat_template_kwargs"] == {"enable_thinking": True}
+    assert body["max_completion_tokens"] == 16
+    assert "max_tokens" not in body
     assert body["stream_options"] == {"include_usage": True}
 
     def rows(source, **kwargs):
@@ -518,19 +522,50 @@ def test_mrcr_parquet_preserves_the_full_conversation(tmp_path, monkeypatch):
         assert selected[0]["id"] == "mrcr:0"
         assert selected[0]["body"]["messages"] == _conversation()
         assert "max_tokens" not in selected[0]["body"]
-        assert "max_completion_tokens" not in selected[0]["body"]
-        for flags in (
-            ("--max-tokens", "16"),
-            ("--body", '{"max_tokens":16}'),
-            ("--body", '{"max_completion_tokens":16}'),
-        ):
-            with pytest.raises(ValueError, match="MRCR does not allow"):
-                load_evaluation_requests(_args(source, *flags))
+        assert selected[0]["body"]["max_completion_tokens"] == 32768
+        for field in ("max_tokens", "max_completion_tokens"):
+            custom = load_evaluation_requests(
+                _args(
+                    source,
+                    "--data-files",
+                    "8needle/*.parquet",
+                    "--body",
+                    json.dumps({field: 16}),
+                )
+            )[0]["body"]
+            assert custom[field] == 16
+            assert custom["messages"] == _conversation()
 
     monkeypatch.setattr(
         basic, "dataset_rows", lambda *a, **kw: iter([{"question": "hello"}])
     )
-    assert load_evaluation_requests(_args("gsm8k"))[0]["body"]["max_tokens"] == 8192
+    body = load_evaluation_requests(_args("gsm8k"))[0]["body"]
+    assert body["max_completion_tokens"] == 32768
+    assert "max_tokens" not in body
+    assert body["temperature"] == 0
+    assert body["chat_template_kwargs"] == {"enable_thinking": True}
+
+
+@pytest.mark.parametrize("source", ["gsm8k", "mrcr"])
+@pytest.mark.parametrize(
+    "body", [{"max_completion_tokens": 1024}, {"temperature": 0}, {}]
+)
+def test_body_replaces_default_generation_settings(monkeypatch, source, body):
+    monkeypatch.setattr(
+        basic,
+        "dataset_rows",
+        lambda *a, **kw: iter(
+            [{"question": "hello", "prompt": [{"role": "user", "content": "hello"}]}]
+        ),
+    )
+    request = load_evaluation_requests(_args(source, "--body", json.dumps(body)))[0]
+    assert request["body"] == {
+        **body,
+        "model": "test-model",
+        "stream": True,
+        "stream_options": {"include_usage": True},
+        "messages": [{"role": "user", "content": "hello"}],
+    }
 
 
 def test_speedbench_jsonl_all_null_metadata_then_strings(tmp_path):

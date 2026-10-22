@@ -12,5 +12,7 @@ scipy
 # Shared dataset loading and acceptance collection.
 httpx>=0.27
 datasets>=3.0
+
+# Dependencies for NVIDIA's remote SPEED-Bench prepare.py.
 pandas
 tiktoken

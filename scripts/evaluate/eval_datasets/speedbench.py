@@ -19,8 +19,9 @@ CONFIGS = (
     "throughput_16k",
     "throughput_32k",
 )
+PREPARE_COMMIT = "5ac8609a56ac941540b10c92e68d556e6343cd4c"
 PREPARE_URL = (
-    "https://raw.githubusercontent.com/NVIDIA-NeMo/Skills/refs/heads/main/"
+    f"https://raw.githubusercontent.com/NVIDIA-NeMo/Skills/{PREPARE_COMMIT}/"
     "nemo_skills/dataset/speed-bench/prepare.py"
 )
 
