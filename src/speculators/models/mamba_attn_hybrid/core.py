@@ -410,8 +410,7 @@ class MambaAttnHybridDraftModel(DraftVocabMixin, SpeculatorModel):
             topk = config.lilicorr_candidate_topk
             if topk < 1 or topk > 16 or topk & (topk - 1):  # noqa: PLR2004
                 raise ValueError(
-                    "lilicorr_candidate_topk must be a power of two <= 16; "
-                    f"got {topk}."
+                    f"lilicorr_candidate_topk must be a power of two <= 16; got {topk}."
                 )
             if config.block_size < 2:
                 raise ValueError(
@@ -512,9 +511,33 @@ class MambaAttnHybridDraftModel(DraftVocabMixin, SpeculatorModel):
             prefix = f"{layer_prefix}.{lid}.self_attn"
 
             if cfg.init_q_proj == "verifier":
-                attn.q_proj.load_state_dict(
-                    {"weight": verifier_weights[f"{prefix}.q_proj.weight"]}
-                )
+                q_weight = verifier_weights[f"{prefix}.q_proj.weight"]
+                expected = attn.q_proj.weight.shape
+                if q_weight.shape != expected:
+                    # Gated-attention verifiers (attn_output_gate=True) store
+                    # [q; gate] concatenated in q_proj, and the draft may use
+                    # fewer query heads. Both are row-major over (heads *
+                    # head_dim), so the draft's rows are a prefix of the q
+                    # half: take the first expected rows.
+                    if (
+                        q_weight.shape[1] != expected[1]
+                        or q_weight.shape[0] < expected[0]
+                    ):
+                        raise ValueError(
+                            f"Cannot adapt verifier q_proj {tuple(q_weight.shape)} "
+                            f"to draft q_proj {tuple(expected)} at {prefix}."
+                        )
+                    logger.warning(
+                        "Verifier q_proj %s has shape %s but draft expects %s "
+                        "(gated attention / fewer draft heads); warm-starting "
+                        "from the first %d rows of the q half.",
+                        prefix,
+                        tuple(q_weight.shape),
+                        tuple(expected),
+                        expected[0],
+                    )
+                    q_weight = q_weight[: expected[0]]
+                attn.q_proj.load_state_dict({"weight": q_weight})
             attn.q_proj.weight.requires_grad = cfg.trainable_q_proj
 
             if cfg.init_kv_proj == "verifier":
