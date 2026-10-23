@@ -345,6 +345,24 @@ def test_on_generate_yaml_warns_deprecated(tmp_path):
         )
 
 
+def test_peagle_flag_warns_deprecated():
+    with pytest.warns(FutureWarning, match="P-EAGLE is deprecated"):
+        TrainConfig.from_sources(
+            cli={"verifier_name_or_path": "m", "speculator_type": "peagle"},
+            argv=["train.py"],
+        )
+
+
+def test_peagle_yaml_warns_deprecated(tmp_path):
+    config_path = _write(tmp_path, "train:\n  speculator_type: peagle\n")
+    with pytest.warns(FutureWarning, match="P-EAGLE is deprecated"):
+        TrainConfig.from_sources(
+            cli={"verifier_name_or_path": "m"},
+            config_path=config_path,
+            argv=["train.py"],
+        )
+
+
 def test_default_on_generate_does_not_warn():
     with warnings.catch_warnings():
         warnings.simplefilter("error")
