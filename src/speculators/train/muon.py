@@ -38,8 +38,22 @@ __all__ = ["Muon", "zeropower_via_newtonschulz"]
 # the dense X @ X.T takes 0.51 ms, 2 blocks 0.39 ms, 4 blocks 0.36 ms, and 8
 # blocks lose it again to the narrow trailing GEMMs.
 SYMMETRIC_BLOCKS = 4
-# Below this many rows the Gram matmuls are too small for the split to pay.
-_MIN_SYMMETRIC_ROWS = 2048
+# Below this many rows the Gram matmuls are too small for the split to pay: the
+# blocks stop filling the machine and the extra launches dominate. Measured on
+# H100, five Newton-Schulz steps, split / dense:
+#
+#     rows   square   3:1 aspect
+#     2048    0.42x        0.78x
+#     2560    0.80x        0.98x
+#     3072    0.99x        1.10x
+#     4096    1.19x        1.20x
+#     5120    1.23x        1.20x
+#     8192    1.27x        1.26x
+#
+# 4096 is the first row count that wins at both aspect ratios. Taking the split
+# at 2048 costs 2.4x on the square case, which is what a Qwen3-1.7B draft is
+# made of -- it regressed that config by 11% before this bound was measured.
+_MIN_SYMMETRIC_ROWS = 4096
 _MIRROR_TILE = 64
 
 # Input validation mirroring ``torch.optim._muon._zeropower_via_newtonschulz``.
