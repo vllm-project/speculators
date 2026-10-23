@@ -44,6 +44,14 @@ __all__ = ["Muon", "zeropower_via_newtonschulz"]
 # apply kernel (2D so a transposed update still reads in coalesced runs).
 _MOMENTUM_BLOCK = 4096
 _APPLY_TILE = 64
+# Below this many elements the fused path is not worth taking. A Muon step over
+# a small draft is bound by launch count, not bandwidth -- roughly 2000 kernels
+# for a 9 ms step on H100 -- and Triton's launcher costs more per call on the
+# host than the four ATen kernels it replaces, so the device-time saving never
+# surfaces. Measured over a full Qwen3-0.6B draft parameter set (step: 9.80 ms
+# unfused, 10.72 ms fused, 9.76 ms with this bound) and confirmed not to cost
+# anything at 1.7B/8B, whose matrices all clear it.
+_MIN_FUSED_NUMEL = 4 * 1024 * 1024
 
 # Row blocks of the Gram product. Measured on H100 for a [4096, 12288] update:
 # the dense X @ X.T takes 0.51 ms, 2 blocks 0.39 ms, 4 blocks 0.36 ms, and 8
@@ -215,6 +223,7 @@ def _apply_update_kernel(
 def _fusable(param: Tensor, grad: Tensor, buf: Tensor) -> bool:
     return (
         param.is_cuda
+        and param.numel() >= _MIN_FUSED_NUMEL
         and not isinstance(param, DTensor)
         and param.dtype == grad.dtype == buf.dtype == torch.float32
         and param.is_contiguous()
