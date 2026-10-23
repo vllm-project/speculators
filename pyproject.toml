@@ -291,6 +291,11 @@ select = [
     "S310",     # URL schemes are user-provided server addresses
     "PLR2004",  # magic numbers are fine in demos
     "B905",     # zip(strict=) not needed in demos
+    "S101",     # assert for data-build invariants is acceptable in examples
+    "S108",     # run-reproduction examples document the literal /tmp paths used
+    "PTH",      # os.path is acceptable in examples
+    "C901",     # complexity is acceptable in single-file pipeline examples
+    "E501",     # long literal paths carried over from the original run pod
 ]
 
 "hs_connectors/**/*.py" = [

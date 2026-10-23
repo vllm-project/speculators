@@ -66,6 +66,14 @@ card-rec = the Qwen3.5-4B model-card non-thinking recommendation (T=0.7, top_p=0
 - Serve-to-serve variance across two independent greedy runs: ±0.05–0.17 AL.
 - Wall-clock throughput/speedup was not measured in these runs (acceptance only).
 
+### Full-scale run (Qwen3.8-27B verifier, regenerated perfectblend, 2 epochs, in progress)
+
+The same recipe scaled to Qwen3.8-27B (64-layer hybrid verifier, draft taps at layers 4/12/20/28/36/44/52/60) on the complete regenerated perfectblend dataset (1,884,616 records → 1,739,710 rows / 4.30 B tokens after 8192 truncation and zero-supervision drops; provenance sha256-verified against the source repo). Differences from the 4B run: **lr 1e-3** (4B used 6e-4), 2 epochs, 1024 anchors per 8192-token sequence, and two scale-driven fixes — `draft_attn_impl: sdpa` (flex falls back to dense math in the dynamo resume frame → 30 GiB score tensors) and `loss_chunk_anchors: 128` (chunked checkpointed head loss; peak 46 GiB/GPU vs 81.5 GiB monolithic, exact parity per `tests/unit/models/test_lilicorr.py`). ~185k steps at 7.7–8.2 s/step ≈ 17 days; checkpoints every 5% of an epoch.
+
+Paused at `epoch0_step9260` (5% of training) for a served acceptance probe (16 greedy prompts, per-request vLLM spec-decode metrics): **token-weighted AL 2.73**, draft-token acceptance 11.5%, 67.7% of rounds accepting ≥1 of 15, conditional per-position acceptance flat at ~0.6 through position 6, per-prompt AL range 1.91–4.63 (code/SQL highest). For scale: the 40-step smoke measured AL 1.05–1.07; the finished 4B run reached greedy mean AL 6.41. Loss descended monotonically 3.74 → 1.92 through the lr peak (no divergence at 1e-3).
+
+Exact reproduction commands, verified dataset hashes, expected data-build outputs, hyperparameter table, and gotchas: **`examples/train/lilicorr_qwen38_27b_full/README.md`** (run scripts, config, and data-prep pipeline committed alongside it). Serving requires vLLM branch `lilicorr-speculators-config` (fork `MeganEFlynn/vllm`, commit `2bf157bd17`).
+
 ## Known deltas vs the NVIDIA ModelOpt reference trainer
 
 - Draft in-block attention: speculators trains causal-in-block on sliding-window draft layers; ModelOpt's lilicorr recipe defaults to bidirectional-in-block with full context. ModelOpt checkpoints can still be served in vLLM by setting `layer_types=["full_attention"]*5` in the converted draft config.
@@ -78,3 +86,5 @@ card-rec = the Qwen3.5-4B model-card non-thinking recommendation (T=0.7, top_p=0
 Training checkpoints/logs live outside git (2.1 GB per epoch checkpoint): container-local under `/tmp/lilicorr_check/full/checkpoints/{0,1,2}/` (val metrics in `val_metrics.json` per epoch). Reproduce with `examples/train/lilicorr_qwen3_8b_online.sh` (see header for GPU layout).
 
 Full-scale run: final checkpoint (step 220,300 = 100%) on the HF Hub at `MeganEFlynn/lilicorr` (private; includes the train command and training state). Per-subset acceptance CSVs and guidellm artifacts for the three sampling protocols live in the training container under `/workspace/lilicorr/eval/final_{greedy,card_rec,default_sampling}/`.
+
+Qwen3.8-27B run (in progress): checkpoints, logs, and probe results live in the training container under `/tmp/lilicorr_check/qwen38-perfectblend/runfull/` (ephemeral); the paused-at-step-9260 resume state (model + optimizer + scheduler) is backed up under `/workspace/lilicorr/qwen38-full/`.
