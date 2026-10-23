@@ -3,9 +3,11 @@
 Provides a single entry point, :func:`build_optimizers`, that returns the list of
 optimizers the trainer should drive. The default ("adamw") returns a single AdamW
 optimizer over all parameters, preserving the historical behavior. The "muon" option
-returns two optimizers: ``torch.optim.Muon`` over the 2D weight matrices (which is all
-Muon supports) and ``torch.optim.AdamW`` over everything else (norms, biases, and the
-embedding / LM-head matrices, following standard Muon practice).
+returns two optimizers: :class:`~speculators.train.muon.Muon` over the 2D weight
+matrices (which is all Muon supports) and ``torch.optim.AdamW`` over everything else
+(norms, biases, and the embedding / LM-head matrices, following standard Muon
+practice). That class is ``torch.optim.Muon`` with a Newton-Schulz iteration that
+computes only the upper block-triangle of each symmetric Gram product.
 
 Muon works transparently for both single-GPU and multi-GPU (FSDP2) training: when the
 model is sharded with ``fully_shard`` the parameters become ``DTensor``s and Muon's
@@ -21,6 +23,8 @@ import logging
 import torch
 from torch import Tensor
 from torch.nn import Module
+
+from speculators.train.muon import Muon
 
 logger = logging.getLogger("speculators")
 
@@ -101,7 +105,7 @@ def build_optimizers(model: Module, config) -> list[torch.optim.Optimizer]:
         optimizers: list[torch.optim.Optimizer] = []
         if muon_params:
             optimizers.append(
-                torch.optim.Muon(
+                Muon(
                     muon_params,
                     lr=config.muon_lr,
                     momentum=config.muon_momentum,
