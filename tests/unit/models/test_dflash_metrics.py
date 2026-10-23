@@ -160,6 +160,36 @@ class TestComputeAccuracy:
         assert total.sum().item() == pytest.approx(6.0, abs=1e-4)
         assert correct.sum().item() <= total.sum().item() + 1e-4
 
+    def test_masked_counts_match_selected_positions(self):
+        torch.manual_seed(0)
+        pred_ids = torch.randint(0, 3, (1, 64))
+        target_ids = torch.randint(0, 3, (1, 64))
+        loss_mask = torch.rand(1, 64) > 0.4
+        pos_idx = torch.arange(64).unsqueeze(0) % 8
+        correct, total = compute_accuracy_multi_step(
+            pred_ids, target_ids, loss_mask, pos_idx, 8
+        )
+        for pos in range(8):
+            sel = loss_mask[0] & (pos_idx[0] == pos)
+            assert total[pos].item() == sel.sum().item()
+            assert correct[pos].item() == (pred_ids[0] == target_ids[0])[sel].sum()
+
+    def test_traces_without_graph_break(self):
+        """No data-dependent shapes: the compiled forward stays one graph."""
+        pred_ids = torch.randint(0, 3, (1, 16))
+        target_ids = torch.randint(0, 3, (1, 16))
+        loss_mask = torch.rand(1, 16) > 0.5
+        pos_idx = torch.arange(16).unsqueeze(0) % 4
+        compiled = torch.compile(
+            compute_accuracy_multi_step, backend="eager", fullgraph=True
+        )
+        correct, total = compiled(pred_ids, target_ids, loss_mask, pos_idx, 4)
+        ref_correct, ref_total = compute_accuracy_multi_step(
+            pred_ids, target_ids, loss_mask, pos_idx, 4
+        )
+        assert torch.equal(correct, ref_correct)
+        assert torch.equal(total, ref_total)
+
 
 class TestLossFunction:
     def test_basic_loss_not_nan(self):
