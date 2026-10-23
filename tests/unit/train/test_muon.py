@@ -110,6 +110,39 @@ def test_step_matches_torch_muon(adjust_lr_fn):
 
 
 @requires_cuda
+@pytest.mark.parametrize("nesterov", [True, False])
+@pytest.mark.parametrize("shape", [(2048, 4096), (4096, 2048), (1024, 512), (37, 100)])
+def test_fused_step_is_bit_identical_to_torch_muon_on_cuda(shape, nesterov):
+    torch.manual_seed(0)
+    rows, cols = shape
+    weight = torch.randn(rows, cols, device="cuda") * 0.02
+    ours = torch.nn.Parameter(weight.clone())
+    ref = torch.nn.Parameter(weight.clone())
+    kwargs: dict[str, Any] = {
+        "lr": 1e-3,
+        "weight_decay": 0.1,
+        "nesterov": nesterov,
+        "adjust_lr_fn": "match_rms_adamw",
+    }
+    opt = Muon([ours], **kwargs)
+    ref_opt = torch.optim.Muon([ref], **kwargs)
+
+    for _ in range(3):
+        grad = _grad(rows, cols, device="cuda") + torch.randn_like(weight) * 1e-3
+        ours.grad, ref.grad = grad.clone(), grad.clone()
+        opt.step()
+        ref_opt.step()
+
+    torch.testing.assert_close(
+        opt.state[ours]["momentum_buffer"],
+        ref_opt.state[ref]["momentum_buffer"],
+        atol=0,
+        rtol=0,
+    )
+    torch.testing.assert_close(ours, ref, atol=0, rtol=0)
+
+
+@requires_cuda
 @pytest.mark.parametrize("shape", [(4096, 8192), (8192, 4096)])
 def test_step_matches_torch_muon_on_the_symmetric_path(shape):
     torch.manual_seed(0)

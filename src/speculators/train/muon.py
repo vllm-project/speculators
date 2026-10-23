@@ -1,8 +1,10 @@
 """``torch.optim.Muon`` whose Newton-Schulz Gram products skip the mirrored half.
 
 ``A = X @ X.T`` and ``B = b * A + c * A @ A`` are symmetric, so only the upper
-block-triangle is computed and mirrored. Matrices too small or unaligned for the
-split, and DTensors, take ``torch.optim._muon``'s reference path.
+block-triangle is computed and mirrored. The momentum blend and the weight update
+each run as one Triton kernel rather than several full-tensor passes; both paths
+are bitwise equal to ``torch.optim.Muon``. Matrices too small or unaligned for
+the split, and DTensors, take ``torch.optim._muon``'s reference path.
 """
 
 # ruff: noqa: N803
@@ -19,6 +21,11 @@ from torch.optim._muon import (
 )
 
 __all__ = ["Muon", "zeropower_via_newtonschulz"]
+
+# Elements per program of the fused momentum kernel, and the tile of the fused
+# apply kernel (2D so a transposed update still reads in coalesced runs).
+_MOMENTUM_BLOCK = 4096
+_APPLY_TILE = 64
 
 # Row blocks per Gram product. Four is the measured optimum on H100 for a
 # [4096, 12288] update; eight loses to the narrower trailing GEMMs.
@@ -131,6 +138,108 @@ def zeropower_via_newtonschulz(
     return ortho_grad
 
 
+@triton.jit
+def _nesterov_momentum_kernel(
+    GRAD,
+    BUF,
+    UPDATE,
+    numel,
+    weight,
+    momentum,
+    BLOCK: tl.constexpr,
+    NESTEROV: tl.constexpr,
+):
+    """``buf.lerp_(grad, weight)``; ``update = grad.lerp(buf, momentum)`` in bf16.
+
+    Spelled as torch's lerp kernel evaluates them (``weight < 0.5`` from the
+    start, ``momentum >= 0.5`` back from the end with ``1 - momentum`` in fp32).
+    """
+    offs = tl.program_id(0).to(tl.int64) * BLOCK + tl.arange(0, BLOCK)
+    mask = offs < numel
+    grad = tl.load(GRAD + offs, mask=mask)
+    buf = tl.load(BUF + offs, mask=mask)
+    buf = buf + weight * (grad - buf)
+    tl.store(BUF + offs, buf, mask=mask)
+    update = buf - (buf - grad) * (1.0 - momentum) if NESTEROV else buf
+    tl.store(UPDATE + offs, update.to(tl.bfloat16), mask=mask)
+
+
+@triton.jit
+def _apply_update_kernel(
+    PARAM,
+    UPDATE,
+    rows,
+    cols,
+    update_row_stride,
+    update_col_stride,
+    decay,
+    step_size,
+    TILE: tl.constexpr,
+):
+    """``param.mul_(decay).add_(update, alpha=step_size)`` for a strided update."""
+    r = tl.program_id(0).to(tl.int64) * TILE + tl.arange(0, TILE)
+    c = tl.program_id(1).to(tl.int64) * TILE + tl.arange(0, TILE)
+    mask = (r[:, None] < rows) & (c[None, :] < cols)
+    param_ptrs = PARAM + r[:, None] * cols + c[None, :]
+    param = tl.load(param_ptrs, mask=mask)
+    update = tl.load(
+        UPDATE + r[:, None] * update_row_stride + c[None, :] * update_col_stride,
+        mask=mask,
+    )
+    # Round the decay before the FMA, as torch's mul_ then add_ do.
+    decayed = param * decay
+    tl.store(param_ptrs, tl.fma(update.to(tl.float32), step_size, decayed), mask=mask)
+
+
+def _fusable(param: Tensor, grad: Tensor, buf: Tensor) -> bool:
+    return (
+        param.is_cuda
+        and not isinstance(param, DTensor)
+        and param.dtype == grad.dtype == buf.dtype == torch.float32
+        and param.is_contiguous()
+        and grad.is_contiguous()
+        and buf.is_contiguous()
+    )
+
+
+def _momentum_update(
+    grad: Tensor, buf: Tensor, momentum: float, nesterov: bool
+) -> Tensor:
+    """Momentum step returning the bf16 Newton-Schulz input in one pass."""
+    update = torch.empty_like(grad, dtype=torch.bfloat16)
+    numel = grad.numel()
+    grid = (triton.cdiv(numel, _MOMENTUM_BLOCK),)
+    _nesterov_momentum_kernel[grid](
+        grad,
+        buf,
+        update,
+        numel,
+        1 - momentum,
+        momentum,
+        BLOCK=_MOMENTUM_BLOCK,
+        NESTEROV=nesterov,
+    )
+    return update
+
+
+def _apply_update(
+    param: Tensor, update: Tensor, decay: float, step_size: float
+) -> None:
+    rows, cols = param.shape
+    grid = (triton.cdiv(rows, _APPLY_TILE), triton.cdiv(cols, _APPLY_TILE))
+    _apply_update_kernel[grid](
+        param,
+        update,
+        rows,
+        cols,
+        update.stride(0),
+        update.stride(1),
+        decay,
+        step_size,
+        TILE=_APPLY_TILE,
+    )
+
+
 def _muon_update(
     params: list[Tensor],
     grads: list[Tensor],
@@ -146,7 +255,10 @@ def _muon_update(
     adjust_lr_fn: str | None,
     has_complex: bool,
 ) -> None:
-    """Upstream's ``_single_tensor_muon`` over :func:`zeropower_via_newtonschulz`."""
+    """Upstream's ``_single_tensor_muon`` over :func:`zeropower_via_newtonschulz`.
+
+    The elementwise halves are fused where the tensors allow it.
+    """
     lr = _to_scalar(lr)
     if has_complex:
         raise ValueError("Complex parameters are not supported")
@@ -157,21 +269,30 @@ def _muon_update(
             raise ValueError("Param gradient must be a 2D matrix")
 
         buf = muon_momentum_bufs[i]
-        buf.lerp_(grad, 1 - momentum)
-        update = grad.lerp(buf, momentum) if nesterov else buf
+        fused = _fusable(param, grad, buf)
+        if fused:
+            update = _momentum_update(grad, buf, momentum, nesterov)
+        else:
+            buf.lerp_(grad, 1 - momentum)
+            update = grad.lerp(buf, momentum) if nesterov else buf
 
         update = zeropower_via_newtonschulz(update, ns_coefficients, ns_steps, eps)
 
         adjusted_lr = _adjust_lr(lr, adjust_lr_fn, param.shape)
 
-        param.mul_(1 - lr * weight_decay)
-        param.add_(update, alpha=-adjusted_lr)
+        if fused:
+            _apply_update(param, update, 1 - lr * weight_decay, -adjusted_lr)
+        else:
+            param.mul_(1 - lr * weight_decay)
+            param.add_(update, alpha=-adjusted_lr)
 
 
 class Muon(torch.optim.Muon):
     """``torch.optim.Muon`` using :func:`zeropower_via_newtonschulz`.
 
-    State layout and update rule are upstream's.
+    State layout and update rule are upstream's; on CUDA the momentum blend and
+    the weight update each run as one Triton kernel.
+
     """
 
     @torch.no_grad()
