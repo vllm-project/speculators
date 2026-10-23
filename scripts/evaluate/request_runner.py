@@ -14,7 +14,7 @@ MAX_CONSECUTIVE_FAILURES = 3
 async def send_request(
     client: httpx.AsyncClient, target: str, request: dict, sequence: int
 ) -> dict:
-    """Read SSE through its final usage chunk; never count chunks as tokens."""
+    """Collect usage and speculative metrics from a non-streaming response."""
     result = {
         "sample_id": request["id"],
         "dataset": request["dataset"],
@@ -27,59 +27,29 @@ async def send_request(
         "prompt_tokens": 0,
     }
     try:
-        async with client.stream(
-            "POST", target + "/v1/chat/completions", json=request["body"]
-        ) as response:
-            if response.is_error:
-                await response.aread()
-                raise ValueError(f"HTTP {response.status_code}: {response.text[:8192]}")
-            response.raise_for_status()
-            await _read_stream(response, result)
+        body = {**request["body"], "stream": False}
+        body.pop("stream_options", None)
+        response = await client.post(target + "/v1/chat/completions", json=body)
+        if response.is_error:
+            raise ValueError(f"HTTP {response.status_code}: {response.text[:8192]}")
+        response.raise_for_status()
+        data = response.json()
+        result["usage"] = data["usage"]
+        result["metrics"] = data.get("metrics")
+        result["finish_reason"] = data["choices"][0]["finish_reason"]
+        if result["finish_reason"] is None:
+            raise ValueError("incomplete response: expected finish reason")
+        if not isinstance(result["usage"], dict):
+            raise ValueError("usage must be an object")
+        for key in ("completion_tokens", "prompt_tokens"):
+            value = result["usage"].get(key)
+            if type(value) is not int or value < 0:
+                raise ValueError(f"invalid token usage: {key}")
         result["output_tokens"] = result["usage"]["completion_tokens"]
         result["prompt_tokens"] = result["usage"]["prompt_tokens"]
-    except (httpx.HTTPError, ValueError, KeyError, TypeError) as exc:
+    except (httpx.HTTPError, ValueError, KeyError, TypeError, IndexError) as exc:
         result.update(status="error", error=f"{type(exc).__name__}: {exc}")
     return result
-
-
-async def _read_stream(response: httpx.Response, result: dict) -> None:
-    done = False
-    async for line in response.aiter_lines():
-        if not line.startswith("data:"):
-            continue
-        data = line[5:].strip()
-        if data == "[DONE]":
-            done = True
-            break
-        chunk = _parse_chunk(data)
-        if chunk.get("usage") is not None:
-            result["usage"] = chunk["usage"]
-        if chunk.get("metrics") is not None:
-            result["metrics"] = chunk["metrics"]
-        for choice in chunk.get("choices", []):
-            if choice.get("finish_reason") is not None:
-                result["finish_reason"] = choice["finish_reason"]
-    _validate_complete(result, done)
-
-
-def _parse_chunk(data: str) -> dict:
-    chunk = json.loads(data)
-    if not isinstance(chunk, dict):
-        raise ValueError("stream chunk must be an object")
-    if chunk.get("error"):
-        raise ValueError(f"server stream error: {chunk['error']}")
-    return chunk
-
-
-def _validate_complete(result: dict, done: bool) -> None:
-    if not done or result["usage"] is None or result["finish_reason"] is None:
-        raise ValueError("incomplete stream: expected finish reason, usage and [DONE]")
-    if not isinstance(result["usage"], dict):
-        raise ValueError("usage must be an object")
-    for key in ("completion_tokens", "prompt_tokens"):
-        value = result["usage"].get(key)
-        if type(value) is not int or value < 0:
-            raise ValueError(f"invalid token usage: {key}")
 
 
 async def collect_requests(

@@ -66,8 +66,10 @@ def _rows(source: str | Path):
                     yield json.loads(line)
 
 
-def _conversations(source: str | Path):
+def _conversations(source: str | Path, categories: list[str] | None):
     for row in _rows(source):
+        if categories and row.get("category") not in categories:
+            continue
         # NeMo Skills writes messages; Model Optimizer writes turns.
         yield {
             "messages": (
@@ -83,5 +85,6 @@ def load(args: argparse.Namespace) -> dict:
     """Use explicit prepared files, or prepare the selected configurations."""
     sources = args.data_files or _prepare(args.dataset_config)
     return {
-        f"speedbench/{Path(source).stem}": _conversations(source) for source in sources
+        f"speedbench/{Path(source).stem}": _conversations(source, args.category)
+        for source in sources
     }

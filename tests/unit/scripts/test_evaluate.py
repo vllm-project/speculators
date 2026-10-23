@@ -22,7 +22,7 @@ import acceptance  # type: ignore[import-not-found]
 import evaluate  # type: ignore[import-not-found]
 import request_runner  # type: ignore[import-not-found]
 from acceptance import acceptance_summary  # type: ignore[import-not-found]
-from eval_datasets import basic  # type: ignore[import-not-found]
+from eval_datasets import basic, speedbench  # type: ignore[import-not-found]
 from loader import (  # type: ignore[import-not-found]
     add_dataset_arguments,
     load_evaluation_requests,
@@ -377,26 +377,6 @@ def _request():
     }
 
 
-def _stream_response(request, complete=True):
-    chunks = [
-        {
-            "choices": [
-                {"delta": {"content": "three tokens here"}, "finish_reason": None}
-            ]
-        },
-        {"choices": [{"delta": {}, "finish_reason": "stop"}]},
-        {
-            "choices": [],
-            "usage": {"completion_tokens": 3, "prompt_tokens": 4},
-            "metrics": _spec([0, 1], 2),
-        },
-    ]
-    text = "".join("data: " + json.dumps(chunk) + "\n\n" for chunk in chunks)
-    if complete:
-        text += "data: [DONE]\n\n"
-    return httpx.Response(200, text=text, request=request)
-
-
 def _run_args(tmp_path):
     return acceptance.argparse.Namespace(
         target="http://unused",
@@ -451,6 +431,10 @@ def test_sample_limit_applies_per_dataset_without_overreading(monkeypatch):
         "example/second:0",
         "example/second:1",
     ]
+    for limit in (0, -1):
+        args.max_samples = limit
+        with pytest.raises(ValueError, match="no requests"):
+            load_evaluation_requests(args)
     calls = []
 
     def rows(source, **kwargs):
@@ -516,10 +500,18 @@ def test_mrcr_parquet_preserves_the_full_conversation(tmp_path, monkeypatch):
     monkeypatch.setattr(httpx, "get", unexpected_api_call)
     monkeypatch.setattr(httpx.Client, "post", unexpected_api_call)
     for source in ("mrcr", "openai/mrcr"):
-        args = _args(source, "--data-files", "8needle/*.parquet", "--max-samples", "1")
+        args = _args(
+            source,
+            "--data-files",
+            "8needle/*.parquet",
+            "--messages-column",
+            "prompt",
+            "--max-samples",
+            "1",
+        )
         selected = load_evaluation_requests(args)
         assert len(selected) == 1
-        assert selected[0]["id"] == "mrcr:0"
+        assert selected[0]["id"] == f"{source}:0"
         assert selected[0]["body"]["messages"] == _conversation()
         assert "max_tokens" not in selected[0]["body"]
         assert selected[0]["body"]["max_completion_tokens"] == 32768
@@ -529,6 +521,8 @@ def test_mrcr_parquet_preserves_the_full_conversation(tmp_path, monkeypatch):
                     source,
                     "--data-files",
                     "8needle/*.parquet",
+                    "--messages-column",
+                    "prompt",
                     "--body",
                     json.dumps({field: 16}),
                 )
@@ -641,6 +635,52 @@ def test_category_filter_precedes_sample_limit(tmp_path, categories, expected):
             load_evaluation_requests(args)
 
 
+@pytest.mark.parametrize(
+    ("source", "mapping", "selected"),
+    [
+        (
+            "example/custom",
+            ["--messages-column", "prompt"],
+            {"prompt": '[{"role":"user","content":"selected"}]'},
+        ),
+        ("example/custom", ["--prompt-column", "question"], {"question": "selected"}),
+        (
+            "example/custom",
+            ["--prompt-template", "{question}"],
+            {"question": "selected"},
+        ),
+        ("speedbench", [], {"messages": [{"role": "user", "content": "selected"}]}),
+    ],
+)
+def test_category_filter_precedes_prompt_construction(
+    monkeypatch, source, mapping, selected
+):
+    rows = [
+        {"category": "skip", "prompt": "not a JSON conversation"},
+        {"category": "keep", **selected},
+        {"category": "keep"},
+    ]
+    monkeypatch.setattr(basic, "dataset_rows", lambda *a, **kw: iter(rows))
+    monkeypatch.setattr(speedbench, "_rows", lambda *a, **kw: iter(rows))
+    args = _args(
+        source,
+        "--data-files",
+        "rows.jsonl",
+        "--category",
+        "keep",
+        "--max-samples",
+        "1",
+        *mapping,
+    )
+    requests = load_evaluation_requests(args)
+    assert len(requests) == 1
+    assert requests[0]["category"] == "keep"
+    assert requests[0]["body"]["messages"] == [{"role": "user", "content": "selected"}]
+    args.category = None
+    with pytest.raises((KeyError, json.JSONDecodeError)):
+        load_evaluation_requests(args)
+
+
 def test_position_rates_count_steps_accepting_through_each_position():
     summary = acceptance_summary(
         [
@@ -653,33 +693,90 @@ def test_position_rates_count_steps_accepting_through_each_position():
     assert 1 + sum(rates.values()) == pytest.approx(summary["acceptance_length"])
 
 
-def test_stream_collects_final_metrics_and_rejects_truncation():
+def test_post_collects_metrics_and_records_response_errors():
     async def run():
         def respond(request):
+            body = json.loads(request.content)
+            assert request.method == "POST"
+            assert body["stream"] is False
+            assert "stream_options" not in body
+            assert body["max_completion_tokens"] == 16
+            assert body["messages"] == _conversation()
             if request.url.path.startswith("/bad/"):
                 return httpx.Response(
                     400, json={"error": {"message": "maximum context length is 128"}}
                 )
-            return _stream_response(
-                request, complete=request.url.path.startswith("/complete/")
+            return httpx.Response(
+                200,
+                json={
+                    "choices": [
+                        {
+                            "message": {
+                                "role": "assistant",
+                                "content": "three tokens here",
+                            },
+                            "finish_reason": "stop"
+                            if request.url.path.startswith("/complete/")
+                            else None,
+                        }
+                    ],
+                    "usage": {"completion_tokens": 3, "prompt_tokens": 4},
+                    "metrics": _spec([0, 1], 2),
+                },
             )
 
+        request = _request()
+        request["body"].update(
+            stream_options={"include_usage": True},
+            messages=_conversation(),
+            max_completion_tokens=16,
+        )
         async with httpx.AsyncClient(transport=httpx.MockTransport(respond)) as client:
-            complete = await send_request(client, "http://test/complete", _request(), 0)
-            truncated = await send_request(
-                client, "http://test/truncated", _request(), 1
+            complete = await send_request(client, "http://test/complete", request, 0)
+            incomplete = await send_request(
+                client, "http://test/incomplete", request, 1
             )
-            bad = await send_request(client, "http://test/bad", _request(), 2)
-        return complete, truncated, bad
+            bad = await send_request(client, "http://test/bad", request, 2)
+        assert request["body"]["stream"] is True
+        assert request["body"]["stream_options"] == {"include_usage": True}
+        return complete, incomplete, bad
 
-    complete, truncated, bad = asyncio.run(run())
+    complete, incomplete, bad = asyncio.run(run())
     assert complete["status"] == "ok"
     assert complete["output_tokens"] == 3
+    assert complete["prompt_tokens"] == 4
+    assert complete["finish_reason"] == "stop"
     assert complete["metrics"] == _spec([0, 1], 2)
-    assert truncated["status"] == "error"
-    assert "incomplete stream" in truncated["error"]
+    assert "three tokens here" not in json.dumps(complete)
+    assert incomplete["status"] == "error"
+    assert "incomplete response" in incomplete["error"]
     assert bad["status"] == "error"
     assert "maximum context length is 128" in bad["error"]
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        "invalid JSON",
+        [],
+        {"choices": [], "usage": {}},
+        {"choices": [{"finish_reason": "stop"}], "usage": None},
+        {
+            "choices": [{"finish_reason": "stop"}],
+            "usage": {"completion_tokens": -1, "prompt_tokens": 4},
+        },
+    ],
+)
+def test_post_records_invalid_response_as_request_error(payload):
+    async def run():
+        def respond(request):
+            content = payload if isinstance(payload, str) else json.dumps(payload)
+            return httpx.Response(200, content=content)
+
+        async with httpx.AsyncClient(transport=httpx.MockTransport(respond)) as client:
+            return await send_request(client, "http://test", _request(), 0)
+
+    assert asyncio.run(run())["status"] == "error"
 
 
 def test_selected_requests_are_sent_once_with_multiple_workers(tmp_path, monkeypatch):
@@ -744,9 +841,11 @@ def test_selected_requests_are_sent_once_with_multiple_workers(tmp_path, monkeyp
         )
 
 
-def test_acceptance_saves_incremental_dataset_category_and_length_summaries(
-    tmp_path, monkeypatch
-):
+def test_acceptance_checkpoints_datasets_and_aggregates_once(tmp_path, monkeypatch):
+    category_summary = Mock(wraps=acceptance.acceptance_by_category)
+    prompt_summary = Mock(wraps=acceptance.acceptance_by_prompt_length)
+    monkeypatch.setattr(acceptance, "acceptance_by_category", category_summary)
+    monkeypatch.setattr(acceptance, "acceptance_by_prompt_length", prompt_summary)
     samples = [
         {"id": f"{dataset}:{i}", "dataset": dataset, "category": category}
         for dataset in ("first", "second")
@@ -762,9 +861,9 @@ def test_acceptance_saves_incremental_dataset_category_and_length_summaries(
         if requests[0]["dataset"] == "second":
             assert [r["dataset"] for r in read_csv("summary.csv")] == ["first"]
             assert len((tmp_path / "requests.jsonl").read_text().splitlines()) == 2
-            partial = json.loads((tmp_path / "summary.json").read_text())
-            assert partial["by_category"]["coding"]["requests"] == 1
-            assert read_csv("summary_by_prompt_length.csv")[1]["acceptance_rate"] == ""
+            category_summary.assert_not_called()
+            prompt_summary.assert_not_called()
+            assert not (tmp_path / "summary.json").exists()
         rows = _dataset_results(requests)
         for row, request in zip(rows, requests, strict=True):
             row.update(category=request["category"], prompt_tokens=8192)
@@ -778,14 +877,16 @@ def test_acceptance_saves_incremental_dataset_category_and_length_summaries(
 
     monkeypatch.setattr(acceptance, "collect_requests", collect)
     assert acceptance.run(_run_args(tmp_path), samples) == 1
+    category_summary.assert_called_once()
+    prompt_summary.assert_called_once()
     report = json.loads((tmp_path / "summary.json").read_text())
     datasets = read_csv("summary.csv")
     assert [r["dataset"] for r in datasets] == ["first", "second", "overall"]
-    assert [int(r["requests"]) for r in datasets] == [2, 2, 4]
-    assert all(float(r["elapsed_seconds"]) >= 0 for r in datasets)
-    assert report["overall"]["requests"] == 4
+    assert [int(r["requests"]) for r in datasets] == [2, 1, 3]
+    assert "elapsed_seconds" not in datasets[0]
+    assert report["overall"]["requests"] == 3
     assert report["overall"]["successful_requests"] == 3
-    assert report["overall"]["errored_requests"] == 1
+    assert "errored_requests" not in report["overall"]
     assert report["overall"]["requests_without_spec_metrics"] == 1
 
     categories = read_csv("summary_by_category.csv")
@@ -798,7 +899,8 @@ def test_acceptance_saves_incremental_dataset_category_and_length_summaries(
         assert float(row["acceptance_rate"]) == pytest.approx(1 / 28)
         assert float(row["acceptance_rate_pos_1"]) == pytest.approx(0.1)
         assert "acceptance_rate_by_position" not in row
-    assert int(categories[1]["errored_requests"]) == 1
+    assert "errored_requests" not in categories[1]
+    assert sum(int(r["requests"]) for r in categories) == 3
     assert int(lengths[0]["requests"]) == 2
     assert int(lengths[1]["requests_without_spec_metrics"]) == 1
     assert sum(int(r["requests"]) for r in lengths) == 3
@@ -811,7 +913,9 @@ def test_acceptance_saves_incremental_dataset_category_and_length_summaries(
     ] == pytest.approx(1.1)
 
 
-def test_interrupted_later_dataset_preserves_completed_csv_row(tmp_path, monkeypatch):
+def test_interrupted_later_dataset_preserves_completed_csv_row(
+    tmp_path, monkeypatch, capsys
+):
     async def collect(requests, target, concurrency, output, *args):
         if requests[0]["dataset"] == "second":
             raise RuntimeError("interrupted")
@@ -844,6 +948,32 @@ def test_interrupted_later_dataset_preserves_completed_csv_row(tmp_path, monkeyp
         acceptance.run(args, [*_datasets(), {"id": "third:0", "dataset": "third"}]) == 1
     )
     summary = json.loads((stopped / "summary.json").read_text())
-    assert summary["overall"]["errored_requests"] == 3
+    assert summary["overall"]["requests"] == 0
+    assert "errored_requests" not in summary["overall"]
+    assert capsys.readouterr().err.count("Failed requests: 3") == 1
     assert list(summary["by_dataset"]) == ["first", "second"]
     assert len((stopped / "requests.jsonl").read_text().splitlines()) == 3
+
+
+def test_request_failure_fails_run_with_successful_metrics(
+    tmp_path, monkeypatch, capsys
+):
+    async def collect(requests, target, concurrency, output, *args):
+        rows = _dataset_results(requests)
+        rows[0]["status"] = "error"
+        for row in rows:
+            output.write(json.dumps(row) + "\n")
+        output.flush()
+        return rows, 0
+
+    monkeypatch.setattr(acceptance, "collect_requests", collect)
+    assert acceptance.run(_run_args(tmp_path), _datasets()[:2]) == 1
+    assert capsys.readouterr().err == "Failed requests: 1\n"
+    summary = json.loads((tmp_path / "summary.json").read_text())["overall"]
+    assert acceptance.check_results(summary)
+    assert summary["requests"] == 1
+    saved = [
+        json.loads(line)
+        for line in (tmp_path / "requests.jsonl").read_text().splitlines()
+    ]
+    assert sum(row["status"] == "error" for row in saved) == 1

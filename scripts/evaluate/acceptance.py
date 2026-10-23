@@ -7,7 +7,6 @@ import asyncio
 import csv
 import json
 import sys
-import time
 from bisect import bisect_left
 from collections import defaultdict
 from itertools import groupby
@@ -29,9 +28,8 @@ PROMPT_TOKEN_BUCKET_BOUNDARIES = (
 )
 
 
-def acceptance_summary(results: list[dict]) -> dict:
-    """Aggregate response counters before dividing into rates."""
-    successful = [r for r in results if r["status"] == "ok"]
+def acceptance_summary(successful: list[dict]) -> dict:
+    """Aggregate successful response counters before dividing into rates."""
     specs = [
         spec
         for result in successful
@@ -49,9 +47,8 @@ def acceptance_summary(results: list[dict]) -> dict:
         by_position[str(position)] = remaining / steps if steps else None
         remaining -= histogram[position]
     return {
-        "requests": len(results),
+        "requests": len(successful),
         "successful_requests": len(successful),
-        "errored_requests": len(results) - len(successful),
         "requests_with_spec_metrics": len(specs),
         "requests_without_spec_metrics": len(successful) - len(specs),
         "requests_with_zero_drafts": sum(s["num_spec_steps"] == 0 for s in specs),
@@ -68,9 +65,8 @@ def acceptance_by_prompt_length(results: list[dict]) -> dict:
     """Group successful requests by the prompt token counts returned by vLLM."""
     groups = defaultdict(list)
     for result in results:
-        if result["status"] == "ok":
-            index = bisect_left(PROMPT_TOKEN_BUCKET_BOUNDARIES, result["prompt_tokens"])
-            groups[index].append(result)
+        index = bisect_left(PROMPT_TOKEN_BUCKET_BOUNDARIES, result["prompt_tokens"])
+        groups[index].append(result)
     summaries = {}
     for index, rows in sorted(groups.items()):
         low = PROMPT_TOKEN_BUCKET_BOUNDARIES[index - 1] + 1 if index else 0
@@ -84,7 +80,7 @@ def acceptance_by_prompt_length(results: list[dict]) -> dict:
 
 
 def acceptance_by_category(results: list[dict]) -> dict:
-    """Use source-provided categories and include failures in their group counts."""
+    """Group successful requests by source-provided categories."""
     groups = defaultdict(list)
     for result in results:
         if category := result.get("category"):
@@ -93,8 +89,8 @@ def acceptance_by_category(results: list[dict]) -> dict:
 
 
 def check_results(summary: dict) -> bool:
-    """Require successful, error-free requests with speculative metrics."""
-    if not summary["successful_requests"] or summary["errored_requests"]:
+    """Require successful requests with speculative metrics."""
+    if not summary["successful_requests"]:
         return False
     if summary["requests_without_spec_metrics"]:
         print(
@@ -106,9 +102,7 @@ def check_results(summary: dict) -> bool:
     return True
 
 
-def _csv_row(
-    name: str, summary: dict, elapsed: float | None, *, group: str = "dataset"
-) -> dict:
+def _csv_row(name: str, summary: dict, *, group: str = "dataset") -> dict:
     return {
         group: name,
         **{k: v for k, v in summary.items() if k != "acceptance_rate_by_position"},
@@ -116,15 +110,11 @@ def _csv_row(
             f"acceptance_rate_pos_{position}": rate
             for position, rate in summary["acceptance_rate_by_position"].items()
         },
-        **({"elapsed_seconds": elapsed} if elapsed is not None else {}),
     }
 
 
 def _write_csv(path: Path, rows: list[dict]) -> None:
     fields = dict.fromkeys(key for row in rows for key in row)
-    if "elapsed_seconds" in fields:
-        fields.pop("elapsed_seconds")
-        fields["elapsed_seconds"] = None
     with path.open("w", newline="") as handle:
         writer = csv.DictWriter(handle, fieldnames=list(fields))
         writer.writeheader()
@@ -132,63 +122,59 @@ def _write_csv(path: Path, rows: list[dict]) -> None:
 
 
 def run(args: argparse.Namespace, requests: list[dict]) -> int:
-    """Finish each dataset and save its results before starting the next."""
-    results = []
-    report = {
-        "schema_version": 1,
-        "overall": acceptance_summary([]),
-        "by_dataset": {},
-        "by_prompt_length": {},
-        "by_category": {},
-    }
-    start = time.perf_counter()
+    """Checkpoint datasets as they finish; aggregate cumulative results once."""
+    all_successful = []
+    total_failures = 0
+    report: dict = {"schema_version": 1, "by_dataset": {}}
     csv_rows = []
     csv_path = args.output_dir / "summary.csv"
     consecutive_failures = 0
     with (args.output_dir / "requests.jsonl").open("x") as raw:
-        for dataset, group in groupby(requests, key=itemgetter("dataset")):
-            samples = list(group)
-            print(f"Collecting {dataset}: {len(samples)} requests", flush=True)
-            dataset_start = time.perf_counter()
-            collected, consecutive_failures = asyncio.run(
-                collect_requests(
-                    samples,
-                    args.target,
-                    args.concurrency,
-                    raw,
-                    args.timeout,
-                    consecutive_failures,
+        try:
+            for dataset, group in groupby(requests, key=itemgetter("dataset")):
+                samples = list(group)
+                print(f"Collecting {dataset}: {len(samples)} requests", flush=True)
+                collected, consecutive_failures = asyncio.run(
+                    collect_requests(
+                        samples,
+                        args.target,
+                        args.concurrency,
+                        raw,
+                        args.timeout,
+                        consecutive_failures,
+                    )
                 )
-            )
-            elapsed = time.perf_counter() - dataset_start
-            results.extend(collected)
-            summary = acceptance_summary(collected)
-            report["by_dataset"][dataset] = summary
-            report["overall"] = acceptance_summary(results)
-            report["by_prompt_length"] = acceptance_by_prompt_length(results)
-            report["by_category"] = acceptance_by_category(results)
+                successful = [r for r in collected if r["status"] == "ok"]
+                all_successful.extend(successful)
+                total_failures += len(collected) - len(successful)
+                summary = acceptance_summary(successful)
+                report["by_dataset"][dataset] = summary
+                csv_rows.append(_csv_row(dataset, summary))
+                _write_csv(csv_path, csv_rows)
+                if consecutive_failures >= MAX_CONSECUTIVE_FAILURES:
+                    print(
+                        "Stopping after three consecutive request failures",
+                        file=sys.stderr,
+                    )
+                    break
+        finally:
+            report["overall"] = acceptance_summary(all_successful)
+            report["by_prompt_length"] = acceptance_by_prompt_length(all_successful)
+            report["by_category"] = acceptance_by_category(all_successful)
             for group_name in ("prompt_length", "category"):
                 summaries = report[f"by_{group_name}"]
                 if summaries:
                     _write_csv(
                         args.output_dir / f"summary_by_{group_name}.csv",
                         [
-                            _csv_row(name, stats, None, group=group_name)
+                            _csv_row(name, stats, group=group_name)
                             for name, stats in summaries.items()
                         ],
                     )
             (args.output_dir / "summary.json").write_text(
                 json.dumps(report, indent=2, allow_nan=False) + "\n"
             )
-            csv_rows.append(_csv_row(dataset, summary, elapsed))
-            _write_csv(csv_path, csv_rows)
-            if consecutive_failures >= MAX_CONSECUTIVE_FAILURES:
-                print(
-                    "Stopping after three consecutive request failures", file=sys.stderr
-                )
-                break
-        csv_rows.append(
-            _csv_row("overall", report["overall"], time.perf_counter() - start)
-        )
+        csv_rows.append(_csv_row("overall", report["overall"]))
         _write_csv(csv_path, csv_rows)
-    return 0 if check_results(report["overall"]) else 1
+    print(f"Failed requests: {total_failures}", file=sys.stderr)
+    return 0 if not total_failures and check_results(report["overall"]) else 1

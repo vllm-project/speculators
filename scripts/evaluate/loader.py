@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import argparse  # noqa: TC003
 import json
-from itertools import islice
 
 from eval_datasets import basic, speedbench
 
@@ -59,20 +58,18 @@ def _load_datasets(args: argparse.Namespace) -> dict:
     """Select loaders and merge their named, lazy conversation iterators."""
     datasets: dict = {}
     for source in args.dataset:
-        match source:
-            case "mrcr" | "openai/mrcr":
-                selected = basic.load("mrcr", args)
-            case "speedbench":
-                selected = speedbench.load(args)
-            case _:
-                selected = basic.load(source, args)
-        for name, conversations in selected.items():
-            datasets.setdefault(name, conversations)
+        if source == "speedbench":
+            selected = speedbench.load(args)
+        else:
+            selected = basic.load(source, args)
+        datasets.update(selected)
     return datasets
 
 
-def _requests(datasets: dict, args: argparse.Namespace):
-    """Build API requests once, after dataset-specific prompt preparation."""
+def iterate_requests(datasets: dict, args: argparse.Namespace):
+    """Yield requests across datasets, applying each dataset's sample cap."""
+    if args.max_samples <= 0:
+        return
     body = {
         "temperature": 0,
         "chat_template_kwargs": {"enable_thinking": True},
@@ -82,24 +79,21 @@ def _requests(datasets: dict, args: argparse.Namespace):
         body = dict(args.body)
     body.update(model=args.model, stream=True, stream_options={"include_usage": True})
     for name, conversations in datasets.items():
-        selected = (
-            sample
-            for sample in conversations
-            if not args.category or sample["category"] in args.category
-        )
-        for index, sample in enumerate(islice(selected, args.max_samples)):
+        for index, sample in enumerate(conversations):
             yield {
                 "id": f"{name}:{index}",
                 "dataset": name,
                 "category": sample["category"],
                 "body": {**body, "messages": sample["messages"]},
             }
+            if index + 1 >= args.max_samples:
+                break
 
 
 def load_evaluation_requests(args: argparse.Namespace) -> list[dict]:
     """Load and combine requests for either evaluation mode."""
     datasets = _load_datasets(args)
-    results = list(_requests(datasets, args))
+    results = list(iterate_requests(datasets, args))
     if not results:
         raise ValueError("no requests in the selected datasets")
     return results

@@ -120,6 +120,8 @@ def _conversations(name: str, args: argparse.Namespace):
     prompt_column = options.get("prompt_column") or "prompt"
     prompt_template = options.get("prompt_template")
     for row in rows:
+        if args.category and row.get("category") not in args.category:
+            continue
         if messages_column:
             messages = _column(row, messages_column)
             messages = json.loads(messages) if isinstance(messages, str) else messages
