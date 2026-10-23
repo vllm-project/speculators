@@ -39,6 +39,9 @@ except ImportError:  # pragma: no cover -- only on a build without Triton
 # apply kernel (2D so a transposed update still reads in coalesced runs).
 _MOMENTUM_BLOCK = 4096
 _APPLY_TILE = 64
+# Below this many elements a step is launch-bound: Triton's host-side launcher
+# costs more than the four ATen kernels it replaces, so fusing loses time.
+_MIN_FUSED_NUMEL = 4 * 1024 * 1024
 
 # Row blocks per Gram product. Four is the measured optimum on H100 for a
 # [4096, 12288] update; eight loses to the narrower trailing GEMMs.
@@ -184,9 +187,9 @@ if HAS_TRITON:
     ):
         """``buf.lerp_(grad, weight)``; ``update = grad.lerp(buf, momentum)`` in bf16.
 
-        Spelled as torch's lerp kernel evaluates them (``weight < 0.5`` from the
-        start, ``momentum >= 0.5`` back from the end with ``1 - momentum`` in
-        fp32).
+        Follows torch's lerp kernel so the result is bitwise equal:
+        ``weight < 0.5`` from the start, ``momentum >= 0.5`` back from the end
+        with ``1 - momentum`` in fp32.
         """
         offs = tl.program_id(0).to(tl.int64) * BLOCK + tl.arange(0, BLOCK)
         mask = offs < numel
@@ -230,6 +233,7 @@ def _fusable(param: Tensor, grad: Tensor, buf: Tensor) -> bool:
     return (
         HAS_TRITON
         and param.is_cuda
+        and param.numel() >= _MIN_FUSED_NUMEL
         and not isinstance(param, DTensor)
         and param.dtype == grad.dtype == buf.dtype == torch.float32
         and param.is_contiguous()
