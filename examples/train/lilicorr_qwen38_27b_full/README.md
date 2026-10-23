@@ -6,6 +6,25 @@ Everything below was executed on the dev container described in the repo's `CLAU
 
 Serving/probing additionally needs the vLLM side: branch `lilicorr-speculators-config` (commit `2bf157bd17`, fork `MeganEFlynn/vllm`) checked out at `/workspace/vllm/.claude/worktrees/lilicorr-speculators-config`. Training itself does not need it — only the acceptance probe does.
 
+## 0. Repos and branches
+
+Two repos are involved, and the run scripts hardcode worktree paths under each. Reproduce that exact layout with:
+
+```bash
+# speculators: training code (branch lilicorr = the commit containing this file)
+git clone https://github.com/vllm-project/speculators.git /workspace/speculators
+mkdir -p /workspace/speculators/.claude/worktrees
+git -C /workspace/speculators worktree add .claude/worktrees/lilicorr-minimal lilicorr
+
+# vllm: serving-side config translator, needed only for the probe/serving
+# (branch lilicorr-speculators-config, tip 2bf157bd17, lives on the fork)
+git clone https://github.com/MeganEFlynn/vllm.git /workspace/vllm
+mkdir -p /workspace/vllm/.claude/worktrees
+git -C /workspace/vllm worktree add .claude/worktrees/lilicorr-speculators-config lilicorr-speculators-config
+```
+
+A plain checkout of either branch (no worktree) works too — adjust `PYTHONPATH` and the `cd` in the commands below to point at it. The per-repo venvs (`/workspace/<repo>/.venv`, created with `--system-site-packages` so they inherit torch/CUDA from the base image — see `CLAUDE.md`) are provisioned by the dev container; the scripts set `PYTHONPATH` to the worktrees, which takes precedence over any installed copy.
+
 ## 1. Fetch the verifier model
 
 ```bash
