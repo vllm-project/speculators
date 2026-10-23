@@ -6,8 +6,7 @@ optimizer over all parameters, preserving the historical behavior. The "muon" op
 returns two optimizers: :class:`~speculators.train.muon.Muon` over the 2D weight
 matrices (which is all Muon supports) and ``torch.optim.AdamW`` over everything else
 (norms, biases, and the embedding / LM-head matrices, following standard Muon
-practice). That class is ``torch.optim.Muon`` with a Newton-Schulz iteration that
-computes only the upper block-triangle of each symmetric Gram product.
+practice). That class computes each symmetric Gram product as a block-triangle.
 
 Muon works transparently for both single-GPU and multi-GPU (FSDP2) training: when the
 model is sharded with ``fully_shard`` the parameters become ``DTensor``s and Muon's

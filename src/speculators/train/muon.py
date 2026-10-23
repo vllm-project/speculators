@@ -1,22 +1,8 @@
-"""Muon with a Newton-Schulz iteration that exploits Gram-matrix symmetry.
+"""``torch.optim.Muon`` whose Newton-Schulz Gram products skip the mirrored half.
 
-Each Newton-Schulz step of ``torch.optim.Muon`` runs three bf16 matmuls::
-
-    A = X @ X.T                    # symmetric
-    B = b * A + c * A @ A          # symmetric (A @ A == A @ A.T)
-    X = a * X + B @ X
-
-The first two produce symmetric matrices, yet a dense GEMM computes every
-element of them. :func:`zeropower_via_newtonschulz` computes only the upper
-block-triangle of ``A`` and ``B`` -- ``SYMMETRIC_BLOCKS`` row blocks, each a
-GEMM against the rows at and below it -- and mirrors it into the lower half
-with one Triton launch. Each element is the same dot product cuBLAS computes
-for the dense matmul, and on H100 the result is bit-identical to
-``torch.optim.Muon``'s; 4 blocks do 10/16 of the Gram FLOPs.
-
-The update, momentum, weight decay, learning-rate adjustment, and state layout
-are ``torch.optim.Muon``'s unchanged, so checkpoints interoperate and the class
-keeps the ``Muon`` name the trainer logs learning rates under.
+``A = X @ X.T`` and ``B = b * A + c * A @ A`` are symmetric, so only the upper
+block-triangle is computed and mirrored. Matrices too small or unaligned for the
+split, and DTensors, take ``torch.optim._muon``'s reference path.
 """
 
 # ruff: noqa: N803
@@ -34,12 +20,12 @@ from torch.optim._muon import (
 
 __all__ = ["Muon", "zeropower_via_newtonschulz"]
 
-# Row blocks of the Gram product. Measured on H100 for a [4096, 12288] update:
-# the dense X @ X.T takes 0.51 ms, 2 blocks 0.39 ms, 4 blocks 0.36 ms, and 8
-# blocks lose it again to the narrow trailing GEMMs.
+# Row blocks per Gram product. Four is the measured optimum on H100 for a
+# [4096, 12288] update; eight loses to the narrower trailing GEMMs.
 SYMMETRIC_BLOCKS = 4
-# Below this many rows the Gram matmuls are too small for the split to pay.
-_MIN_SYMMETRIC_ROWS = 2048
+# First row count where the split beats a dense GEMM at both square and 3:1
+# aspect ratios (H100). A Qwen3-1.7B draft is built from 2048-row matrices.
+_MIN_SYMMETRIC_ROWS = 4096
 _MIRROR_TILE = 64
 
 # Input validation mirroring ``torch.optim._muon._zeropower_via_newtonschulz``.
@@ -50,10 +36,10 @@ _NS_COEFFICIENT_COUNT = 3
 
 @triton.jit
 def _mirror_lower_blocks_kernel(A, stride, block_rows, TILE: tl.constexpr):
-    """Copy the transpose of the upper off-diagonal blocks into the lower ones."""
+    """Mirror the upper off-diagonal blocks into the lower half."""
     ti = tl.program_id(0)
     tj = tl.program_id(1)
-    # Diagonal blocks were computed whole by their GEMM; leave them untouched.
+    # Diagonal blocks were computed whole; leave them.
     if (ti * TILE) // block_rows <= (tj * TILE) // block_rows:
         return
     rows = ti * TILE + tl.arange(0, TILE)
@@ -85,10 +71,7 @@ def _symmetric_gram(
     beta: float = 0.0,
     alpha: float = 1.0,
 ) -> Tensor:
-    """``out = beta * bias + alpha * x @ x.T`` for a symmetric ``bias``.
-
-    Computes the upper block-triangle with one GEMM per row block, then mirrors.
-    """
+    """``out = beta * bias + alpha * x @ x.T`` for a symmetric ``bias``."""
     block_rows = x.size(0) // blocks
     for i in range(blocks):
         start, end = i * block_rows, (i + 1) * block_rows
@@ -163,11 +146,7 @@ def _muon_update(
     adjust_lr_fn: str | None,
     has_complex: bool,
 ) -> None:
-    """``torch.optim._muon._single_tensor_muon`` over the symmetric iteration.
-
-    The body is upstream's, with :func:`zeropower_via_newtonschulz` in place of
-    ``_zeropower_via_newtonschulz``.
-    """
+    """Upstream's ``_single_tensor_muon`` over :func:`zeropower_via_newtonschulz`."""
     lr = _to_scalar(lr)
     if has_complex:
         raise ValueError("Complex parameters are not supported")
@@ -192,13 +171,11 @@ def _muon_update(
 class Muon(torch.optim.Muon):
     """``torch.optim.Muon`` using :func:`zeropower_via_newtonschulz`.
 
-    Hyperparameters, state (``momentum_buffer``), and the update rule are those
-    of ``torch.optim.Muon``; only the orthogonalization's GEMMs change.
+    State layout and update rule are upstream's.
     """
 
     @torch.no_grad()
     def step(self, closure=None):
-        """Performs a single optimization step."""
         loss = None
         if closure is not None:
             with torch.enable_grad():

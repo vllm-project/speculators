@@ -24,9 +24,10 @@ def _grad(rows: int, cols: int, device: str) -> torch.Tensor:
 
 
 @requires_cuda
-@pytest.mark.parametrize("shape", [(2048, 4096), (4096, 2048), (2048, 2048)])
+@pytest.mark.parametrize("shape", [(4096, 8192), (8192, 4096), (4096, 4096)])
 def test_matches_reference_on_cuda(shape):
     rows, cols = shape
+    assert muon._use_symmetric(min(shape)), "shape no longer takes the split path"
     grad = _grad(rows, cols, device="cuda")
 
     ours = zeropower_via_newtonschulz(grad, COEFFICIENTS, 5, 1e-7)
@@ -68,6 +69,18 @@ def test_small_matrices_use_the_reference():
     torch.testing.assert_close(ours, ref, atol=0, rtol=0)
 
 
+@pytest.mark.parametrize("rows", [1024, 2048, 2560, 3072])
+def test_row_counts_the_split_loses_on_stay_on_the_reference(rows):
+    # The split loses below 4096 rows; 2048-row matrices are what a Qwen3-1.7B
+    # draft is built from.
+    assert not muon._use_symmetric(rows)
+
+
+@pytest.mark.parametrize("rows", [4096, 5120, 8192])
+def test_row_counts_the_split_wins_on_take_it(rows):
+    assert muon._use_symmetric(rows)
+
+
 @pytest.mark.parametrize("adjust_lr_fn", [None, "match_rms_adamw"])
 def test_step_matches_torch_muon(adjust_lr_fn):
     torch.manual_seed(0)
@@ -97,10 +110,11 @@ def test_step_matches_torch_muon(adjust_lr_fn):
 
 
 @requires_cuda
-@pytest.mark.parametrize("shape", [(2048, 4096), (4096, 2048)])
+@pytest.mark.parametrize("shape", [(4096, 8192), (8192, 4096)])
 def test_step_matches_torch_muon_on_the_symmetric_path(shape):
     torch.manual_seed(0)
     rows, cols = shape
+    assert muon._use_symmetric(min(shape)), "shape no longer takes the split path"
     weight = torch.randn(rows, cols, device="cuda") * 0.02
     ours = torch.nn.Parameter(weight.clone())
     ref = torch.nn.Parameter(weight.clone())
