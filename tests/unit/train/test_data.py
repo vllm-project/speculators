@@ -289,6 +289,16 @@ def _valid_generated_sample() -> dict[str, torch.Tensor]:
     }
 
 
+def _generated_sample(num_layers: int, hidden_size: int = 4) -> dict[str, torch.Tensor]:
+    """A valid hidden-state payload of shape [seq_len=3, num_layers, hidden_size].
+    Layer i is filled with i + 1 so tests can tell the captured entries apart."""
+    capture = torch.arange(1, num_layers + 1, dtype=torch.bfloat16)
+    return {
+        "hidden_states": capture.view(1, -1, 1).expand(3, num_layers, hidden_size),
+        "token_ids": torch.tensor([1, 2, 3], dtype=torch.long),
+    }
+
+
 def _next_generation_result(handles):
     handle = next(handles)
     return handle, {"handle": handle}
@@ -321,6 +331,64 @@ def test_arrow_dataset_retries_nonfinite_read_then_recovers(
     assert torch.isfinite(item["hidden_states"]).all()
     assert transfer.deleted == ["bad-handle", "good-handle"]
     assert arrow_ds.generation_recovery.consecutive_failures == 0
+
+
+def test_arrow_dataset_payload_matching_target_layers_feeds_all_entries(
+    tmp_path, monkeypatch
+):
+    num_target_layers = 3
+    hidden_size = 4
+    sample = _generated_sample(num_target_layers, hidden_size)
+    transfer = _SequenceTransfer([sample])
+    arrow_ds = _make_generation_dataset(
+        tmp_path, transfer, num_target_layers=num_target_layers
+    )
+    monkeypatch.setattr(
+        data_module,
+        "generate_hidden_states",
+        lambda *_args, **_kwargs: ("handle-0", {"handle": "handle-0"}),
+    )
+
+    item = arrow_ds[0]
+
+    assert isinstance(item, dict)
+    # Every captured entry feeds `fc`; the trailing one is not split off.
+    assert item["hidden_states"].shape == (3, num_target_layers * hidden_size)
+    assert torch.equal(item["hidden_states"], sample["hidden_states"].flatten(1))
+    # The trailing entry doubles as the verifier's final hidden state.
+    assert torch.equal(
+        item["verifier_last_hidden_states"], sample["hidden_states"][:, -1]
+    )
+
+
+def test_arrow_dataset_payload_one_past_target_layers_drops_trailing(
+    tmp_path, monkeypatch
+):
+    num_target_layers = 3
+    hidden_size = 4
+    sample = _generated_sample(num_target_layers + 1, hidden_size)
+    transfer = _SequenceTransfer([sample])
+    arrow_ds = _make_generation_dataset(
+        tmp_path, transfer, num_target_layers=num_target_layers
+    )
+    monkeypatch.setattr(
+        data_module,
+        "generate_hidden_states",
+        lambda *_args, **_kwargs: ("handle-0", {"handle": "handle-0"}),
+    )
+
+    item = arrow_ds[0]
+
+    assert isinstance(item, dict)
+    # The trailing entry is the verifier's final hidden state and is not fed
+    # to `fc`.
+    assert item["hidden_states"].shape == (3, num_target_layers * hidden_size)
+    assert torch.equal(
+        item["hidden_states"], sample["hidden_states"][:, :-1].flatten(1)
+    )
+    assert torch.equal(
+        item["verifier_last_hidden_states"], sample["hidden_states"][:, -1]
+    )
 
 
 def test_exhausted_generation_produces_locally_empty_zero_loss_batch(

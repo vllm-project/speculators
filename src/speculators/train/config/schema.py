@@ -116,8 +116,7 @@ class DraftArgs(_Group):
         default=None,
         description="(Optional) space-separated list of integer layer ids for the "
         "auxiliary hidden states. Defaults to [2, n//2, n-3]. If custom values were "
-        "used to launch vllm, pass the same ids here, excluding the final layer "
-        "launch_vllm.py appends.",
+        "used to launch vllm, pass the same ids here.",
     )
     token_freq_path: str | None = Field(
         default=None,
