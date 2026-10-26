@@ -1,3 +1,5 @@
+import sys
+from types import ModuleType
 from unittest.mock import patch
 
 import pytest
@@ -141,3 +143,150 @@ def test_zero_step_ms_returns_zero_throughput():
     assert profile is not None
     assert profile["tokens_per_s"] == 0.0
     assert profile["fetch_frac"] == 0.0
+
+
+class _FakeDevice:
+    def __init__(self, device_type: str):
+        self.type = device_type
+
+
+def test_memory_fallback_to_backend_native():
+    """Generic accelerator API raises RuntimeError; falls back to backend-native.
+
+    This exercises the NPU code path on a CPU-only CI by patching
+    torch.accelerator.is_available, current_accelerator, and
+    memory_allocated, then injecting a stub torch.npu module.
+    """
+    stub_npu = ModuleType("torch.npu")
+    stub_npu.memory_allocated = lambda: 42 * 1024**2  # 42 MiB
+
+    fake_device = _FakeDevice("npu")
+
+    try:
+        with (
+            patch(
+                "speculators.train.trainer.torch.accelerator.is_available",
+                return_value=True,
+            ),
+            patch(
+                "speculators.train.trainer.torch.accelerator.current_accelerator",
+                return_value=fake_device,
+            ),
+            patch(
+                "speculators.train.trainer.torch.accelerator.memory_allocated",
+                side_effect=RuntimeError("Allocator for npu is not a DeviceAllocator"),
+            ),
+            patch(
+                "speculators.train.trainer.torch.npu",
+                stub_npu,
+                create=True,
+            ),
+            patch("speculators.train.trainer.torch.accelerator.synchronize"),
+            patch(
+                "speculators.train.trainer.time.perf_counter",
+                return_value=1.0,
+            ),
+        ):
+            timer = _StepTimer(enabled=True)
+            timer.mark("fwd")
+    finally:
+        sys.modules.pop("torch.npu", None)
+
+    assert timer._memory["fwd"] == 42.0
+
+
+def test_memory_fallback_skips_when_backend_missing():
+    """Generic API raises RuntimeError and no backend module exists -> skip."""
+    fake_device = _FakeDevice("privateuse1")
+
+    with (
+        patch(
+            "speculators.train.trainer.torch.accelerator.is_available",
+            return_value=True,
+        ),
+        patch(
+            "speculators.train.trainer.torch.accelerator.current_accelerator",
+            return_value=fake_device,
+        ),
+        patch(
+            "speculators.train.trainer.torch.accelerator.memory_allocated",
+            side_effect=RuntimeError("not a DeviceAllocator"),
+        ),
+        patch("speculators.train.trainer.torch.accelerator.synchronize"),
+        patch(
+            "speculators.train.trainer.time.perf_counter",
+            return_value=1.0,
+        ),
+    ):
+        timer = _StepTimer(enabled=True)
+        timer.mark("fwd")
+
+    assert "fwd" not in timer._memory
+    profile = timer.profile(num_tokens=1024)
+    assert profile is not None
+    assert "memory_mb" not in profile
+
+
+def test_memory_fallback_skips_when_backend_lacks_memory_allocated():
+    """Backend module exists but has no memory_allocated -> skip silently."""
+    stub_npu = ModuleType("torch.npu")
+
+    fake_device = _FakeDevice("npu")
+
+    try:
+        with (
+            patch(
+                "speculators.train.trainer.torch.accelerator.is_available",
+                return_value=True,
+            ),
+            patch(
+                "speculators.train.trainer.torch.accelerator.current_accelerator",
+                return_value=fake_device,
+            ),
+            patch(
+                "speculators.train.trainer.torch.accelerator.memory_allocated",
+                side_effect=RuntimeError("not a DeviceAllocator"),
+            ),
+            patch(
+                "speculators.train.trainer.torch.npu",
+                stub_npu,
+                create=True,
+            ),
+            patch("speculators.train.trainer.torch.accelerator.synchronize"),
+            patch(
+                "speculators.train.trainer.time.perf_counter",
+                return_value=1.0,
+            ),
+        ):
+            timer = _StepTimer(enabled=True)
+            timer.mark("fwd")
+    finally:
+        sys.modules.pop("torch.npu", None)
+
+    assert "fwd" not in timer._memory
+    profile = timer.profile(num_tokens=1024)
+    assert profile is not None
+    assert "memory_mb" not in profile
+
+
+def test_memory_happy_path_still_works():
+    """Generic accelerator API succeeds (CUDA-like) - memory recorded normally."""
+    with (
+        patch(
+            "speculators.train.trainer.torch.accelerator.is_available",
+            return_value=True,
+        ),
+        patch(
+            "speculators.train.trainer.torch.accelerator.memory_allocated",
+            return_value=100 * 1024**2,
+        ),
+        patch("speculators.train.trainer.torch.accelerator.synchronize"),
+        patch(
+            "speculators.train.trainer.time.perf_counter",
+            return_value=1.0,
+        ),
+    ):
+        timer = _StepTimer(enabled=True)
+        timer.mark("fwd")
+
+    assert timer._memory["fwd"] == 100.0
