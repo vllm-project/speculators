@@ -17,6 +17,7 @@ from speculators.data_generation.vllm_client import (
     DEFAULT_REQUEST_TIMEOUT,
     ClientItem,
     generate_hidden_states,
+    has_multimodal_content,
 )
 from speculators.train.recovery import (
     RECOVERY_METADATA_KEY,
@@ -55,16 +56,6 @@ def create_empty_sample(
     }
 
 
-def _has_multimodal_content(messages: list[dict]) -> bool:
-    """True when any turn carries non-text content (images, video, audio).
-
-    Text-only turns store ``content`` as a plain string.  Multimodal turns
-    (produced by ``_adapt_conv_for_vllm``) store it as a list of typed parts,
-    e.g. ``[{"type": "text", ...}, {"type": "image_url", ...}]``.
-    """
-    return any(isinstance(m.get("content"), list) for m in messages)
-
-
 def build_client_item(dataset_item: dict) -> ClientItem:
     """Build a request payload for vLLM hidden-state extraction.
 
@@ -89,8 +80,10 @@ def build_client_item(dataset_item: dict) -> ClientItem:
     """
     out_dict: dict = {"input_ids": dataset_item["input_ids"].tolist()}
 
-    if "messages" in dataset_item and _has_multimodal_content(dataset_item["messages"]):
-        out_dict["messages"] = dataset_item["messages"]
+    # A text-only source concatenated with a multimodal one has None messages.
+    messages = dataset_item.get("messages")
+    if messages is not None and has_multimodal_content(messages):
+        out_dict["messages"] = messages
 
     return cast("ClientItem", out_dict)
 
