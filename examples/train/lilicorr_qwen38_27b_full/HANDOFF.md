@@ -7,10 +7,11 @@ background/reference doc is [`README.md`](./README.md) — this file is just
 
 ## 0. What's already been decided, and what's still open
 
-This checkout has uncommitted fixes on top of the public `lilicorr` branch
-(base commit `d8c73a887afb39d68daba5a81bd2020585cbc186`). They are **not yet
-committed or pushed anywhere** — see [Step 1](#1-get-the-code-onto-the-new-pod)
-for how to bring them with you.
+This checkout's fixes on top of the public `lilicorr` branch are committed
+locally (the commit titled "Match LiLiCorr training recipe to the paper and
+NVIDIA ModelOpt reference", plus this file), but **not yet pushed to
+`origin`** — see [Step 1](#1-get-the-code-onto-the-new-pod) for how to bring
+them with you.
 
 **Already fixed / decided (no action needed):**
 
@@ -45,31 +46,36 @@ for how to bring them with you.
 
 ## 1. Get the code onto the new pod
 
-Pick **one** of these two options.
+Pick **one** of these three options, in order of preference.
 
-**Option A — apply the patch to a fresh clone (recommended, cleanest):**
+**Option A — `origin/lilicorr` may already have it (check this first):**
 
-A patch of every uncommitted change in this session is saved at
-`/home/MeganEFlynn/lilicorr-paper-fixes.patch` on the old pod. Copy it to the
-new pod (e.g. `scp old-pod:/home/MeganEFlynn/lilicorr-paper-fixes.patch .`),
-then:
+Someone may have pushed it since this handoff was written:
 
 ```bash
 git clone https://github.com/vllm-project/speculators.git ~/speculators
 cd ~/speculators
-git checkout d8c73a887afb39d68daba5a81bd2020585cbc186   # = branch lilicorr as of this handoff
-git apply /path/to/lilicorr-paper-fixes.patch
-git status   # sanity check: should show the 9 files listed in the table above as modified
+git checkout lilicorr
+ls examples/train/lilicorr_qwen38_27b_full/HANDOFF.md   # if this exists, you're done — skip to Step 2
 ```
 
-**Option B — copy the whole checkout directly:**
+**Option B — clone directly from the old pod (if `origin` doesn't have it yet):**
+
+```bash
+git clone old-pod:/home/MeganEFlynn/speculators ~/speculators
+cd ~/speculators
+git checkout lilicorr
+```
+
+**Option C — copy the whole checkout directly (works regardless of git state):**
 
 ```bash
 rsync -av old-pod:/home/MeganEFlynn/speculators/ ~/speculators/
 ```
 
-Either way, end up with a `~/speculators` checkout that has `git status`
-showing the same modified files as the table in Step 0.
+Any of these should leave you with a `~/speculators` checkout that has this
+very file at `examples/train/lilicorr_qwen38_27b_full/HANDOFF.md` — if you're
+reading this after following one of the options above, it worked.
 
 ## 2. Sanity-check the new pod before touching anything
 
