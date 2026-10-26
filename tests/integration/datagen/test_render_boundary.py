@@ -14,6 +14,7 @@ import pytest
 import torch
 from datasets import Dataset as HFDataset
 from datasets import load_from_disk
+from transformers import ProcessorMixin
 
 from speculators.data_generation import preprocessing, render_client
 from speculators.data_generation.preprocessing import (
@@ -21,7 +22,7 @@ from speculators.data_generation.preprocessing import (
     build_speculator_training_dataset,
 )
 from speculators.data_generation.vllm_client import InvalidResponseError
-from speculators.train.data import CollateFn
+from speculators.train.data import CollateFn, build_client_item
 
 # Neither build path below reads the processor: the missing-endpoint guard
 # raises before it is used, and speculator-format rows skip rendering entirely.
@@ -337,3 +338,50 @@ def test_loss_mask_stays_boolean_after_save_load_and_collation(tmp_path, mask):
     )
     assert batch["loss_mask"].dtype == torch.bool
     assert batch["loss_mask"].tolist() == [[False, False, True, True, False, False]]
+
+
+class _ProcessorMixinStub(ProcessorMixin):
+    """Routes preprocessing down the multimodal path; never called."""
+
+    def __init__(self):
+        pass
+
+
+def _build_with_processor(monkeypatch, conversations: list[list[dict]]) -> HFDataset:
+    # One row per conversation; the conv itself is what `messages` would store.
+    monkeypatch.setattr(
+        preprocessing,
+        "_render_conversation_rows",
+        lambda conv, *a, **k: [
+            {"input_ids": [1, 2, 3], "loss_mask": [0, 1, 1], "conv": conv}
+        ],
+    )
+    return build_speculator_training_dataset(
+        HFDataset.from_dict({"conversations": conversations}),
+        cast("ProcessorLike", _ProcessorMixinStub()),
+        num_proc=1,
+        render_endpoint="http://x",
+    )
+
+
+def test_processor_text_only_rows_do_not_store_messages(monkeypatch):
+    # The trainer only forwards `messages` for multimodal rows, so a text-only
+    # prep through a processor-based model should not keep the column.
+    dataset = _build_with_processor(monkeypatch, [_conv(2), _conv(2)])
+    assert len(dataset) == 2
+    assert "messages" not in dataset.column_names
+    assert "is_multimodal" not in dataset.column_names
+
+
+def test_processor_multimodal_rows_keep_messages(monkeypatch):
+    image = {"type": "image", "url": "http://x/a.png", "text": None}
+    text = {"type": "text", "url": None, "text": "what is this?"}
+    conv = [
+        {"role": "user", "content": [image, text]},
+        {"role": "assistant", "content": [{**text, "text": "a cat"}]},
+    ]
+    dataset = _build_with_processor(monkeypatch, [conv])
+    assert "is_multimodal" not in dataset.column_names
+    user_parts = dataset[0]["messages"][0]["content"]
+    assert user_parts[0]["image_url"] == {"url": "http://x/a.png"}
+    assert build_client_item(dataset[0])["messages"] == dataset[0]["messages"]
