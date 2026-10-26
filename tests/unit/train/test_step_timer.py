@@ -150,17 +150,18 @@ class _FakeDevice:
         self.type = device_type
 
 
-def test_memory_fallback_to_backend_native():
+def test_memory_fallback_uses_backend_native_api():
     """Generic accelerator API raises RuntimeError; falls back to backend-native.
 
-    This exercises the NPU code path on a CPU-only CI by patching
-    torch.accelerator.is_available, current_accelerator, and
-    memory_allocated, then injecting a stub torch.npu module.
+    This is a backend-agnostic fallback: when torch.accelerator.memory_allocated()
+    fails on any device type, the code tries torch.<device_type>.memory_allocated()
+    instead.  We simulate this on a CPU-only CI by patching the accelerator
+    APIs and injecting a stub backend module.
     """
-    stub_npu = ModuleType("torch.npu")
-    stub_npu.memory_allocated = lambda: 42 * 1024**2  # 42 MiB
+    stub_backend = ModuleType("torch.fake_device")
+    stub_backend.memory_allocated = lambda: 42 * 1024**2  # 42 MiB
 
-    fake_device = _FakeDevice("npu")
+    fake_device = _FakeDevice("fake_device")
 
     try:
         with (
@@ -174,11 +175,11 @@ def test_memory_fallback_to_backend_native():
             ),
             patch(
                 "speculators.train.trainer.torch.accelerator.memory_allocated",
-                side_effect=RuntimeError("Allocator for npu is not a DeviceAllocator"),
+                side_effect=RuntimeError("Allocator is not a DeviceAllocator"),
             ),
             patch(
-                "speculators.train.trainer.torch.npu",
-                stub_npu,
+                "speculators.train.trainer.torch.fake_device",
+                stub_backend,
                 create=True,
             ),
             patch("speculators.train.trainer.torch.accelerator.synchronize"),
@@ -190,7 +191,7 @@ def test_memory_fallback_to_backend_native():
             timer = _StepTimer(enabled=True)
             timer.mark("fwd")
     finally:
-        sys.modules.pop("torch.npu", None)
+        sys.modules.pop("torch.fake_device", None)
 
     assert timer._memory["fwd"] == 42.0
 
@@ -229,9 +230,9 @@ def test_memory_fallback_skips_when_backend_missing():
 
 def test_memory_fallback_skips_when_backend_lacks_memory_allocated():
     """Backend module exists but has no memory_allocated -> skip silently."""
-    stub_npu = ModuleType("torch.npu")
+    stub_backend = ModuleType("torch.fake_device")
 
-    fake_device = _FakeDevice("npu")
+    fake_device = _FakeDevice("fake_device")
 
     try:
         with (
@@ -248,8 +249,8 @@ def test_memory_fallback_skips_when_backend_lacks_memory_allocated():
                 side_effect=RuntimeError("not a DeviceAllocator"),
             ),
             patch(
-                "speculators.train.trainer.torch.npu",
-                stub_npu,
+                "speculators.train.trainer.torch.fake_device",
+                stub_backend,
                 create=True,
             ),
             patch("speculators.train.trainer.torch.accelerator.synchronize"),
@@ -261,7 +262,7 @@ def test_memory_fallback_skips_when_backend_lacks_memory_allocated():
             timer = _StepTimer(enabled=True)
             timer.mark("fwd")
     finally:
-        sys.modules.pop("torch.npu", None)
+        sys.modules.pop("torch.fake_device", None)
 
     assert "fwd" not in timer._memory
     profile = timer.profile(num_tokens=1024)
