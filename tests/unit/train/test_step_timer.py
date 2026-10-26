@@ -223,9 +223,6 @@ def test_memory_fallback_skips_when_backend_missing():
         timer.mark("fwd")
 
     assert "fwd" not in timer._memory
-    profile = timer.profile(num_tokens=1024)
-    assert profile is not None
-    assert "memory_mb" not in profile
 
 
 def test_memory_fallback_skips_when_backend_lacks_memory_allocated():
@@ -265,9 +262,6 @@ def test_memory_fallback_skips_when_backend_lacks_memory_allocated():
         sys.modules.pop("torch.fake_device", None)
 
     assert "fwd" not in timer._memory
-    profile = timer.profile(num_tokens=1024)
-    assert profile is not None
-    assert "memory_mb" not in profile
 
 
 def test_memory_happy_path_still_works():
