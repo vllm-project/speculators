@@ -135,11 +135,11 @@ CUDA_VISIBLE_DEVICES=2,3,4,5,6,7 python -m torch.distributed.run \
 | Speculator | `lilicorr` (DFlash backbone + candidate-lattice reranker), seed 42                                                                                                                                          |
 | Verifier   | Qwen3.8-27B (local path above)                                                                                                                                                                              |
 | Draft      | 5 layers, taps at verifier layers `[4, 12, 20, 28, 36, 44, 52, 60]`, mask_token_id 248077, `draft_attn_impl: sdpa`                                                                                          |
-| Data       | total_seq_len 8192, train_data_ratio 0.99, max_anchors 1024, num_workers 4                                                                                                                                  |
+| Data       | total_seq_len 6144, train_data_ratio 0.99, max_anchors 1024, num_workers 4                                                                                                                                  |
 | Generation | vLLM at `localhost:8000/v1`, `on_missing: generate`, timeout 300 s, 3 retries                                                                                                                               |
-| Loss       | `{"ce": 0.1, "tv": 0.9}`                                                                                                                                                                                    |
-| Optimizer  | Muon, **lr 1.0e-3**, weight_decay 0.0 (Muon defaults: momentum 0.95, ns_steps 5, muon_weight_decay 0.1 on 2D weights, `match_rms_adamw` LR adjust; non-2D params in the AdamW group, wd 0.0; grad clip 1.0) |
-| Scheduler  | cosine, warmup ratio 0.04                                                                                                                                                                                   |
+| Loss       | `ce` (matches the LiLiCorr paper's DFlash term; reranker CE/penalty weights stay at the code defaults 0.25/0.25, already matching the paper's gamma/lambda)                                                |
+| Optimizer  | AdamW, **lr 6.0e-4**, weight_decay 0.0, grad clip 1.0 (matches the LiLiCorr paper, Table 4)                                                                                                                |
+| Scheduler  | linear, warmup ratio 0.04 (matches the LiLiCorr paper)                                                                                                                                                      |
 | Trainer    | 2 epochs, checkpoint_freq 0.05, FSDP shard, gradient checkpointing, trackio logging                                                                                                                         |
 | DFlash     | block_size 16 (= 15 speculative tokens), sample_from_anchor false, per-position loss weight `fixed-exp-decay`, gamma 7.0, **loss_chunk_anchors 128**                                                        |
 

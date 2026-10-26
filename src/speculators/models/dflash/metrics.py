@@ -31,6 +31,7 @@ def compute_metrics(
     dpace_alpha: float = 0.5,
     sample_from_anchor: bool = False,
     denominator: torch.Tensor | None = None,
+    ce_target_ids: torch.Tensor | None = None,
 ) -> tuple[torch.Tensor, dict]:
     """Compute loss and accuracy metrics for draft model predictions.
 
@@ -48,6 +49,12 @@ def compute_metrics(
         denominator: Optional precomputed normalizer for the loss reduction;
             callers pooling several chunks of anchor blocks pass the *global*
             mask sum so per-chunk losses add up to the unchunked value.
+        ce_target_ids: Optional real observed token ids, shape [1, T], matching
+            ``targets``. When given, overrides the ``"ce"`` loss term's hard
+            label to be the real token instead of ``argmax(targets)`` (the
+            teacher's own top-1 prediction) -- matches NVIDIA ModelOpt's
+            default DFlash CE. Accuracy/EAL metrics are unaffected and still
+            compare against ``argmax(targets)``, as before.
 
     Returns:
         Tuple of (loss, metrics_dict) where metrics_dict contains:
@@ -83,6 +90,7 @@ def compute_metrics(
         loss_config=loss_config,
         decay_fn=decay_fn,
         denominator=denominator,
+        target_ids=ce_target_ids,
     )
 
     pred_ids = torch.argmax(logits, dim=-1)

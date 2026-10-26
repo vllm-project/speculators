@@ -230,6 +230,23 @@ def resolve_loss_config(spec: str, implementation: str = "fused") -> LossConfig:
     return config
 
 
+def _hard_label_targets(
+    targets: torch.Tensor, target_ids: torch.Tensor
+) -> torch.Tensor:
+    """Force each row's argmax to ``target_ids`` instead of the teacher's own.
+
+    ``ce_loss``/``fused_ce_loss`` both train against ``argmax(targets)`` and
+    never read any other entry of ``targets``, so boosting the ``target_ids``
+    entry of each row above every other logit reproduces training against
+    ``target_ids`` directly -- matching NVIDIA ModelOpt's default (non-KD)
+    DFlash CE, which uses the real observed token (``input_ids``) rather than
+    the teacher's top-1 prediction -- without a separate hard-label code path
+    through the (possibly fused Triton) loss functions.
+    """
+    boosted = targets.max(dim=-1, keepdim=True).values + 1.0
+    return targets.scatter(-1, target_ids.unsqueeze(-1), boosted)
+
+
 def compound_loss(
     logits: torch.Tensor,
     targets: torch.Tensor,
@@ -238,12 +255,19 @@ def compound_loss(
     loss_config: LossConfig,
     decay_fn: Callable[..., torch.Tensor] | None = None,
     denominator: torch.Tensor | None = None,
+    target_ids: torch.Tensor | None = None,
 ) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
     """Compute a weighted sum of loss terms.
 
     Each entry in *loss_config* maps a name to ``(loss_fn, weight)``; the
     result is ``sum(weight * loss_function(logits, targets, ..., loss_fn))``
     over all entries.
+
+    ``target_ids`` (shape matching ``targets``' batch/sequence dims), if
+    given, overrides only the ``"ce"`` term's hard label with the real
+    observed token instead of ``argmax(targets)``. The other terms (e.g.
+    ``kl_div``, ``tv``) are genuine teacher-distillation losses against the
+    full target distribution and are left untouched.
 
     Returns the total loss and a dict of per-term (unweighted) scalar losses
     keyed as ``"{name}_loss"``.  When the config contains a single term the
@@ -253,9 +277,14 @@ def compound_loss(
     term_losses: dict[str, torch.Tensor] = {}
     multi = len(loss_config) > 1
     for name, (fn, weight) in loss_config.items():
+        term_targets = (
+            _hard_label_targets(targets, target_ids)
+            if name == "ce" and target_ids is not None
+            else targets
+        )
         term = loss_function(
             logits,
-            targets,
+            term_targets,
             loss_mask,
             pos_idx,
             loss_fn=fn,
@@ -287,9 +316,10 @@ def loss_function(
         loss_fn: Per-position loss function (default: kl_div_loss).
         decay_fn: Optional position-dependent decay weighting function.
         denominator: Optional precomputed normalizer (``[1]``) to divide the
-            masked sum by, replacing ``loss_mask.sum()``. Callers that pool
-            several chunks of anchor blocks pass the *global* mask sum so the
-            chunk losses add up to the unchunked reduction.
+            masked (and decay-weighted, if ``decay_fn`` is given) sum by,
+            replacing the default below. Callers that pool several chunks of
+            anchor blocks pass the *global* weighted sum so the chunk losses
+            add up to the unchunked reduction.
 
     Returns:
         Scalar mean loss across the batch.
@@ -298,15 +328,20 @@ def loss_function(
 
     loss_mask = loss_mask.to(elementwise_loss.dtype)
     elementwise_loss = elementwise_loss * loss_mask
+    weight = loss_mask
 
     if decay_fn is not None:
         decay_mult = decay_fn(
             pos_idx.to(elementwise_loss.dtype), elementwise_loss=elementwise_loss
         )
         elementwise_loss = elementwise_loss * decay_mult
+        weight = weight * decay_mult
 
     if denominator is None:
-        denominator = loss_mask.sum(dim=1) + _LOSS_REDUCTION_EPS
+        # Normalize by the weighted mass actually summed in the numerator (matching
+        # NVIDIA ModelOpt's DFlash loss), not the raw count of valid positions --
+        # those differ whenever decay_fn down-weights some positions.
+        denominator = weight.sum(dim=1) + _LOSS_REDUCTION_EPS
 
     batch_loss = torch.sum(elementwise_loss, dim=1) / denominator  # shape: [1]
     return batch_loss.mean()  # shape: []

@@ -35,6 +35,20 @@ _ADAMW_NAME_HINTS = (
 # Muon only orthogonalizes 2D weight matrices.
 _MATRIX_NDIM = 2
 
+# Prefix of the LiLiCorr transformer head's parameters (``self.lilicorr`` on
+# LiLiCorrDraftModel), used to give the head its own learning rate separate
+# from the DFlash backbone.
+_LILICORR_HEAD_PREFIX = "lilicorr."
+
+
+def _split_by_prefix(
+    named_params: list[tuple[str, Tensor]], prefix: str
+) -> tuple[list[tuple[str, Tensor]], list[tuple[str, Tensor]]]:
+    """Split named params into (not matching prefix, matching prefix)."""
+    rest = [(n, p) for n, p in named_params if not n.startswith(prefix)]
+    matching = [(n, p) for n, p in named_params if n.startswith(prefix)]
+    return rest, matching
+
 
 def split_named_params_for_muon(
     model: Module,
@@ -74,28 +88,45 @@ def build_optimizers(model: Module, config) -> list[torch.optim.Optimizer]:
     :return: A list of optimizers for the trainer to step in tandem. The default
         "adamw" returns a single optimizer; "muon" returns ``[Muon, AdamW]``.
     """
+    # Falls back to config.lr when the model has no LiLiCorr head, or the head's LR
+    # was never overridden (lilicorr_lr defaults to lr in that case).
+    lilicorr_lr = config.lilicorr_lr if config.lilicorr_lr is not None else config.lr
+
     if config.optimizer == "adamw":
-        return [
-            torch.optim.AdamW(
-                model.named_parameters(),
-                lr=config.lr,
-                weight_decay=config.weight_decay,
+        backbone_params, head_params = _split_by_prefix(
+            list(model.named_parameters()), _LILICORR_HEAD_PREFIX
+        )
+        param_groups = [{"params": [p for _, p in backbone_params], "lr": config.lr}]
+        if head_params:
+            param_groups.append(
+                {"params": [p for _, p in head_params], "lr": lilicorr_lr}
             )
+        return [
+            torch.optim.AdamW(param_groups, weight_decay=config.weight_decay)
         ]
 
     if config.optimizer == "muon":
         muon_params, adamw_params = split_named_params_for_muon(model)
+        muon_backbone, muon_head = _split_by_prefix(
+            muon_params, _LILICORR_HEAD_PREFIX
+        )
+        adamw_backbone, adamw_head = _split_by_prefix(
+            adamw_params, _LILICORR_HEAD_PREFIX
+        )
         logger.info(
-            "Muon optimizer: %d 2D params via Muon, %d params via AdamW.",
+            "Muon optimizer: %d 2D params via Muon, %d params via AdamW "
+            "(%d LiLiCorr head params at lr=%g).",
             len(muon_params),
             len(adamw_params),
+            len(muon_head) + len(adamw_head),
+            lilicorr_lr,
         )
 
         optimizers: list[torch.optim.Optimizer] = []
-        if muon_params:
+        if muon_backbone:
             optimizers.append(
                 torch.optim.Muon(
-                    muon_params,
+                    muon_backbone,
                     lr=config.muon_lr,
                     momentum=config.muon_momentum,
                     weight_decay=config.muon_weight_decay,
@@ -103,11 +134,30 @@ def build_optimizers(model: Module, config) -> list[torch.optim.Optimizer]:
                     adjust_lr_fn=config.muon_adjust_lr_fn,
                 )
             )
-        if adamw_params:
+        if muon_head:
+            optimizers.append(
+                torch.optim.Muon(
+                    muon_head,
+                    lr=lilicorr_lr,
+                    momentum=config.muon_momentum,
+                    weight_decay=config.muon_weight_decay,
+                    ns_steps=config.muon_ns_steps,
+                    adjust_lr_fn=config.muon_adjust_lr_fn,
+                )
+            )
+        if adamw_backbone:
             optimizers.append(
                 torch.optim.AdamW(
-                    adamw_params,
+                    adamw_backbone,
                     lr=config.lr,
+                    weight_decay=config.weight_decay,
+                )
+            )
+        if adamw_head:
+            optimizers.append(
+                torch.optim.AdamW(
+                    adamw_head,
+                    lr=lilicorr_lr,
                     weight_decay=config.weight_decay,
                 )
             )
