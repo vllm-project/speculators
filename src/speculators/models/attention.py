@@ -10,6 +10,7 @@ from collections.abc import Callable
 from typing import cast
 
 import torch
+import torch.nn.attention.flex_attention as _flex_attention_mod
 from torch.nn.attention.flex_attention import (
     BlockMask,
     FlexKernelOptions,
@@ -22,8 +23,144 @@ from transformers.modeling_utils import AttentionInterface
 
 from speculators.models.utils import conditional_torch_compile
 
-# Compile flex attention on CUDA to avoid dense scores during checkpoint recompute.
-_compiled_flex_attention = conditional_torch_compile(flex_attention)
+
+# On NPU, force single-threaded inductor compilation so that monkey-patches
+# applied below are visible to the compiler (subprocess workers would not
+# inherit them).
+if os.environ.get("TORCHINDUCTOR_COMPILE_THREADS", "0") != "1":
+    try:
+        import torch_npu  # noqa: F401, PLC0415
+        if torch.npu.is_available():
+            os.environ["TORCHINDUCTOR_COMPILE_THREADS"] = "1"
+    except ImportError:
+        pass
+
+
+# --- NPU flex_attention support -------------------------------------------------
+# flex_attention is a HigherOrderOperator: it must be called inside a
+# torch.compile graph so that dynamo traces it and inductor lowers it to a
+# Triton kernel (via triton-ascend on Ascend NPU).  Without compilation the
+# HOP has no registered kernel for the NPU dispatch key and raises
+# NotImplementedError.
+#
+# Additionally, PyTorch's _validate_device hard-codes a device allowlist that
+# does not include "npu", so we monkey-patch it before any call.
+#
+# torch_npu._inductor registers fallback lowerings for *all* HigherOrderOperator
+# ops, including flex_attention.  The fallback handler does not understand
+# Subgraph arguments and crashes with "AttributeError: 'Subgraph' object has no
+# attribute 'dtype'".  We work around this by saving the upstream lowering
+# before importing torch_npu._inductor and restoring it afterward.
+#
+# Two more upstream hard-codings must be patched:
+#   1. flex_decoding.get_split_k calls torch.cuda.get_device_properties()
+#   2. NPUTritonScheduling.define_kernel expects an extra traced_graph_hash arg
+
+def _npu_available() -> bool:
+    """Return True when torch_npu is importable and an NPU device exists."""
+    try:
+        import torch_npu  # noqa: F401, PLC0415
+    except ImportError:
+        return False
+    return bool(torch.npu.is_available())
+
+
+def _patch_flex_attention_device_check() -> None:
+    """Allow flex_attention on NPU by extending the device allowlist."""
+    original = _flex_attention_mod._validate_device
+
+    def _patched_validate_device(query, key, value):  # noqa: ANN001
+        if query.device.type == "npu":
+            return
+        return original(query, key, value)
+
+    _flex_attention_mod._validate_device = _patched_validate_device
+
+
+_patch_flex_attention_device_check()
+
+
+def _setup_npu_flex_attention() -> None:
+    """Apply all monkey-patches needed for flex_attention on Ascend NPU."""
+    import torch_npu  # noqa: F401, PLC0415
+
+    # 1. Save upstream flex_attention lowerings before torch_npu._inductor
+    #    replaces them with crash-prone fallbacks.
+    from torch._inductor.lowering import lowerings, needs_realized_inputs
+
+    flex_op = torch.ops.higher_order.flex_attention
+    flex_bwd_op = torch.ops.higher_order.flex_attention_backward
+    orig_flex_fwd = lowerings.get(flex_op)
+    orig_flex_bwd = lowerings.get(flex_bwd_op)
+
+    # 2. Import torch_npu._inductor — applies triton-ascend patches that make
+    #    inductor recognise NPU as a triton backend.
+    import torch_npu._inductor  # noqa: F401, PLC0415
+
+    # 3. Restore the upstream flex_attention lowerings.
+    lowerings[flex_op] = orig_flex_fwd
+    lowerings[flex_bwd_op] = orig_flex_bwd
+    needs_realized_inputs.discard(flex_op)
+    needs_realized_inputs.discard(flex_bwd_op)
+
+    # 4. Patch flex_decoding.get_split_k — upstream hard-codes
+    #    torch.cuda.get_device_properties() to obtain SM count.
+    import torch._inductor.kernel.flex.flex_decoding as _flex_decoding_mod
+
+    def _patched_get_split_k(B, H, Mk):  # noqa: ANN001, N803, ARG001
+        if torch.npu.is_available():
+            num_SM = torch.npu.get_device_properties("npu").multi_processor_count
+        elif torch.xpu.is_available():
+            num_SM = torch.xpu.get_device_properties("xpu").gpu_subslice_count
+        else:
+            num_SM = torch.cuda.get_device_properties("cuda").multi_processor_count
+        bh = max(B * H, 1)
+        split_k = num_SM // bh * 2
+        return max(split_k, 1)
+
+    _flex_decoding_mod.get_split_k = _patched_get_split_k
+
+    # 5. Patch NPUTritonScheduling.define_kernel — the NPU version has two
+    #    incompatibilities with upstream inductor:
+    #    (a) it expects an extra ``traced_graph_hash`` argument
+    #    (b) it returns ``(kernel_name, src_code)`` instead of just ``kernel_name``
+    #    NPU's own codegen_node_schedule passes traced_graph_hash and expects
+    #    a tuple; upstream callers pass 3 args and expect a string.  A sentinel
+    #    default distinguishes the two callers.
+    from torch_npu._inductor.codegen.scheduling import NPUTritonScheduling
+
+    _orig_define_kernel = NPUTritonScheduling.define_kernel
+
+    _sentinel = object()
+
+    def _patched_define_kernel(self, src_code, node_schedule, kernel, traced_graph_hash=_sentinel):  # noqa: ANN001
+        if traced_graph_hash is _sentinel:
+            # Upstream caller — pass empty string, return only kernel_name
+            result = _orig_define_kernel(self, src_code, node_schedule, kernel, "")
+            if isinstance(result, tuple):
+                return result[0]
+            return result
+        # NPU caller — pass through, return tuple as expected
+        return _orig_define_kernel(self, src_code, node_schedule, kernel, traced_graph_hash)
+
+    NPUTritonScheduling.define_kernel = _patched_define_kernel
+
+
+if _npu_available():
+    _setup_npu_flex_attention()
+
+
+def _compile_flex_attention():
+    """Compile flex_attention on CUDA and NPU; leave uncompiled elsewhere."""
+    if not hasattr(torch, "compile"):
+        return flex_attention
+    if torch.cuda.is_available() or _npu_available():
+        return torch.compile(flex_attention)
+    return flex_attention
+
+
+# Compile flex_attention on CUDA/NPU to generate fused Triton kernels.
+_compiled_flex_attention = _compile_flex_attention()
 
 # ~99 KB per block on sm_120 (RTX PRO 6000 / RTX 5090) and sm_89 (L40S / 4090);
 # inductor's default flex backward tiles for head_dim > 128 need ~112 KB.
@@ -108,16 +245,33 @@ def flex_attention_forward(
     key = key.contiguous()
     value = value.contiguous()
 
-    flex_attention_output = _compiled_flex_attention(
-        query,
-        key,
-        value,
-        score_mod=None,
-        block_mask=attention_mask,
-        enable_gqa=enable_gqa,
-        scale=scaling,
-        kernel_options=flex_kernel_options(query.device, query.shape[-1]),
-    )
+    _flex_opts = flex_kernel_options(query.device, query.shape[-1])
+    try:
+        flex_attention_output = _compiled_flex_attention(
+            query,
+            key,
+            value,
+            score_mod=None,
+            block_mask=attention_mask,
+            enable_gqa=enable_gqa,
+            scale=scaling,
+            kernel_options=_flex_opts,
+        )
+    except NotImplementedError:
+        # On NPU, gradient checkpointing disables dynamo via
+        # @torch._disable_dynamo on torch.utils.checkpoint.checkpoint.
+        # When dynamo is disabled, torch.compile(flex_attention) cannot
+        # trace the HOP, so it falls through to the eager flex_attention_hop
+        # which has no registered kernel on NPU.  Fall back to SDPA which
+        # is mathematically equivalent for causal/block-sparse masks.
+        flex_attention_output = torch.nn.functional.scaled_dot_product_attention(
+            query,
+            key,
+            value,
+            is_causal=True,
+            enable_gqa=enable_gqa,
+            scale=scaling,
+        )
     attention_output: torch.Tensor = flex_attention_output
     attention_output = attention_output.transpose(1, 2).contiguous()
     return attention_output, None

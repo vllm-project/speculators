@@ -30,9 +30,7 @@ from speculators.models.utils import (
 
 logger = logging.getLogger(__name__)
 
-# Compile so the mask builds block-sparse instead of materializing DFlash's huge
-# dense [Q, KV] grid every step. (No benefit for EAGLE3's small autoregressive mask.)
-_compiled_create_block_mask = torch.compile(create_block_mask)
+_compiled_create_block_mask = conditional_torch_compile(create_block_mask)
 
 
 @SpeculatorModel.register("dflash")
@@ -75,9 +73,14 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
     ) -> None:
         # Forcibly override config settings
         if config.transformer_layer_config._attn_implementation is None:  # noqa: SLF001
-            config.transformer_layer_config._attn_implementation = (  # noqa: SLF001
-                "simple_flex_attention"
-            )
+            # flex_attention requires torch.compile on CUDA; on non-CUDA devices
+            # (e.g., Ascend NPU) fall back to eager attention
+            if torch.cuda.is_available():
+                config.transformer_layer_config._attn_implementation = (  # noqa: SLF001
+                    "simple_flex_attention"
+                )
+            else:
+                config.transformer_layer_config._attn_implementation = "eager"  # noqa: SLF001
         self._attn_impl = config.transformer_layer_config._attn_implementation  # noqa: SLF001
         self._create_mask_fn = (
             _compiled_create_block_mask
