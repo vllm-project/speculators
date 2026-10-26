@@ -95,7 +95,7 @@ torchrun --standalone --nproc_per_node=4 -m speculators.train \
 
 - **`--mask-token-id`** (int, default: auto-detect) Token ID to use as mask token (for DFlash). Auto-detected if not provided.
 
-- **`--target-layer-ids`** (int list, default: auto-select) Space-separated list of layer IDs for the auxiliary hidden states. Default: `[2, num_layers//2, num_layers-3]` **If custom layers were specified when launching vLLM, pass the same ids here.** Training splits the captured entries into the draft's `fc` inputs and the verifier's final hidden state: the trailing entry is split off when the capture list ends below `num_hidden_layers`, so **omit** the final layer that `--include-last-layer` appended — that one reaches training separately as the verifier's last hidden states. When the list already ends at `num_hidden_layers`, pass the whole list instead: that entry feeds `fc` as well as the verifier head.
+- **`--target-layer-ids`** (int list, default: auto-select) Space-separated list of layer IDs for the auxiliary hidden states. Default: `[2, num_layers//2, num_layers-3]` **If custom layers were specified when launching vLLM, pass the same ids here.**
 
 ### Distributed Training Arguments
 
