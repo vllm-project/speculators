@@ -11,9 +11,12 @@ pre-commit install
 Fill in the PR template's **Purpose** and **Tests** sections (see [PULL_REQUEST_TEMPLATE.md](./.github/PULL_REQUEST_TEMPLATE.md)). A reviewer should get the point in under 30 seconds:
 
 - **Purpose**: 1–3 sentences or a few bullets on *why*, plus the issue link if available. Not a restatement of the diff.
-- **Tests**: the command you ran and its real output. Never paste results you did not produce or numbers you did not measure.
+- **Tests**: the command a reviewer can run, and whether it passed. Do not paste the output — CI prints it, and a wall of captured log pushes the point of the PR off the screen. Never claim a run you did not do, or numbers you did not measure.
+- Keep the description proportional to the diff. A few changed lines do not need a paragraph each; if the description is longer than what it describes, cut it.
 - Do not state unverified hypotheses as facts.
+- In a stacked PR, do not restate where it sits in the stack ("first of N", "stacked on #1234", "top of the stack") or list the other PRs. GitHub renders the stack already. Reference another PR only for something the stack view does not carry, such as which commit a measurement was taken against.
 - No emoji headings, no "comprehensive"/"robust"/"production-ready", no per-file summary tables.
+- Do not hard-wrap the description at a fixed column. GitHub reflows it, so manual line breaks only make the diff of a later edit noisy.
 - Leave the "I (a human) have written or reviewed the code" checkbox unchecked.
 
 ## Provenance
