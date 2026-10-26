@@ -359,6 +359,35 @@ def test_selector_training_candidates_keep_strict_top_k_and_inject_missing_targe
     torch.testing.assert_close(strict_candidate_ids, original_candidate_ids)
 
 
+def test_selector_training_candidates_strict_policy_never_modifies_candidates():
+    """Under miss_policy='strict' the top-K set is never touched, even on a miss."""
+    unary_logits = torch.tensor(
+        [[[0.0, 1.0, 2.0, 3.0, 4.0, 5.0], [0.0, 1.0, 2.0, 3.0, 4.0, 5.0]]]
+    )
+    candidate_ids = unary_logits.topk(3, dim=-1).indices
+    original_candidate_ids = candidate_ids.clone()
+    target_ids = torch.tensor([[4, 0]])  # position 0 hits top-k; position 1 misses
+
+    training_candidate_ids, target_positions, contains_target = (
+        selector_training_candidates(candidate_ids, target_ids, miss_policy="strict")
+    )
+
+    torch.testing.assert_close(training_candidate_ids, original_candidate_ids)
+    torch.testing.assert_close(candidate_ids, original_candidate_ids)
+    assert contains_target.tolist() == [[True, False]]
+    # The miss position gets a dummy label (position 0); compute_selector_loss
+    # is responsible for excluding it from the selector CE via contains_target.
+    assert target_positions.tolist() == [[1, 0]]
+
+
+def test_selector_training_candidates_rejects_unknown_miss_policy():
+    candidate_ids = torch.tensor([[[0, 1, 2]]])
+    target_ids = torch.tensor([[1]])
+
+    with pytest.raises(ValueError, match="Unknown selector miss policy"):
+        selector_training_candidates(candidate_ids, target_ids, miss_policy="bogus")
+
+
 def _selector_objective_inputs():
     torch.manual_seed(7)
     selector = CandidateSelector(
@@ -492,6 +521,72 @@ def test_selector_loss_reaches_every_selector_parameter():
         assert torch.count_nonzero(parameter.grad), f"zero gradient for {name}"
 
 
+def test_compute_selector_loss_masks_excluded_positions_and_their_gradients():
+    """selector_valid_mask=False positions contribute zero loss and zero grad."""
+    torch.manual_seed(0)
+    block_size = 4
+    top_k = 3
+    candidate_logits = torch.randn(1, block_size, top_k, requires_grad=True)
+    target_positions = torch.tensor([[0, 1, 2, 0]])
+    loss_mask = torch.tensor([[1.0, 1.0, 1.0, 1.0]])
+    # Exclude position 1 (nonzero decay weight) from the selector loss while
+    # keeping position 2 (also nonzero decay weight) included.
+    selector_valid_mask = torch.tensor([[True, False, True, True]])
+
+    loss = compute_selector_loss(
+        candidate_logits,
+        target_positions,
+        loss_mask,
+        block_size,
+        gamma=4.0,
+        per_position_loss_weight="fixed-exp-decay",
+        dpace_alpha=0.5,
+        selector_valid_mask=selector_valid_mask,
+    )
+    loss.backward()
+
+    assert candidate_logits.grad is not None
+    torch.testing.assert_close(candidate_logits.grad[0, 1], torch.zeros(top_k))
+    assert torch.count_nonzero(candidate_logits.grad[0, 2])
+
+
+def test_compute_metrics_rejects_unknown_selector_miss_policy():
+    (
+        selector,
+        unary_logits,
+        hidden_states,
+        predecessor_ids,
+        target_ids,
+        targets,
+        loss_mask,
+    ) = _selector_objective_inputs()
+    loss_config = resolve_loss_config("ce", "eager")
+    tv_loss_fn = resolve_loss_config("tv", "eager")["tv"][0]
+    candidate_ids = unary_logits.topk(selector.top_k, dim=-1).indices
+    training_candidate_ids, target_positions, contains_target = (
+        selector_training_candidates(candidate_ids, target_ids)
+    )
+    candidate_logits = selector.score_candidates(
+        unary_logits, hidden_states, predecessor_ids, training_candidate_ids
+    )
+
+    with pytest.raises(ValueError, match="Unknown selector miss policy"):
+        compute_dflash2_metrics(
+            unary_logits=unary_logits,
+            targets=targets,
+            training_candidate_ids=training_candidate_ids,
+            candidate_logits=candidate_logits,
+            target_positions=target_positions,
+            contains_target=contains_target,
+            loss_mask=loss_mask,
+            block_size=4,
+            top_k=selector.top_k,
+            loss_config=loss_config,
+            tv_loss_fn=tv_loss_fn,
+            selector_miss_policy="bogus",
+        )
+
+
 def test_trainer_kwargs_include_selector_loss_alpha():
     train_kwargs, val_kwargs = DFlash2DraftModel.get_trainer_kwargs(
         loss_fn="ce",
@@ -501,6 +596,27 @@ def test_trainer_kwargs_include_selector_loss_alpha():
 
     assert train_kwargs["selector_loss_alpha"] == pytest.approx(0.25)
     assert val_kwargs["selector_loss_alpha"] == pytest.approx(0.25)
+
+
+def test_trainer_kwargs_selector_miss_policy_defaults_to_replace():
+    train_kwargs, val_kwargs = DFlash2DraftModel.get_trainer_kwargs(
+        loss_fn="ce",
+        loss_implementation="eager",
+    )
+
+    assert train_kwargs["selector_miss_policy"] == "replace"
+    assert val_kwargs["selector_miss_policy"] == "replace"
+
+
+def test_trainer_kwargs_include_selector_miss_policy():
+    train_kwargs, val_kwargs = DFlash2DraftModel.get_trainer_kwargs(
+        loss_fn="ce",
+        loss_implementation="eager",
+        selector_miss_policy="strict",
+    )
+
+    assert train_kwargs["selector_miss_policy"] == "strict"
+    assert val_kwargs["selector_miss_policy"] == "strict"
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA is required")

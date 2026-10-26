@@ -27,9 +27,9 @@ Inference starts with the anchor token and then conditions each position on the 
 The public DFlash2 implementation specifies inference but does not publish its training objective. The current Speculators implementation is therefore an experimental split objective:
 
 1. The configured DFlash-family compound loss trains the unary logits.
-2. A separate hard cross-entropy term trains the selector over the unary top-K candidates while teacher-forcing the previous sequence token. If the target is outside that set, training replaces the weakest unary candidate with the target so the K-way loss remains defined. Validation loss uses the same replacement; serving and strict validation candidate/path metrics do not.
+2. A separate hard cross-entropy term trains the selector over the unary top-K candidates while teacher-forcing the previous sequence token. When the target is outside that set, `--selector-miss-policy` controls how the miss is handled: `replace` (default) swaps the weakest unary candidate for the target so the K-way loss remains defined at every position; `strict` leaves the top-K candidates untouched and excludes that position from the selector CE instead, so the selector is only ever trained on candidate sets it can actually see at serving time. The unary loss term is unaffected by this choice. Validation loss uses the same policy; serving and strict validation candidate/path metrics do not.
 
-`--selector-loss-alpha` controls the second term. Both terms use the configured fixed exponential or D-PACE position weighting. The selector is never trained against a full-vocabulary corrected distribution, matching the candidate set it can rerank at serving time.
+`--selector-loss-alpha` controls the weight of the second term. Both terms use the configured fixed exponential or D-PACE position weighting. The selector is never trained against a full-vocabulary corrected distribution, matching the candidate set it can rerank at serving time.
 
 Validation reports clearly separated unary candidate recall and target mass, teacher-forced selector accuracy, and an actual greedy self-conditioned path. The path begins at the verified anchor and feeds each selected token to the next edge score. Its per-position accuracy is conditioned on the earlier path being correct. The accepted-length metrics include the verified anchor and report both the realized selector path and the oracle unary-top-K path.
 
@@ -39,13 +39,14 @@ This experimental implementation directly trains full-vocabulary predecessor and
 
 ## Key Parameters
 
-| Parameter               | Default | Description                              |
-| ----------------------- | ------: | ---------------------------------------- |
-| `--conv-kernel-size`    |       2 | Number of causal convolution taps        |
-| `--conv-group-size`     |      16 | Hidden channels sharing a dynamic kernel |
-| `--selector-rank`       |     256 | Rank of the transition factorization     |
-| `--selector-top-k`      |      16 | Unary candidates reranked per position   |
-| `--selector-loss-alpha` |     1.0 | Weight of the selector K-way CE term     |
+| Parameter                |   Default | Description                               |
+| ------------------------ | --------: | ----------------------------------------- |
+| `--conv-kernel-size`     |         2 | Number of causal convolution taps         |
+| `--conv-group-size`      |        16 | Hidden channels sharing a dynamic kernel  |
+| `--selector-rank`        |       256 | Rank of the transition factorization      |
+| `--selector-top-k`       |        16 | Unary candidates reranked per position    |
+| `--selector-loss-alpha`  |       1.0 | Weight of the selector K-way CE term      |
+| `--selector-miss-policy` | `replace` | Gold-miss handling: `replace` or `strict` |
 
 All [DFlash](dflash.md) backbone parameters also apply. DFlash2 defaults to five draft layers, block size 8, `sample_from_anchor: False`, fixed exponential position weighting, and KL divergence loss. Set all shared knobs explicitly when comparing it with another algorithm.
 

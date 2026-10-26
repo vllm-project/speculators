@@ -73,6 +73,7 @@ def test_flatten_resolves_dflash2_derived_defaults():
     assert flat["selector_rank"] == 256
     assert flat["selector_top_k"] == 16
     assert flat["selector_loss_alpha"] == pytest.approx(1.0)
+    assert flat["selector_miss_policy"] == "replace"
     assert flat["sliding_window_non_causal"] is True
 
 
@@ -113,6 +114,7 @@ def test_dflash2_explicit_values_override_defaults():
             selector_rank=128,
             selector_top_k=32,
             selector_loss_alpha=0.25,
+            selector_miss_policy="strict",
         ),
     )
     flat = cfg.flatten()
@@ -125,6 +127,7 @@ def test_dflash2_explicit_values_override_defaults():
     assert flat["selector_rank"] == 128
     assert flat["selector_top_k"] == 32
     assert flat["selector_loss_alpha"] == pytest.approx(0.25)
+    assert flat["selector_miss_policy"] == "strict"
 
 
 def test_from_flat_inverts_flatten():
