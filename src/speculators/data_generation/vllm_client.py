@@ -133,11 +133,15 @@ class ClientItem(TypedDict):
 def has_multimodal_content(messages: list[dict]) -> bool:
     """True when any turn carries non-text content (images, video, audio).
 
-    Text-only turns store ``content`` as a plain string.  Multimodal turns
-    (produced by ``_adapt_conv_for_vllm``) store it as a list of typed parts,
-    e.g. ``[{"type": "text", ...}, {"type": "image_url", ...}]``.
+    Turns store ``content`` as a plain string or, after ``_adapt_conv_for_vllm``,
+    as a list of typed parts, e.g. ``[{"type": "text", ...}, {"type": "image_url",
+    ...}]``. Only a part whose type is not ``text`` makes the turn multimodal.
     """
-    return any(isinstance(m.get("content"), list) for m in messages)
+    return any(
+        isinstance(m.get("content"), list)
+        and any(part.get("type") != "text" for part in m["content"])
+        for m in messages
+    )
 
 
 async def _poll_lock_async(fd, poll_interval):

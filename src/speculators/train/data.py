@@ -80,8 +80,10 @@ def build_client_item(dataset_item: dict) -> ClientItem:
     """
     out_dict: dict = {"input_ids": dataset_item["input_ids"].tolist()}
 
-    if "messages" in dataset_item and has_multimodal_content(dataset_item["messages"]):
-        out_dict["messages"] = dataset_item["messages"]
+    # A text-only source concatenated with a multimodal one has None messages.
+    messages = dataset_item.get("messages")
+    if messages is not None and has_multimodal_content(messages):
+        out_dict["messages"] = messages
 
     return cast("ClientItem", out_dict)
 

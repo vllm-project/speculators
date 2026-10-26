@@ -13,7 +13,7 @@ from typing import cast
 import pytest
 import torch
 from datasets import Dataset as HFDataset
-from datasets import load_from_disk
+from datasets import concatenate_datasets, load_from_disk
 from transformers import ProcessorMixin
 
 from speculators.data_generation import preprocessing, render_client
@@ -385,3 +385,34 @@ def test_processor_multimodal_rows_keep_messages(monkeypatch):
     user_parts = dataset[0]["messages"][0]["content"]
     assert user_parts[0]["image_url"] == {"url": "http://x/a.png"}
     assert build_client_item(dataset[0])["messages"] == dataset[0]["messages"]
+
+
+def test_processor_text_part_lists_do_not_store_messages(monkeypatch):
+    # Content given as a list of text parts carries no media either.
+    conv = [
+        {"role": "user", "content": [{"type": "text", "text": "hi"}]},
+        {"role": "assistant", "content": [{"type": "text", "text": "hello"}]},
+    ]
+    dataset = _build_with_processor(monkeypatch, [conv])
+    assert "messages" not in dataset.column_names
+
+
+def test_mixed_text_and_multimodal_sources_build_client_items(monkeypatch):
+    # Concatenating a text-only source with a multimodal one fills the
+    # text-only rows' `messages` with None; those rows must still send ids.
+    image = {"type": "image", "url": "http://x/a.png", "text": None}
+    text = {"type": "text", "url": None, "text": "what is this?"}
+    conv = [
+        {"role": "user", "content": [image, text]},
+        {"role": "assistant", "content": [{**text, "text": "a cat"}]},
+    ]
+    dataset = concatenate_datasets(
+        [
+            _build_with_processor(monkeypatch, [_conv(2)]),
+            _build_with_processor(monkeypatch, [conv]),
+        ]
+    )
+    dataset.set_format(type="torch")
+    text_item, mm_item = (build_client_item(dataset[i]) for i in range(2))
+    assert "messages" not in text_item
+    assert mm_item["messages"] == dataset[1]["messages"]
