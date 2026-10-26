@@ -1,128 +1,73 @@
 #!/usr/bin/env python3
-"""Unified evaluation CLI for speculative decoding benchmarking.
-
-Modes:
-    throughput   Max throughput run for acceptance rates
-    sweep        Full pipeline (gen-len, sweep, CSV)
-
-Examples:
-    python evaluate.py --target http://localhost:8000/v1 throughput
-    python evaluate.py --target http://localhost:8000/v1 sweep
-    python evaluate.py --target http://localhost:8000/v1 sweep \\
-        --subsets "HumanEval,qa" --gen-kwargs '{"temperature":0.6}'
-
-    # SPEED-Bench (run prepare_speedbench.py once first to split data):
-    python evaluate.py --target http://localhost:8000/v1 throughput \\
-        --dataset speedbench/qualitative \\
-        --speedbench-data-dir ./speedbench_data
-    python evaluate.py --target http://localhost:8000/v1 throughput \\
-        --dataset speedbench/qualitative/coding \\
-        --speedbench-data-dir ./speedbench_data
-
-    # MRCR long-context (first run renders and caches data in ./mrcr_data):
-    python evaluate.py --target http://localhost:8000/v1 throughput \\
-        --dataset openai/mrcr --mrcr-needles 2 --mrcr-buckets 1,2
-"""
+"""Run simple AIPerf presets or summarize saved acceptance records."""
 
 from __future__ import annotations
 
 import argparse
+import csv
 import json
 import logging
 import shlex
+import subprocess
 import sys
+from bisect import bisect_left
+from collections import Counter, defaultdict
 from datetime import UTC, datetime
 from pathlib import Path
-from urllib.error import URLError
-from urllib.request import urlopen
 
-from mrcr import (
-    BUCKETS,
-    MRCR_DATASET,
-    parse_buckets,
-    parse_needles,
-    prepare_mrcr,
-)
-from perf_utils import (
-    BASE_CSV_COLUMNS,
-    CsvWriter,
-    acceptance_csv_columns,
-    check_dependencies,
-    extract_spec_decode_metrics,
-    fetch_metrics,
-    parse_gen_kwargs,
-    parse_gen_len_results,
-    parse_prometheus_metrics,
-    parse_sweep_results,
-    print_acceptance_report,
-    run_guidellm,
-)
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from speculators.provenance import (
+from _provenance import (
     atomic_write,
-    find_package_repo,
     git_sha,
     package_versions,
 )
+from eval_datasets.speedbench import speedbench_args
 
 logger = logging.getLogger("evaluate")
 
-DEFAULT_DATASET = "RedHatAI/speculator_benchmarks"
-DEFAULT_SUBSETS = (
-    "HumanEval,math_reasoning,qa,question,rag,"
-    "summarization,tool_call,translation,writing"
-)
-DEFAULT_MAX_CONCURRENCY = 128
-DEFAULT_MAX_REQUESTS = 200
-DEFAULT_GEN_LEN_RATE = 128
-DEFAULT_SWEEP_RATE = 10
-DEFAULT_DATA_COLUMN_MAPPER = (
-    "kind=generative_column_mapper,column_mappings.text_column=prompt"
-)
+PROMPT_TOKEN_BOUNDS = (8192, 16384, 32768, 65536, 131072, 262144, 524288, 1048576)
 
-# ---------------------------------------------------------------------------
-# SPEED-Bench constants
-# ---------------------------------------------------------------------------
+ALIASES = {
+    name: f"spec_al_{name}"
+    for name in ("gsm8k", "math500", "humaneval", "mbpp", "mtbench")
+}
+ALIASES["qualitative"] = "speed_bench_qualitative"
 
-_SPEEDBENCH_COLUMN_MAPPER = (
-    "kind=generative_column_mapper,column_mappings.text_column=turns"
-)
-
-
-def _fetch_model_name(target: str) -> str | None:
-    base = target.rstrip("/")
-    if not base.endswith("/v1"):
-        base += "/v1"
-    url = f"{base}/models"
-    try:
-        with urlopen(url, timeout=10) as resp:  # noqa: S310
-            data = json.loads(resp.read())
-        models = data.get("data", [])
-        if models:
-            return models[0].get("id")
-    except (URLError, json.JSONDecodeError, OSError) as e:
-        logger.warning("Could not fetch model name from %s: %s", url, e)
-    return None
-
-
-def _sanitize_dir_name(name: str) -> str:
-    return name.replace("/", "_").replace(" ", "_")
+COMMON_DEFAULTS: dict[str, str | None] = {
+    "--endpoint-type": "chat",
+    "--dataset-sampling-strategy": "sequential",
+    "--use-server-token-count": None,
+    "--export-level": "raw",
+    "--extra-inputs": (
+        '{"temperature":1,"chat_template_kwargs":{"enable_thinking":true},'
+        '"max_completion_tokens":32768}'
+    ),
+}
+MODE_DEFAULTS: dict[str, dict[str, str | None]] = {
+    "acceptance": {"--concurrency": "64", "--request-timeout-seconds": "900"},
+    "speedup": {
+        "--streaming": None,
+        "--auto-plot": None,
+        "--concurrency": "1,4,8,16,32,64,128",
+        "--num-profile-runs": "3",
+        "--no-profile-run-disable-warmup-after-first": None,
+        "--warmup-duration": "30",
+        "--benchmark-duration": "100",
+        "--benchmark-grace-period": "0",
+    },
+}
 
 
 def save_eval_provenance(output_dir: Path) -> None:
-    """Write ``eval_command.txt`` into *output_dir*.
-
-    Records the full command line, timestamp, and package versions so the
-    eval can be reproduced.  Best-effort — never blocks the eval on failure.
-    """
+    """Write the invocation, source revision, and package versions."""
     try:
-        sha = git_sha(find_package_repo("speculators"))
-        versions = package_versions()
+        sha = git_sha(Path(__file__).resolve().parents[2])
         header = "\n".join(
             [
                 f"# Timestamp: {datetime.now(UTC).isoformat()}",
                 f"# Git SHA: {sha}",
-                *versions,
+                *package_versions(),
             ]
         )
         atomic_write(
@@ -133,474 +78,205 @@ def save_eval_provenance(output_dir: Path) -> None:
         logger.warning("Failed to save eval_command.txt", exc_info=True)
 
 
-def _require_metrics(metrics_url: str) -> list:
-    text = fetch_metrics(metrics_url)
-    if text is None:
-        logger.error("Failed to fetch metrics from %s", metrics_url)
-        sys.exit(1)
-    return parse_prometheus_metrics(text)
+def acceptance_row(metrics: list[dict | None]) -> dict:
+    """Use pooled histograms for acceptance length and per-position rates."""
+    histogram: Counter[int] = Counter()
+    drafts = positions = 0
+    for spec in metrics:
+        if not spec:
+            continue
+        histogram.update({int(k): n for k, n in spec["acceptance_histogram"].items()})
+        drafts += spec["num_draft_tokens"]
+        positions = max(positions, spec.get("num_spec_tokens") or 0)
+    steps = sum(histogram.values())
+    accepted = sum(k * count for k, count in histogram.items())
 
-
-def _resolve_speedbench(
-    spec: str,
-    data_dir: Path,
-) -> list[tuple[str, Path]]:
-    """Resolve a ``speedbench/<config>[/<category>[/<subcategory>]]`` spec.
-
-    Returns ``(label, path)`` pairs for pre-split JSONL files produced by
-    ``scripts/evaluate/prepare_speedbench.py``.  Run that script once after
-    NVIDIA's ``prepare.py`` to create per-category/subcategory files.
-    """
-    parts = spec.removeprefix("speedbench/").split("/")
-    config = parts[0]
-    rest = parts[1:]
-    # Build glob pattern matching prepare_speedbench.py's naming convention:
-    #   qualitative/coding          → qualitative_coding*.jsonl
-    #   throughput_1k/high_entropy  → throughput_1k_high_entropy_*.jsonl
-    #   throughput_1k/high_entropy/code_completion
-    #                               → throughput_1k_high_entropy__code_completion*.jsonl
-    # Entropy level and subcategory are separated by "__" in the filename.
-    if not rest:
-        suffix = ""
-    elif len(rest) == 1:
-        suffix = rest[0]
-    else:
-        suffix = rest[0] + "__" + "_".join(rest[1:])
-    pattern = f"{config}_{suffix}*.jsonl" if suffix else f"{config}_*.jsonl"
-
-    files = sorted(data_dir.glob(pattern))
-    if not files:
-        logger.error(
-            "--speedbench-data-dir='%s': no files matching '%s'.\n"
-            "Run scripts/evaluate/prepare_speedbench.py first.",
-            data_dir,
-            pattern,
-        )
-        sys.exit(1)
-
-    results = []
-    for path in files:
-        # Derive label: qualitative_coding → speedbench/qualitative/coding
-        stem = path.stem.removeprefix(f"{config}_")
-        label = f"speedbench/{config}/{stem.replace('__', '/')}"
-        results.append((label, path))
-        logger.info("  %s: %s", label, path.name)
-
-    return results
-
-
-def _validate_throughput_results(run_output: Path, subset: str) -> None:
-    """Require a readable throughput report with successful requests."""
-    try:
-        with run_output.open() as stream:
-            benchmarks = json.load(stream)["benchmarks"]
-
-        successful = sum(
-            benchmark["metrics"]["request_totals"]["successful"]
-            for benchmark in benchmarks
-        )
-        if successful <= 0:
-            raise ValueError("No successful throughput requests")
-    except (OSError, ValueError, KeyError, TypeError) as exc:
-        logger.error("[%s] Invalid throughput results: %s", subset, exc)
-        sys.exit(1)
-
-
-def _run_subset(
-    subset: str,
-    args: argparse.Namespace,
-    *,
-    is_sweep: bool,
-    metrics_url: str,
-    artifacts_dir: Path,
-    output_dir: Path,
-    guidellm_common: dict,
-    acceptance_csv: CsvWriter | None,
-    perf_csv: CsvWriter | None,
-) -> tuple[CsvWriter | None, CsvWriter | None, int | None]:
-    """Run benchmark for one subset.
-
-    *subset* is the human-readable label used for output file names and the
-    acceptance CSV.  When ``guidellm_common["dataset"]`` is a local file path
-    the ``--data-args`` flag is suppressed automatically; when it is an HF
-    dataset ID *subset* is also passed as the data-args filter so guidellm
-    loads just that split.
-    """
-
-    logger.info("[%s] Starting", subset)
-    safe = subset.replace("/", "_").replace(" ", "_")
-    max_tokens = 4096
-
-    # Dataset-provided request-body defaults (MRCR sets add_special_tokens)
-    # merged under user-supplied --gen-kwargs.
-    gen_kwargs = {
-        **guidellm_common.pop("gen_kwargs", {}),
-        **parse_gen_kwargs(args.gen_kwargs),
+    row = {
+        "acceptance_length": round(1 + accepted / steps, 4) if steps else "",
+        "acceptance_rate_pct": round(100 * accepted / drafts, 2) if drafts else "",
     }
-
-    # For local JSONL files (SPEED-Bench) the dataset path IS the file —
-    # no --data-args needed.  For HF datasets subset name doubles as the filter.
-    guidellm_subset = None if Path(guidellm_common["dataset"]).exists() else subset
-
-    if is_sweep:
-        gen_len_dir = artifacts_dir / "gen_len"
-        gen_len_dir.mkdir(parents=True, exist_ok=True)
-        gen_len_output = gen_len_dir / f"gen_len_{safe}.json"
-        run_guidellm(
-            **guidellm_common,
-            subset=guidellm_subset,
-            profile="throughput",
-            rate=args.gen_len_rate,
-            max_requests=None,
-            output_path=gen_len_output,
-            max_tokens=4096,
-            gen_kwargs=gen_kwargs,
+    for position in range(1, max(positions, max(histogram, default=0)) + 1):
+        accepted_steps = sum(count for k, count in histogram.items() if k >= position)
+        row[f"acceptance_rate_pos_{position}_pct"] = (
+            round(100 * accepted_steps / steps, 2) if steps else ""
         )
-        mapping = parse_gen_len_results(
-            [gen_len_output],
-            gen_len_dir / f"max_tokens_{safe}.json",
-        )
-        key = guidellm_subset if guidellm_subset else safe
-        max_tokens = mapping.get(key, max_tokens)
-        logger.info("[%s] max_tokens=%d", subset, max_tokens)
-
-    baseline = _require_metrics(metrics_url)
-    profile = "sweep" if is_sweep else "throughput"
-    run_output = artifacts_dir / f"run_{safe}.json"
-    run_guidellm(
-        **guidellm_common,
-        subset=guidellm_subset,
-        rate=args.sweep_rate if is_sweep else args.gen_len_rate,
-        profile=profile,
-        max_requests=args.max_requests,
-        output_path=run_output,
-        max_tokens=max_tokens,
-        gen_kwargs=gen_kwargs,
-    )
-    current = _require_metrics(metrics_url)
-
-    if not is_sweep:
-        _validate_throughput_results(run_output, subset)
-
-    spec = extract_spec_decode_metrics(
-        current,
-        baseline_metrics=baseline,
-    )
-    has_spec = spec and spec.get("num_drafts", 0) > 0
-
-    if has_spec:
-        spec["subset"] = subset
-        logger.info("[%s] Acceptance metrics cover the entire %s run", subset, profile)
-        print_acceptance_report(spec)
-        if acceptance_csv is None:
-            acceptance_csv = CsvWriter(
-                output_dir / "acceptance.csv",
-                ["subset"] + acceptance_csv_columns(spec),
-            )
-        acceptance_csv.append(spec)
-    else:
-        logger.warning("[%s] No speculative decoding metrics found", subset)
-
-    if is_sweep:
-        rows = parse_sweep_results(run_output, spec if has_spec else None)
-        if not rows:
-            logger.error("[%s] No performance results collected", subset)
-            sys.exit(1)
-        for row in rows:
-            row["subset"] = subset
-        if perf_csv is None:
-            acc_cols = acceptance_csv_columns(spec) if has_spec else []
-            cols = BASE_CSV_COLUMNS + acc_cols
-            perf_csv = CsvWriter(output_dir / "perf_results.csv", cols)
-        perf_csv.append_rows(rows)
-
-    logger.info("[%s] Complete", subset)
-    return acceptance_csv, perf_csv, max_tokens if is_sweep else None
+    return row
 
 
-def _speedbench_run_items(args: argparse.Namespace) -> list[tuple[str, dict]]:
-    """Resolve a ``speedbench/`` spec into ``(label, guidellm_common)`` pairs."""
-    if not getattr(args, "speedbench_data_dir", None):
-        logger.error(
-            "--speedbench-data-dir is required for speedbench/ datasets.\n"
-            "Run scripts/evaluate/prepare_speedbench.py first, then add"
-            " --speedbench-data-dir <dir>.",
-        )
-        sys.exit(1)
-    return [
-        (
-            label,
-            {
-                "target": args.target,
-                "dataset": str(local_path),
-                "data_column_mapper": _SPEEDBENCH_COLUMN_MAPPER,
-                "max_concurrency": args.max_concurrency,
-            },
-        )
-        for label, local_path in _resolve_speedbench(
-            args.dataset, Path(args.speedbench_data_dir)
-        )
-    ]
+def prompt_bin(tokens: int | None) -> str:
+    if tokens is None:
+        return "unknown"
+    index = bisect_left(PROMPT_TOKEN_BOUNDS, tokens)
+    if index == len(PROMPT_TOKEN_BOUNDS):
+        return f">{PROMPT_TOKEN_BOUNDS[-1]}"
+    low = PROMPT_TOKEN_BOUNDS[index - 1] + 1 if index else 0
+    return f"{low}-{PROMPT_TOKEN_BOUNDS[index]}"
 
 
-def _mrcr_run_items(
-    args: argparse.Namespace, artifacts_dir: Path
-) -> list[tuple[str, dict]]:
-    """Prepare MRCR data and build its ``(label, guidellm_common)`` pairs."""
-    if args.mrcr_max_samples is not None and args.mrcr_max_samples < 1:
-        logger.error("--mrcr-max-samples must be at least 1")
-        sys.exit(1)
-    pairs = prepare_mrcr(
-        target=args.target,
-        needles=args.mrcr_needles,
-        buckets=args.mrcr_buckets,
-        data_dir=args.mrcr_data_dir,
-        artifacts_dir=artifacts_dir,
-        max_samples=args.mrcr_max_samples,
-        gen_budget=parse_gen_kwargs(args.gen_kwargs).get("max_tokens", 4096),
-        retry_failed=args.mrcr_retry_failed,
-    )
-    if not pairs:
-        logger.error("No MRCR buckets could run on this server")
-        sys.exit(1)
-    return [
-        (
-            label,
-            {
-                "target": args.target,
-                "dataset": str(bucket_path),
-                "data_column_mapper": args.data_column_mapper,
-                "max_concurrency": args.max_concurrency,
-                "request_format": "/v1/completions",
-                # Prevents a repeated BOS on models whose tokenizer
-                # adds one (e.g. Llama); a no-op on models that
-                # don't (e.g. Qwen).
-                "gen_kwargs": {"add_special_tokens": False},
-            },
-        )
-        for label, bucket_path in pairs
-    ]
+def write_csv(path: Path, rows: list[dict]) -> None:
+    if rows:
+        fields = list(dict.fromkeys(key for row in rows for key in row))
+        with path.open("w", newline="") as handle:
+            writer = csv.DictWriter(handle, fieldnames=fields)
+            writer.writeheader()
+            writer.writerows(rows)
 
 
-def run_benchmark(args: argparse.Namespace) -> None:
-    check_dependencies()
-    is_sweep = args.mode == "sweep"
+def summarize_acceptance_run(
+    report: dict, path: Path, root: Path
+) -> tuple[list[dict], list[dict], bool]:
+    """Calculate one overall row and one row per prompt-length bucket."""
+    metrics = []
+    buckets = defaultdict(list)
+    valid = True
+    with path.with_name("profile_export.jsonl").open() as handle:
+        for line in handle:
+            try:
+                record = json.loads(line)
+                if record["metadata"]["benchmark_phase"] != "profiling":
+                    continue
+                failed = bool(record.get("error"))
+                token_metric = "error_isl" if failed else "input_sequence_length"
+                tokens = record["metrics"].get(token_metric, {}).get("value")
+                bucket = prompt_bin(tokens)
+                spec = None if failed else record.get("spec_decode_acceptance")
+                metrics.append(spec)
+                buckets[bucket].append(spec)
+            except (ValueError, KeyError, TypeError) as exc:
+                logger.error("%s: %s", path, exc)
+                valid = False
 
-    metrics_url = args.target.rstrip("/").removesuffix("/v1") + "/metrics"
-    output_dir = Path(args.output_dir)
-    artifacts_dir = output_dir / "artifacts"
-    artifacts_dir.mkdir(parents=True, exist_ok=True)
+    count = report["request_count"]["avg"]
+    if (
+        sum(bool(spec) for spec in metrics) != count
+        or report.get("spec_decode_acceptance_length", {}).get("count", 0) != count
+    ):
+        logger.error("%s: missing metrics or incomplete request export", path)
+        valid = False
+    if not metrics:
+        return [], [], False
 
-    save_eval_provenance(output_dir)
-
-    if not (output_dir / "vllm_command.txt").exists():
-        logger.info(
-            "No vllm_command.txt found. To co-locate vLLM provenance "
-            "with eval results: launch_vllm.py --provenance-dir %s",
-            output_dir,
-        )
-
-    acceptance_csv = None
-    perf_csv = None
-    all_max_tokens: dict[str, int] = {}
-
-    # Build a flat list of (label, guidellm_common) to run uniformly.
-    # _run_subset auto-detects whether --data-args is needed from the dataset path.
-    dataset_spec = args.dataset
-    run_items: list[tuple[str, dict]] = []
-
-    if dataset_spec == MRCR_DATASET:
-        run_items = _mrcr_run_items(args, artifacts_dir)
-    elif dataset_spec.startswith("speedbench/"):
-        run_items = _speedbench_run_items(args)
-    else:
-        guidellm_common = {
-            "target": args.target,
-            "dataset": dataset_spec,
-            "data_column_mapper": args.data_column_mapper,
-            "max_concurrency": args.max_concurrency,
+    name = path.parent.relative_to(root).as_posix()
+    overall = [{"dataset": name, **acceptance_row(metrics)}]
+    by_length = [
+        {
+            "dataset": name,
+            "prompt_length": bucket,
+            "requests": len(group),
+            **acceptance_row(group),
         }
-        for subset in [s.strip() for s in args.subsets.split(",") if s.strip()]:
-            run_items.append((subset, guidellm_common))
-
-    if not run_items:
-        logger.error("No subsets selected for benchmarking")
-        sys.exit(1)
-
-    logger.info(
-        "Mode: %s | %d subsets | Output: %s", args.mode, len(run_items), output_dir
-    )
-    for label, common in run_items:
-        acceptance_csv, perf_csv, mt = _run_subset(
-            label,
-            args,
-            is_sweep=is_sweep,
-            metrics_url=metrics_url,
-            artifacts_dir=artifacts_dir,
-            output_dir=output_dir,
-            guidellm_common=common,
-            acceptance_csv=acceptance_csv,
-            perf_csv=perf_csv,
-        )
-        if mt is not None:
-            all_max_tokens[label] = mt
-
-    if acceptance_csv is None:
-        logger.info(
-            "No acceptance metrics collected; GuideLLM results are saved in %s",
-            artifacts_dir,
-        )
-
-    if is_sweep and all_max_tokens:
-        with (output_dir / "max_tokens.json").open("w") as f:
-            json.dump(all_max_tokens, f, indent=2)
-
-    logger.info("Benchmarking complete! Results: %s", output_dir)
+        for bucket, group in buckets.items()
+    ]
+    return overall, by_length, valid
 
 
-def main() -> None:
-    logging.basicConfig(
-        level=logging.INFO,
-        format="[%(levelname)s] %(message)s",
-        stream=sys.stderr,
-    )
+def summarize_output_directory(output_dir: Path, mode: str) -> bool:
+    """Validate native runs and write the two additional acceptance CSVs."""
+    paths = [
+        path
+        for path in sorted(output_dir.rglob("profile_export_aiperf.json"))
+        if "phases" not in path.relative_to(output_dir).parts
+    ]
+    if not paths:
+        logger.error("No AIPerf summaries found in %s", output_dir)
+    valid = bool(paths)
+    overall_rows = []
+    length_rows = []
+    for path in paths:
+        try:
+            report = json.loads(path.read_text())
+            count = report["request_count"]["avg"]
+            errors = report.get("error_request_count", {}).get("avg", 0)
+            complete = report["is_complete"] and not report["was_cancelled"]
+            if not complete or count <= 0 or errors:
+                logger.error("%s: incomplete run or %s request errors", path, errors)
+                valid = False
+            if mode == "acceptance":
+                overall, by_length, records_valid = summarize_acceptance_run(
+                    report, path, output_dir
+                )
+                overall_rows.extend(overall)
+                length_rows.extend(by_length)
+                valid = valid and records_valid
+        except (OSError, ValueError, KeyError, TypeError) as exc:
+            logger.error("%s: %s", path, exc)
+            valid = False
+    write_csv(output_dir / "acceptance.csv", overall_rows)
+    write_csv(output_dir / "acceptance_by_prompt_length.csv", length_rows)
+    return valid
 
+
+def dataset_args(name: str, args: argparse.Namespace) -> list[str]:
+    """Resolve dataset aliases and dispatch to the appropriate loader."""
+    name = ALIASES.get(name, name).replace("-", "_")
+    if name.startswith("speed_bench_"):
+        return speedbench_args(name, args)
+    return ["--public-dataset", name]
+
+
+def run_profile(args: argparse.Namespace, profile_args: list[str], output: Path) -> int:
+    """Run AIPerf with preset defaults and explicit CLI overrides."""
+    supplied = {arg.split("=", 1)[0].replace("--no-", "--", 1) for arg in profile_args}
+    defaults = COMMON_DEFAULTS | MODE_DEFAULTS[args.mode]
+    if args.num_profile_runs == 1:
+        defaults.pop("--no-profile-run-disable-warmup-after-first", None)
+    command = ["aiperf", "profile", *profile_args]
+    for flag, value in defaults.items():
+        if flag.replace("--no-", "--", 1) not in supplied:
+            command.append(flag)
+            if value is not None:
+                command.append(value)
+    command.extend(["--output-artifact-dir", str(output)])
+    (output / "aiperf_command.txt").write_text(shlex.join(command) + "\n")
+    return subprocess.run(command, check=False).returncode  # noqa: S603
+
+
+def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
-        prog="evaluate",
-        description="Speculative decoding performance evaluation toolkit.",
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog=(
-            "examples:\n"
-            "  python evaluate.py --target http://localhost:8000/v1 throughput\n"
-            "  python evaluate.py --target http://localhost:8000/v1 sweep\n"
-            "  python evaluate.py --target http://localhost:8000/v1 sweep "
-            '--subsets "HumanEval,qa"\n'
-        ),
+        description=__doc__,
+        allow_abbrev=False,
+        epilog="Other flags pass to 'aiperf profile'. Use canonical long names.",
     )
-    parser.add_argument(
-        "mode",
-        choices=["throughput", "sweep"],
-        help=(
-            "throughput: max-rate run for acceptance rates; "
-            "sweep: full benchmarking pipeline"
-        ),
-    )
-    parser.add_argument(
-        "--target",
-        required=True,
-        help="vLLM server endpoint (e.g. http://localhost:8000/v1)",
-    )
+    parser.add_argument("mode", choices=(*MODE_DEFAULTS, "summarize"))
+    parser.add_argument("--output-artifact-dir", type=Path, required=True)
     parser.add_argument(
         "--dataset",
-        default=DEFAULT_DATASET,
-        help=f"HF dataset ID or local directory (default: {DEFAULT_DATASET})",
-    )
-    parser.add_argument(
-        "--subsets",
-        default=DEFAULT_SUBSETS,
-        help="Comma-separated subset names (default: all 9 standard subsets)",
-    )
-    parser.add_argument(
-        "--output-dir",
-        default=None,
-        help="Output directory (default: <model_name>_TIMESTAMP)",
-    )
-    parser.add_argument(
-        "--max-concurrency",
-        type=int,
-        default=DEFAULT_MAX_CONCURRENCY,
-        help=f"Max concurrent requests (default: {DEFAULT_MAX_CONCURRENCY})",
-    )
-    parser.add_argument(
-        "--max-requests",
-        type=int,
-        default=DEFAULT_MAX_REQUESTS,
-        help=f"Max requests per sweep point (default: {DEFAULT_MAX_REQUESTS})",
-    )
-    parser.add_argument(
-        "--gen-len-rate",
-        type=int,
-        default=DEFAULT_GEN_LEN_RATE,
-        help=f"Request rate for gen-len estimation (default: {DEFAULT_GEN_LEN_RATE})",
-    )
-    parser.add_argument(
-        "--sweep-rate",
-        type=int,
-        default=DEFAULT_SWEEP_RATE,
-        help=f"Number of sweep rate points (default: {DEFAULT_SWEEP_RATE})",
-    )
-    parser.add_argument(
-        "--gen-kwargs",
-        default="",
+        nargs="+",
         help=(
-            "JSON with generation kwargs, e.g. '{\"temperature\":0.6}'. "
-            "Nested values are supported, e.g. "
-            '\'{"chat_template_kwargs":{"enable_thinking":false}}\'.'
+            "Datasets to run sequentially (default: qualitative for acceptance, "
+            "humaneval for speedup)."
         ),
     )
-    parser.add_argument(
-        "--data-column-mapper",
-        default=DEFAULT_DATA_COLUMN_MAPPER,
-        help="Column mapping for guidellm in typed key=value format"
-        f" (default: {DEFAULT_DATA_COLUMN_MAPPER})",
-    )
-    parser.add_argument(
-        "--speedbench-data-dir",
-        default=None,
-        dest="speedbench_data_dir",
-        help=(
-            "Path to directory produced by SPEED-Bench prepare.py. "
-            "Required when --dataset is a speedbench/ spec."
-        ),
-    )
-    parser.add_argument(
-        "--mrcr-needles",
-        type=parse_needles,
-        default=[2, 4, 8],
-        help="MRCR needle counts: comma list of 2, 4, 8 (default: 2,4,8)",
-    )
-    parser.add_argument(
-        "--mrcr-buckets",
-        type=parse_buckets,
-        default=list(BUCKETS),
-        help=(
-            "MRCR context-length buckets as a comma list of numbers or"
-            " labels, e.g. 1,4,8 or 4096-8192,32769-65536,524289-1048576"
-            " (default: all buckets): "
-            + ", ".join(f"{i}={label}" for i, (label, _, _) in enumerate(BUCKETS, 1))
-        ),
-    )
-    parser.add_argument(
-        "--mrcr-data-dir",
-        type=Path,
-        default=Path("mrcr_data"),
-        help="Cache directory for rendered MRCR data (default: ./mrcr_data)",
-    )
-    parser.add_argument(
-        "--mrcr-max-samples",
-        type=int,
-        default=None,
-        help="Maximum samples per MRCR bucket (default: no limit)",
-    )
-    parser.add_argument(
-        "--mrcr-retry-failed",
-        action="store_true",
-        help="Retry MRCR rows whose render previously failed (default: reuse "
-        "the partial cache as-is)",
-    )
-    args = parser.parse_args()
-
-    if args.output_dir is None:
-        model_name = _fetch_model_name(args.target)
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        if model_name:
-            logger.info("Detected model: %s", model_name)
-            args.output_dir = f"{_sanitize_dir_name(model_name)}_{timestamp}"
-        else:
-            args.output_dir = f"perf_results_{timestamp}"
-
-    run_benchmark(args)
+    args, profile_args = parser.parse_known_args(argv)
+    if args.mode == "summarize":
+        return int(
+            not summarize_output_directory(args.output_artifact_dir, "acceptance")
+        )
+    native_only = {"--config", "-f", "--conversation-num", "--num-sessions"}
+    if any(arg.split("=", 1)[0] in native_only for arg in profile_args):
+        parser.error("Use canonical flags here; run 'aiperf profile' for YAML.")
+    # Inspect the options we need without changing the forwarded arguments.
+    profile_parser = argparse.ArgumentParser(add_help=False, allow_abbrev=False)
+    profile_parser.add_argument("--input-file", type=Path)
+    profile_parser.add_argument("--request-count", type=int)
+    profile_parser.add_argument("--num-conversations", type=int)
+    profile_parser.add_argument("--benchmark-duration", type=float)
+    profile_parser.add_argument("--num-profile-runs", type=int)
+    args, _ = profile_parser.parse_known_args(profile_args, namespace=args)
+    default_dataset = "qualitative" if args.mode == "acceptance" else "humaneval"
+    datasets = list(dict.fromkeys(args.dataset or [default_dataset]))
+    args.output_artifact_dir.mkdir(parents=True, exist_ok=False)
+    save_eval_provenance(args.output_artifact_dir)
+    exit_code = 0
+    for dataset in datasets:
+        output = args.output_artifact_dir / dataset
+        output.mkdir()
+        run_args = [*profile_args, *dataset_args(dataset, args)]
+        returncode = run_profile(args, run_args, output)
+        exit_code = exit_code or returncode
+    valid = summarize_output_directory(args.output_artifact_dir, args.mode)
+    return exit_code or int(not valid)
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

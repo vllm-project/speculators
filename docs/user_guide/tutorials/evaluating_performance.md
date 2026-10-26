@@ -1,128 +1,132 @@
 # Evaluating Model Performance
 
-## Prerequisites
+The evaluator uses AIPerf 0.13.0 for dataset loading, requests, concurrency sweeps, native reports, and plotting. Our adapters prepare SPEED-Bench, preserve MRCR histories, and summarize acceptance statistics.
+
+## Install
+
+From the repository root, use a client environment with Python 3.11–3.13:
 
 ```bash
-cd scripts/evaluate
-pip install -r requirements.txt
+pip install -r scripts/evaluate/requirements.txt
 ```
 
-## Quick Start
+## Serve the model
 
-Run the full benchmark pipeline (output-length estimation → performance sweep → CSV):
+All examples use [RedHatAI/Qwen3.8-27B-speculator.dspark](https://huggingface.co/RedHatAI/Qwen3.8-27B-speculator.dspark) with the `Qwen/Qwen3.8-27B` verifier, 7 speculative tokens, and adaptive verification disabled.
 
 ```bash
-python evaluate.py sweep --target http://localhost:8000/v1
+vllm serve Qwen/Qwen3.8-27B \
+  --port 9145 \
+  --speculative-config '{"model":"RedHatAI/Qwen3.8-27B-speculator.dspark","num_speculative_tokens":7,"method":"dspark","enable_adaptive_verification":false}' \
+  --per-request-spec-decode-metrics summary \
+  --no-enable-prefix-caching
 ```
 
-This runs all 9 subsets from `RedHatAI/speculator_benchmarks` and produces `perf_results_<timestamp>/perf_results.csv`.
+The evaluation commands use `--model Qwen/Qwen3.8-27B` to match the server's model name; the speculator is selected by `--speculative-config`. The experimental per-request response format must match AIPerf's adapter. The wrapper does not validate prefix-cache counters.
 
-For acceptance rates only (skips the sweep):
+## Acceptance
+
+Use `--dataset` to select datasets. When omitted, acceptance defaults to SPEED-Bench qualitative and speedup defaults to HumanEval.
 
 ```bash
-python evaluate.py throughput --target http://localhost:8000/v1
+python scripts/evaluate/evaluate.py acceptance \
+  --dataset qualitative \
+  --model Qwen/Qwen3.8-27B --url http://localhost:9145 \
+  --output-artifact-dir output/qualitative
 ```
 
-See [`examples/evaluate/`](https://github.com/vllm-project/speculators/tree/main/examples/evaluate) for end-to-end examples that launch a vLLM server and run the pipeline.
+This prepares qualitative once and runs the aggregate split in one native profile. The current source contains 880 conversations across 11 categories and 1,138 user turns. Follow-up turns are generated in the same conversation. For category matrices, use the native sweep below.
 
-## Outputs and baseline runs
+Defaults are concurrency 64, timeout 900 seconds, sequential sampling, server-reported token counts, and raw exports. Generation defaults are temperature 1, thinking enabled, and `max_completion_tokens=32768`. Replace that settings object with `--extra-inputs '{"temperature":0,"max_completion_tokens":1024}'`.
 
-Both modes support a vLLM server running without speculative decoding. A successful baseline run does not require speculative counters and does not produce `acceptance.csv`. Throughput runs must contain at least one successful request; speculative decoding metrics are optional. Raw GuideLLM results are saved under `artifacts/` in both modes. In `sweep` mode, the run also produces `perf_results.csv` and `max_tokens.json` for comparison with a speculative run.
-
-`perf_results.csv` contains performance metrics for each sweep load point. When speculative counters are available and drafts were generated, each row also carries the sweep's aggregate acceptance metrics (`num_drafts`, `num_accepted_tokens`, `acceptance_length`, etc.) — these values are measured across the entire sweep, not per load point, so they repeat unchanged across rows. The evaluator samples counters before and after the run and cannot attribute acceptance to individual load points. `acceptance.csv` additionally contains one aggregate acceptance row per subset: in `throughput` mode this covers the throughput run; in `sweep` mode it covers the entire sweep, excluding the preceding output-length estimation run.
-
-## Options
-
-Both `throughput` and `sweep` share the same options:
-
-```
-  --target URL               vLLM server endpoint (required)
-  --dataset DATASET          HF dataset ID or local dir (default: RedHatAI/speculator_benchmarks)
-  --subsets LIST             Comma-separated subset names (default: all 9)
-  --output-dir DIR           Output directory (default: perf_results_TIMESTAMP)
-  --max-concurrency N        Max concurrent requests (default: 128)
-  --max-requests N           Max requests per sweep point (default: 200)
-  --gen-len-rate N           Request rate for gen-len estimation (default: 128)
-  --sweep-rate N             Number of sweep rate points (default: 10)
-  --gen-kwargs JSON          Generation kwargs, e.g. '{"temperature":0.6}'
-  --data-column-mapper TEXT  Column mapping for guidellm in typed key=value format
-                             (default: kind=generative_column_mapper,column_mappings.text_column=prompt)
-```
-
-## SPEED-Bench
-
-[NVIDIA SPEED-Bench](https://huggingface.co/datasets/nvidia/SPEED-Bench) provides structured evaluation across qualitative categories (coding, math, reasoning, multilingual, …) and throughput splits with varying input sequence lengths (1 k–32 k tokens).
-
-### One-time data preparation
-
-SPEED-Bench prompts are fetched from external sources and cannot be redistributed directly. Run the preparation step once to materialise them locally:
+Run several datasets sequentially:
 
 ```bash
-# Fetch and materialise prompts, then split into per-category files (all in one command)
-python scripts/evaluate/prepare_speedbench.py \
-    --data-dir ./speedbench_data \
-    --download
-
-# Or run the two steps separately if you already have the flat files:
-curl -LsSf https://raw.githubusercontent.com/NVIDIA-NeMo/Skills/refs/heads/main/nemo_skills/dataset/speed-bench/prepare.py \
-    | python3 - --output_dir ./speedbench_data
-python scripts/evaluate/prepare_speedbench.py --data-dir ./speedbench_data
+python scripts/evaluate/evaluate.py acceptance \
+  --dataset gsm8k math500 qualitative \
+  --request-count 8 --concurrency 64 \
+  --model Qwen/Qwen3.8-27B --url http://localhost:9145 \
+  --output-artifact-dir output/acceptance-smoke
 ```
 
-> **Note:** `prepare_speedbench.py` reads from the URL above to fetch NVIDIA's `prepare.py`. Save a local copy (`--download` does this implicitly) if you anticipate running data preparation again. The materialised files contain data from third-party sources — do not redistribute them.
+The budget applies separately to each dataset. Each dataset keeps native reports under `<output-dir>/<dataset>/`, with combined acceptance CSVs at the root. A native run failure retains its results, subsequent datasets run, and the command returns nonzero.
 
-### Running evaluations
+`gsm8k`, `math500`, `humaneval`, `mbpp`, and `mtbench` select the corresponding native `spec_al_*` public loaders. Native public dataset names also work. Their prompt templates and conversation handling are AIPerf's; MT-Bench includes both turns. Without an explicit budget, these public datasets use AIPerf's default ten requests. AIME26 and Arena-Hard have no equivalent registered presets in this version.
 
-Pass a `speedbench/<config>` spec to `--dataset` together with `--speedbench-data-dir`:
+## SPEED-Bench selection
+
+`qualitative` aliases `speed_bench_qualitative`. The wrapper does not expand it into categories. Select individual categories with native names, for example:
 
 ```bash
-# All 11 qualitative categories
-python evaluate.py throughput \
-    --target http://localhost:8000/v1 \
-    --dataset speedbench/qualitative \
-    --speedbench-data-dir ./speedbench_data
-
-# Single category
-python evaluate.py throughput \
-    --target http://localhost:8000/v1 \
-    --dataset speedbench/qualitative/coding \
-    --speedbench-data-dir ./speedbench_data
-
-# All throughput_1k subcategories
-python evaluate.py throughput \
-    --target http://localhost:8000/v1 \
-    --dataset speedbench/throughput_1k \
-    --speedbench-data-dir ./speedbench_data
-
-# One entropy tier only
-python evaluate.py throughput \
-    --target http://localhost:8000/v1 \
-    --dataset speedbench/throughput_1k/high_entropy \
-    --speedbench-data-dir ./speedbench_data
+python scripts/evaluate/evaluate.py acceptance \
+  --dataset speed_bench_coding speed_bench_math \
+  --model Qwen/Qwen3.8-27B --url http://localhost:9145 \
+  --output-artifact-dir output/coding-math
 ```
 
-Available configs: `qualitative`, `throughput_1k`, `throughput_2k`, `throughput_8k`, `throughput_32k`.
+Each selected qualitative category defaults to all its conversations (currently 80) unless a budget is supplied. Explicitly selecting multiple categories runs them separately, which also supports category-specific speedup measurements.
 
-Results are written to `acceptance.csv` in the output directory with per-category acceptance lengths and per-position acceptance rates, identical in format to the `RedHatAI/speculator_benchmarks` output.
-
-## Visualization
+Generate category reports from those runs:
 
 ```bash
-# Compare multiple versions
-python plot.py compare \
-    --source "No Spec=nospec/perf_results.csv" \
-    --source "DFlash=dflash/perf_results.csv" \
-    --metric latency --output-dir ./plots
-
-# Pairwise speedup (blue = faster, red = regression)
-python plot.py speedup \
-    --baseline "No Spec=nospec/perf_results.csv" \
-    --target "DFlash=dflash/perf_results.csv" \
-    --metric latency --title "Qwen3-8B" --output-dir ./plots
+aiperf speed-bench-report output/coding-math/speed_bench_* \
+  --metric accept_length --format csv \
+  --output output/coding-math/acceptance_length_by_category.csv
+aiperf speed-bench-report output/coding-math/speed_bench_* \
+  --metric accept_rate --format csv \
+  --output output/coding-math/acceptance_rate_by_category.csv
 ```
 
-Both accept CSVs or raw GuideLLM sweep JSONs. Available metrics: `latency`, `itl`, `ttft`, `output_tps`.
+Throughput selections use native names such as `speed_bench_throughput_8k_high_entropy`. They use native request budgets in acceptance mode and timed sweeps in speedup mode. Select the desired entropy tiers explicitly when separate reports are needed.
 
-## Throughput vs. Interactivity
+## MRCR
 
-To measure the production trade-off, output tokens per second for the GPU against tokens per second for each user, at fixed concurrency and with one or more speculators, see [Throughput vs. Interactivity](throughput_interactivity.md). It uses `scripts/evaluate/throughput_interactivity.py` and the same `RedHatAI/speculator_benchmarks` subsets.
+```bash
+python scripts/evaluate/evaluate.py acceptance \
+  --dataset mrcr \
+  --dataset-filter needles=8 --dataset-filter max_samples=800 \
+  --request-count 800 --concurrency 64 --request-timeout-seconds 3600 \
+  --model Qwen/Qwen3.8-27B --url http://localhost:9145 \
+  --output-artifact-dir output/mrcr
+```
+
+The registered MRCR plugin streams `openai/mrcr` from Hugging Face. Each complete history becomes one request, preserving system messages, user turns, and historical assistant responses. Earlier turns are not regenerated. No client tokenization, truncation, or context filtering occurs.
+
+Select `needles=2`, `4`, or `8` and optionally `revision=<HF-commit>` with `--dataset-filter`. Defaults are eight needles and at most 100 source rows. `max_samples` limits source rows; AIPerf's request budget is separate and can replay them. The normal generation cap and `--extra-inputs` overrides also apply to MRCR. Over-context responses remain errors; this evaluates decoding statistics rather than answer accuracy.
+
+## Acceptance results
+
+- `acceptance.csv`: one row per native run, with pooled acceptance length, acceptance rate, and numeric position rates.
+- `acceptance_length_by_category.csv` and `acceptance_rate_by_category.csv`: produced by the native `speed-bench-report` commands above.
+- `acceptance_by_prompt_length.csv`: those metrics and request counts grouped by actual prompt-token length. Boundaries start at 8,192 and double through 1,048,576, with overflow and `unknown` bins.
+
+Each profiling record is read once. Warmup and duplicate phase exports are excluded; follow-up turns and repeated conversations count as separate requests. Acceptance counters include successful responses with speculative metrics. Prompt-bin request counts also retain exported failures; missing token lengths appear under `unknown`. Unexported incomplete requests cannot be counted.
+
+Counters are summed before division: acceptance length is `1 + accepted draft tokens / verification steps`; acceptance rate is `accepted draft tokens / proposed draft tokens`. Position k is the fraction of steps accepting at least k draft tokens. Rates are percentages and unavailable values are blank. These pooled values can differ from native means across requests.
+
+Category matrices are generated by AIPerf 0.13.0's `speed-bench-report`, using each category run's `server_metrics_export.json`. Keep server metrics enabled and expose the server's `/metrics` endpoint (collection is enabled by default). Native acceptance rates are fractions from 0 to 1; the `Overall` column is the arithmetic mean of category values. These server-based matrices can differ from the request-based pooled statistics in `acceptance.csv`. Per-position rates for each category remain in that run's row of `acceptance.csv`. There is no custom category aggregation or request-ID lookup.
+
+## Speedup and plotting
+
+```bash
+# SPEED-Bench qualitative
+python scripts/evaluate/evaluate.py speedup \
+  --dataset qualitative \
+  --model Qwen/Qwen3.8-27B --url http://localhost:9145 \
+  --output-artifact-dir output/speedup-qualitative
+
+# Individual categories
+python scripts/evaluate/evaluate.py speedup \
+  --dataset speed_bench_coding speed_bench_math \
+  --model Qwen/Qwen3.8-27B --url http://localhost:9145 \
+  --output-artifact-dir output/speedup-categories
+
+# HumanEval
+python scripts/evaluate/evaluate.py speedup \
+  --dataset humaneval \
+  --model Qwen/Qwen3.8-27B --url http://localhost:9145 \
+  --output-artifact-dir output/speedup-humaneval
+
+# Generate plots
+aiperf plot output/speedup-qualitative --output output/plots
+```
