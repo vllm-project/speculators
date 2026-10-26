@@ -31,6 +31,7 @@ def create_empty_batch(
     #     "verifier_last_hidden_states": [seq_len, hidden_size],
     #     "loss_mask": [seq_len],
     #     "position_ids": [seq_len],
+    #     "document_ids": [seq_len],
     # }
 
     return {
@@ -43,7 +44,7 @@ def create_empty_batch(
         ),
         "loss_mask": torch.zeros(1, seq_len, dtype=torch.bool),
         "position_ids": torch.zeros(1, seq_len, dtype=torch.long),
-        "document_ids": -1 * torch.ones(1, seq_len, dtype=torch.long),
+        "document_ids": -torch.ones(1, seq_len, dtype=torch.long),
     }
 
 
