@@ -15,7 +15,10 @@ from transformers import (
 )
 
 from speculators.data_generation.logging_utils import PipelineLogger
-from speculators.data_generation.render_client import render_conversation
+from speculators.data_generation.render_client import (
+    RenderRouteError,
+    render_conversation,
+)
 from speculators.data_generation.torch_utils import set_default_torch_num_threads
 from speculators.data_generation.vllm_client import has_multimodal_content
 from speculators.train.vocab_mapping import save_token_frequency_distribution
@@ -368,6 +371,8 @@ def _render_conversation_rows(
             max_length,
             tools=parsed_tools,
         )
+    except RenderRouteError:
+        raise
     # One row the render endpoint or boundary derivation can't handle must
     # not kill the run. The failure modes can't be enumerated -- templates
     # are swappable and raise arbitrary types -- so catch broadly and skip.

@@ -51,6 +51,10 @@ class RenderError(Exception):
     """Non-200, retry-eligible response from the render endpoint."""
 
 
+class RenderRouteError(InvalidResponseError):
+    """The configured server does not expose a usable render route."""
+
+
 @with_retries
 def render_conversation(
     endpoint: str,
@@ -86,6 +90,10 @@ def render_conversation(
 
     resp = _post(url, json=body, timeout=timeout)
 
+    if resp.status_code in {HTTPStatus.NOT_FOUND, HTTPStatus.METHOD_NOT_ALLOWED}:
+        raise RenderRouteError(
+            f"Render endpoint {url} returned {resp.status_code}: {resp.text}"
+        )
     if (
         resp.status_code == HTTPStatus.BAD_REQUEST
         and "max_tokens must be at least 1" in resp.text
