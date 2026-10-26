@@ -93,6 +93,7 @@ speculators prepare-data \
     --output "$OUTPUT_DIR" \
     --max-samples "$MAX_SAMPLES" \
     --seq-length "$SEQ_LENGTH" \
+    --no-skip-token-freq \
     --render-endpoint "http://localhost:${VLLM_PORT}"
 
 # Step 3: Train DSpark against the live vLLM server

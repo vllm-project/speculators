@@ -85,7 +85,7 @@ torchrun --standalone --nproc_per_node=4 -m speculators.train \
 
 ### Vocabulary Mapping Arguments
 
-- **`--draft-vocab-size`** (int, default: `None`) Vocabulary size for the draft model. If not specified and no vocab mapping files are provided, uses full verifier vocabulary.
+- **`--draft-vocab-size`** (int, default: `None`) Vocabulary size for the draft model. If not specified and no vocab mapping files are provided, uses full verifier vocabulary. If specified, the mapping is loaded from `{data-path}/d2t-{size}.npy`/`t2d-{size}.npy` or built from `--token-freq-path`; training stops with an error if neither exists, so run `prepare-data` with `--no-skip-token-freq`.
 
 - **`--token-freq-path`** (str, default: `{data-path}/token_freq.pt`) Path to token frequency distribution file. This is used to determine which tokens to include in the reduced draft vocab.
 

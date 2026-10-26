@@ -441,15 +441,26 @@ def parse_vocab_mappings(args: argparse.Namespace):
                     )
                 else:
                     result = _generate_vocab_mappings(args, data_path)
+                    if result is None:
+                        token_freq_path = (
+                            args.token_freq_path or data_path / "token_freq.pt"
+                        )
+                        # Falling back to the full vocab here would silently
+                        # train a different model than the one asked for.
+                        raise ValueError(
+                            f"--draft-vocab-size {args.draft_vocab_size} needs a "
+                            f"vocab mapping, but neither '{default_d2t_path}' / "
+                            f"'{default_t2d_path}' nor the token frequencies at "
+                            f"'{token_freq_path}' exist. Re-run `speculators "
+                            "prepare-data` with --no-skip-token-freq, or pass "
+                            "--token-freq-path or --d2t-path/--t2d-path. Omit "
+                            "--draft-vocab-size to train with the full verifier "
+                            "vocab."
+                        )
 
             if result is None:
-                token_freq_path = args.token_freq_path or data_path / "token_freq.pt"
-                token_freq_path = Path(token_freq_path)
-
-                logger.warning(
-                    "No vocab mappings found, and can't generate new ones because "
-                    f"either token_freq_path='{token_freq_path}' doesn't exist or "
-                    "--draft-vocab-size is None. Using full verifier vocab"
+                logger.info(
+                    "No --draft-vocab-size given; using the full verifier vocab"
                 )
                 # When vocab mapping is not provided, use the full verifier vocab
                 verifier_config = AutoConfig.from_pretrained(
