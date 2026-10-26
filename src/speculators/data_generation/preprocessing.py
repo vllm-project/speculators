@@ -20,6 +20,7 @@ from speculators.data_generation.render_client import (
     render_conversation,
 )
 from speculators.data_generation.torch_utils import set_default_torch_num_threads
+from speculators.data_generation.vllm_client import has_multimodal_content
 from speculators.train.vocab_mapping import save_token_frequency_distribution
 
 __all__ = [
@@ -435,7 +436,9 @@ def _append_boundary_rows(
         if status == "kept":
             num_kept += 1
             if "messages" in results:
-                results["messages"].append(_adapt_conv_for_vllm(row["conv"]))
+                messages = _adapt_conv_for_vllm(row["conv"])
+                results["messages"].append(messages)
+                results["is_multimodal"].append(has_multimodal_content(messages))
 
     return num_kept, num_unsupervised, num_maybe_truncated
 
@@ -515,6 +518,7 @@ def _preprocess_batch(
     # original messages -- token ids alone cannot carry the images.
     if is_multimodal:
         results["messages"] = []
+        results["is_multimodal"] = []
 
     if not conversations:
         log.warning(f"No conversations key found. Keys: {list(examples.keys())}")
@@ -642,8 +646,26 @@ def build_speculator_training_dataset(
             keep_in_memory=True,  # skip caching
         )
 
+    dataset = _drop_unused_messages(dataset)
     dataset.set_format(type="torch")
     return dataset
+
+
+def _drop_unused_messages(dataset: HFDataset) -> HFDataset:
+    """Drop the ``messages`` column when no row is multimodal.
+
+    Processor-based models write ``messages`` for every row, but the trainer
+    only forwards it for multimodal rows, so a text-only dataset would store
+    the full conversation text unused. Decided after ``map`` rather than per
+    batch so every map shard keeps the same schema.
+    """
+    if "is_multimodal" not in dataset.column_names:
+        return dataset
+    drop = ["is_multimodal"]
+    if not any(dataset["is_multimodal"]):
+        log.info("No multimodal rows: not storing the messages column")
+        drop.append("messages")
+    return dataset.remove_columns(drop)
 
 
 def _load_hf_dataset(spec: str) -> tuple[HFDataset, None]:

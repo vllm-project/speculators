@@ -95,6 +95,17 @@ def render_conversation(
             f"Render endpoint {url} returned {resp.status_code}: {resp.text}"
         )
     if (
+        resp.status_code == HTTPStatus.BAD_REQUEST
+        and "max_tokens must be at least 1" in resp.text
+        and truncate_prompt_tokens is not None
+    ):
+        raise InvalidResponseError(
+            f"Render endpoint returned {resp.status_code}: {resp.text}. "
+            "Relaunch vLLM with --max-model-len greater than "
+            f"--seq-length ({truncate_prompt_tokens}), then rerun prepare-data."
+        )
+
+    if (
         HTTPStatus.BAD_REQUEST <= resp.status_code < HTTPStatus.INTERNAL_SERVER_ERROR
         and resp.status_code not in TRANSIENT_STATUSES
     ):

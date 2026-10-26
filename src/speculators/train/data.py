@@ -17,6 +17,7 @@ from speculators.data_generation.vllm_client import (
     DEFAULT_REQUEST_TIMEOUT,
     ClientItem,
     generate_hidden_states,
+    has_multimodal_content,
 )
 from speculators.train.recovery import (
     RECOVERY_METADATA_KEY,
@@ -55,16 +56,6 @@ def create_empty_sample(
     }
 
 
-def _has_multimodal_content(messages: list[dict]) -> bool:
-    """True when any turn carries non-text content (images, video, audio).
-
-    Text-only turns store ``content`` as a plain string.  Multimodal turns
-    (produced by ``_adapt_conv_for_vllm``) store it as a list of typed parts,
-    e.g. ``[{"type": "text", ...}, {"type": "image_url", ...}]``.
-    """
-    return any(isinstance(m.get("content"), list) for m in messages)
-
-
 def build_client_item(dataset_item: dict) -> ClientItem:
     """Build a request payload for vLLM hidden-state extraction.
 
@@ -89,8 +80,10 @@ def build_client_item(dataset_item: dict) -> ClientItem:
     """
     out_dict: dict = {"input_ids": dataset_item["input_ids"].tolist()}
 
-    if "messages" in dataset_item and _has_multimodal_content(dataset_item["messages"]):
-        out_dict["messages"] = dataset_item["messages"]
+    # A text-only source concatenated with a multimodal one has None messages.
+    messages = dataset_item.get("messages")
+    if messages is not None and has_multimodal_content(messages):
+        out_dict["messages"] = messages
 
     return cast("ClientItem", out_dict)
 
@@ -155,6 +148,7 @@ class ArrowDataset(BaseDataset):
         train_ratio: float = 1.0,
         split: Literal["train", "val"] = "train",
         hidden_states_dtype=torch.bfloat16,
+        num_target_layers: int = 3,
         model: str | None = None,
         request_timeout: float | None = DEFAULT_REQUEST_TIMEOUT,
         max_retries: int = DEFAULT_MAX_RETRIES,
@@ -188,6 +182,7 @@ class ArrowDataset(BaseDataset):
         self.model = model
         self.request_timeout = request_timeout
         self.max_retries = max_retries
+        self.num_target_layers = num_target_layers
         self.generation_recovery = GenerationRecoveryGuard(
             retries=generation_validation_retries,
             max_consecutive_failures=max_consecutive_generation_failures,
@@ -321,10 +316,27 @@ class ArrowDataset(BaseDataset):
                 reason=f"Cached token ids do not match sample {index}"
             )
 
+        # The payload carries one entry per captured layer, ordered by layer id,
+        # and its trailing entry is the verifier's final hidden state -- the input
+        # of `verifier_lm_head`, i.e. the distilling target.
+        #
+        # The capture list normally ends one layer past the draft's target layers
+        # (launch_vllm.py appends the final layer unless it is already listed), so
+        # the payload is one entry wider than `fc` and the trailing entry is
+        # split off. When the capture list already ends at the verifier's final
+        # layer, the launcher appends nothing and the payload is exactly as wide
+        # as `fc`: every entry feeds `fc` and the trailing one doubles as the
+        # verifier's final hidden state. Any other width keeps the original
+        # behaviour of dropping the trailing entry, so no configuration that ran
+        # before this change can start failing.
+        num_payload_layers = loaded_hs["hidden_states"].shape[1]
+        if num_payload_layers == self.num_target_layers:
+            hs_features = loaded_hs["hidden_states"]
+        else:
+            hs_features = loaded_hs["hidden_states"][:, :-1]
+
         return {
-            "hidden_states": loaded_hs["hidden_states"][:, :-1].flatten(
-                1
-            ),  # [seq_len, 3 * hidden_size]
+            "hidden_states": hs_features.flatten(1),  # [seq_len, n_feat * h]
             "input_ids": loaded_hs["token_ids"],  # [seq_len]
             "verifier_last_hidden_states": loaded_hs["hidden_states"][
                 :, -1

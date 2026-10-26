@@ -16,7 +16,8 @@ import httpx
 import pytest
 import torch
 from datasets import Dataset as HFDataset
-from datasets import load_from_disk
+from datasets import concatenate_datasets, load_from_disk
+from transformers import ProcessorMixin
 
 from speculators.data_generation import preprocessing, render_client
 from speculators.data_generation.preprocessing import (
@@ -24,7 +25,7 @@ from speculators.data_generation.preprocessing import (
     build_speculator_training_dataset,
 )
 from speculators.data_generation.vllm_client import InvalidResponseError
-from speculators.train.data import CollateFn
+from speculators.train.data import CollateFn, build_client_item
 
 # Neither build path below reads the processor: the missing-endpoint guard
 # raises before it is used, and speculator-format rows skip rendering entirely.
@@ -392,3 +393,81 @@ def test_preprocess_keeps_conversation_specific_render_error_policy(
     assert len(result["input_ids"]) == (2 if status == 200 else 1)
     assert result["input_ids"][0].tolist() == [1, 2, 3]
     assert result["loss_mask"][0].tolist() == [False, False, True]
+
+
+class _ProcessorMixinStub(ProcessorMixin):
+    """Routes preprocessing down the multimodal path; never called."""
+
+    def __init__(self):
+        pass
+
+
+def _build_with_processor(monkeypatch, conversations: list[list[dict]]) -> HFDataset:
+    # One row per conversation; the conv itself is what `messages` would store.
+    monkeypatch.setattr(
+        preprocessing,
+        "_render_conversation_rows",
+        lambda conv, *a, **k: [
+            {"input_ids": [1, 2, 3], "loss_mask": [0, 1, 1], "conv": conv}
+        ],
+    )
+    return build_speculator_training_dataset(
+        HFDataset.from_dict({"conversations": conversations}),
+        cast("ProcessorLike", _ProcessorMixinStub()),
+        num_proc=1,
+        render_endpoint="http://x",
+    )
+
+
+def test_processor_text_only_rows_do_not_store_messages(monkeypatch):
+    # The trainer only forwards `messages` for multimodal rows, so a text-only
+    # prep through a processor-based model should not keep the column.
+    dataset = _build_with_processor(monkeypatch, [_conv(2), _conv(2)])
+    assert len(dataset) == 2
+    assert "messages" not in dataset.column_names
+    assert "is_multimodal" not in dataset.column_names
+
+
+def test_processor_multimodal_rows_keep_messages(monkeypatch):
+    image = {"type": "image", "url": "http://x/a.png", "text": None}
+    text = {"type": "text", "url": None, "text": "what is this?"}
+    conv = [
+        {"role": "user", "content": [image, text]},
+        {"role": "assistant", "content": [{**text, "text": "a cat"}]},
+    ]
+    dataset = _build_with_processor(monkeypatch, [conv])
+    assert "is_multimodal" not in dataset.column_names
+    user_parts = dataset[0]["messages"][0]["content"]
+    assert user_parts[0]["image_url"] == {"url": "http://x/a.png"}
+    assert build_client_item(dataset[0])["messages"] == dataset[0]["messages"]
+
+
+def test_processor_text_part_lists_do_not_store_messages(monkeypatch):
+    # Content given as a list of text parts carries no media either.
+    conv = [
+        {"role": "user", "content": [{"type": "text", "text": "hi"}]},
+        {"role": "assistant", "content": [{"type": "text", "text": "hello"}]},
+    ]
+    dataset = _build_with_processor(monkeypatch, [conv])
+    assert "messages" not in dataset.column_names
+
+
+def test_mixed_text_and_multimodal_sources_build_client_items(monkeypatch):
+    # Concatenating a text-only source with a multimodal one fills the
+    # text-only rows' `messages` with None; those rows must still send ids.
+    image = {"type": "image", "url": "http://x/a.png", "text": None}
+    text = {"type": "text", "url": None, "text": "what is this?"}
+    conv = [
+        {"role": "user", "content": [image, text]},
+        {"role": "assistant", "content": [{**text, "text": "a cat"}]},
+    ]
+    dataset = concatenate_datasets(
+        [
+            _build_with_processor(monkeypatch, [_conv(2)]),
+            _build_with_processor(monkeypatch, [conv]),
+        ]
+    )
+    dataset.set_format(type="torch")
+    text_item, mm_item = (build_client_item(dataset[i]) for i in range(2))
+    assert "messages" not in text_item
+    assert mm_item["messages"] == dataset[1]["messages"]
