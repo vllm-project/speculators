@@ -70,6 +70,22 @@ def resolve_verifier_norm_class(config) -> type:
     return Qwen3RMSNorm
 
 
+def npu_available() -> bool:
+    """Return True when torch_npu is importable and an NPU device exists."""
+    try:
+        import torch_npu  # noqa: F401, PLC0415
+    except ImportError:
+        return False
+    return bool(torch.npu.is_available())
+
+
+def flex_attention_supported() -> bool:
+    """True when flex_attention can be compiled on the current device."""
+    if not hasattr(torch, "compile"):
+        return False
+    return torch.cuda.is_available() or npu_available()
+
+
 def conditional_torch_compile(func=None, *args, **kwargs):
     if func is None:
         return partial(conditional_torch_compile, *args, **kwargs)

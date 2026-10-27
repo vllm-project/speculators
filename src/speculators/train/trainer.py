@@ -80,7 +80,15 @@ class _StepTimer:
             torch.accelerator.synchronize()
             self._marks[name] = time.perf_counter()
             if torch.accelerator.is_available():
-                self._memory[name] = torch.accelerator.memory_allocated() / (1024**2)
+                try:
+                    mem_bytes = torch.accelerator.memory_allocated()
+                except RuntimeError:
+                    # NPU's allocator is not a CachingDeviceAllocator, so the
+                    # generic accelerator API raises. Fall back to the
+                    # NPU-native allocator stats.
+                    import torch_npu  # noqa: PLC0415
+                    mem_bytes = torch_npu.npu.memory_allocated()
+                self._memory[name] = mem_bytes / (1024**2)
 
     def mark_value(self, name: str, value: float) -> None:
         if self.enabled:
