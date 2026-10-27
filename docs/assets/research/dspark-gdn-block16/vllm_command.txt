@@ -1,258 +1,55 @@
-Qwen3.8-27B + RadixArk DSpark v2, K=15, target query width16.
-Hardware: 2 NVIDIA B300, TP2, BF16. Timed runs used GPUs5,6.
-Training width16 is distinct from the checkpoint serving default7. K15 was explicitly configured and verified on both TP ranks.
+Source: https://github.com/vllm-project/vllm/commit/555978f8cf2cd21b22adba5d09d5f6e9df357714 (author's PR #60229 head on 2026-10-27). No tracked modifications. Check out this commit and install its Python source with compatible precompiled extensions before running the commands below.
 
-Source: https://github.com/tomasruizt/vllm/commit/c3e701c8bf0424e467008dddff0ecb6b603dae1b (exact benchmark source, based on PR #60229's 2026-10-26 snapshot, including builder cap removal, gather simplification, and reverted capture conditional). The fused CUDA GDN width guard remains unchanged.
+Qwen3.8-27B BF16 + RadixArk DSpark v2, K15, target width16, TP2, 2 B300 GPUs per method.
 
-Prepare a vLLM checkout at c3e701c8bf0424e467008dddff0ecb6b603dae1b. Install this source using compatible precompiled extensions, as recorded below.
-These commands reconstruct the recorded launches with portable model and output locations. They are not an automatically captured provenance manifest.
+Timed fixed/baseline/AV methods ran concurrently on GPUs0,1 /2,3 /4,5, respectively. Diagnostic and matched c1 profiles used GPUs6,7. One persistent server per method, prefix caching disabled. Profiling hooks were absent from timed servers.
 
-Software:
-{
-  "python": "3.12.13",
-  "torch": "2.13.0+cu130",
-  "cuda": "13.0",
-  "transformers": "5.17.0",
-  "triton": "3.7.1",
-  "installed_vllm": "0.30.1rc1.dev17+g8d3f2b65c.precompiled"
-}
-AIPerf: 0.13.0
+The parallel run completed successfully in about15m20s after setup was corrected. GPU reservations and workers were released.
 
-Download pinned models into a writable shared cache:
+The earlier snapshot differs by a broad upstream rebase (1187files), not just the two GDN fixes. Different GPU pairs and shared host resources also limit comparisons against older sequential runs.
+
+Fixed GPU clocks dropped under high-concurrency load (minimum1485MHz across c64 cells), whereas baseline and AV stayed2032MHz. Matched Nsight trace passes on GPUs6,7 stayed2032MHz. One fixed events-only sample on GPU7 was1897MHz. Non-numeric clock readings during startup were recorded as unavailable, with zero unavailable samples during matched profile requests.
+
+Pinned model downloads into a writable shared cache:
 
 export HF_HUB_CACHE=/path/to/writable/shared/hf-cache
+
 export TARGET_MODEL_DIR=$(hf download Qwen/Qwen3.8-27B --revision 1d4bf0f2ff6012fd82039f2fa52739d0dd7c60c0 --quiet)
+
 export DRAFT_MODEL_DIR=$(hf download RadixArk/Qwen3.8-27B-DSpark --revision b9a5dbdf03bc999c6c73c426b19c2d9041cea393 --quiet)
 
-Run fixed, non-SD, then AV, one persistent server per method for all three repeats. Prefix caching is disabled. Stop the server before starting the next method. The following commands reserve a GPU pair through canhazgpu.
+Place NVIDIA SPEED-Bench throughput_1k JSONL at throughput_1k.jsonl. Software: Python 3.12.13, PyTorch 2.13.0+cu130, CUDA 13.0, Transformers 5.17.0, Triton 3.7.1, AIPerf 0.13.0. Installed precompiled vLLM extensions (0.30.1rc1.dev17+g8d3f2b65c.precompiled) were reused.
+
+Server commands below reserve independent GPU pairs. Start them in separate terminals, then run each matching benchmark config. Ports8796/8797/8798 isolate the methods.
+
 
 
 FIXED
 
-chg run --gpus 2 -- env VLLM_USE_V2_MODEL_RUNNER=1 VLLM_ADAPTIVE_VERIFICATION_PROFILE_CONTEXT_LEN=1024 vllm serve Qwen/Qwen3.8-27B --revision 1d4bf0f2ff6012fd82039f2fa52739d0dd7c60c0 --served-model-name qwen --language-model-only --max-model-len 8192 --tensor-parallel-size 2 --max-num-seqs 128 --max-num-batched-tokens 8192 --gpu-memory-utilization 0.92 --no-enable-prefix-caching --disable-uvicorn-access-log --host 127.0.0.1 --port 8696 --compilation-config '{"cudagraph_capture_sizes": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 48, 64, 80, 96, 112, 128, 144, 160, 176, 192, 208, 224, 240, 256, 272, 288, 304, 320, 336, 352, 368, 384, 400, 416, 432, 448, 464, 480, 496, 512, 768, 1024, 1280, 1536, 1792, 2048, 3072, 4096]}' --speculative-config '{"method": "dspark", "model": "RadixArk/Qwen3.8-27B-DSpark", "num_speculative_tokens": 15, "draft_sample_method": "probabilistic", "enable_adaptive_verification": false, "revision": "b9a5dbdf03bc999c6c73c426b19c2d9041cea393"}'
+chg run --gpu-ids 0,1 -- env VLLM_USE_V2_MODEL_RUNNER=1 VLLM_ADAPTIVE_VERIFICATION_PROFILE_CONTEXT_LEN=1024 vllm serve Qwen/Qwen3.8-27B --revision 1d4bf0f2ff6012fd82039f2fa52739d0dd7c60c0 --served-model-name qwen --language-model-only --max-model-len 8192 --tensor-parallel-size 2 --max-num-seqs 128 --max-num-batched-tokens 8192 --gpu-memory-utilization 0.92 --no-enable-prefix-caching --disable-uvicorn-access-log --host 127.0.0.1 --port 8796 --compilation-config '{"cudagraph_capture_sizes": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 48, 64, 80, 96, 112, 128, 144, 160, 176, 192, 208, 224, 240, 256, 272, 288, 304, 320, 336, 352, 368, 384, 400, 416, 432, 448, 464, 480, 496, 512, 768, 1024, 1280, 1536, 1792, 2048, 3072, 4096]}' --speculative-config '{"method": "dspark", "model": "RadixArk/Qwen3.8-27B-DSpark", "num_speculative_tokens": 15, "draft_sample_method": "probabilistic", "enable_adaptive_verification": false, "revision": "b9a5dbdf03bc999c6c73c426b19c2d9041cea393"}'
 
-In a second terminal:
 TMPDIR=/tmp aiperf profile --config fixed-sweep.yaml
 
-schemaVersion: '2.0'
-randomSeed: 42
-benchmark:
-  model: qwen
-  endpoint:
-    url: http://127.0.0.1:8696
-    type: chat
-    streaming: true
-    use_server_token_count: true
-    timeout: 600
-    extra:
-      temperature: 0
-      ignore_eos: false
-      min_tokens: 0
-      max_completion_tokens: 1024
-      chat_template_kwargs:
-        enable_thinking: false
-  tokenizer:
-    name: ${TARGET_MODEL_DIR}
-  datasets:
-  - name: main
-    type: file
-    path: throughput_1k.jsonl
-    format: speed_bench_throughput_1k
-    sampling: shuffle
-    random_seed: 42
-  phases:
-  - name: profiling
-    type: concurrency
-    duration: 30
-    grace_period: 120
-    concurrency: 1
-  server_metrics:
-    enabled: true
-    urls:
-    - http://127.0.0.1:8696/metrics
-    formats:
-    - json
-  artifacts:
-    dir: artifacts/fixed
-    summary:
-    - json
-    records:
-    - jsonl
-    raw: true
-    export_outputs_json: true
-  runtime:
-    ui: none
-sweep:
-  type: zip
-  same_seed: true
-  iteration_order: repeated
-  parameters:
-    concurrency:
-    - 1
-    - 16
-    - 64
-    - 128
-    duration:
-    - 30
-    - 30
-    - 45
-    - 60
-multi_run:
-  num_runs: 3
 
 
 BASELINE
 
-chg run --gpus 2 -- env VLLM_USE_V2_MODEL_RUNNER=1 VLLM_ADAPTIVE_VERIFICATION_PROFILE_CONTEXT_LEN=1024 vllm serve Qwen/Qwen3.8-27B --revision 1d4bf0f2ff6012fd82039f2fa52739d0dd7c60c0 --served-model-name qwen --language-model-only --max-model-len 8192 --tensor-parallel-size 2 --max-num-seqs 128 --max-num-batched-tokens 8192 --gpu-memory-utilization 0.92 --no-enable-prefix-caching --disable-uvicorn-access-log --host 127.0.0.1 --port 8696 --compilation-config '{"cudagraph_capture_sizes": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 48, 64, 80, 96, 112, 128, 144, 160, 176, 192, 208, 224, 240, 256, 272, 288, 304, 320, 336, 352, 368, 384, 400, 416, 432, 448, 464, 480, 496, 512, 768, 1024, 1280, 1536, 1792, 2048, 3072, 4096]}'
+chg run --gpu-ids 2,3 -- env VLLM_USE_V2_MODEL_RUNNER=1 VLLM_ADAPTIVE_VERIFICATION_PROFILE_CONTEXT_LEN=1024 vllm serve Qwen/Qwen3.8-27B --revision 1d4bf0f2ff6012fd82039f2fa52739d0dd7c60c0 --served-model-name qwen --language-model-only --max-model-len 8192 --tensor-parallel-size 2 --max-num-seqs 128 --max-num-batched-tokens 8192 --gpu-memory-utilization 0.92 --no-enable-prefix-caching --disable-uvicorn-access-log --host 127.0.0.1 --port 8797 --compilation-config '{"cudagraph_capture_sizes": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 48, 64, 80, 96, 112, 128, 144, 160, 176, 192, 208, 224, 240, 256, 272, 288, 304, 320, 336, 352, 368, 384, 400, 416, 432, 448, 464, 480, 496, 512, 768, 1024, 1280, 1536, 1792, 2048, 3072, 4096]}'
 
-In a second terminal:
 TMPDIR=/tmp aiperf profile --config baseline-sweep.yaml
 
-schemaVersion: '2.0'
-randomSeed: 42
-benchmark:
-  model: qwen
-  endpoint:
-    url: http://127.0.0.1:8696
-    type: chat
-    streaming: true
-    use_server_token_count: true
-    timeout: 600
-    extra:
-      temperature: 0
-      ignore_eos: false
-      min_tokens: 0
-      max_completion_tokens: 1024
-      chat_template_kwargs:
-        enable_thinking: false
-  tokenizer:
-    name: ${TARGET_MODEL_DIR}
-  datasets:
-  - name: main
-    type: file
-    path: throughput_1k.jsonl
-    format: speed_bench_throughput_1k
-    sampling: shuffle
-    random_seed: 42
-  phases:
-  - name: profiling
-    type: concurrency
-    duration: 30
-    grace_period: 120
-    concurrency: 1
-  server_metrics:
-    enabled: true
-    urls:
-    - http://127.0.0.1:8696/metrics
-    formats:
-    - json
-  artifacts:
-    dir: artifacts/baseline
-    summary:
-    - json
-    records:
-    - jsonl
-    raw: true
-    export_outputs_json: true
-  runtime:
-    ui: none
-sweep:
-  type: zip
-  same_seed: true
-  iteration_order: repeated
-  parameters:
-    concurrency:
-    - 1
-    - 16
-    - 64
-    - 128
-    duration:
-    - 30
-    - 30
-    - 45
-    - 60
-multi_run:
-  num_runs: 3
 
 
 ADAPTIVE
 
-chg run --gpus 2 -- env VLLM_USE_V2_MODEL_RUNNER=1 VLLM_ADAPTIVE_VERIFICATION_PROFILE_CONTEXT_LEN=1024 vllm serve Qwen/Qwen3.8-27B --revision 1d4bf0f2ff6012fd82039f2fa52739d0dd7c60c0 --served-model-name qwen --language-model-only --max-model-len 8192 --tensor-parallel-size 2 --max-num-seqs 128 --max-num-batched-tokens 8192 --gpu-memory-utilization 0.92 --no-enable-prefix-caching --disable-uvicorn-access-log --host 127.0.0.1 --port 8696 --compilation-config '{"cudagraph_capture_sizes": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 48, 64, 80, 96, 112, 128, 144, 160, 176, 192, 208, 224, 240, 256, 272, 288, 304, 320, 336, 352, 368, 384, 400, 416, 432, 448, 464, 480, 496, 512, 768, 1024, 1280, 1536, 1792, 2048, 3072, 4096]}' --speculative-config '{"method": "dspark", "model": "RadixArk/Qwen3.8-27B-DSpark", "num_speculative_tokens": 15, "draft_sample_method": "probabilistic", "enable_adaptive_verification": true, "revision": "b9a5dbdf03bc999c6c73c426b19c2d9041cea393"}'
+chg run --gpu-ids 4,5 -- env VLLM_USE_V2_MODEL_RUNNER=1 VLLM_ADAPTIVE_VERIFICATION_PROFILE_CONTEXT_LEN=1024 vllm serve Qwen/Qwen3.8-27B --revision 1d4bf0f2ff6012fd82039f2fa52739d0dd7c60c0 --served-model-name qwen --language-model-only --max-model-len 8192 --tensor-parallel-size 2 --max-num-seqs 128 --max-num-batched-tokens 8192 --gpu-memory-utilization 0.92 --no-enable-prefix-caching --disable-uvicorn-access-log --host 127.0.0.1 --port 8798 --compilation-config '{"cudagraph_capture_sizes": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 48, 64, 80, 96, 112, 128, 144, 160, 176, 192, 208, 224, 240, 256, 272, 288, 304, 320, 336, 352, 368, 384, 400, 416, 432, 448, 464, 480, 496, 512, 768, 1024, 1280, 1536, 1792, 2048, 3072, 4096]}' --speculative-config '{"method": "dspark", "model": "RadixArk/Qwen3.8-27B-DSpark", "num_speculative_tokens": 15, "draft_sample_method": "probabilistic", "enable_adaptive_verification": true, "revision": "b9a5dbdf03bc999c6c73c426b19c2d9041cea393"}'
 
-In a second terminal:
 TMPDIR=/tmp aiperf profile --config adaptive-sweep.yaml
 
-schemaVersion: '2.0'
-randomSeed: 42
-benchmark:
-  model: qwen
-  endpoint:
-    url: http://127.0.0.1:8696
-    type: chat
-    streaming: true
-    use_server_token_count: true
-    timeout: 600
-    extra:
-      temperature: 0
-      ignore_eos: false
-      min_tokens: 0
-      max_completion_tokens: 1024
-      chat_template_kwargs:
-        enable_thinking: false
-  tokenizer:
-    name: ${TARGET_MODEL_DIR}
-  datasets:
-  - name: main
-    type: file
-    path: throughput_1k.jsonl
-    format: speed_bench_throughput_1k
-    sampling: shuffle
-    random_seed: 42
-  phases:
-  - name: profiling
-    type: concurrency
-    duration: 30
-    grace_period: 120
-    concurrency: 1
-  server_metrics:
-    enabled: true
-    urls:
-    - http://127.0.0.1:8696/metrics
-    formats:
-    - json
-  artifacts:
-    dir: artifacts/adaptive
-    summary:
-    - json
-    records:
-    - jsonl
-    raw: true
-    export_outputs_json: true
-  runtime:
-    ui: none
-sweep:
-  type: zip
-  same_seed: true
-  iteration_order: repeated
-  parameters:
-    concurrency:
-    - 1
-    - 16
-    - 64
-    - 128
-    duration:
-    - 30
-    - 30
-    - 30
-    - 40
-multi_run:
-  num_runs: 3
 
 
-Dataset: NVIDIA SPEED-Bench throughput_1k JSONL placed at throughput_1k.jsonl. Temperature0, thinking off, natural EOS, output cap1024. Three repeats at c1/16/64/128, seed42. Fixed and non-SD durations30/30/45/60s, AV30/30/30/40s.
+Metrics: tables/CSV use medians across3repeats, plot lines use means. Steady throughput excludes initial fill and final drain, with output token counts distributed evenly across streamed chunks. TPOT averages requests submitted inside the steady window. AL=1+accepted_draft_tokens/speculative_steps over the full client measurement interval.
 
-The plot connects means of three runs, with individual runs shown faintly. Tables use medians of three runs. Throughput uses the steady window after initial completions and before drain. The minimum observed window is10.40s. These are consecutive server sessions, not interleaved A/B measurements. Timed servers have no execution hooks. Separate execution evidence uses instrumentation.
+GSM8K uses the first 100 test questions and first 5 training examples, concurrency 16, seed 42, temperature 0, max_tokens 1024, thinking disabled. All three methods scored 99/100, with identical numeric answers on all 100 questions. See eval_command.txt and eval_gsm8k.py.txt for reproduction.
 
-GSM8K: vLLM five-shot evaluation, same100questions for each arm, concurrency16, temperature0, seed42, max_tokens1024, thinking off. Fixed/AV numeric answers match on100/100.
-
-Additional c1 profiles use GPUs3,4. Compare profiling timings within that pair, rather than as an exact decomposition of the timed5,6 sweep. Probe timings are separate from uninstrumented benchmark results.
+The earlier setup-only attempt failed before benchmarking due to a missing ignored FlashMLA interface and IPC temporary paths exceeding107characters. Fixed by reusing the interface from the same precompiled installation and using short per-server /tmp directories. The tracked author source stayed clean.

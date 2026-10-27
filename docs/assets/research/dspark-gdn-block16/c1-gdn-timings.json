@@ -1,19 +1,9 @@
 {
   "gdn_ms_per_rank_step": {
-    "adaptive": 0.4953342924320353,
-    "fixed": 1.1142644033715676
+    "adaptive": 0.4778555996653031,
+    "fixed": 1.1086305450278164
   },
-  "gdn_saving_ms_per_rank_step": 0.6189301109395323,
-  "target_saving_ms_per_step": 0.9265842202919066,
-  "gdn_fraction_of_target_saving": 0.667969621525119,
-  "calls_per_rank_step": {
-    "adaptive": 48.0,
-    "fixed": 48.0
-  },
-  "kernel_us_per_call": {
-    "adaptive": 10.3195,
-    "fixed": 23.2138
-  },
-  "hardware_note": "Timed sweep used GPUs5,6. Separate matched profiles used GPUs3,4. Both SD profiles ran at2032MHz.",
-  "instrumentation_note": "External CUDA events, buffered GPU counts read after requests drained. CPU/GPU stages overlap, do not add. Nsight-off retains event hooks."
+  "gdn_saving_ms_per_rank_step": 0.6307749453625133,
+  "target_saving_ms_per_step": 1.3303677093430792,
+  "gdn_fraction_of_target_saving": 0.4741357903778219
 }
