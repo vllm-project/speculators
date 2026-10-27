@@ -50,15 +50,18 @@ def compute_accuracy_single_step(
         counts suitable for distributed reduction before computing ratios.
     """
     correct = pred_ids == target_ids
-    cond_total = torch.tensor(correct.numel(), dtype=torch.float, device=correct.device)
+    numel = torch.full((), correct.numel(), dtype=torch.float, device=correct.device)
+    cond_total = numel
     if prev_correct is not None:
         cond_total = prev_correct.sum().float()
         correct = torch.logical_and(prev_correct, correct, out=prev_correct)
     if loss_mask is not None:
-        correct = torch.masked_select(correct, loss_mask.to(torch.bool))
-
-    correct_sum = correct.float().sum()
-    full_total = torch.tensor(correct.numel(), dtype=torch.float, device=correct.device)
+        mask = loss_mask.to(torch.bool)
+        correct_sum = torch.logical_and(correct, mask).float().sum()
+        full_total = mask.sum().float()
+    else:
+        correct_sum = correct.float().sum()
+        full_total = numel.clone()
 
     return correct_sum, full_total, correct_sum.clone(), cond_total
 

@@ -578,10 +578,11 @@ class Trainer:
             timer.mark("pre_clip")
             torch.nn.utils.clip_grad_norm_(self.model.parameters(), 1.0)
 
-            metrics["error_records_sum"] = torch.tensor(
-                batch["error_records"], dtype=torch.float32, device=loss.device
+            metrics["error_records_sum"] = torch.full(
+                (), batch["error_records"], dtype=torch.float32, device=loss.device
             )
-            metrics["error_records_total"] = torch.tensor(
+            metrics["error_records_total"] = torch.full(
+                (),
                 1.0 if self.rank == 0 else 0,
                 dtype=torch.float32,
                 device=loss.device,
