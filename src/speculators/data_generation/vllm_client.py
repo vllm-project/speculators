@@ -130,6 +130,20 @@ class ClientItem(TypedDict):
     instead of passing `token_ids` to Completions API."""
 
 
+def has_multimodal_content(messages: list[dict]) -> bool:
+    """True when any turn carries non-text content (images, video, audio).
+
+    Turns store ``content`` as a plain string or, after ``_adapt_conv_for_vllm``,
+    as a list of typed parts, e.g. ``[{"type": "text", ...}, {"type": "image_url",
+    ...}]``. Only a part whose type is not ``text`` makes the turn multimodal.
+    """
+    return any(
+        isinstance(m.get("content"), list)
+        and any(part.get("type") != "text" for part in m["content"])
+        for m in messages
+    )
+
+
 async def _poll_lock_async(fd, poll_interval):
     while True:
         try:
