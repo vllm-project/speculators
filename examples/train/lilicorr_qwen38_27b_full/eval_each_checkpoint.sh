@@ -142,6 +142,45 @@ while true; do
       --standalone --nproc_per_node 6 \
       -m speculators.train --config "$CONFIG_FILE" \
       >> "$RUN_DIR/train.log" 2>&1 &
+  TRAIN_PID=$!
+
+  # Only promote this checkpoint to the verified backup slot (checkpoints/0_prev)
+  # AFTER confirming training actually resumed from it -- otherwise an
+  # untested/corrupted checkpoint could overwrite the one known-good backup we
+  # have. This is what we didn't have on 2026-10-27: checkpoints/0 is
+  # overwritten in place every save with no history, so when a save got
+  # corrupted (pkill landed mid-write) there was nothing to fall back to.
+  echo "--- verifying training resumed before trusting step $step's checkpoint ---"
+  resumed_ok=0
+  marker_line=$(wc -l < "$RUN_DIR/train.log" 2>/dev/null || echo 0)
+  for _ in $(seq 1 30); do
+    sleep 5
+    if ! kill -0 "$TRAIN_PID" 2>/dev/null; then
+      echo "!!! trainer process died while verifying resume for step $step !!!"
+      break
+    fi
+    new_lines=$(tail -n +"$((marker_line + 1))" "$RUN_DIR/train.log" 2>/dev/null)
+    if echo "$new_lines" | grep -qE "ChildFailedError|Traceback"; then
+      echo "!!! trainer crashed while verifying resume for step $step !!!"
+      break
+    fi
+    if echo "$new_lines" | grep -qE "global_step="; then
+      resumed_ok=1
+      break
+    fi
+  done
+
+  if [ "$resumed_ok" -eq 1 ]; then
+    echo "--- training confirmed resumed from step $step -- promoting it to the verified backup ---"
+    PREV_CKPT_DIR="$RUN_DIR/checkpoints/0_prev"
+    rm -rf "${PREV_CKPT_DIR}.new"
+    cp -a "$CKPT_DIR" "${PREV_CKPT_DIR}.new"
+    rm -rf "$PREV_CKPT_DIR"
+    mv "${PREV_CKPT_DIR}.new" "$PREV_CKPT_DIR"
+    echo "--- backup complete: $PREV_CKPT_DIR now holds the verified step-$step checkpoint ---"
+  else
+    echo "!!! NOT promoting step $step -- resume did not confirm. $RUN_DIR/checkpoints/0_prev still holds the last verified checkpoint; investigate $RUN_DIR/train.log before continuing !!!"
+  fi
 
   echo "=== resumed training after step $step eval ==="
 done
