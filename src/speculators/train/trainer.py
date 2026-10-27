@@ -358,6 +358,7 @@ class Trainer:
             self._setup_model_ddp(load_checkpoint)
 
     def _setup_model_fsdp(self, load_checkpoint: bool):
+        """Wrap the model with FSDP, then restore or broadcast its weights."""
         # Capture full state dict on rank 0 before FSDP sharding
         full_state_dict = {}
         if not load_checkpoint and dist.get_rank() == 0:
