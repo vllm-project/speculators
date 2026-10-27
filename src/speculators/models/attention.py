@@ -21,7 +21,7 @@ from torch.nn.attention.flex_attention import (
 )
 from transformers.modeling_utils import AttentionInterface
 
-from speculators.models.utils import conditional_torch_compile
+from speculators.models.utils import conditional_torch_compile, npu_available
 
 
 # On NPU, force single-threaded inductor compilation so that monkey-patches
@@ -55,15 +55,6 @@ if os.environ.get("TORCHINDUCTOR_COMPILE_THREADS", "0") != "1":
 # Two more upstream hard-codings must be patched:
 #   1. flex_decoding.get_split_k calls torch.cuda.get_device_properties()
 #   2. NPUTritonScheduling.define_kernel expects an extra traced_graph_hash arg
-
-def _npu_available() -> bool:
-    """Return True when torch_npu is importable and an NPU device exists."""
-    try:
-        import torch_npu  # noqa: F401, PLC0415
-    except ImportError:
-        return False
-    return bool(torch.npu.is_available())
-
 
 def _patch_flex_attention_device_check() -> None:
     """Allow flex_attention on NPU by extending the device allowlist."""
@@ -146,7 +137,7 @@ def _setup_npu_flex_attention() -> None:
     NPUTritonScheduling.define_kernel = _patched_define_kernel
 
 
-if _npu_available():
+if npu_available():
     _setup_npu_flex_attention()
 
 
@@ -154,7 +145,7 @@ def _compile_flex_attention():
     """Compile flex_attention on CUDA and NPU; leave uncompiled elsewhere."""
     if not hasattr(torch, "compile"):
         return flex_attention
-    if torch.cuda.is_available() or _npu_available():
+    if torch.cuda.is_available() or npu_available():
         return torch.compile(flex_attention)
     return flex_attention
 

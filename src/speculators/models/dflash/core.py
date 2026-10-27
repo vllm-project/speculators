@@ -24,6 +24,7 @@ from speculators.models.dflash.utils import (
 from speculators.models.utils import (
     conditional_torch_compile,
     flatten_rope_parameters,
+    flex_attention_supported,
     resolve_target_layer_ids,
     resolve_verifier_norm_class,
 )
@@ -73,9 +74,10 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
     ) -> None:
         # Forcibly override config settings
         if config.transformer_layer_config._attn_implementation is None:  # noqa: SLF001
-            # flex_attention requires torch.compile on CUDA; on non-CUDA devices
-            # (e.g., Ascend NPU) fall back to eager attention
-            if torch.cuda.is_available():
+            # flex_attention is supported on CUDA and Ascend NPU (with runtime
+            # patches in speculators.models.attention); fall back to eager
+            # on devices without torch.compile support.
+            if flex_attention_supported():
                 config.transformer_layer_config._attn_implementation = (  # noqa: SLF001
                     "simple_flex_attention"
                 )
