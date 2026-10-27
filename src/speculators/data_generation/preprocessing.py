@@ -16,6 +16,7 @@ from transformers import (
 
 from speculators.data_generation.logging_utils import PipelineLogger
 from speculators.data_generation.render_client import (
+    RenderEndpointError,
     RenderRouteError,
     render_conversation,
 )
@@ -371,7 +372,11 @@ def _render_conversation_rows(
             max_length,
             tools=parsed_tools,
         )
-    except RenderRouteError:
+    except (RenderEndpointError, RenderRouteError):
+        # The endpoint, not this conversation, is failing: every remaining
+        # conversation would fail the same way. Let it abort the build instead
+        # of returning a training set silently missing everything after the
+        # first failure.
         raise
     # One row the render endpoint or boundary derivation can't handle must
     # not kill the run. The failure modes can't be enumerated -- templates
