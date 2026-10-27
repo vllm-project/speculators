@@ -688,7 +688,12 @@ class Trainer:
             return
 
         root_logger.info(f"Saving checkpoint to {self.checkpointer.path / str(epoch)}")
-        self.checkpointer.save_checkpoint(self.model, self.optimizers, epoch)
+        # float32 (not the bfloat16 default): the checkpointer otherwise
+        # downcasts model and optimizer state, which degrades resume precision
+        # across the pause/eval/resume cycles this run uses (see plan.md §5).
+        self.checkpointer.save_checkpoint(
+            self.model, self.optimizers, epoch, float_dtype=torch.float32
+        )
         if self.schedulers:
             self.checkpointer.save_scheduler_state_dict(self.schedulers, epoch)
         if isinstance(epoch, int):
