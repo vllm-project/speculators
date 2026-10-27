@@ -55,6 +55,8 @@ def compute_metrics(
     prev_correct: torch.Tensor | None,
     ttt_step: int,
     ttt_step_loss_decay: float,
+    pred_ids: torch.Tensor,
+    target_ids: torch.Tensor,
     loss_config: LossConfig | None = None,
 ) -> tuple[torch.Tensor, dict]:
     """Compute metrics for a given ttt_step.
@@ -66,6 +68,9 @@ def compute_metrics(
         prev_correct: The previous correct predictions for the current ttt_step.
         ttt_step: The current ttt_step.
         ttt_step_loss_decay: The loss decay for the current ttt_step.
+        pred_ids: ``argmax(logits, dim=-1)`` over all ``total_seq_len``
+            positions, i.e. not yet aligned for the current ttt_step.
+        target_ids: ``argmax(targets, dim=-1)``, likewise unaligned.
         loss_config: Mapping of ``{name: (loss_fn, weight)}``.
 
     Effects:
@@ -97,8 +102,11 @@ def compute_metrics(
         decay_fn=partial(exp_loss_decay, gamma=ttt_step_loss_decay),
     )
 
-    pred_ids = torch.argmax(s_logits, dim=-1)
-    target_ids = torch.argmax(s_targets, dim=-1)
+    # The ids arrive unaligned, so apply the same slicing align_for_step
+    # applies to the tensors they came from.
+    if ttt_step > 0:
+        pred_ids = pred_ids[:, :-ttt_step]
+    target_ids = target_ids[:, ttt_step:]
 
     full_correct, full_total, cond_correct, cond_total = compute_accuracy_single_step(
         pred_ids, target_ids, s_loss_mask, s_prev_correct
