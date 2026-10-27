@@ -578,9 +578,6 @@ class Trainer:
             timer.mark("pre_clip")
             torch.nn.utils.clip_grad_norm_(self.model.parameters(), 1.0)
 
-            # torch.full fills on the device. torch.tensor(<python scalar>,
-            # device=...) copies from pageable host memory, which waits for the
-            # backward queued just above to drain.
             metrics["error_records_sum"] = torch.full(
                 (), batch["error_records"], dtype=torch.float32, device=loss.device
             )
