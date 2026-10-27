@@ -441,9 +441,8 @@ def generate_offline_data(
             "--validate-outputs",
             help=(
                 "Load generated safetensor files and check output token ids "
-                "match prompt tokens, hidden states seq_len matches num tokens "
-                "and hidden states are finite; samples that fail are not saved, "
-                "so a later run regenerates them"
+                "match prompt tokens and hidden states seq_len matches num tokens; "
+                "samples that fail are not saved, so a later run regenerates them"
             ),
         ),
     ] = False,

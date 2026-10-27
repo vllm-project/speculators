@@ -8,7 +8,7 @@ Generates training data for speculator models by extracting hidden states from a
 - **Error handling with auto-retries** — Failed requests are automatically retried up to `--max-retries` times. Samples that still fail are skipped by default, allowing the rest of the dataset to complete.
 - **Consecutive failure detection** — Aborts early after `--max-consecutive-errors` consecutive failures to avoid silently churning through the dataset when the server is unreachable.
 - **Async concurrency** — Sends multiple requests to the vLLM server in parallel, controlled by `--concurrency`, for high throughput.
-- **Output validation** — Optional `--validate-outputs` flag checks each sample's token IDs, sequence length and finiteness before it is saved; a sample that fails is regenerated on the next run. This applies only to files the current run generates, so it is not a way to re-check a directory that is already complete.
+- **Output validation** — Optional `--validate-outputs` flag verifies that saved hidden states match expected token IDs and sequence lengths. This applies only to files the current run generates, so it is not a way to re-check a directory that is already complete.
 
 ## Basic Usage
 
@@ -41,7 +41,7 @@ speculators generate-offline-data \
 
 - **`--concurrency`** (int, default: `32`) Number of active vLLM requests at a time. The number of async workers is set to `2 * concurrency`.
 
-- **`--validate-outputs`** (flag) Load generated safetensor files and verify that output token IDs match prompt tokens, hidden states sequence length matches the number of tokens, and hidden states are finite. A sample that fails is not saved, so the next run regenerates it.
+- **`--validate-outputs`** (flag) Load generated safetensor files and verify that output token IDs match prompt tokens and hidden states sequence length matches the number of tokens. A sample that fails is not saved, so the next run regenerates it.
 
 - **`--request-timeout`** (float) Timeout in seconds for each individual vLLM request.
 

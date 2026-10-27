@@ -173,7 +173,7 @@ def test_valid_samples_are_published(monkeypatch, tmp_path, output_dir):
 
 
 def test_publishes_without_validation_when_disabled(monkeypatch, tmp_path, output_dir):
-    # Without --validate-outputs the file is published unchecked, as before.
+    # Without --validate-outputs the file is published unchecked.
     items = [{"idx": 0, "input_ids": [1, 2, 3]}]
 
     stats, skipped = _run_worker(

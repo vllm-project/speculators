@@ -270,7 +270,7 @@ speculators generate-offline-data \
   --max-samples 5000 --world-size 2 --rank 1
 ```
 
-**Skipping validation:** validation loads every generated output file and confirms that the token ids match the sent request, the hidden states length matches expectation, and the hidden states are finite. A sample that fails is not saved, so the next run regenerates it. This is generally not required but is a good sanity check. Omit `--validate-outputs` to skip it.
+**Skipping validation:** validation loads every generated output file and confirms that the token ids match the sent request and the hidden states length matches expectation. This is generally not required but is a good sanity check. Omit `--validate-outputs` to skip it.
 
 **Resuming interrupted generation:** ensure the vLLM server is running and rerun the same command. The script automatically detects existing `hs_*.safetensors` files and skips them, continuing where you left off.
 
