@@ -1,0 +1,19 @@
+GSM8K correctness check, run once for each of the three servers.
+
+Download eval_gsm8k.py.txt and save it as eval_gsm8k.py. It is included as a text attachment because it runs against the separate vLLM checkout, not the Speculators package.
+
+Use the vLLM source checkout at c3e701c8bf0424e467008dddff0ecb6b603dae1b (exact benchmark source):
+https://github.com/tomasruizt/vllm/commit/c3e701c8bf0424e467008dddff0ecb6b603dae1b
+Start the corresponding server using vllm_command.txt, then run from the vLLM checkout:
+
+PYTHONPATH="$PWD" python /path/to/submission/eval_gsm8k.py --port 8696 --count 100 --concurrency 16 --stagger --output /path/to/results/gsm8k.json
+
+Use a different output file for each method. The client uses the checkout's tests.evals.gsm8k.gsm8k_eval helpers, the first 100 GSM8K test questions, and the first five training examples as demonstrations.
+Request settings: temperature 0, seed 42, max_tokens 1024, enable_thinking false.
+The --stagger option offsets request launches by 50 ms per question, matching the original run.
+Python dependencies include aiohttp and the dependencies of vLLM's GSM8K evaluation helpers.
+
+Metadata tests, from the same checkout:
+VLLM_USE_V2_MODEL_RUNNER=1 python -m pytest tests/v1/attention/test_gdn_metadata_builder.py -q
+
+This command file is a portable reconstruction of the original invocation, not an automatically captured provenance manifest.
