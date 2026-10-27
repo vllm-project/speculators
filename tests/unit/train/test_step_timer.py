@@ -273,10 +273,16 @@ def test_memory_fallback_skips_when_backend_lacks_memory_allocated():
 
 def test_memory_happy_path_still_works():
     """Generic accelerator API succeeds (CUDA-like) - memory recorded normally."""
+    fake_device = _FakeDevice("cuda")
+
     with (
         patch(
             "speculators.train.trainer.torch.accelerator.is_available",
             return_value=True,
+        ),
+        patch(
+            "speculators.train.trainer.torch.accelerator.current_accelerator",
+            return_value=fake_device,
         ),
         patch(
             "speculators.train.trainer.torch.accelerator.memory_allocated",
