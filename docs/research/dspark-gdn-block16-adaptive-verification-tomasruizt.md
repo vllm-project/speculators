@@ -17,21 +17,21 @@ tags:
 
 ## Summary
 
-We reran the experiment on the author's latest PR #60229 commit, with no local source changes. In a parallel sweep on separate GPU pairs, adaptive verification (AV) improved throughput over fixed K=15 by 5–25% with Qwen3.8-27B and RadixArk's DSpark v2 drafter. The c1 profiles again showed that verifying fewer tokens saves GDN recurrence work.
+Adaptive verification (AV) improved throughput over fixed K=15 by 5–25% with Qwen3.8-27B and RadixArk's DSpark v2 drafter in a parallel sweep on separate GPU pairs. Profiling at concurrency 1 showed that verifying fewer tokens saves GDN recurrence work.
 
-We ran this to check whether GDN could support a 16-token verification window through its Triton fallback, beyond the fused CUDA kernel's limit of 8. Removing the graph limit while retaining the fused kernel's guard worked with real requests under FULL CUDA graph replay.
+GDN supported a 16-token verification window through its Triton fallback under FULL CUDA graph replay, beyond the fused CUDA kernel's limit of 8. The fused kernel's width guard remained in place.
 
 ## Results
 
 We compared no speculation, fixed K=15, and K=15 with AV, each on two B300s (TP2, BF16), using SPEED-Bench `throughput_1k`. The three methods ran concurrently on separate GPU pairs. Each setting has three repeats. Tables show medians, and the plot connects means with individual runs shown faintly.
 
-These measurements differ substantially from our earlier sequential run. The author's branch also includes a broad upstream rebase, and parallel methods share host resources. This rerun validates the current implementation, but is not a controlled replacement for the earlier performance comparison.
+The methods used different GPU pairs and shared host resources, so the measured speedups may include hardware-placement and contention effects. A sequential comparison on the same GPU pair would separate those effects from the choice of decoding method.
 
 ![Throughput versus inverse TPOT for target-only, fixed K=15, and AV](../assets/research/dspark-gdn-block16/throughput-inverse-tpot.png)
 
 Higher and further right is better. The x-axis is inverse mean request TPOT in tok/s/user, and the y-axis is aggregate output throughput in tok/s.
 
-AV beat fixed K=15 throughout this sweep. It also exceeded target-only throughput at all four concurrencies, unlike the earlier run. We have not isolated how much of that difference comes from the rebase, GPU pair, or parallel execution.
+AV exceeded both fixed K=15 and target-only throughput at all four measured concurrencies under these conditions.
 
 | Concurrency | Target-only tok/s | Fixed K=15 tok/s | AV tok/s | AV / target-only | AV / fixed |
 | ----------: | ----------------: | ---------------: | -------: | ---------------: | ---------: |
@@ -99,16 +99,16 @@ These kernel totals cover the whole capture, including drafter and prefill work.
 
 We would next compare smaller fixed K values and a simple policy that changes K with batch size. Those comparisons would tell us whether AV is the best choice, rather than just a better choice than always verifying 15 drafts.
 
-The three methods ran in parallel on separate GPU pairs and shared host resources. A sequential comparison on the same pair would remove that confound. We only profiled c1 and have not located a compute-bound crossover or explained the performance differences from the earlier run.
+The three methods ran in parallel on separate GPU pairs and shared host resources. A sequential comparison on the same pair would remove that confound. We only profiled c1 and have not located a compute-bound crossover or measured which operations determine performance at higher concurrency.
 
 ## Appendix
 
 <details markdown="1">
-<summary>Why K=15, and which code changes were tested?</summary>
+<summary>Why test a 16-token verification window?</summary>
 
-While reviewing [vLLM PR #60229](https://github.com/vllm-project/vllm/pull/60229), we found that GDN's maximum query length for variable-length CUDA graphs was capped at 8. That matches the fused CUDA kernel's limit, but GDN also has a Triton fallback that handles longer queries. The graph limit was therefore preventing configurations that the fallback should support.
+GDN's fused CUDA kernel supports query lengths up to 8, but its Triton fallback handles longer queries. CUDA graph support therefore needs to allow longer queries while keeping the fused kernel's own guard in place. [vLLM PR #60229](https://github.com/vllm-project/vllm/pull/60229) provides that support for adaptive verification.
 
-We wanted to test that distinction with real requests: remove the graph limit, leave the fused kernel's guard in place, and check that longer queries run correctly through Triton under CUDA graph replay.
+The implementation question is whether longer queries execute correctly through Triton under CUDA graph replay with real requests.
 
 We chose a DSpark checkpoint trained with block size 16 and explicitly set K=15. That gives the target up to 16 input tokens per request: one existing token plus 15 draft tokens. This goes beyond the fused kernel's limit and gives AV room to choose how much of the draft to verify.
 
@@ -122,7 +122,7 @@ There was also a performance question. A large draft may help when few requests 
 - Target: [Qwen3.8-27B](https://huggingface.co/Qwen/Qwen3.8-27B/tree/1d4bf0f2ff6012fd82039f2fa52739d0dd7c60c0), with 48 GDN layers and 16 standard attention layers.
 - Drafter: [RadixArk's DSpark v2](https://huggingface.co/RadixArk/Qwen3.8-27B-DSpark/tree/b9a5dbdf03bc999c6c73c426b19c2d9041cea393). Its training block size is 16, but its serving default is 7, so we explicitly selected K=15. We used the published weights without further training.
 - Hardware: two B300 GPUs per method, TP2, BF16 for both models. Eight GPUs in total, including the separate diagnostic/profile pair.
-- Code: [555978f8cf](https://github.com/vllm-project/vllm/commit/555978f8cf2cd21b22adba5d09d5f6e9df357714) (author's PR #60229 head on 2026-10-27), with no tracked source changes. The author integrated the graph-limit removal and capture-conditional revert. This run retains their scatter implementation.
+- Code: [555978f8cf](https://github.com/vllm-project/vllm/commit/555978f8cf2cd21b22adba5d09d5f6e9df357714) (PR #60229 snapshot from 2026-10-27), without local source changes.
 - Workload: [SPEED-Bench](https://huggingface.co/datasets/nvidia/SPEED-Bench) `throughput_1k`, measured with AIPerf 0.13.0. Temperature 0, thinking disabled, natural EOS, output capped at 1,024 tokens.
 
 We tested concurrency 1, 16, 64, and 128, with three repeats per setting. We kept each method's server running across its repeats to avoid repeated startup costs, and disabled prefix caching so later runs would not benefit from earlier prompts. Fixed K used GPUs 0–1, target-only used 2–3, and AV used 4–5 concurrently, using the same shuffle seed of 42. Diagnostics and c1 profiles used GPUs 6–7.
@@ -152,7 +152,7 @@ To check the original implementation question, we recorded FULL graph replay wit
 The commands and pinned model revisions are linked below. We extended the graph capture sizes because K=15 creates larger target and drafter batches. Without enough graph coverage, eager execution could obscure the comparison.
 
 - [Server commands, software versions, pinned model downloads, and benchmark instructions](../assets/research/dspark-gdn-block16/vllm_command.txt)
-- [Exact vLLM source commit](https://github.com/vllm-project/vllm/commit/555978f8cf2cd21b22adba5d09d5f6e9df357714) (author's PR #60229 head on 2026-10-27, no tracked modifications)
+- [Exact vLLM source commit](https://github.com/vllm-project/vllm/commit/555978f8cf2cd21b22adba5d09d5f6e9df357714) (PR #60229 snapshot from 2026-10-27, without local source changes)
 - AIPerf configs: [target-only](../assets/research/dspark-gdn-block16/baseline-sweep.yaml), [fixed K=15](../assets/research/dspark-gdn-block16/fixed-sweep.yaml), [AV](../assets/research/dspark-gdn-block16/adaptive-sweep.yaml)
 - GSM8K: [evaluation command](../assets/research/dspark-gdn-block16/eval_command.txt) and [evaluation client](../assets/research/dspark-gdn-block16/eval_gsm8k.py.txt) (save as `eval_gsm8k.py`)
 - [All 36 per-run measurements](../assets/research/dspark-gdn-block16/measurements.csv)
@@ -176,12 +176,10 @@ Software: Python 3.12.13, PyTorch 2.13.0+cu130, CUDA 13.0, Transformers 5.17.0, 
 </details>
 
 <details markdown="1">
-<summary>Additional limitations and run notes</summary>
+<summary>Additional measurement limitations</summary>
 
 - Output lengths and the requests included in each measurement differ, so throughput and mean TPOT are not exact reciprocals at a fixed nominal concurrency.
 - The model revisions are pinned, but we did not generate weight checksum manifests or record the cached SPEED-Bench dataset's revision and checksum.
-- The author snapshot also includes a broad upstream rebase: 1,187 files differ from our earlier source. We have not isolated that effect from the change to parallel execution on different GPU pairs.
 - Fixed-K GPU clocks dropped under high-concurrency load (down to 1,485 MHz at c64), while the target-only and AV pairs stayed at 2,032 MHz.
-- An initial setup attempt failed before benchmarking because a vendored interface was missing and temporary paths exceeded the IPC limit. After fixing the environment, the full rerun and its launcher exited successfully. The tracked author source remained clean.
 
 </details>

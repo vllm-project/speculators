@@ -2,7 +2,7 @@ GSM8K correctness check, run once for each of the three servers.
 
 Download eval_gsm8k.py.txt and save it as eval_gsm8k.py. It is included as a text attachment because it runs against the separate vLLM checkout, not the Speculators package.
 
-Use the vLLM source checkout at 555978f8cf2cd21b22adba5d09d5f6e9df357714 (author's PR #60229 head on 2026-10-27, without tracked modifications):
+Use the vLLM source checkout at 555978f8cf2cd21b22adba5d09d5f6e9df357714 (PR #60229 snapshot from 2026-10-27, without local source changes):
 https://github.com/vllm-project/vllm/commit/555978f8cf2cd21b22adba5d09d5f6e9df357714
 Start the corresponding server using vllm_command.txt, then run from the vLLM checkout:
 

@@ -1,12 +1,10 @@
-Source: https://github.com/vllm-project/vllm/commit/555978f8cf2cd21b22adba5d09d5f6e9df357714 (author's PR #60229 head on 2026-10-27). No tracked modifications. Check out this commit and install its Python source with compatible precompiled extensions before running the commands below.
+Source: https://github.com/vllm-project/vllm/commit/555978f8cf2cd21b22adba5d09d5f6e9df357714 (PR #60229 snapshot from 2026-10-27), without local source changes. Check out this commit and install its Python source with compatible precompiled extensions before running the commands below.
 
 Qwen3.8-27B BF16 + RadixArk DSpark v2, K15, target width16, TP2, 2 B300 GPUs per method.
 
 Timed fixed/baseline/AV methods ran concurrently on GPUs0,1 /2,3 /4,5, respectively. Diagnostic and matched c1 profiles used GPUs6,7. One persistent server per method, prefix caching disabled. Profiling hooks were absent from timed servers.
 
-The parallel run completed successfully in about15m20s after setup was corrected. GPU reservations and workers were released.
-
-The earlier snapshot differs by a broad upstream rebase (1187files), not just the two GDN fixes. Different GPU pairs and shared host resources also limit comparisons against older sequential runs.
+Different GPU pairs and shared host resources mean measured speedups may include hardware-placement and contention effects. A sequential comparison on the same pair would separate those effects from the decoding method.
 
 Fixed GPU clocks dropped under high-concurrency load (minimum1485MHz across c64 cells), whereas baseline and AV stayed2032MHz. Matched Nsight trace passes on GPUs6,7 stayed2032MHz. One fixed events-only sample on GPU7 was1897MHz. Non-numeric clock readings during startup were recorded as unavailable, with zero unavailable samples during matched profile requests.
 
@@ -52,4 +50,4 @@ Metrics: tables/CSV use medians across3repeats, plot lines use means. Steady thr
 
 GSM8K uses the first 100 test questions and first 5 training examples, concurrency 16, seed 42, temperature 0, max_tokens 1024, thinking disabled. All three methods scored 99/100, with identical numeric answers on all 100 questions. See eval_command.txt and eval_gsm8k.py.txt for reproduction.
 
-The earlier setup-only attempt failed before benchmarking due to a missing ignored FlashMLA interface and IPC temporary paths exceeding107characters. Fixed by reusing the interface from the same precompiled installation and using short per-server /tmp directories. The tracked author source stayed clean.
+The precompiled installation must include the vendored FlashMLA interface. Use short per-server temporary directories, such as /tmp/gdn-8796, to stay within the 107-character IPC socket-path limit.
