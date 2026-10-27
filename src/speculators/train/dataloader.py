@@ -11,15 +11,20 @@ import os
 import torch
 from torch.utils.data import DataLoader
 
-from hs_connectors import HiddenStatesTransfer
+from hs_connectors import FileTransfer, HiddenStatesTransfer
+from speculators.data_generation.vllm_client import validate_vllm_model
 from speculators.train.data import (
     ArrowDataset,
-    BaseDataset,
-    CollateFn,
+    SpeculatorsDataset,
 )
 from speculators.train.distributed import get_dp_rank, get_dp_size
 from speculators.train.distributed_batch_sampler import (
     MultipackDistributedBatchSamplerV2,
+)
+from speculators.train.hidden_states_source import (
+    HiddenStatesSource,
+    OfflineHiddenStatesSource,
+    VllmHiddenStatesSource,
 )
 
 logger = logging.getLogger(__name__)
@@ -52,14 +57,15 @@ def _worker_init_fn(worker_id: int) -> None:  # noqa: ARG001
         torch.accelerator.set_device_index(local_rank)
 
 
+def identity_fn(x):
+    return x
+
+
 def _setup_dataloader(
-    dataset: BaseDataset,
+    dataset: SpeculatorsDataset,
     total_seq_len: int,
-    hidden_size: int,
     num_workers: int = 12,
-    num_target_layers: int = 3,
     prefetch_factor: int | None = 4,
-    preprocess: Callable[[BatchType], BatchType] | None = None,
     max_batches: int | None = None,
     seed: int = 0,
 ) -> DataLoader:
@@ -78,13 +84,7 @@ def _setup_dataloader(
         num_workers=num_workers,
         prefetch_factor=prefetch_factor if use_workers else None,
         pin_memory=True,
-        collate_fn=CollateFn(
-            total_seq_len,
-            hidden_size,
-            num_target_layers=num_target_layers,
-            dtype=dataset.hidden_states_dtype,
-            preprocess=preprocess,
-        ),
+        collate_fn=identity_fn,
         persistent_workers=use_workers,
         multiprocessing_context="spawn" if use_workers else None,
         worker_init_fn=_worker_init_fn if use_workers else None,
@@ -112,6 +112,7 @@ def create_train_val_loaders(
     train_data_ratio: float = 0.9,
     max_train_batches: int | None = None,
     seed: int = 0,
+    max_transfer_workers: int = 1,
 ) -> tuple[DataLoader, DataLoader]:
     """Create training and validation DataLoaders.
 
@@ -128,58 +129,72 @@ def create_train_val_loaders(
     if not (0.0 < train_data_ratio < 1.0):
         raise ValueError(f"train_data_ratio must be in (0, 1), got {train_data_ratio}")
 
-    train_dataset: BaseDataset = ArrowDataset(
+    train_records = ArrowDataset(
         datapath=data_path,
-        max_len=total_seq_len,
-        transfer=transfer,
-        vllm_endpoint=vllm_endpoint,
-        on_missing=on_missing,
         train_ratio=train_data_ratio,
         split="train",
-        model=verifier_name_or_path,
-        hidden_states_dtype=hidden_states_dtype,
-        num_target_layers=num_target_layers,
-        request_timeout=request_timeout,
-        max_retries=max_retries,
-        generation_validation_retries=generation_validation_retries,
-        max_consecutive_generation_failures=max_consecutive_generation_failures,
     )
-    val_dataset: BaseDataset = ArrowDataset(
+    val_records = ArrowDataset(
         datapath=data_path,
-        max_len=total_seq_len,
-        transfer=transfer,
-        vllm_endpoint=vllm_endpoint,
-        on_missing=on_missing,
         train_ratio=train_data_ratio,
         split="val",
-        model=verifier_name_or_path,
+    )
+
+    # ``on_missing=generate`` is retained as the backwards-compatible switch
+    # for the vLLM source. The other values select offline loading and define
+    # what happens when a cached sample is absent.
+    source_transfer = transfer or FileTransfer(train_records.datapath / "hidden_states")
+    hidden_states_source: HiddenStatesSource
+    if on_missing == "generate":
+        validate_vllm_model(vllm_endpoint, verifier_name_or_path)
+        hidden_states_source = VllmHiddenStatesSource(
+            transfer=source_transfer,
+            vllm_endpoint=vllm_endpoint,
+            model=verifier_name_or_path,
+            request_timeout=request_timeout,
+            max_retries=max_retries,
+            generation_validation_retries=generation_validation_retries,
+            max_consecutive_generation_failures=max_consecutive_generation_failures,
+            max_transfer_workers=max_transfer_workers,
+        )
+    else:
+        hidden_states_source = OfflineHiddenStatesSource(
+            transfer=source_transfer,
+            on_missing=on_missing,
+        )
+
+    train_dataset = SpeculatorsDataset(
+        records=train_records,
+        max_len=total_seq_len,
+        hidden_states=hidden_states_source,
+        hidden_size=hidden_size,
         hidden_states_dtype=hidden_states_dtype,
         num_target_layers=num_target_layers,
-        request_timeout=request_timeout,
-        max_retries=max_retries,
-        generation_validation_retries=generation_validation_retries,
-        max_consecutive_generation_failures=max_consecutive_generation_failures,
+        preprocess=preprocess,
+    )
+    val_dataset = SpeculatorsDataset(
+        records=val_records,
+        max_len=total_seq_len,
+        hidden_states=hidden_states_source,
+        hidden_size=hidden_size,
+        hidden_states_dtype=hidden_states_dtype,
+        num_target_layers=num_target_layers,
+        preprocess=preprocess,
     )
 
     train_loader = _setup_dataloader(
         train_dataset,
         total_seq_len,
-        hidden_size,
-        num_target_layers=num_target_layers,
         num_workers=num_workers,
         prefetch_factor=prefetch_factor,
-        preprocess=preprocess,
         max_batches=max_train_batches,
         seed=seed,
     )
     val_loader = _setup_dataloader(
         val_dataset,
         total_seq_len,
-        hidden_size,
-        num_target_layers=num_target_layers,
         num_workers=num_workers,
         prefetch_factor=prefetch_factor,
-        preprocess=preprocess,
     )
 
     return train_loader, val_loader

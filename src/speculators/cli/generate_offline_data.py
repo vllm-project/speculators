@@ -39,7 +39,8 @@ from speculators.data_generation.vllm_client import (
     generate_hidden_states_async,
     wait_for_lock_async,
 )
-from speculators.train.data import build_client_item
+from speculators.train.data_types import DatasetRecord
+from speculators.train.hidden_states_source import build_client_item
 from speculators.train.logger import setup_root_logger
 
 logger = logging.getLogger(__name__)
@@ -234,8 +235,8 @@ async def _feed_queue(to_process, dataset, queue, cancel_event):
         if cancel_event.is_set():
             break
 
-        dataset_item = dataset[i]
-        client_item = build_client_item(dataset_item) | {"idx": i}
+        record = DatasetRecord.from_arrow_row(dataset[i], storage_index=i)
+        client_item = build_client_item(record) | {"idx": i}
 
         while not cancel_event.is_set():
             try:
