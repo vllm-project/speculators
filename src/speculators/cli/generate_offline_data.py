@@ -106,6 +106,32 @@ class _FailureTracker:
         return self._consecutive >= self.threshold
 
 
+def _publish_hidden_states(
+    source_path: str,
+    target_path: Path,
+    expected_tokens: list[int] | None,
+) -> float:
+    """Move ``source_path`` to ``target_path`` only once it is complete and valid.
+
+    ``hs_<idx>`` marks a finished sample for resumption and training, so the file is
+    staged beside the target, checked against ``expected_tokens`` (``None`` skips
+    the check) and renamed into place last. On failure the staged file is removed,
+    and the next run redoes the index, replacing any staged file left by a crash.
+    Returns the seconds spent on the move.
+    """
+    tmp_path = target_path.with_name(f".{target_path.name}.tmp")
+    try:
+        t_move = time.perf_counter()
+        shutil.move(source_path, tmp_path)
+        move_s = time.perf_counter() - t_move
+        if expected_tokens is not None:
+            check_hidden_states(load_file(tmp_path), expected_tokens)
+        tmp_path.replace(target_path)
+    finally:
+        tmp_path.unlink(missing_ok=True)
+    return move_s
+
+
 async def _worker(  # noqa: C901
     client,
     model: str,
@@ -154,21 +180,12 @@ async def _worker(  # noqa: C901
                 await wait_for_lock_async(lock_path)
 
             async with write_semaphore:
-                t_write = time.perf_counter()
-                await asyncio.to_thread(
-                    shutil.move, hidden_states_path, target_hidden_states_path
+                write_s = await asyncio.to_thread(
+                    _publish_hidden_states,
+                    hidden_states_path,
+                    target_hidden_states_path,
+                    item["input_ids"] if validate_outputs else None,
                 )
-                write_s = time.perf_counter() - t_write
-                if validate_outputs:
-
-                    def _load_and_check(
-                        path=target_hidden_states_path,
-                        tokens=item["input_ids"],
-                    ):
-                        loaded = load_file(path)
-                        check_hidden_states(loaded, tokens)
-
-                    await asyncio.to_thread(_load_and_check)
         except Exception as e:
             if fail_on_error:
                 logger.exception(
@@ -424,7 +441,8 @@ def generate_offline_data(
             "--validate-outputs",
             help=(
                 "Load generated safetensor files and check output token ids "
-                "match prompt tokens and hidden states seq_len matches num tokens"
+                "match prompt tokens and hidden states seq_len matches num tokens; "
+                "samples that fail are not saved, so a later run regenerates them"
             ),
         ),
     ] = False,
