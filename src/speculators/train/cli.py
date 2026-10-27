@@ -787,6 +787,7 @@ def main(cfg: TrainConfig):  # noqa: C901
         hidden_states_dtype=hidden_states_dtype,
         log_freq=args.log_freq,
         fsdp_shard=args.fsdp_shard,
+        fsdp_replicate_frozen=args.fsdp_replicate_frozen,
         gradient_checkpointing=args.gradient_checkpointing,
         max_steps=args.max_steps,
     )
