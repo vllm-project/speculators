@@ -755,6 +755,7 @@ def main(cfg: TrainConfig):  # noqa: C901
         num_target_layers=num_target_layers,
         num_workers=args.num_workers,
         prefetch_factor=args.prefetch_factor,
+        max_transfer_workers=args.max_transfer_workers,
         preprocess=preprocess,
         train_data_ratio=args.train_data_ratio,
         seed=args.seed,

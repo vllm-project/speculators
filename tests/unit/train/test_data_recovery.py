@@ -1,3 +1,4 @@
+import asyncio
 import os
 from typing import Any
 
@@ -69,6 +70,32 @@ def test_generation_guard_resets_after_a_valid_sample():
     assert isinstance(unavailable, SampleUnavailable)
     assert result == "valid"
     assert guard.consecutive_failures == 0
+
+
+def test_generation_guard_retries_async_operations():
+    guard = GenerationRecoveryGuard(retries=2, max_consecutive_failures=2)
+    attempts = 0
+
+    async def fail():
+        nonlocal attempts
+        attempts += 1
+        raise ValueError("bad payload")
+
+    unavailable = asyncio.run(guard.run_async(fail, description="round trip failed"))
+
+    assert isinstance(unavailable, SampleUnavailable)
+    assert unavailable.consecutive_failures == 1
+    assert attempts == 3
+
+
+def test_generation_guard_propagates_async_cancellation():
+    guard = GenerationRecoveryGuard(retries=2, max_consecutive_failures=2)
+
+    async def cancel():
+        raise asyncio.CancelledError
+
+    with pytest.raises(asyncio.CancelledError):
+        asyncio.run(guard.run_async(cancel, description="round trip failed"))
 
 
 def test_locally_empty_batch_does_not_mask_other_ranks_or_skip_step():

@@ -25,7 +25,9 @@ from speculators.data_generation.preprocessing import (
     build_speculator_training_dataset,
 )
 from speculators.data_generation.vllm_client import InvalidResponseError
-from speculators.train.data import CollateFn, build_client_item
+from speculators.train.data import _add_document_ids, _pad_samples
+from speculators.train.data_types import DatasetRecord
+from speculators.train.hidden_states_source import build_client_item
 
 # Neither build path below reads the processor: the missing-endpoint guard
 # raises before it is used, and speculator-format rows skip rendering entirely.
@@ -330,15 +332,18 @@ def test_loss_mask_stays_boolean_after_save_load_and_collation(tmp_path, mask):
     assert row["input_ids"].dtype == torch.long
     assert row["input_ids"].tolist() == [1, 2, 3, 4]
 
-    batch = CollateFn(max_len=6, hidden_size=1)(
+    batch = _pad_samples(
         [
             {
                 "input_ids": row["input_ids"],
                 "loss_mask": row["loss_mask"],
                 "lengths": torch.tensor([4]),
             }
-        ]
+        ],
+        max_len=6,
+        dtype=torch.bfloat16,
     )
+    _add_document_ids(batch, 6)
     assert batch["loss_mask"].dtype == torch.bool
     assert batch["loss_mask"].tolist() == [[False, False, True, True, False, False]]
 
@@ -439,7 +444,8 @@ def test_processor_multimodal_rows_keep_messages(monkeypatch):
     assert "is_multimodal" not in dataset.column_names
     user_parts = dataset[0]["messages"][0]["content"]
     assert user_parts[0]["image_url"] == {"url": "http://x/a.png"}
-    assert build_client_item(dataset[0])["messages"] == dataset[0]["messages"]
+    record = DatasetRecord.from_arrow_row(dataset[0], storage_index=0)
+    assert build_client_item(record)["messages"] == record.messages
 
 
 def test_processor_text_part_lists_do_not_store_messages(monkeypatch):
@@ -468,6 +474,9 @@ def test_mixed_text_and_multimodal_sources_build_client_items(monkeypatch):
         ]
     )
     dataset.set_format(type="torch")
-    text_item, mm_item = (build_client_item(dataset[i]) for i in range(2))
+    records = [
+        DatasetRecord.from_arrow_row(dataset[i], storage_index=i) for i in range(2)
+    ]
+    text_item, mm_item = (build_client_item(record) for record in records)
     assert "messages" not in text_item
-    assert mm_item["messages"] == dataset[1]["messages"]
+    assert mm_item["messages"] == records[1].messages
