@@ -80,7 +80,34 @@ class _StepTimer:
             torch.accelerator.synchronize()
             self._marks[name] = time.perf_counter()
             if torch.accelerator.is_available():
-                self._memory[name] = torch.accelerator.memory_allocated() / (1024**2)
+                acc = torch.accelerator.current_accelerator()
+                # torch.accelerator.memory_allocated() may raise on backends
+                # whose allocator is not a c10::CachingDeviceAllocator (e.g.
+                # Ascend NPU, where torch_npu registers its own
+                # NPUCachingAllocator). Fall back to the backend-native API
+                # via torch.<device_type>.  This assumes the backend
+                # package (e.g. torch_npu) has already been imported by the
+                # environment so that torch.<device_type> is populated.
+                try:
+                    mem_bytes = torch.accelerator.memory_allocated()
+                except RuntimeError:
+                    if acc is None:
+                        root_logger.debug(
+                            "accelerator is None, skipping memory tracking"
+                        )
+                        return
+                    backend = getattr(torch, acc.type, None)
+                    if backend is None or not hasattr(backend, "memory_allocated"):
+                        root_logger.debug(
+                            "no backend-native memory_allocated for %s, skipping",
+                            acc.type,
+                        )
+                        return
+                    root_logger.debug(
+                        "using backend-native memory_allocated for %s", acc.type
+                    )
+                    mem_bytes = backend.memory_allocated()
+                self._memory[name] = mem_bytes / (1024**2)
 
     def mark_value(self, name: str, value: float) -> None:
         if self.enabled:
