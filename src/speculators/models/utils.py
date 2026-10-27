@@ -14,9 +14,9 @@ logger = logging.getLogger(__name__)
 # `x_norm * (1 + w)` instead of the plain RMSNorm `x_norm * w`. Matched
 # exactly against the verifier's effective `model_type` (after text_config
 # extraction) — gemma3n and gemma4 dropped this convention, so prefix
-# matching would over-include. Qwen3.5 is in here because transformers'
-# Qwen3_5RMSNorm computes `output * (1.0 + weight)` and vLLM's is an alias
-# of GemmaRMSNorm.
+# matching would over-include. Qwen3.5, Qwen3-Next and Step3.5 are in here
+# because their transformers RMSNorm computes `output * (1.0 + weight)` and
+# vLLM uses GemmaRMSNorm for them.
 GEMMA_STYLE_FINAL_NORM_MODEL_TYPES = frozenset(
     (
         "gemma",
@@ -27,7 +27,9 @@ GEMMA_STYLE_FINAL_NORM_MODEL_TYPES = frozenset(
         "qwen3_5_text",
         "qwen3_5_moe",
         "qwen3_5_moe_text",
+        "qwen3_next",
         "recurrent_gemma",
+        "step3p5",
     )
 )
 
