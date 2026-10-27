@@ -50,11 +50,6 @@ def compute_accuracy_single_step(
         counts suitable for distributed reduction before computing ratios.
     """
     correct = pred_ids == target_ids
-    # Counts come from reductions over the mask rather than masked_select: the
-    # selected size depends on the mask's values, so the host has to wait for
-    # the device to know it. torch.full fills on the device, where
-    # torch.tensor(<python scalar>, device=...) copies from pageable host
-    # memory and blocks on whatever is already queued.
     numel = torch.full((), correct.numel(), dtype=torch.float, device=correct.device)
     cond_total = numel
     if prev_correct is not None:
