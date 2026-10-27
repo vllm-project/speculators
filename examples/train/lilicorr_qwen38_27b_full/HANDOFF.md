@@ -96,10 +96,31 @@ proceeding.
 cd ~/speculators
 python -m venv .venv && source .venv/bin/activate   # or however this pod's dev container expects a venv
 pip install -e ".[dev]"
+pip install -e ./hs_connectors   # see gotcha below -- do not skip this
 ```
 
 (If this pod has a dev-container convention with a pre-provisioned venv that
 inherits torch/CUDA from a base image, use that instead — don't fight it.)
+
+**Gotcha, hit on 2026-10-26, cost real debugging time:** `hs_connectors` is a
+`[tool.uv.workspace]` member (see `pyproject.toml`), but plain `pip install
+-e .` doesn't understand that and will happily pull a stale `hs_connectors`
+release from PyPI instead of linking the local checkout. The stale version's
+`HiddenStatesTransfer.get_generated()` takes a plain `handle: str`, while the
+current `speculators.train.data` calls it with the full `hs_transfer_params`
+dict — same call arity, so it doesn't error at import time, it fails deep in
+training with `TypeError: argument should be a str or an os.PathLike object
+... not 'dict'` on effectively every sample, with `train/loss` reported as a
+suspicious flat `0.00e+00`. If you ever see that signature, check
+`pip show hs_connectors` — if it's not editable / doesn't point at your
+checkout, that's it: `pip install -e ./hs_connectors` to fix.
+
+Also install `vllm` separately (it's intentionally not a `pyproject.toml`
+dependency, since it needs to match this environment's exact torch build):
+
+```bash
+pip install vllm==0.32.0   # check `pip show torch` first; vllm's version must match torch's exactly
+```
 
 ## 4. Fetch the verifier model
 
@@ -178,8 +199,10 @@ CUDA_VISIBLE_DEVICES=0,1 python ../../../scripts/launch_vllm.py /tmp/models/Qwen
     --target-layer-ids 4 12 20 28 36 44 52 60 \
     --provenance-dir "$RUN_DIR" \
     -- --data-parallel-size 2 --port 8000 \
-    --max-model-len 8448 --max-num-batched-tokens 16384 \
-    --gpu-memory-utilization 0.95 --no-enable-prefix-caching \
+    --max-model-len 8448 --max-num-batched-tokens 8192 \
+    --gpu-memory-utilization 0.90 --no-enable-prefix-caching \
+    --attention-config '{"flash_attn_version": 2}' \
+    --enforce-eager \
     > "$RUN_DIR/vllm.log" 2>&1 &
 
 # wait until healthy
@@ -192,6 +215,26 @@ CUDA_VISIBLE_DEVICES=2,3,4,5,6,7 python -m torch.distributed.run \
     -m speculators.train --config full.yaml \
     > "$RUN_DIR/train.log" 2>&1 &
 ```
+
+**Gotcha, hit on 2026-10-26 (H100 pod, vllm 0.32.0) — the extraction server
+flags above differ from `README.md`'s (which were tuned for A100s) for three
+stacked reasons found by trial and error:**
+1. `--max-num-batched-tokens 16384` OOM'd during KV-cache profiling (tried to
+   allocate 25 GiB with only ~24.7 GiB free) — this buffer size scales with
+   `--max-num-batched-tokens`, *not* `--gpu-memory-utilization` (lowering the
+   latter alone did nothing). Halving to `8192` fixed it.
+2. The default FlashAttention-3 kernel (`vllm/vllm_flash_attn`'s
+   `_vllm_fa3_C` op) hit a torch "stable ABI" mismatch and crashed with
+   `RuntimeError: torch_call_dispatcher("aten::new_empty", ...)`. Forcing FA2
+   via `--attention-config '{"flash_attn_version": 2}'` routed around it.
+3. With FA2, CUDA graph capture then crashed silently (worker died with no
+   traceback, `exit code: None`) — `--enforce-eager` (skip CUDA graph
+   capture entirely) was the fix. This costs throughput but the server
+   otherwise comes up healthy and correct.
+
+If you're on different hardware/vllm version, these three may not be needed
+at all, or a different combination might be — don't copy-paste blindly,
+watch `$RUN_DIR/vllm.log` and adjust based on what actually breaks.
 
 Watch progress:
 
@@ -226,8 +269,9 @@ checkpoint and run the probe:
 ```bash
 CUDA_VISIBLE_DEVICES=0 python -m vllm.entrypoints.openai.api_server \
     --model /tmp/models/Qwen3.8-27B --dtype bfloat16 \
-    --max-model-len 2048 --max-num-seqs 4 --gpu-memory-utilization 0.95 \
+    --max-model-len 2048 --max-num-seqs 4 --gpu-memory-utilization 0.90 \
     --port 8002 --per-request-spec-decode-metrics summary \
+    --attention-config '{"flash_attn_version": 2}' --enforce-eager \
     --speculative-config '{"method":"dflash","model":"/tmp/lilicorr_check/qwen38-perfectblend/runfull/checkpoints/0","num_speculative_tokens":15,"draft_sample_method":"greedy"}' \
     > /tmp/lilicorr_check/qwen38-perfectblend/runfull/serve_probe.log 2>&1 &
 
@@ -236,32 +280,144 @@ cd ~/speculators/examples/train/lilicorr_qwen38_27b_full
 python probe_acceptance.py   # saves runfull/acceptance_probe.json
 ```
 
-**This needs the vLLM fork's speculative-decoding config support** — branch
-`lilicorr-speculators-config` on `github.com/MeganEFlynn/vllm` (see
-`README.md` §0 for exact checkout commands). Training itself doesn't need
-this; only this probe step does.
+**Correction, 2026-10-26/27: you do NOT need the vLLM fork.** This doc
+previously said the probe needs branch `lilicorr-speculators-config` on
+`github.com/MeganEFlynn/vllm` — that turned out to be unnecessary. Plain
+`vllm==0.32.0` from PyPI already ships the LiLiCorr model/worker code
+(`vllm/model_executor/models/lilicorr.py`,
+`vllm/v1/worker/gpu/spec_decode/lilicorr/`); it's just missing two small
+pieces of glue that translate a saved `speculators`-format checkpoint into
+vLLM's native speculative config. Without these, loading the checkpoint
+fails with `ValueError: Expected one of: {'eagle3', 'peagle', 'dflash',
+'dflash2', 'dspark'}` (`lilicorr` isn't in that set) immediately followed by
+a pydantic `ValidationError` on `SpeculativeConfig.method` (because
+`"lilicorr"` isn't a valid `method` value either — only `"dflash"` is, and
+`LiLiCorr` reuses that runtime). Patch your installed vLLM:
+
+```bash
+# find these two files in your vllm install:
+python -c "import vllm.transformers_utils.configs.speculators.algos as m; print(m.__file__)"
+python -c "import vllm.transformers_utils.configs.speculators.base as m; print(m.__file__)"
+```
+
+1. In `algos.py`, add a `@register_speculator("lilicorr")` function (model it
+   on the existing `update_dflash2`): call `update_dflash(config_dict,
+   pre_trained_config)`, then set `pre_trained_config["architectures"] =
+   ["LiLiCorrDraftModel"]`, then set `pre_trained_config["dflash_config"]`'s
+   `lilicorr_enabled = True` and `block_size = config_dict.get("block_size",
+   0)`, then copy over `lilicorr_candidate_topk`, `lilicorr_factor_dim`,
+   `lilicorr_hidden_size`, `lilicorr_logit_scale`, `lilicorr_mlp_ratio`,
+   `lilicorr_num_heads`, `lilicorr_num_layers`, `lilicorr_vector_eps` into
+   that same nested dict (not the top level — `LiLiCorrHead.__init__` in
+   `vllm/model_executor/models/lilicorr.py` reads them from there).
+2. In `base.py`'s `build_vllm_speculative_config`, the existing `elif
+   result["method"] == "dflash2": result["method"] = "dflash"` needs
+   `"lilicorr"` added to that tuple too, same reasoning.
+
+This is a plain-text patch to a small, stable Python file (no C++/CUDA
+rebuild) — safe to hand-edit directly in `site-packages` for now, or ask
+whoever owns the `MeganEFlynn/vllm` fork whether it's been upstreamed since
+this was written.
 
 Compare your `acceptance_probe.json` numbers against the reference, measured
-at the original run's first 5% checkpoint (`README.md` §7):
+at the original run's first 5% checkpoint (`README.md` §7), and against this
+handoff's own measured first checkpoint:
 
-| Metric | Reference (step 9260, old 8192-seq-len run) |
-| --- | --- |
-| Token-weighted acceptance length | 2.73 |
-| Draft-token acceptance rate | 11.5% (1,869 / 16,200) |
-| Rounds accepting ≥ 1 of 15 | 67.7% |
-| Per-prompt AL range | 1.91 – 4.63 |
+| Metric | Reference (step 9260, old 8192-seq-len/Muon/lr1e-3 run) | This run (step 5449, 6144-seq-len/AdamW/lr6e-4 paper recipe) |
+| --- | --- | --- |
+| Acceptance length (round-weighted) | 2.73 | 2.35 |
+| Draft-token acceptance rate | 11.5% (1,869 / 16,200) | 9.0% (1,700 / 18,855) |
+| Rounds accepting ≥ 1 of 15 | 67.7% | 61.1% (768 / 1,257) |
+| Per-prompt AL range | 1.91 – 4.63 | 1.81 – 4.02 |
 
 Exact equality isn't expected — the sequence length, optimizer, LR, loss
-function, and loss normalization are all different from that reference run
-(see the table in Step 0). The useful comparison is **order of magnitude and
-shape**: acceptance length clearly above 1.0 and rising, no sign of
-divergence in `train.log`'s loss curve. If it's wildly off (e.g. AL stuck
-near 1.0, or loss exploding), stop and investigate before continuing — don't
-assume it'll fix itself with more steps.
+function, and loss normalization are all different between these three runs
+(see the table in Step 0), and this run's `lilicorr_target_source` was still
+at its default `"argmax"` despite the training data being sampled, not
+greedy (see Step 0's open decision). The useful comparison is **order of
+magnitude and shape**: acceptance length clearly above 1.0 and rising, no
+sign of divergence in `train.log`'s loss curve. Both measured runs clear
+that bar comfortably. If a future run is wildly off (e.g. AL stuck near 1.0,
+or loss exploding), stop and investigate before continuing — don't assume
+it'll fix itself with more steps.
+
+**To resume training after the probe**, same as Step 7's trainer command —
+`no_resume_from_checkpoint` defaults to false, so it picks up automatically
+from `checkpoints/0/` (confirmed working: `INFO Resuming mid-epoch from
+epoch=0 local_step=5449 global_step=5449`). Relaunch the extraction server
+first, wait for `/health`, then the trainer.
+
+## 10. Automated per-checkpoint HumanEval eval (optional)
+
+`eval_each_checkpoint.sh` in this directory automates Step 9: it watches for
+each new checkpoint, pauses training, serves it, runs
+`scripts/evaluate/evaluate.py throughput --subsets HumanEval` (default
+sampling temperature), then resumes training. It takes three args:
+
+```bash
+bash eval_each_checkpoint.sh <last_seen_training_state_mtime> <config_file> <run_dir>
+# e.g. for a fresh run where no checkpoint exists yet:
+bash eval_each_checkpoint.sh 0 full.yaml /tmp/lilicorr_check/qwen38-perfectblend/runfull
+```
+
+**Smoke-test it before trusting it on a real run.** `smoke.yaml` is a copy of
+`full.yaml` with `checkpoint_freq: 0.0001` (~11 steps instead of thousands),
+`max_steps: 40`, and its own `save_path`/`log_dir` under
+`.../smoketest/` — it validates the whole pause → eval → resume cycle in
+minutes. Run it the same way as a real run (own extraction server + trainer +
+`eval_each_checkpoint.sh 0 smoke.yaml .../smoketest`), confirm one full cycle
+completes and training resumes cleanly, *then* switch to `full.yaml` and the
+real run directory.
+
+**Two serious bugs were found and fixed building this (2026-10-27), both now
+baked into the script — don't regress them:**
+
+1. **Checkpoint corruption from pausing mid-save.** The loop originally
+   detected a new checkpoint by watching `model.safetensors`'s mtime. But
+   `optimizer_state_dict.pt` (written *after* `model.safetensors`) can still
+   be mid-write at that point; pausing then truncates it, and
+   `training_state.json`/`scheduler_state_dict.pt` are left stale from the
+   *previous* checkpoint. Resuming then either crashes (`PytorchStreamReader
+   failed reading zip archive ... checkpoint file is corrupted`) or silently
+   resumes with a mismatched step counter. There is no checkpoint history to
+   roll back to — `checkpoints/0` is overwritten in place every save. **Fix:**
+   watch `training_state.json`'s mtime instead — it's written *last*, so by
+   the time the loop sees it change, the whole checkpoint is guaranteed
+   complete. This is what's in the script now; don't switch back to watching
+   `model.safetensors`.
+2. **Every HumanEval request 400ing.** Caused by the eval server's
+   `--max-model-len 2048` being smaller than `evaluate.py`'s hardcoded
+   `max_tokens=4096` (throughput mode) plus prompt length. `--gen-kwargs`
+   does **not** fix this — `evaluate.py`'s internal `max_tokens` goes into
+   guidellm's top-level backend field, separate from the `extras.body` that
+   `--gen-kwargs` populates, so overriding just `--gen-kwargs` doesn't change
+   the effective request. The real fix (in the script now) is
+   `--max-model-len 8192` on the eval server.
+
+If recovering from a corrupted checkpoint like #1: the model weights are
+usually fine (serving only reads `model.safetensors`, not the optimizer
+file), but the optimizer momentum is unrecoverable. Point
+`draft.from_pretrained` at the checkpoint dir and do **not** resume
+optimizer/scheduler state — this restarts the LR schedule's warmup from
+scratch over the remaining training, which is a real (if bounded) deviation
+from a single continuous schedule, so decide deliberately rather than by
+default.
 
 ## Key gotchas (full list in `README.md`)
 
 - `/tmp` is ephemeral on most pods — copy anything you want to keep off of it.
+- **If `/tmp` is tmpfs (RAM-backed, check with `df -h /tmp` — `Filesystem`
+  column says `tmpfs`), watch disk usage closely.** When the hidden-states
+  pipeline is broken (see the `hs_connectors` gotcha in Step 3), every failed
+  sample still writes a real safetensors file to `--hidden-states-path`
+  (default `/tmp/hidden_states`) that never gets cleaned up, since cleanup
+  itself depends on the same broken code path. This grew to 369 GB in about
+  10 minutes on 2026-10-26 and nearly starved the host of memory. If training
+  is failing, check `du -sh /tmp/hidden_states` before you debug anything
+  else, and `rm -rf /tmp/hidden_states/*` if it's large.
+- `trackio` (the `logging.logger` in `full.yaml`) is not a `pyproject.toml`
+  dependency — `pip install trackio` separately or the trainer fails
+  immediately with `ModuleNotFoundError: No module named 'trackio'`.
 - `draft_attn_impl: sdpa` and `loss_chunk_anchors: 128` in `full.yaml` are
   load-bearing for memory at this model scale — don't remove them.
 - The extraction server's `--max-model-len 8448` and `--no-enable-prefix-caching`
