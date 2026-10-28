@@ -66,7 +66,8 @@ def resolve_mask_token_id(
         token_id = getattr(tokenizer, token_name, None)
         if token_id is not None:
             warnings.warn(
-                f"Tokenizer does not have mask_token and no unused embedding slots. "
+                "Tokenizer has no mask_token and no <|MASK|> token could be added "
+                "(no unused embedding slots, or the tokenizer can't add tokens). "
                 f"Using {token_name}={token_id} as fallback.",
                 stacklevel=2,
             )
@@ -74,7 +75,8 @@ def resolve_mask_token_id(
 
     raise ValueError(
         "Could not resolve mask_token_id: no --mask-token-id provided, tokenizer has "
-        "no mask_token, no unused embedding slots, and no pad/eos/unk fallback tokens."
+        "no mask_token, no <|MASK|> token could be added (no unused embedding slots, "
+        "or the tokenizer can't add tokens), and no pad/eos/unk fallback tokens."
     )
 
 

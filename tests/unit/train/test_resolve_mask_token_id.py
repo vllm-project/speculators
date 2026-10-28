@@ -61,7 +61,7 @@ def test_tokenizer_without_mask_attr_falls_back_to_pad(use_tokenizer):
 def test_tokenizer_that_cannot_add_tokens_falls_back_to_pad(use_tokenizer):
     # Embedding padded beyond the tokenizer, but the backend can't add <|MASK|>.
     use_tokenizer(_CannotAddTokenizer())
-    with pytest.warns(UserWarning, match="pad_token_id=11"):
+    with pytest.warns(UserWarning, match="can't add tokens.*pad_token_id=11"):
         assert resolve_mask_token_id("mistral", vocab_size=131200) == 11
 
 
@@ -84,3 +84,11 @@ def test_full_vocab_falls_back_to_eos(use_tokenizer):
     use_tokenizer(_HFTokenizer(size=8))
     with pytest.warns(UserWarning, match="eos_token_id=1"):
         assert resolve_mask_token_id("hf", vocab_size=8) == 1
+
+
+def test_no_fallback_token_raises(use_tokenizer):
+    tokenizer = _CannotAddTokenizer()
+    tokenizer.pad_token_id = tokenizer.eos_token_id = tokenizer.unk_token_id = None
+    use_tokenizer(tokenizer)
+    with pytest.raises(ValueError, match="can't add tokens"):
+        resolve_mask_token_id("mistral", vocab_size=131200)
