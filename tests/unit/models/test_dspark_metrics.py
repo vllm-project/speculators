@@ -289,3 +289,38 @@ class TestComputeMetrics:
             assert key in metrics
         # all metric values must be tensors (so dist.reduce works in the trainer)
         assert all(torch.is_tensor(v) for v in metrics.values())
+
+
+class TestComputeMetricsTvWithArgmax:
+    def test_with_argmax_tv_fn_matches_plain_tv_fn(self):
+        """The fused TV+argmax pass yields the same loss and metrics."""
+        from speculators.losses.eager import tv_loss_with_argmax
+
+        torch.manual_seed(0)
+        logits = torch.randn(1, 16, 32)
+        targets = torch.randn(1, 16, 32)
+        confidence_logits = torch.randn(1, 16, requires_grad=True)
+        loss_mask = torch.ones(1, 16)
+
+        args = (
+            logits,
+            targets,
+            confidence_logits,
+            loss_mask,
+        )
+        kwargs = dict(
+            block_size=4,
+            loss_config=_DEFAULT_LOSS,
+            sample_from_anchor=True,
+        )
+        loss_a, metrics_a = compute_metrics(*args, **kwargs)
+        loss_b, metrics_b = _compute_metrics(
+            *args, tv_loss_fn=tv_loss_with_argmax, **kwargs
+        )
+
+        torch.testing.assert_close(loss_a, loss_b, atol=0, rtol=0)
+        assert metrics_a.keys() == metrics_b.keys()
+        for key in metrics_a:
+            torch.testing.assert_close(
+                metrics_a[key], metrics_b[key], atol=0, rtol=0
+            )

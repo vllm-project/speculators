@@ -8,6 +8,7 @@ from speculators.losses import (
     LossConfig,
     kl_div_loss,
     resolve_loss_config,
+    resolve_tv_loss_with_argmax,
     tv_loss,
 )
 from speculators.model import SpeculatorModel
@@ -98,7 +99,9 @@ class DSparkDraftModel(DFlashDraftModel):
         """Resolve DSpark's compound loss from ``--loss-fn``."""
         implementation = kwargs.get("loss_implementation", "fused")
         loss_config = resolve_loss_config(kwargs["loss_fn"], implementation)
-        tv_loss_fn = resolve_loss_config("tv", implementation)["tv"][0]
+        # The metrics' TV pass doubles as the greedy-argmax pass, so the two
+        # full-vocab torch.argmax calls fold into the same streaming kernel.
+        tv_loss_fn = resolve_tv_loss_with_argmax(implementation)
         gamma = kwargs.get("dflash_decay_gamma", 4.0)
         max_anchors = kwargs.get("max_anchors", 3072)
         confidence_head_alpha = kwargs.get("confidence_head_alpha", 1.0)

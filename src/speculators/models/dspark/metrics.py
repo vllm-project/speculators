@@ -68,7 +68,13 @@ def compute_metrics(
     dpace_alpha: float = 0.5,
     sample_from_anchor: bool = True,
 ) -> tuple[torch.Tensor, dict]:
-    """Compute the DSpark loss and a metrics dict (``*_sum``/``*_total`` pairs)."""
+    """Compute the DSpark loss and a metrics dict (``*_sum``/``*_total`` pairs).
+
+    ``tv_loss_fn`` may be the plain TV distance or its with-argmax variant
+    (:func:`speculators.losses.tv_loss_with_argmax`), which returns
+    ``(tv, pred_ids, target_ids)`` from the same streaming pass; the argmaxes
+    then replace the separate full-vocab ``torch.argmax`` calls below.
+    """
 
     device = logits.device
     seq_len = logits.shape[1]
@@ -93,7 +99,12 @@ def compute_metrics(
     # Analytical per-position acceptance rate = distributional overlap
     # = 1 - TV; the fused kernel avoids the two full-vocab fp32 softmaxes.
     with torch.no_grad():
-        accept_rate = 1.0 - tv_loss_fn(logits, targets)  # [1, T]
+        tv_out = tv_loss_fn(logits, targets)
+        if isinstance(tv_out, tuple):
+            tv_value, pred_ids, target_ids = tv_out
+        else:
+            tv_value, pred_ids, target_ids = tv_out, None, None
+        accept_rate = 1.0 - tv_value  # [1, T]
         # Per-block cumulative acceptance product over the draft slots (slot 0
         # is the anchor), shared by the accept-length and calibration metrics.
         num_blocks = seq_len // block_size
@@ -161,8 +172,9 @@ def compute_metrics(
         metrics["accept_len_total"] = block_valid.sum().clamp_min(1.0)
 
     # Per-position greedy accuracy
-    pred_ids = torch.argmax(logits, dim=-1)
-    target_ids = torch.argmax(targets, dim=-1)
+    if pred_ids is None:
+        pred_ids = torch.argmax(logits, dim=-1)
+        target_ids = torch.argmax(targets, dim=-1)
     correct_per_pos, total_per_pos = compute_accuracy_multi_step(
         pred_ids, target_ids, loss_mask, pos_idx, block_size
     )

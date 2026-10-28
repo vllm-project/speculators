@@ -86,7 +86,10 @@ _OP_TV = tl.constexpr(4)
 # stats [_N_STATS, n_rows]: [0]/[1] draft row max / sum-exp, [2]/[3] same for
 # targets (unused by ce), [4] per-OP -- kl_div/rkl: row loss L | jsd:
 # KL(dp||mix) | tv: s_s | ce: argmax as float32 (exact: vocab < 2**24).
+# With return_argmax, two TV-only rows follow: [5]/[6] the draft / target row
+# argmax, same float32 encoding as ce's.
 _N_STATS = 5
+_N_STATS_WITH_ARGMAX = 7
 
 
 def _tile_configs():
@@ -166,6 +169,7 @@ def loss_forward_kernel(  # noqa: C901 -- constexpr OP branches, pruned per inst
     n_cols,
     OP: tl.constexpr,
     BLOCK_SIZE: tl.constexpr,
+    RETURN_ARGMAX: tl.constexpr,
 ):
     """One row per program: online softmax stats, then the OP's reduction.
 
@@ -260,6 +264,13 @@ def loss_forward_kernel(  # noqa: C901 -- constexpr OP branches, pruned per inst
 
         acc = 0.0
         extra = 0.0
+        # Row argmaxes, tracked only when RETURN_ARGMAX (TV + metrics): the
+        # acc pass below already loads both rows, so the indices ride along on
+        # loads the pass pays for instead of a separate full-vocab argmax.
+        best_x = float("-inf")
+        best_xi = 0
+        best_y = float("-inf")
+        best_yi = 0
         for i in range(0, n_cols, BLOCK_SIZE):
             offsets = i + tl.arange(0, BLOCK_SIZE)
             mask = offsets < n_cols
@@ -276,6 +287,25 @@ def loss_forward_kernel(  # noqa: C901 -- constexpr OP branches, pruned per inst
             elif OP == _OP_TV:
                 acc += tl.sum(tl.where(mask, tl.minimum(dp, tp), 0.0))
                 extra += tl.sum(tl.where(mask & (dp <= tp), dp, 0.0))
+            if RETURN_ARGMAX:
+                # Masked lanes read as 0.0 for the probability math; for the
+                # argmax they must not outrank a real (possibly negative)
+                # value, so select them out before the reduction. The index is
+                # the first offset holding the block max (a where+min reduce,
+                # cheaper than tl.argmax); strict > across blocks keeps the
+                # first occurrence, the torch.argmax convention.
+                xm = tl.where(mask, x, float("-inf"))
+                ym = tl.where(mask, y, float("-inf"))
+                bx = tl.max(xm)
+                by = tl.max(ym)
+                upd_x = bx > best_x
+                upd_y = by > best_y
+                pos_x = tl.min(tl.where(xm == bx, offsets, n_cols))
+                pos_y = tl.min(tl.where(ym == by, offsets, n_cols))
+                best_xi = tl.where(upd_x, pos_x, best_xi)
+                best_yi = tl.where(upd_y, pos_y, best_yi)
+                best_x = tl.where(upd_x, bx, best_x)
+                best_y = tl.where(upd_y, by, best_y)
 
         if OP == _OP_JSD:
             tl.store(loss_ptr + pid, 0.5 * (acc + extra))
@@ -283,6 +313,11 @@ def loss_forward_kernel(  # noqa: C901 -- constexpr OP branches, pruned per inst
         elif OP == _OP_TV:
             tl.store(loss_ptr + pid, 1.0 - acc)
             tl.store(stats_ptr + 4 * stats_row + pid, extra)
+        if RETURN_ARGMAX:
+            # Index rows, read back as float32 the way CE caches its argmax;
+            # exact for any vocab below 2**24.
+            tl.store(stats_ptr + 5 * stats_row + pid, best_xi.to(tl.float32))  # type: ignore[attr-defined]
+            tl.store(stats_ptr + 6 * stats_row + pid, best_yi.to(tl.float32))  # type: ignore[attr-defined]
 
 
 @_autotune_tile
@@ -352,15 +387,25 @@ class _FusedLoss(torch.autograd.Function):
 
     Targets intentionally receive no gradient; use the eager implementation when
     target gradients are required.
+
+    ``return_argmax`` (TV only) additionally returns the draft and target row
+    argmaxes the streaming pass already computes, as non-differentiable int64
+    tensors of the loss's batch shape -- the caller's alternative is two extra
+    full-vocabulary ``torch.argmax`` passes.
     """
 
     @staticmethod
-    def forward(ctx, logits, targets, op):
+    def forward(ctx, logits, targets, op, return_argmax=False):
         B, T, V = logits.shape
         logits_flat = logits.contiguous().view(B * T, V)
         targets_flat = targets.contiguous().view(B * T, V)
+        if return_argmax and op != _OP_TV.value:
+            raise ValueError("return_argmax is only supported for the TV loss")
         loss = torch.empty(B * T, device=logits.device, dtype=torch.float32)
-        stats = torch.empty(_N_STATS, B * T, device=logits.device, dtype=torch.float32)
+        n_stats = _N_STATS_WITH_ARGMAX if return_argmax else _N_STATS
+        stats = torch.empty(
+            n_stats, B * T, device=logits.device, dtype=torch.float32
+        )
         loss_forward_kernel[(B * T,)](
             logits_flat,
             targets_flat,
@@ -369,6 +414,7 @@ class _FusedLoss(torch.autograd.Function):
             stats.stride(0),
             V,
             OP=op,
+            RETURN_ARGMAX=return_argmax,
         )
         # CE backward only needs the target argmax cached in stats.
         ctx.save_for_backward(
@@ -376,10 +422,15 @@ class _FusedLoss(torch.autograd.Function):
         )
         ctx.op = op
         ctx.shape = (B, T, V)
+        if return_argmax:
+            pred_ids = stats[5].long().view(B, T)
+            target_ids = stats[6].long().view(B, T)
+            ctx.mark_non_differentiable(pred_ids, target_ids)
+            return loss.view(B, T), pred_ids, target_ids
         return loss.view(B, T)
 
     @staticmethod
-    def backward(ctx, grad_output):
+    def backward(ctx, grad_output, _grad_pred=None, _grad_target=None):
         logits_flat, targets_flat, stats = ctx.saved_tensors
         B, T, V = ctx.shape
         grad_in = torch.empty_like(logits_flat)
@@ -393,7 +444,7 @@ class _FusedLoss(torch.autograd.Function):
             V,
             OP=ctx.op,
         )
-        return grad_in.view(B, T, V), None, None
+        return grad_in.view(B, T, V), None, None, None
 
 
 _NLA_EPS = 1e-5
@@ -422,6 +473,18 @@ def fused_ce_loss(logits, targets):
 def fused_tv_loss(logits, targets):
     """Per-position TV distance ``[1, T]`` from draft/target logits (fused Triton)."""
     return _FusedLoss.apply(logits, targets, _OP_TV.value)
+
+
+def fused_tv_loss_with_argmax(logits, targets):
+    """TV distance plus the draft/target row argmaxes, in one streaming pass.
+
+    Returns ``(tv_loss, pred_ids, target_ids)`` with the ids shaped like
+    ``torch.argmax(logits, dim=-1)``. The TV forward already streams both rows
+    a third time for the overlap reduction; tracking the two argmaxes there is
+    register work on loads that pass already pays, so the caller's separate
+    full-vocab argmax passes (one per tensor) fold in.
+    """
+    return _FusedLoss.apply(logits, targets, _OP_TV.value, True)
 
 
 def fused_nla_loss(logits, targets):
