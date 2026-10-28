@@ -215,7 +215,15 @@ def compute_metrics(
         ).sum()
         metrics[f"unary_candidate_recall_at_{top_k}_total"] = valid_total
 
-        target_log_normalizer = torch.logsumexp(targets.float(), dim=-1)
+        # Process rows in chunks so logsumexp does not materialize a
+        # full-vocab fp32 copy of the targets and its exp workspace.
+        target_log_normalizer = torch.cat(
+            [
+                torch.logsumexp(chunk.float(), dim=-1)
+                for chunk in targets.split(1024, dim=1)
+            ],
+            dim=1,
+        )
         candidate_target_logits = targets.gather(-1, training_candidate_ids).float()
         candidate_mass = torch.exp(
             torch.logsumexp(candidate_target_logits, dim=-1) - target_log_normalizer
