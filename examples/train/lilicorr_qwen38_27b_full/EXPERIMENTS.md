@@ -83,7 +83,10 @@ cleared, eval server healthy, HumanEval ran, training resumed cleanly.
 | Checkpoint | Step | % of epoch | Acceptance length | Pos-0 accept | Notes |
 |------------|------|-----------|-------------------|--------------|-------|
 | 1 | 5449 | 5% | **2.562** | 0.583 | first fully-valid measurement of the entire pipeline |
-| 2 | ~10898 | 10% | — | — | pending |
+| 2 | 10898 | 10% | **2.728** | — | |
+| 3 | 16347 | 15% | **2.956** | — | |
+| 4 | 21796 | 20% | **3.041** | — | |
+| 5 | 27245 | 25% | **3.130** | — | run stopped here (2026-10-28) to free GPUs for the plan.md run; checkpoint verified + backed up to `checkpoints/0_prev`, resumable |
 
 **Step-5449 per-position acceptance rates** (HumanEval, 100,798 drafts,
 157,447 accepted tokens):
