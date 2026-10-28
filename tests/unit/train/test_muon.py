@@ -171,3 +171,40 @@ def test_step_matches_torch_muon_on_the_symmetric_path(shape):
         rtol=0,
     )
     torch.testing.assert_close(ours, ref, atol=0, rtol=0)
+
+
+@requires_cuda
+@pytest.mark.parametrize("nesterov", [True, False])
+def test_batched_step_matches_torch_muon_on_cuda(nesterov):
+    # Same-shaped small matrices route through the batched bmm path; the
+    # lone [96, 96] has nothing to batch and keeps the per-matrix path, so
+    # the group split is covered too.
+    torch.manual_seed(0)
+    shapes = [(64, 128)] * 3 + [(32, 96)] * 2 + [(96, 96)]
+    weights = [torch.randn(r, c, device="cuda") * 0.02 for r, c in shapes]
+    ours = [torch.nn.Parameter(w.clone()) for w in weights]
+    ref = [torch.nn.Parameter(w.clone()) for w in weights]
+    kwargs: dict[str, Any] = {
+        "lr": 1e-3,
+        "weight_decay": 0.1,
+        "nesterov": nesterov,
+        "adjust_lr_fn": "match_rms_adamw",
+    }
+    opt = Muon(ours, **kwargs)
+    ref_opt = torch.optim.Muon(ref, **kwargs)
+
+    for _ in range(3):
+        grads = [
+            _grad(r, c, device="cuda") + torch.randn(r, c, device="cuda") * 1e-3
+            for r, c in shapes
+        ]
+        for p, r, g in zip(ours, ref, grads, strict=True):
+            p.grad, r.grad = g.clone(), g.clone()
+        opt.step()
+        ref_opt.step()
+
+    for p, r in zip(ours, ref, strict=True):
+        torch.testing.assert_close(p, r, atol=2e-3, rtol=2e-2)
+        torch.testing.assert_close(
+            opt.state[p]["momentum_buffer"], ref_opt.state[r]["momentum_buffer"]
+        )

@@ -13,8 +13,10 @@ from speculators.losses.utils import (
     loss_function,
     neg_log_acceptance_loss,
     resolve_loss_config,
+    resolve_tv_loss_with_argmax,
     reverse_kl_div_loss,
     tv_loss,
+    tv_loss_with_argmax,
 )
 
 __all__ = [
@@ -30,6 +32,8 @@ __all__ = [
     "loss_function",
     "neg_log_acceptance_loss",
     "resolve_loss_config",
+    "resolve_tv_loss_with_argmax",
     "reverse_kl_div_loss",
     "tv_loss",
+    "tv_loss_with_argmax",
 ]

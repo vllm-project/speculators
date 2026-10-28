@@ -144,6 +144,13 @@ def tv_loss(logits: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
     return _fused_kernel("fused_tv_loss")(logits, targets)
 
 
+def tv_loss_with_argmax(
+    logits: torch.Tensor, targets: torch.Tensor
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    """Per-position TV distance plus both row argmaxes, in one fused pass."""
+    return _fused_kernel("fused_tv_loss_with_argmax")(logits, targets)
+
+
 def neg_log_acceptance_loss(
     logits: torch.Tensor, targets: torch.Tensor
 ) -> torch.Tensor:
@@ -179,6 +186,23 @@ _EAGER_LOSS_FN_MAP: dict[str, Callable[[torch.Tensor, torch.Tensor], torch.Tenso
 
 
 _LOSS_FN_MAPS = {"fused": _FUSED_LOSS_FN_MAP, "eager": _EAGER_LOSS_FN_MAP}
+
+# The TV-plus-argmax metric pass, resolved by implementation like the losses.
+_TV_WITH_ARGMAX_MAPS = {
+    "fused": tv_loss_with_argmax,
+    "eager": eager.tv_loss_with_argmax,
+}
+
+
+def resolve_tv_loss_with_argmax(implementation: str = "fused"):
+    """Pick the TV+argmax metric pass for ``implementation`` ("fused"/"eager")."""
+    try:
+        return _TV_WITH_ARGMAX_MAPS[implementation]
+    except KeyError:
+        raise ValueError(
+            f"Unknown loss implementation '{implementation}'. Choose from: "
+            f"{sorted(_TV_WITH_ARGMAX_MAPS)}"
+        ) from None
 
 
 def resolve_loss_config(spec: str, implementation: str = "fused") -> LossConfig:

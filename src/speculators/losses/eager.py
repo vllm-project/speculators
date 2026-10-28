@@ -211,3 +211,20 @@ def lk_hybrid_loss(
     elementwise_loss = weight * kl + (1.0 - weight) * tv
 
     return elementwise_loss  # noqa: RET504
+
+
+def tv_loss_with_argmax(
+    logits: torch.Tensor,  # shape: [1, seq_len, draft_vocab_size]
+    targets: torch.Tensor,  # shape: [1, seq_len, draft_vocab_size]
+):
+    """Eager twin of the fused TV-plus-argmax pass.
+
+    Returns ``(tv_loss, pred_ids, target_ids)`` with the ids matching
+    ``torch.argmax(..., dim=-1)``, the same contract as
+    ``speculators.losses.fused.fused_tv_loss_with_argmax``.
+    """
+    return (
+        tv_loss(logits, targets),
+        torch.argmax(logits, dim=-1),
+        torch.argmax(targets, dim=-1),
+    )

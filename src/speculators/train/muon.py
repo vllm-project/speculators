@@ -20,6 +20,14 @@ the decoupled weight decay with the orthogonalized step. Both spell the
 arithmetic the way torch's lerp and ``mul_``/``add_`` evaluate it, so the fused
 path is bitwise equal to ``torch.optim.Muon`` as well.
 
+A Muon step over a small draft is bound by launch count, not bandwidth --
+roughly 2000 kernels for a 9 ms step on H100. Matrices that share a shape
+(the repeated q/k/v/o/MLP projections of the draft's decoder layers) are
+additionally batched through :func:`_batched_update`: the momentum blend and
+the apply pass become ``_foreach_`` launches over the whole group and the
+Newton-Schulz iteration becomes three batched GEMMs per step instead of three
+per matrix, with the same per-matrix arithmetic.
+
 The update, momentum, weight decay, learning-rate adjustment, and state layout
 are ``torch.optim.Muon``'s unchanged, so checkpoints interoperate and the class
 keeps the ``Muon`` name the trainer logs learning rates under.
@@ -270,6 +278,76 @@ def _apply_update(
     )
 
 
+def _batchable(param: Tensor, grad: Tensor, buf: Tensor) -> bool:
+    """Eligible for the shape-batched Newton-Schulz below (see _batched_update)."""
+    return (
+        param.is_cuda
+        and not isinstance(param, DTensor)
+        and param.dtype == grad.dtype == buf.dtype == torch.float32
+        and param.is_contiguous()
+        and grad.is_contiguous()
+        and buf.is_contiguous()
+        and param.numel() < _MIN_FUSED_NUMEL
+        and not _use_symmetric(min(param.shape))
+    )
+
+
+def _batched_update(
+    params: list[Tensor],
+    grads: list[Tensor],
+    bufs: list[Tensor],
+    *,
+    lr: float,
+    weight_decay: float,
+    momentum: float,
+    nesterov: bool,
+    ns_coefficients: tuple[float, float, float],
+    ns_steps: int,
+    eps: float,
+    adjust_lr_fn: str | None,
+) -> None:
+    """Orthogonalize a group of same-shaped small matrices as one bmm batch.
+
+    A Muon step over a small draft is bound by launch count, not bandwidth:
+    each matrix pays ~35 kernel launches for an iteration that reads and writes
+    a few megabytes. Matrices that share a shape -- the q/k/v/o/MLP projections
+    of a draft's repeated decoder layers -- run the identical per-matrix
+    arithmetic here as one ``[B, rows, cols]`` batch: the momentum blend and
+    the weight-decay/apply passes become two ``_foreach_`` launches over the
+    whole group, and the Newton-Schulz iteration becomes three batched GEMMs
+    per step instead of three per matrix. Same elements, same operations, same
+    order within each matrix; only the GEMM batching (bmm vs mm) reassociates,
+    well inside the reassociation the fused paths already trade on.
+
+    Reserved for groups the per-matrix paths do not already serve well: only
+    CUDA fp32 contiguous tensors below the fused-elementwise bound and below
+    the symmetric-Gram row count, and only when the learning rate is a host
+    scalar (a tensor lr would need a per-group sync to feed ``_foreach_mul_``).
+    """
+    a, b, c = ns_coefficients
+    torch._foreach_lerp_(bufs, grads, 1 - momentum)
+    updates = (
+        torch._foreach_lerp(grads, bufs, momentum) if nesterov else list(bufs)
+    )  # fp32, as the eager per-matrix path computes them
+
+    x = torch.stack(updates).bfloat16()  # [B, rows, cols]
+    rows, cols = params[0].shape
+    if rows > cols:
+        x = x.transpose(1, 2)
+    norms = torch.linalg.vector_norm(x, dim=(1, 2))
+    x = x / norms.clamp(min=eps).view(-1, 1, 1)
+    for _ in range(ns_steps):
+        gram = torch.bmm(x, x.transpose(1, 2))
+        gram_update = torch.baddbmm(gram, gram, gram, beta=b, alpha=c)
+        x = torch.baddbmm(x, gram_update, x, beta=a)
+    if rows > cols:
+        x = x.transpose(1, 2)
+
+    adjusted_lr = _adjust_lr(lr, adjust_lr_fn, params[0].shape)
+    torch._foreach_mul_(params, 1 - lr * weight_decay)
+    torch._foreach_add_(params, [x[j] for j in range(len(params))], alpha=-adjusted_lr)
+
+
 def _muon_update(
     params: list[Tensor],
     grads: list[Tensor],
@@ -288,35 +366,71 @@ def _muon_update(
     """``torch.optim._muon._single_tensor_muon`` over the symmetric iteration.
 
     The body is upstream's, with :func:`zeropower_via_newtonschulz` in place of
-    ``_zeropower_via_newtonschulz`` and the elementwise halves fused where the
-    tensors allow it.
+    ``_zeropower_via_newtonschulz``, the elementwise halves fused where the
+    tensors allow it, and same-shaped small matrices batched through
+    :func:`_batched_update`.
     """
     lr = _to_scalar(lr)
     if has_complex:
         raise ValueError("Complex parameters are not supported")
 
+    # Same-shaped matrices eligible for the batched path, keyed by shape; a
+    # group of one has nothing to batch and keeps the per-matrix path.
+    batch_groups: dict[tuple[int, int], list[int]] = {}
+    eager: list[int] = []
     for i, param in enumerate(params):
         grad = grads[i]
         if grad.ndim != _MATRIX_NDIM:
             raise ValueError("Param gradient must be a 2D matrix")
 
         buf = muon_momentum_bufs[i]
-        fused = _fusable(param, grad, buf)
-        if fused:
+        if _fusable(param, grad, buf):
             update = _momentum_update(grad, buf, momentum, nesterov)
+            update = zeropower_via_newtonschulz(
+                update, ns_coefficients, ns_steps, eps
+            )
+            adjusted_lr = _adjust_lr(lr, adjust_lr_fn, param.shape)
+            _apply_update(param, update, 1 - lr * weight_decay, -adjusted_lr)
+        elif (
+            isinstance(lr, float)
+            and len(params) > 1
+            and _batchable(param, grad, buf)
+        ):
+            batch_groups.setdefault(tuple(param.shape), []).append(i)
         else:
-            buf.lerp_(grad, 1 - momentum)
-            update = grad.lerp(buf, momentum) if nesterov else buf
+            eager.append(i)
+
+    for idxs in batch_groups.values():
+        if len(idxs) == 1:
+            eager.extend(idxs)
+            continue
+        _batched_update(
+            [params[i] for i in idxs],
+            [grads[i] for i in idxs],
+            [muon_momentum_bufs[i] for i in idxs],
+            lr=lr,
+            weight_decay=weight_decay,
+            momentum=momentum,
+            nesterov=nesterov,
+            ns_coefficients=ns_coefficients,
+            ns_steps=ns_steps,
+            eps=eps,
+            adjust_lr_fn=adjust_lr_fn,
+        )
+
+    for i in eager:
+        param = params[i]
+        grad = grads[i]
+        buf = muon_momentum_bufs[i]
+        buf.lerp_(grad, 1 - momentum)
+        update = grad.lerp(buf, momentum) if nesterov else buf
 
         update = zeropower_via_newtonschulz(update, ns_coefficients, ns_steps, eps)
 
         adjusted_lr = _adjust_lr(lr, adjust_lr_fn, param.shape)
 
-        if fused:
-            _apply_update(param, update, 1 - lr * weight_decay, -adjusted_lr)
-        else:
-            param.mul_(1 - lr * weight_decay)
-            param.add_(update, alpha=-adjusted_lr)
+        param.mul_(1 - lr * weight_decay)
+        param.add_(update, alpha=-adjusted_lr)
 
 
 class Muon(torch.optim.Muon):

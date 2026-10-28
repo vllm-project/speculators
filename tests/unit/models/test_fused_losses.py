@@ -340,6 +340,7 @@ def test_autotuner_never_picks_a_spilling_tile():
             vocab,
             OP=op,
             BLOCK_SIZE=block,
+            RETURN_ARGMAX=False,
             num_warps=warps,
         )
 
@@ -413,3 +414,64 @@ def test_prune_oversized_tiles_never_empties_the_space():
             assert all(config.kwargs["BLOCK_SIZE"] <= cap for config in pruned)
         else:
             assert {config.kwargs["BLOCK_SIZE"] for config in pruned} == {min(blocks)}
+
+
+@requires_accelerator
+@pytest.mark.parametrize(
+    ("dtype", "vocab"), [(torch.float32, 512), (torch.bfloat16, 151936)]
+)
+def test_fused_tv_with_argmax_matches_eager(dtype, vocab):
+    """The TV+argmax pass: same TV value, exact torch.argmax ids, same gradient."""
+    fused_losses = pytest.importorskip("speculators.losses.fused")
+
+    torch.manual_seed(0)
+    logits = torch.randn(1, 16, vocab, device=DEVICE, dtype=dtype) * 3
+    targets = torch.randn(1, 16, vocab, device=DEVICE, dtype=dtype) * 3
+
+    tv, pred_ids, target_ids = fused_losses.fused_tv_loss_with_argmax(logits, targets)
+
+    assert torch.equal(tv, fused_losses.fused_tv_loss(logits, targets))
+    assert pred_ids.dtype == target_ids.dtype == torch.int64
+    assert torch.equal(pred_ids, torch.argmax(logits, dim=-1))
+    assert torch.equal(target_ids, torch.argmax(targets, dim=-1))
+
+
+@requires_accelerator
+def test_fused_tv_with_argmax_breaks_ties_like_torch():
+    """Equal row maxima resolve to the first index, as torch.argmax does."""
+    fused_losses = pytest.importorskip("speculators.losses.fused")
+
+    torch.manual_seed(0)
+    logits = torch.zeros(1, 4, 4096, device=DEVICE, dtype=torch.bfloat16)
+    logits[0, :, 100] = 7.0
+    logits[0, :, 4000] = 7.0  # tie, later block
+    targets = torch.randn(1, 4, 4096, device=DEVICE, dtype=torch.bfloat16)
+
+    _tv, pred_ids, _target_ids = fused_losses.fused_tv_loss_with_argmax(
+        logits, targets
+    )
+
+    assert torch.equal(pred_ids, torch.argmax(logits, dim=-1))
+    assert (pred_ids == 100).all()
+
+
+@requires_accelerator
+def test_fused_tv_with_argmax_gradient_flows_through_tv_only():
+    """The argmax outputs are constants; the TV output keeps its gradient."""
+    fused_losses = pytest.importorskip("speculators.losses.fused")
+
+    torch.manual_seed(0)
+    logits = torch.randn(1, 8, 1024, device=DEVICE, requires_grad=True)
+    targets = torch.randn(1, 8, 1024, device=DEVICE)
+
+    tv, pred_ids, _target_ids = fused_losses.fused_tv_loss_with_argmax(
+        logits, targets
+    )
+    assert not pred_ids.requires_grad
+    tv.sum().backward()
+
+    ref = torch.randn(1, 8, 1024, device=DEVICE, requires_grad=True)
+    with torch.no_grad():
+        ref.copy_(logits.detach())
+    fused_losses.fused_tv_loss(ref, targets).sum().backward()
+    torch.testing.assert_close(logits.grad, ref.grad, atol=0, rtol=0)
