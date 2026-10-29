@@ -134,6 +134,15 @@ background children (extraction server + trainer). Fixed by giving each
 long-lived process its own persistent tmux session (`planb8-vllm`,
 `planb8-train`).
 
+**Paused 2026-10-29 ~13:05 EDT** (user request, to set up the input_ids-vs-
+argmax target comparison — see [TARGET_SOURCE_COMPARISON.md](TARGET_SOURCE_COMPARISON.md)).
+Training had reached ~step 38.4k, but the graceful interrupted-checkpoint
+save failed: SIGTERM delivered directly to the workers (SIGINT to torchrun
+hadn't propagated) collapsed the TCPStore before the save completed, so
+`checkpoints/interrupted/` was never written and steps 23148→~38.4k are lost.
+The verified step-23148 checkpoint (`checkpoints/0` + `0_prev`) is intact and
+resumable. GPUs and extraction server fully torn down.
+
 ## 6. Infrastructure findings (each cost real debugging time)
 
 | Symptom | Root cause | Fix |
