@@ -217,13 +217,15 @@ def compute_metrics(
 
         # Process rows in chunks so logsumexp does not materialize a
         # full-vocab fp32 copy of the targets and its exp workspace.
-        target_log_normalizer = torch.cat(
-            [
-                torch.logsumexp(chunk.float(), dim=-1)
-                for chunk in targets.split(1024, dim=1)
-            ],
-            dim=1,
+        target_log_normalizer = torch.empty(
+            targets.shape[:-1], device=targets.device, dtype=torch.float32
         )
+        for start in range(0, targets.shape[1], 1024):
+            torch.logsumexp(
+                targets[:, start : start + 1024].float(),
+                dim=-1,
+                out=target_log_normalizer[:, start : start + 1024],
+            )
         candidate_target_logits = targets.gather(-1, training_candidate_ids).float()
         candidate_mass = torch.exp(
             torch.logsumexp(candidate_target_logits, dim=-1) - target_log_normalizer
