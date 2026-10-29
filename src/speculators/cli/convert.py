@@ -1,7 +1,7 @@
 """Convert command — convert external models to speculators format."""
 
 import json
-from enum import Enum
+from enum import StrEnum
 from typing import Annotated, Any
 
 import typer
@@ -9,7 +9,7 @@ import typer
 from speculators.convert import convert_model
 
 
-class AlgorithmChoice(str, Enum):
+class AlgorithmChoice(StrEnum):
     eagle3 = "eagle3"
     mtp = "mtp"
     dflash = "dflash"

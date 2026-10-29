@@ -1,4 +1,4 @@
-"""Tests for the draft-model initialization sources in ``scripts/train.py``.
+"""Tests for the draft-model initialization sources in ``speculators train``.
 
 Covers the three mutually exclusive init paths and their guard rails:
 - ``--draft-config``: decoder ``transformer_layer_config`` loaded from a file,
@@ -23,6 +23,7 @@ from transformers.integrations.heterogeneity.configuration_utils import (
     AmbiguousGlobalPerLayerAttributeError,
 )
 from transformers.models.llama.configuration_llama import LlamaConfig
+from transformers.models.nemotron_h.configuration_nemotron_h import NemotronHConfig
 from transformers.models.qwen3.configuration_qwen3 import Qwen3Config
 
 from speculators import SpeculatorsConfig, VerifierConfig
@@ -240,6 +241,61 @@ def test_create_layer_config_rejects_out_of_range_indices(bad_indices):
             sliding_window=2048,
             full_attention_indices=bad_indices,
         )
+
+
+def _layer_config_for(verifier):
+    with patch(
+        "speculators.train.cli.AutoConfig.from_pretrained", return_value=verifier
+    ):
+        return create_transformer_layer_config(
+            "target",
+            num_layers=1,
+            draft_arch="qwen3",
+            hidden_act="silu",
+            sliding_window=2048,
+            full_attention_indices=[0],
+        )
+
+
+@pytest.mark.parametrize(
+    "attr",
+    ["layer_norm_epsilon", "norm_eps", "layer_norm_eps", "norm_epsilon"],
+)
+def test_create_layer_config_resolves_norm_eps_alias(attr):
+    """Verifiers that name the norm epsilon something other than rms_norm_eps
+    seed the draft rms_norm_eps from that attribute."""
+    verifier = _make_verifier_namespace(**{attr: 3e-5})
+    del verifier.rms_norm_eps
+    assert _layer_config_for(verifier).rms_norm_eps == 3e-5
+
+
+def test_create_layer_config_skips_none_norm_eps():
+    """A ``None`` rms_norm_eps falls through to the next alias."""
+    verifier = _make_verifier_namespace(rms_norm_eps=None, layer_norm_eps=3e-5)
+    assert _layer_config_for(verifier).rms_norm_eps == 3e-5
+
+
+def test_create_layer_config_missing_norm_eps_raises():
+    verifier = _make_verifier_namespace()
+    del verifier.rms_norm_eps
+    with pytest.raises(AttributeError, match="--draft-config"):
+        _layer_config_for(verifier)
+
+
+def test_create_layer_config_nemotron_h_verifier():
+    """NemotronH exposes layer_norm_epsilon and no rms_norm_eps."""
+    verifier = NemotronHConfig(
+        vocab_size=128,
+        hidden_size=32,
+        num_attention_heads=4,
+        num_key_value_heads=2,
+        head_dim=8,
+        layer_norm_epsilon=3e-5,
+    )
+    assert not hasattr(verifier, "rms_norm_eps")
+    config = _layer_config_for(verifier)
+    assert config.rms_norm_eps == 3e-5
+    assert config.hidden_act == "silu"
 
 
 # ---------------------------------------------------------------------------

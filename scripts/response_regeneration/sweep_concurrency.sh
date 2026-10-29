@@ -19,8 +19,6 @@
 
 set -e
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-
 # ── Sweep defaults ──────────────────────────────────────────────────
 ENDPOINT="http://127.0.0.1:8000/v1/chat/completions"
 CONCURRENCIES=(64 128 256 512 1024 2048)
@@ -29,7 +27,7 @@ WARMUP_SAMPLES=20
 RUN_AFTER=false
 
 # ── Argument parsing ───────────────────────────────────────────────
-# Everything not consumed below passes through to script.py.
+# Everything not consumed below passes through to speculators regenerate-responses.
 PYTHON_ARGS=()
 
 while [[ $# -gt 0 ]]; do
@@ -105,7 +103,7 @@ print(len(seen), tokens)
 echo "Warming up ($WARMUP_SAMPLES samples at concurrency 64)..."
 echo ""
 WARMUP_START=$(date +%s%N)
-python "$SCRIPT_DIR/script.py" \
+python -m speculators regenerate-responses \
     "${PYTHON_ARGS[@]}" \
     --endpoint "$ENDPOINT" \
     --concurrency 64 \
@@ -134,10 +132,10 @@ for C in "${SHUFFLED[@]}"; do
     echo "── Trial: concurrency=$C (${DURATION}s) ──"
 
     # Run for a fixed duration, then SIGINT to stop gracefully.
-    # script.py flushes after each completed conversation, so the output
+    # Regeneration flushes after each completed conversation, so the output
     # file contains all work that finished before the signal.
     timeout --signal=INT "${DURATION}s" \
-        python "$SCRIPT_DIR/script.py" \
+        python -m speculators regenerate-responses \
             "${PYTHON_ARGS[@]}" \
             --endpoint "$ENDPOINT" \
             --concurrency "$C" \
@@ -191,7 +189,7 @@ if [ "$RUN_AFTER" = true ]; then
     echo "Running full regeneration (concurrency=$BEST_C)"
     echo "==========================================="
     echo ""
-    python "$SCRIPT_DIR/script.py" \
+    python -m speculators regenerate-responses \
         "${PYTHON_ARGS[@]}" \
         --endpoint "$ENDPOINT" \
         --concurrency "$BEST_C"
@@ -199,4 +197,4 @@ if [ "$RUN_AFTER" = true ]; then
 fi
 
 echo "Run full regeneration with:"
-echo "  python $SCRIPT_DIR/script.py ${PYTHON_ARGS[*]} --endpoint $ENDPOINT --concurrency $BEST_C"
+echo "  python -m speculators regenerate-responses ${PYTHON_ARGS[*]} --endpoint $ENDPOINT --concurrency $BEST_C"

@@ -29,6 +29,7 @@ from tqdm import tqdm
 
 from speculators.data_generation.offline import (
     check_hidden_states,
+    find_corrupt_hidden_state_indices,
     get_existing_hidden_state_indices,
     get_indices_to_process,
 )
@@ -38,10 +39,51 @@ from speculators.data_generation.vllm_client import (
     generate_hidden_states_async,
     wait_for_lock_async,
 )
-from speculators.train.data import build_client_item
+from speculators.train.data_types import DatasetRecord
+from speculators.train.hidden_states_source import build_client_item
 from speculators.train.logger import setup_root_logger
 
 logger = logging.getLogger(__name__)
+
+# Cap on how many unreadable filenames a single warning line lists.
+_MAX_CORRUPT_REPORTED = 10
+
+
+def _drop_unreadable_cached_files(
+    hidden_states_dir: Path, existing_file_indices: list[int]
+) -> list[int]:
+    """Drop cached files that cannot be opened, so they get regenerated.
+
+    The presence of ``hs_i.safetensors`` is not proof that it is readable; see
+    :func:`find_corrupt_hidden_state_indices`. Without this, a file truncated by
+    an interrupted run is treated as complete forever and only surfaces much
+    later as a ``SafetensorError`` inside the training dataloader.
+    """
+    if not existing_file_indices:
+        return existing_file_indices
+
+    corrupt = find_corrupt_hidden_state_indices(
+        hidden_states_dir, existing_file_indices
+    )
+    if not corrupt:
+        logger.info(
+            "Verified %d cached hidden-states file(s) are readable",
+            len(existing_file_indices),
+        )
+        return existing_file_indices
+
+    shown = sorted(corrupt)[:_MAX_CORRUPT_REPORTED]
+    names = ", ".join(f"hs_{i}.safetensors" for i in shown)
+    if len(shown) < len(corrupt):
+        names += ", ..."
+    logger.warning(
+        "%d cached hidden-states file(s) are unreadable and will be regenerated: "
+        "%s (first reason: %s)",
+        len(corrupt),
+        names,
+        corrupt[shown[0]],
+    )
+    return [i for i in existing_file_indices if i not in corrupt]
 
 
 class _FailureTracker:
@@ -63,6 +105,32 @@ class _FailureTracker:
         """Record a failure. Returns True when the threshold is reached."""
         self._consecutive += 1
         return self._consecutive >= self.threshold
+
+
+def _publish_hidden_states(
+    source_path: str,
+    target_path: Path,
+    expected_tokens: list[int] | None,
+) -> float:
+    """Move ``source_path`` to ``target_path`` only once it is complete and valid.
+
+    ``hs_<idx>`` marks a finished sample for resumption and training, so the file is
+    staged beside the target, checked against ``expected_tokens`` (``None`` skips
+    the check) and renamed into place last. On failure the staged file is removed,
+    and the next run redoes the index, replacing any staged file left by a crash.
+    Returns the seconds spent on the move.
+    """
+    tmp_path = target_path.with_name(f".{target_path.name}.tmp")
+    try:
+        t_move = time.perf_counter()
+        shutil.move(source_path, tmp_path)
+        move_s = time.perf_counter() - t_move
+        if expected_tokens is not None:
+            check_hidden_states(load_file(tmp_path), expected_tokens)
+        tmp_path.replace(target_path)
+    finally:
+        tmp_path.unlink(missing_ok=True)
+    return move_s
 
 
 async def _worker(  # noqa: C901
@@ -113,21 +181,12 @@ async def _worker(  # noqa: C901
                 await wait_for_lock_async(lock_path)
 
             async with write_semaphore:
-                t_write = time.perf_counter()
-                await asyncio.to_thread(
-                    shutil.move, hidden_states_path, target_hidden_states_path
+                write_s = await asyncio.to_thread(
+                    _publish_hidden_states,
+                    hidden_states_path,
+                    target_hidden_states_path,
+                    item["input_ids"] if validate_outputs else None,
                 )
-                write_s = time.perf_counter() - t_write
-                if validate_outputs:
-
-                    def _load_and_check(
-                        path=target_hidden_states_path,
-                        tokens=item["input_ids"],
-                    ):
-                        loaded = load_file(path)
-                        check_hidden_states(loaded, tokens)
-
-                    await asyncio.to_thread(_load_and_check)
         except Exception as e:
             if fail_on_error:
                 logger.exception(
@@ -176,8 +235,8 @@ async def _feed_queue(to_process, dataset, queue, cancel_event):
         if cancel_event.is_set():
             break
 
-        dataset_item = dataset[i]
-        client_item = build_client_item(dataset_item) | {"idx": i}
+        record = DatasetRecord.from_arrow_row(dataset[i], storage_index=i)
+        client_item = build_client_item(record) | {"idx": i}
 
         while not cancel_event.is_set():
             try:
@@ -230,6 +289,9 @@ async def _generate_and_save_hidden_states(
     hidden_states_dir.mkdir(parents=True, exist_ok=True)
 
     existing_file_indices = get_existing_hidden_state_indices(hidden_states_dir)
+    existing_file_indices = _drop_unreadable_cached_files(
+        hidden_states_dir, existing_file_indices
+    )
     num_samples = len(dataset)
 
     to_process = get_indices_to_process(
@@ -380,7 +442,8 @@ def generate_offline_data(
             "--validate-outputs",
             help=(
                 "Load generated safetensor files and check output token ids "
-                "match prompt tokens and hidden states seq_len matches num tokens"
+                "match prompt tokens and hidden states seq_len matches num tokens; "
+                "samples that fail are not saved, so a later run regenerates them"
             ),
         ),
     ] = False,

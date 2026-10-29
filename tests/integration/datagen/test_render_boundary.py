@@ -7,11 +7,17 @@ scaffold fallback (needs a template that pre-fills ``<think>``), the unstable
 guard (needs a template that rewrites history), and the client's error paths.
 """
 
+import json
+import os
 import time
 from typing import cast
 
+import httpx
 import pytest
+import torch
 from datasets import Dataset as HFDataset
+from datasets import concatenate_datasets, load_from_disk
+from transformers import ProcessorMixin
 
 from speculators.data_generation import preprocessing, render_client
 from speculators.data_generation.preprocessing import (
@@ -19,6 +25,9 @@ from speculators.data_generation.preprocessing import (
     build_speculator_training_dataset,
 )
 from speculators.data_generation.vllm_client import InvalidResponseError
+from speculators.train.data import _add_document_ids, _pad_samples
+from speculators.train.data_types import DatasetRecord
+from speculators.train.hidden_states_source import build_client_item
 
 # Neither build path below reads the processor: the missing-endpoint guard
 # raises before it is used, and speculator-format rows skip rendering entirely.
@@ -163,6 +172,8 @@ def test_append_row_statuses():
     assert preprocessing._append_row(results, [1, 2, 3], [0, 1, 1], 10, 1) == "kept"
     assert len(results["input_ids"]) == 1
     assert results["seq_len"] == [3]
+    assert results["loss_mask"][0].dtype == torch.bool
+    assert results["loss_mask"][0].tolist() == [False, True, True]
 
 
 def test_append_boundary_rows_counts_rows_at_limit_as_maybe_truncated():
@@ -302,3 +313,170 @@ def test_pretokenized_dataset_skips_render():
         HFDataset.from_dict(data), NO_PROCESSOR, num_proc=1
     )
     assert len(ds) == 1
+
+
+@pytest.mark.parametrize("mask", [[0, 0, 1, 1], [False, False, True, True]])
+def test_loss_mask_stays_boolean_after_save_load_and_collation(tmp_path, mask):
+    dataset = build_speculator_training_dataset(
+        HFDataset.from_dict({"input_ids": [[1, 2, 3, 4]], "loss_mask": [mask]}),
+        NO_PROCESSOR,
+        num_proc=1,
+    )
+    assert dataset[0]["loss_mask"].dtype == torch.bool
+    dataset.save_to_disk(tmp_path / "dataset")
+
+    restored = load_from_disk(tmp_path / "dataset")
+    row = restored[0]
+    assert row["loss_mask"].dtype == torch.bool
+    assert row["loss_mask"].tolist() == [False, False, True, True]
+    assert row["input_ids"].dtype == torch.long
+    assert row["input_ids"].tolist() == [1, 2, 3, 4]
+
+    batch = _pad_samples(
+        [
+            {
+                "input_ids": row["input_ids"],
+                "loss_mask": row["loss_mask"],
+                "lengths": torch.tensor([4]),
+            }
+        ],
+        max_len=6,
+        dtype=torch.bfloat16,
+    )
+    _add_document_ids(batch, 6)
+    assert batch["loss_mask"].dtype == torch.bool
+    assert batch["loss_mask"].tolist() == [[False, False, True, True, False, False]]
+
+
+@pytest.mark.parametrize("status", [404, 405])
+def test_preprocess_aborts_when_render_route_disappears(monkeypatch, status):
+    requests = []
+
+    def handle(request):
+        body = json.loads(request.content)
+        requests.append(body)
+        if body["messages"][0]["content"] == "missing":
+            return httpx.Response(status, text="render route unavailable")
+        ids = [1, 2] if body["add_generation_prompt"] else [1, 2, 3]
+        return httpx.Response(200, json={"token_ids": ids})
+
+    conversations = [
+        [{"role": "user", "content": text}, {"role": "assistant", "content": "ok"}]
+        for text in ["good", "missing"]
+    ]
+    with httpx.Client(transport=httpx.MockTransport(handle)) as client:
+        monkeypatch.setattr(render_client, "_client", client)
+        monkeypatch.setattr(render_client, "_client_pid", os.getpid())
+        with pytest.raises(InvalidResponseError, match=str(status)):
+            preprocessing._preprocess_batch(
+                {"conversations": conversations}, False, "http://render.test", 2048
+            )
+    assert len(requests) == 3  # two valid renders, then one permanent route failure
+
+
+@pytest.mark.parametrize("status", [200, 400, 422])
+def test_preprocess_keeps_conversation_specific_render_error_policy(
+    monkeypatch, status
+):
+    def handle(request):
+        body = json.loads(request.content)
+        if status != 200 and body["messages"][0]["content"] == "bad":
+            return httpx.Response(status, text="bad conversation")
+        ids = [1, 2] if body["add_generation_prompt"] else [1, 2, 3]
+        return httpx.Response(200, json={"token_ids": ids})
+
+    conversations = [
+        [{"role": "user", "content": text}, {"role": "assistant", "content": "ok"}]
+        for text in ["good", "bad"]
+    ]
+    with httpx.Client(transport=httpx.MockTransport(handle)) as client:
+        monkeypatch.setattr(render_client, "_client", client)
+        monkeypatch.setattr(render_client, "_client_pid", os.getpid())
+        result = preprocessing._preprocess_batch(
+            {"conversations": conversations}, False, "http://render.test", 2048
+        )
+    assert len(result["input_ids"]) == (2 if status == 200 else 1)
+    assert result["input_ids"][0].tolist() == [1, 2, 3]
+    assert result["loss_mask"][0].tolist() == [False, False, True]
+
+
+class _ProcessorMixinStub(ProcessorMixin):
+    """Routes preprocessing down the multimodal path; never called."""
+
+    def __init__(self):
+        pass
+
+
+def _build_with_processor(monkeypatch, conversations: list[list[dict]]) -> HFDataset:
+    # One row per conversation; the conv itself is what `messages` would store.
+    monkeypatch.setattr(
+        preprocessing,
+        "_render_conversation_rows",
+        lambda conv, *a, **k: [
+            {"input_ids": [1, 2, 3], "loss_mask": [0, 1, 1], "conv": conv}
+        ],
+    )
+    return build_speculator_training_dataset(
+        HFDataset.from_dict({"conversations": conversations}),
+        cast("ProcessorLike", _ProcessorMixinStub()),
+        num_proc=1,
+        render_endpoint="http://x",
+    )
+
+
+def test_processor_text_only_rows_do_not_store_messages(monkeypatch):
+    # The trainer only forwards `messages` for multimodal rows, so a text-only
+    # prep through a processor-based model should not keep the column.
+    dataset = _build_with_processor(monkeypatch, [_conv(2), _conv(2)])
+    assert len(dataset) == 2
+    assert "messages" not in dataset.column_names
+    assert "is_multimodal" not in dataset.column_names
+
+
+def test_processor_multimodal_rows_keep_messages(monkeypatch):
+    image = {"type": "image", "url": "http://x/a.png", "text": None}
+    text = {"type": "text", "url": None, "text": "what is this?"}
+    conv = [
+        {"role": "user", "content": [image, text]},
+        {"role": "assistant", "content": [{**text, "text": "a cat"}]},
+    ]
+    dataset = _build_with_processor(monkeypatch, [conv])
+    assert "is_multimodal" not in dataset.column_names
+    user_parts = dataset[0]["messages"][0]["content"]
+    assert user_parts[0]["image_url"] == {"url": "http://x/a.png"}
+    record = DatasetRecord.from_arrow_row(dataset[0], storage_index=0)
+    assert build_client_item(record)["messages"] == record.messages
+
+
+def test_processor_text_part_lists_do_not_store_messages(monkeypatch):
+    # Content given as a list of text parts carries no media either.
+    conv = [
+        {"role": "user", "content": [{"type": "text", "text": "hi"}]},
+        {"role": "assistant", "content": [{"type": "text", "text": "hello"}]},
+    ]
+    dataset = _build_with_processor(monkeypatch, [conv])
+    assert "messages" not in dataset.column_names
+
+
+def test_mixed_text_and_multimodal_sources_build_client_items(monkeypatch):
+    # Concatenating a text-only source with a multimodal one fills the
+    # text-only rows' `messages` with None; those rows must still send ids.
+    image = {"type": "image", "url": "http://x/a.png", "text": None}
+    text = {"type": "text", "url": None, "text": "what is this?"}
+    conv = [
+        {"role": "user", "content": [image, text]},
+        {"role": "assistant", "content": [{**text, "text": "a cat"}]},
+    ]
+    dataset = concatenate_datasets(
+        [
+            _build_with_processor(monkeypatch, [_conv(2)]),
+            _build_with_processor(monkeypatch, [conv]),
+        ]
+    )
+    dataset.set_format(type="torch")
+    records = [
+        DatasetRecord.from_arrow_row(dataset[i], storage_index=i) for i in range(2)
+    ]
+    text_item, mm_item = (build_client_item(record) for record in records)
+    assert "messages" not in text_item
+    assert mm_item["messages"] == records[1].messages

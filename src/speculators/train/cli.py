@@ -1,4 +1,4 @@
-"""Training entrypoint — core logic moved from scripts/train.py."""
+"""Training implementation behind the ``speculators train`` command."""
 
 import argparse
 import gc
@@ -115,6 +115,29 @@ def _maybe_apply_mrope_full_head_hack(
             f"{inherited_partial} < 1.0 can cause HF trainer / vLLM "
             "partial-rotation mismatch."
         )
+
+
+# Verifier config attribute names for the final-norm epsilon, in lookup order.
+# NemotronH and Falcon use ``layer_norm_epsilon``; Nemotron and LFM2 ``norm_eps``;
+# Cohere, Phi, StableLM and GPT-NeoX ``layer_norm_eps``; Starcoder2 ``norm_epsilon``.
+_NORM_EPS_ATTRS = (
+    "rms_norm_eps",
+    "layer_norm_epsilon",
+    "norm_eps",
+    "layer_norm_eps",
+    "norm_epsilon",
+)
+
+
+def _resolve_norm_eps(verifier_config: PretrainedConfig) -> float:
+    for attr in _NORM_EPS_ATTRS:
+        eps = getattr(verifier_config, attr, None)
+        if eps is not None:
+            return float(eps)
+    raise AttributeError(
+        f"{type(verifier_config).__name__} has none of {list(_NORM_EPS_ATTRS)}; "
+        "pass --draft-config to set the draft rms_norm_eps explicitly."
+    )
 
 
 def create_transformer_layer_config(  # noqa: C901
@@ -235,6 +258,7 @@ def create_transformer_layer_config(  # noqa: C901
         for i in range(num_layers)
     ]
 
+<<<<<<< HEAD
     config_kwargs: dict = {
         "vocab_size": verifier_config.vocab_size,
         "hidden_size": resolved_hidden_size,
@@ -255,6 +279,25 @@ def create_transformer_layer_config(  # noqa: C901
     if draft_arch == "glm5":
         config_kwargs.update(mla_kwargs_from_verifier(verifier_config))
     config = config_class(**config_kwargs)
+=======
+    config = config_class(
+        vocab_size=verifier_config.vocab_size,
+        hidden_size=resolved_hidden_size,
+        intermediate_size=resolve_draft_intermediate_size(verifier_config),
+        num_hidden_layers=num_layers,
+        num_attention_heads=num_attention_heads,
+        num_key_value_heads=num_key_value_heads,
+        hidden_act=hidden_act,
+        max_position_embeddings=verifier_config.max_position_embeddings,
+        initializer_range=verifier_config.initializer_range,
+        rms_norm_eps=_resolve_norm_eps(verifier_config),
+        head_dim=head_dim,
+        tie_word_embeddings=False,
+        sliding_window=sliding_window,
+        use_sliding_window="sliding_attention" in layer_types,
+        layer_types=layer_types,
+    )
+>>>>>>> main
 
     # New rope parameters definition introduced in transformers 5.0
     if version.parse(transformers.__version__) >= version.parse("5.0.0"):
@@ -796,6 +839,7 @@ def main(cfg: TrainConfig):  # noqa: C901
         num_target_layers=num_target_layers,
         num_workers=args.num_workers,
         prefetch_factor=args.prefetch_factor,
+        max_transfer_workers=args.max_transfer_workers,
         preprocess=preprocess,
         train_data_ratio=args.train_data_ratio,
         seed=args.seed,
@@ -812,6 +856,7 @@ def main(cfg: TrainConfig):  # noqa: C901
         train_call_kwargs=train_call_kwargs,
         val_call_kwargs=val_call_kwargs,
         optimizer=args.optimizer,
+        optimizer_implementation=args.optimizer_implementation,
         weight_decay=args.weight_decay,
         muon_lr=args.muon_lr,
         muon_momentum=args.muon_momentum,

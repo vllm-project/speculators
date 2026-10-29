@@ -1,10 +1,8 @@
-from typing import Any, Literal
+from typing import Literal
 
-from pydantic import Field, field_serializer, field_validator
-from transformers import AutoConfig, PretrainedConfig
-from transformers.models.qwen3.modeling_qwen3 import (
-    Qwen3Config,
-)
+from pydantic import Field
+from transformers import PretrainedConfig
+from transformers.models.qwen3.configuration_qwen3 import Qwen3Config
 
 from speculators import SpeculatorModelConfig
 from speculators.models.dflash.glm5 import (
@@ -85,6 +83,7 @@ class DFlashSpeculatorConfig(SpeculatorModelConfig):
         ),
     )
 
+<<<<<<< HEAD
     @field_serializer("transformer_layer_config")
     def serialize_transformer_config(self, value: PretrainedConfig) -> dict:
         """Serialize transformer config to dict."""
@@ -108,6 +107,8 @@ class DFlashSpeculatorConfig(SpeculatorModelConfig):
             return config_class(**value)
         return value
 
+=======
+>>>>>>> main
     @property
     def target_vocab_size(self) -> int:
         """Get target vocabulary size from transformer config."""

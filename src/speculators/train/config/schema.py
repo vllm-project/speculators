@@ -117,8 +117,7 @@ class DraftArgs(_Group):
         default=None,
         description="(Optional) space-separated list of integer layer ids for the "
         "auxiliary hidden states. Defaults to [2, n//2, n-3]. If custom values were "
-        "used to launch vllm, pass the same ids here, excluding the final layer "
-        "launch_vllm.py appends.",
+        "used to launch vllm, pass the same ids here.",
     )
     token_freq_path: str | None = Field(
         default=None,
@@ -236,6 +235,11 @@ class DataArgs(_Group):
     )
     num_workers: int = Field(default=12, description="Number of dataloader workers.")
     prefetch_factor: int = Field(default=4, description="Dataloader prefetch factor.")
+    max_transfer_workers: int = Field(
+        default=1,
+        gt=0,
+        description="Maximum concurrent hidden-state transfers per dataloader worker.",
+    )
     max_anchors: int = Field(
         default=512,
         description="Maximum anchor positions for DFlash-family and P-EAGLE training "
@@ -270,15 +274,15 @@ class GenerationArgs(_Group):
 
     vllm_endpoint: str = Field(
         default="http://localhost:8000/v1",
-        description="vLLM endpoint used to generate hidden states on demand. Only "
-        "needed if --on-missing=generate and samples are missing. The vLLM instance "
+        description="vLLM endpoint used to generate hidden states on demand when "
+        "--on-missing=generate. The vLLM instance "
         "must cache hidden states to a location reachable from the training instance.",
     )
     on_missing: Literal["generate", "skip", "warn", "raise"] = Field(
         default="generate",
-        description="Dataloader behaviour when a sample has no cached hidden states. "
-        "Default 'generate' generates them on demand via the vLLM endpoint; the others "
-        "skip the sample, skip with a warning, or raise.",
+        description="Hidden-state source and offline cache-miss policy. 'generate' "
+        "selects vLLM generation; 'skip', 'warn', and 'raise' select the offline "
+        "source and control what happens when a cached sample is missing.",
     )
     on_generate: Literal["delete"] = Field(
         default="delete",
@@ -353,6 +357,12 @@ class OptimizerArgs(_Group):
         default="muon",
         description="Optimizer to use. 'muon' applies Muon to 2D weight matrices and "
         "AdamW to the remaining params (norms, biases, embeddings, lm_head).",
+    )
+    optimizer_implementation: Literal["fused", "eager"] = Field(
+        default="fused",
+        description="AdamW implementation to use; 'fused' runs the update in a single "
+        "kernel, 'eager' falls back to PyTorch's default (foreach) path for "
+        "accelerators or dtypes where the fused kernel is unsupported.",
     )
     lr: float = Field(default=1e-3, description="Learning rate (AdamW / base group).")
     weight_decay: float = Field(
@@ -515,6 +525,14 @@ class DFlash2Args(_Group):
         default=1.0,
         ge=0.0,
         description="DFlash2: weight of the candidate-selector K-way CE term.",
+    )
+    selector_miss_policy: Literal["replace", "strict"] = Field(
+        default="replace",
+        description=(
+            "DFlash2 selector target-miss policy. 'replace' inserts the gold token "
+            "into the training candidates; 'strict' leaves top-K unchanged and "
+            "excludes that position from selector CE. Unary loss remains active."
+        ),
     )
 
 
@@ -921,7 +939,7 @@ class TrainConfig(BaseSettings):
         """The impure CLI boundary: parse argv, layer, validate.
 
         Turns any configuration error into a clean ``SystemExit(2)``. This is what
-        ``scripts/train.py`` calls.
+        the ``speculators train`` command calls.
         """
         from speculators.train.config import resolution  # noqa: PLC0415
 

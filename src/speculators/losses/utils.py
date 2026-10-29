@@ -248,7 +248,7 @@ def compound_loss(
     keyed as ``"{name}_loss"``.  When the config contains a single term the
     dict is empty (the overall loss already captures it).
     """
-    total = torch.tensor(0.0, device=logits.device, dtype=torch.float32)
+    total = torch.zeros((), device=logits.device, dtype=torch.float32)
     term_losses: dict[str, torch.Tensor] = {}
     multi = len(loss_config) > 1
     for name, (fn, weight) in loss_config.items():

@@ -405,8 +405,8 @@ class SpeculatorModel(ClassRegistryMixin, PreTrainedModel):  # type: ignore[misc
         """
         Looks up the appropriate speculator model class from the registry
         based on the configuration type. It matches the config class to the
-        corresponding model class that was registered during auto-discovery or manual
-        registration.
+        corresponding model class registered when its implementation module
+        was imported.
 
         :param config: The configuration for which to find the registered model class.
             Must be an instance of a SpeculatorModelConfig subclass.
@@ -429,7 +429,7 @@ class SpeculatorModel(ClassRegistryMixin, PreTrainedModel):  # type: ignore[misc
             raise ValueError(
                 "No registered model classes found. "
                 "Ensure that models are registered with "
-                "`SpeculatorModel.register(NAME)` or that auto-discovery is enabled."
+                "`SpeculatorModel.register(NAME)` and their modules are imported."
             )
 
         for _, model_class in cls.registry.items():
