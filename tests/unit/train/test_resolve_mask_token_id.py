@@ -7,9 +7,9 @@ from speculators.train.utils import resolve_mask_token_id
 class _NoMaskAttrTokenizer:
     """Mimics MistralCommonBackend: reading mask_token_id raises AttributeError."""
 
-    pad_token_id = 11
-    eos_token_id = 2
-    unk_token_id = 0
+    pad_token_id: int | None = 11
+    eos_token_id: int | None = 2
+    unk_token_id: int | None = 0
 
     def __len__(self):
         return 131072
