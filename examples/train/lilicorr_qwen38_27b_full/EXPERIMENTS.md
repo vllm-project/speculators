@@ -106,7 +106,35 @@ Observations:
 *(This table is updated as each checkpoint's eval completes; raw results live
 in `runfull/humaneval_each_checkpoint/step_<N>/` under the run directory.)*
 
-## 5. Infrastructure findings (each cost real debugging time)
+## 5. Run 3 — plan.md recipe, block 8 (2026-10-28 11:40 → ongoing)
+
+**Config:** fresh draft per `~/plan.md` — block **8** (7 speculative tokens),
+candidate K=8, **gamma 3**, `total_seq_len` **8192**, **Muon** (2D weights) +
+AdamW (rest) both at **6e-4** (Muon wd 0.1, AdamW wd 0), one **cosine**
+schedule across 2 epochs, 4% warmup, `checkpoint_freq 0.25`, pure CE,
+`input_ids` targets. Branch `lilicorr-qwen38-fresh-2ep` (worktree
+`~/speculators-b8`) from `6c88b7e` + FP32 checkpoint-saving patch (`dd330a5`).
+Run dir: `run_b8_2ep`. Note: epoch ≈ 92.6k steps at seq-len 8192 (vs ≈ 109k at
+6144), so 25% lands at step 23148. Pace ~1,550 steps/h (≈70% faster than
+Run 2). Evals run manually (no auto loop, per plan.md §5) with
+`num_speculative_tokens=7`.
+
+| Checkpoint | Step | % of epoch 1 | Acceptance length | Pos-0 accept | Notes |
+|------------|------|-----------|-------------------|--------------|-------|
+| 1 | 23148 | 25% | **3.025** (of 7) | 0.653 | per-position: .653/.436/.302/.221/.169/.135/.109 |
+| 2 | ~46296 | 50% | — | — | pending |
+
+vs Run 2 at the same 25%-of-epoch point: 3.025-of-7 vs 3.130-of-15 —
+near-identical acceptance length with less than half the drafted tokens
+(43% vs 21% per-slot efficiency), and better position-0 (0.653 vs 0.583).
+
+Operational note: the first launch attempt died at step 4 — the switchover
+script ran in a tmux session that exited on completion, SIGHUP-ing its
+background children (extraction server + trainer). Fixed by giving each
+long-lived process its own persistent tmux session (`planb8-vllm`,
+`planb8-train`).
+
+## 6. Infrastructure findings (each cost real debugging time)
 
 | Symptom | Root cause | Fix |
 |---|---|---|
@@ -120,7 +148,7 @@ in `runfull/humaneval_each_checkpoint/step_<N>/` under the run directory.)*
 | Checkpoint corruption | `pkill` mid-save; checkpointer has no atomic staging | watch `training_state.json`; verified-backup rotation (see Run 1) |
 | Orphaned GPU memory after kills | vLLM/torch workers renamed via `setproctitle` (`VLLM::Worker` etc.) escape `pkill -f` | kill by PID from `nvidia-smi --query-compute-apps`, poll until memory clear |
 
-## 6. Open items
+## 7. Open items
 
 - [ ] Collect 10% checkpoint (step ~10898) HumanEval result for Run 2 and
       compare the acceptance-length trend against 5%.
