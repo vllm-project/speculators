@@ -50,9 +50,6 @@ if [ -n "${TRANSFORMERS_VERSION:-}" ] && [ "${TRANSFORMERS_VERSION}" != "latest"
   fi
 fi
 
-echo "~~~ Speculators environment"
-uv pip freeze
-
 if [[ "${TEST_TYPE}" =~ ^(smoke|e2e|regression|multi_gpu)$ ]]; then
   echo "--- Setting up vLLM environment"
   uv venv vllm_venv --python "${PYTHON_VERSION}"
@@ -76,6 +73,9 @@ if [[ "${TEST_TYPE}" =~ ^(smoke|e2e|regression|multi_gpu)$ ]]; then
     uv pip install .[mooncake-cuda13]
     uv pip install --python "${VLLM_VENV_PYTHON}" mooncake-transfer-engine-cuda13 ./hs_connectors
   fi
+
+  echo "~~~ Speculators environment"
+  uv pip freeze
 
   echo "~~~ vLLM environment"
   uv pip freeze --python "${VLLM_VENV_PYTHON}"
