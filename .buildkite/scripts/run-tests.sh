@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-TEST_TYPE="${1:?Usage: run-tests.sh <unit|integration|smoke|e2e|regression|multi-gpu>}"
+TEST_TYPE="${1:?Usage: run-tests.sh <unit|integration|smoke|e2e|regression|multi_gpu>}"
 
 PYTEST_EXTRA_ARGS=()
 case "${TEST_TYPE}" in
@@ -10,7 +10,7 @@ case "${TEST_TYPE}" in
   smoke)      TEST_PATH="tests/e2e/smoke" ;;
   e2e)        TEST_PATH="tests/e2e"; PYTEST_EXTRA_ARGS+=(-m "not regression") ;;
   regression) TEST_PATH="tests/e2e"; PYTEST_EXTRA_ARGS+=(-m "regression") ;;
-  multi-gpu)  TEST_PATH="tests/e2e"; PYTEST_EXTRA_ARGS+=(-m "multi_gpu") ;;
+  multi_gpu)  TEST_PATH="tests/e2e"; PYTEST_EXTRA_ARGS+=(-m "multi_gpu") ;;
   *) echo "Unknown test type: ${TEST_TYPE}" >&2; exit 1 ;;
 esac
 
@@ -23,7 +23,7 @@ export HF_HUB_DISABLE_PROGRESS_BARS=1
 
 echo "--- Installing system packages"
 git fetch --tags --unshallow 2>/dev/null || git fetch --tags
-apt-get update -qq > /dev/null 2>&1 && apt-get install -y -qq curl g++ gcc make python3-dev libibverbs-dev libnuma-dev librdmacm-dev
+apt-get update -qq > /dev/null 2>&1 && apt-get install -y -qq curl g++ gcc make python3-dev
 curl -LsSf https://astral.sh/uv/install.sh | sh
 
 export LD_LIBRARY_PATH=/usr/local/nvidia/lib64
@@ -50,7 +50,10 @@ if [ -n "${TRANSFORMERS_VERSION:-}" ] && [ "${TRANSFORMERS_VERSION}" != "latest"
   fi
 fi
 
-if [[ "${TEST_TYPE}" =~ ^(smoke|e2e|regression|multi-gpu)$ ]]; then
+echo "~~~ Speculators environment"
+uv pip freeze
+
+if [[ "${TEST_TYPE}" =~ ^(smoke|e2e|regression|multi_gpu)$ ]]; then
   echo "--- Setting up vLLM environment"
   uv venv vllm_venv --python "${PYTHON_VERSION}"
   VLLM_VENV_PYTHON="$PWD/vllm_venv/bin/python"
@@ -67,15 +70,14 @@ if [[ "${TEST_TYPE}" =~ ^(smoke|e2e|regression|multi-gpu)$ ]]; then
       --extra-index-url https://wheels.vllm.ai/nightly/cu130
   fi
 
+  echo "~~~ vLLM environment"
+  uv pip freeze --python "${VLLM_VENV_PYTHON}"
+
   if [ "${TEST_TYPE}" = "e2e" ]; then
     echo "--- Installing hs_connectors dependencies"
-    # mooncake-transfer-engine-cuda13 has no wheel for Python 3.14+
-    if [[ ! "${PYTHON_VERSION}" =~ ^3\.1[4-9] ]]; then
-      uv pip install .[mooncake-cuda13]
-      uv pip install --python "${VLLM_VENV_PYTHON}" mooncake-transfer-engine-cuda13 ./hs_connectors
-    else
-      uv pip install --python "${VLLM_VENV_PYTHON}" ./hs_connectors
-    fi
+    apt-get install -y -qq libibverbs1 ibverbs-providers
+    uv pip install .[mooncake-cuda13]
+    uv pip install --python "${VLLM_VENV_PYTHON}" mooncake-transfer-engine-cuda13 ./hs_connectors
   fi
 
   export VLLM_PYTHON="${VLLM_VENV_PYTHON}"

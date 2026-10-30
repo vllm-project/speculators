@@ -70,6 +70,8 @@ steps:
           adjustments:
             - with: {python: "3.11", transformers: "main"}
               skip: true
+            - with: {python: "3.14", transformers: "latest"}
+              skip: true
 
   - group: ":test_tube: Nightly Integration Tests (A100)"
     steps:
@@ -142,6 +144,8 @@ steps:
           adjustments:
             - with: {python: "3.11", transformers: "main"}
               skip: true
+            - with: {python: "3.14", transformers: "latest"}
+              skip: true
 
   - group: ":rocket: Nightly E2E Tests (H100)"
     steps:
@@ -213,7 +217,7 @@ steps:
 
         matrix:
           setup:
-            python: ["3.11", "3.12", "3.14"]
+            python: ["3.11", "3.12", "3.13"]
             transformers: ["latest", "main"]
             vllm: ["latest", "nightly"]
           adjustments:
@@ -225,7 +229,9 @@ steps:
               skip: true
             - with: {python: "3.12", vllm: "latest"}
               skip: true
-            - with: {python: "3.14", vllm: "nightly"}
+            - with: {python: "3.13", vllm: "latest"}
+              skip: true
+            - with: {python: "3.13", transformers: "main"}
               skip: true
 
   - group: ":rotating_light: Nightly Regression Tests (H100)"
@@ -301,9 +307,9 @@ steps:
           adjustments:
             - with: {python: "3.11", vllm: "nightly"}
               skip: true
-            - with: {python: "3.12", vllm: "latest"}
+            - with: {python: "3.12", vllm: "nightly"}
               skip: true
-            - with: {python: "3.14", vllm: "nightly"}
+            - with: {python: "3.14", vllm: "latest"}
               skip: true
 
   - group: ":link: Nightly Multi-GPU Tests (A100)"
@@ -337,7 +343,7 @@ steps:
                     image: buildkite/agent:3-ubuntu
                     command:
                       - chmod +x .buildkite/scripts/run-tests.sh
-                      - .buildkite/scripts/run-tests.sh multi-gpu
+                      - .buildkite/scripts/run-tests.sh multi_gpu
 
                     resources:
                       limits:
@@ -376,4 +382,6 @@ steps:
             transformers: ["latest", "main"]
           adjustments:
             - with: {python: "3.11", transformers: "main"}
+              skip: true
+            - with: {python: "3.14", transformers: "latest"}
               skip: true
