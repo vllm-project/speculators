@@ -26,6 +26,7 @@ from speculators.cli.regenerate_responses import (
     load_input_dataset,
     load_seen,
     prepare_row,
+    refuse_append_without_resume,
     regenerate_conversation,
 )
 from speculators.data_generation import vllm_client
@@ -1046,3 +1047,38 @@ def test_tools_and_results_are_read_from_the_normalized_row():
     assert tool_results == [("sunny", [])]
     # the raw row hides the conversation behind `input`: results would be lost
     assert extract_conversation(row, None)[1] == []
+
+
+# ---------------------------------------------------------------------------
+# Output file: do not append a second copy unless --resume is set.
+# ---------------------------------------------------------------------------
+
+
+def test_refuse_append_without_resume_rejects_nonempty_file(tmp_path):
+    outfile = tmp_path / "out.jsonl"
+    original = '{"id": "a"}\n'
+    outfile.write_text(original, encoding="utf-8")
+    size = outfile.stat().st_size
+
+    with pytest.raises(typer.BadParameter, match="--resume") as exc_info:
+        refuse_append_without_resume(str(outfile), resume=False)
+
+    assert "delete" in str(exc_info.value)
+    assert outfile.stat().st_size == size
+    assert outfile.read_text(encoding="utf-8") == original
+
+
+def test_refuse_append_without_resume_allows_resume(tmp_path):
+    outfile = tmp_path / "out.jsonl"
+    outfile.write_text('{"id": "a"}\n', encoding="utf-8")
+
+    refuse_append_without_resume(str(outfile), resume=True)
+
+
+@pytest.mark.parametrize("setup", ["missing", "empty"])
+def test_refuse_append_without_resume_allows_missing_or_empty(tmp_path, setup):
+    outfile = tmp_path / "out.jsonl"
+    if setup == "empty":
+        outfile.write_text("", encoding="utf-8")
+
+    refuse_append_without_resume(str(outfile), resume=False)
