@@ -143,7 +143,31 @@ hadn't propagated) collapsed the TCPStore before the save completed, so
 The verified step-23148 checkpoint (`checkpoints/0` + `0_prev`) is intact and
 resumable. GPUs and extraction server fully torn down.
 
-## 6. Infrastructure findings (each cost real debugging time)
+## 6. Run 4 — argmax A/B (2026-10-29 13:22 → ongoing)
+
+**Config:** identical to Run 3 except `lilicorr_target_source="argmax"`
+(branch `lilicorr-qwen38-fresh-2ep-argmax`, commit `b6271a8` — the default
+flipped in `core.py::get_trainer_kwargs`). Run dir: `run_b8_2ep_argmax`.
+Purpose: the controlled input_ids-vs-argmax comparison the Run 1 failure
+left unanswered — see
+[TARGET_SOURCE_COMPARISON.md](TARGET_SOURCE_COMPARISON.md) for the full
+writeup.
+
+| Checkpoint | Step | % of epoch 1 | Acceptance length | Pos-0 accept | Notes |
+|------------|------|-----------|-------------------|--------------|-------|
+| 1 | 23148 | 25% | **3.040** (of 7) | 0.662 | per-position: .662/.440/.305/.221/.169/.135/.109; eval ran automatically overnight, training resumed + backup promoted |
+
+**Result: statistically indistinguishable from Run 3's input_ids side at the
+matched step** (3.040 vs 3.025 acceptance, every per-position rate within
+~0.01, argmax marginally ahead everywhere, train loss equal at 2.77). The
+"argmax trains against wrong targets" concern does not show up in served
+acceptance at this stage; `input_ids` stays the default on principle
+(matches ModelOpt, correct for sampled data). Caveat: one seed per side, one
+checkpoint, one benchmark.
+
+Run 4 continues training past the 25% point (auto-resumed after the eval).
+
+## 7. Infrastructure findings (each cost real debugging time)
 
 | Symptom | Root cause | Fix |
 |---|---|---|
@@ -157,7 +181,7 @@ resumable. GPUs and extraction server fully torn down.
 | Checkpoint corruption | `pkill` mid-save; checkpointer has no atomic staging | watch `training_state.json`; verified-backup rotation (see Run 1) |
 | Orphaned GPU memory after kills | vLLM/torch workers renamed via `setproctitle` (`VLLM::Worker` etc.) escape `pkill -f` | kill by PID from `nvidia-smi --query-compute-apps`, poll until memory clear |
 
-## 7. Open items
+## 8. Open items
 
 - [ ] Collect 10% checkpoint (step ~10898) HumanEval result for Run 2 and
       compare the acceptance-length trend against 5%.

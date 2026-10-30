@@ -2,8 +2,7 @@
 
 Purpose: hold the served-eval results needed to compare LiLiCorr training with
 observed `input_ids` targets against `argmax` targets, at matched recipe and
-training progress. The `input_ids` side is filled in below; the `argmax` side
-will be filled in when that run reaches the same point.
+training progress. **Both sides are complete** — see the Verdict.
 
 Background: the LiLiCorr ground truth for the backbone CE and the lattice
 terms can be defined either as the token actually sampled into the training
@@ -62,20 +61,58 @@ Lesson: SIGINT to the *torchrun agent* is the supported graceful path; SIGTERM
 to workers races the save against distributed teardown. The 25%-checkpoint
 measurement above is unaffected — it was taken before the pause.
 
-## argmax — PENDING
+## argmax (Run 4, branch `lilicorr-qwen38-fresh-2ep-argmax`) — COMPLETE
 
-Same recipe, `lilicorr_target_source="argmax"`. Note the toggle is an
-internal kwarg (`core.py::get_trainer_kwargs` reads it; default is
-`input_ids` since commit 6c88b7e) — do not invent a YAML flag; flip the
-default on a dedicated branch or thread the kwarg explicitly.
+Same recipe with the `lilicorr_target_source` default flipped to `"argmax"`
+in `core.py::get_trainer_kwargs` (commit `b6271a8`; internal kwarg, no YAML
+flag). Fresh run, same seed-free launch protocol. Run dir:
+`run_b8_2ep_argmax`.
 
-| Checkpoint | Step | Acceptance length | Per-position rates |
-|------------|------|-------------------|--------------------|
-| 25% | ~23148 | — | — |
+### 25% of epoch 1 (step 23148), evaluated 2026-10-30 05:02 EDT
+
+| Metric | Value |
+|---|---|
+| Acceptance length | **3.040** (of 7 drafted) |
+| Num drafts / accepted tokens | 82,536 / 168,367 |
+
+**Per-position acceptance rates:**
+
+| Position | 0 | 1 | 2 | 3 | 4 | 5 | 6 |
+|----------|------|------|------|------|------|------|------|
+| Accept rate | 0.6624 | 0.4398 | 0.3048 | 0.2205 | 0.1689 | 0.1347 | 0.1087 |
+
+Training loss at the matched step (23146) was essentially identical:
+2.777 (argmax) vs 2.771 (input_ids). Note the two runs' CE values are
+computed against *different* targets, so equality of the number is not
+itself meaningful — but the absence of a large gap rules out the
+"argmax is easier to fit" hypothesis at this stage.
 
 ## Verdict
 
-TBD once the argmax side has its 25% measurement. Compare acceptance length,
-position-0 rate, and the per-position decay ratio at matched steps; also
-watch training-loss trajectory, since argmax targets are lower-entropy
-(easier) and may show lower CE without better served acceptance.
+**Statistically indistinguishable at 25% of epoch 1.**
+
+| Metric | input_ids | argmax | Δ |
+|---|---|---|---|
+| Acceptance length | 3.025 | 3.040 | +0.015 (+0.5%) |
+| Position-0 accept | 0.6534 | 0.6624 | +0.009 |
+| Decay ratio/position | ~0.72 | ~0.72 | ~0 |
+| Train loss @ step 23146 | 2.771 | 2.777 | −0.006 |
+
+Every per-position rate agrees within ~0.01, with argmax marginally ahead
+at every position. With ~82.5k drafts per side, the standard error on the
+mean acceptance length is ~0.01, so the +0.015 gap is at most one-or-two
+SE — a hint, not a result.
+
+Practical conclusions:
+1. The theoretical concern that argmax "silently trains against wrong
+   targets" on a sampled corpus does **not** translate into a measurable
+   acceptance penalty at this training stage — if anything the sign points
+   the other way.
+2. Since the two are equivalent in served quality, the tiebreaker is
+   principle, not performance: `input_ids` matches NVIDIA ModelOpt's
+   reference default and is the correct ground truth for *sampled* data,
+   so it remains the right default (kept on `lilicorr-qwen38-fresh-2ep`).
+3. Caveats: one seed per side, one checkpoint (25% of epoch 1), one eval
+   benchmark. A gap could still emerge later in training or on other
+   workloads; if the input_ids run is ever resumed past 50%, re-running
+   this comparison there would be cheap.
