@@ -71,11 +71,11 @@ steps:
             - with: {python: "3.11", transformers: "main"}
               skip: true
 
-  - group: ":test_tube: Nightly Integration Tests (H100)"
+  - group: ":test_tube: Nightly Integration Tests (A100)"
     steps:
       - label: ":python: Integration Tests py{{matrix.python}} / transformers {{matrix.transformers}}"
         agents:
-          queue: RedHat-H100-WDC
+          queue: RedHat-A100-WDC
 
         retry:
           automatic:
@@ -95,7 +95,7 @@ steps:
                   runAsUser: 0
                   runAsGroup: 0
                 nodeSelector:
-                  vllm.ci/gpu-pool: upstream-ci-h100
+                  vllm.ci/gpu-pool: upstream-ci-a100
 
                 containers:
                   - name: tests
