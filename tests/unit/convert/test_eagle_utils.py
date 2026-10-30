@@ -3,12 +3,15 @@ Unit tests for Eagle converter utility functions.
 """
 
 import json
+import pickle
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 from unittest.mock import MagicMock, patch
 
 import pytest
 import torch
+from safetensors.torch import save_file
 
 from speculators.convert.eagle.utils import detect_fusion_bias_and_layernorms
 from speculators.convert.utils import (
@@ -172,7 +175,7 @@ class TestLoadCheckpointWeights:
 
         assert weights == expected_weights
         mock_torch_load.assert_called_once_with(
-            checkpoint_dir / "pytorch_model.bin", map_location="cpu"
+            checkpoint_dir / "pytorch_model.bin", map_location="cpu", weights_only=True
         )
 
     def test_no_weights_found(self, tmp_path):
@@ -183,22 +186,136 @@ class TestLoadCheckpointWeights:
         with pytest.raises(FileNotFoundError, match="No weights found"):
             load_checkpoint_weights(checkpoint_dir)
 
-    def test_sharded_safetensors_not_supported(self, tmp_path):
-        """Test error for sharded safetensors checkpoints."""
+    def test_sharded_safetensors_loads(self, tmp_path):
+        "Sharded safetensors checkpoints load and merge across shards."
         checkpoint_dir = tmp_path / "checkpoint"
         checkpoint_dir.mkdir()
-        (checkpoint_dir / "model.safetensors.index.json").touch()
+        expected = {"a.w": torch.randn(4, 4), "b.w": torch.randn(2, 8)}
 
-        with pytest.raises(NotImplementedError, match="Sharded checkpoint detected"):
+        save_file(
+            {"a.w": expected["a.w"]},
+            str(checkpoint_dir / "model-00001-of-00002.safetensors"),
+        )
+        save_file(
+            {"b.w": expected["b.w"]},
+            str(checkpoint_dir / "model-00002-of-00002.safetensors"),
+        )
+        (checkpoint_dir / "model.safetensors.index.json").write_text(
+            json.dumps(
+                {
+                    "weight_map": {
+                        "a.w": "model-00001-of-00002.safetensors",
+                        "b.w": "model-00002-of-00002.safetensors",
+                    }
+                }
+            )
+        )
+
+        weights = load_checkpoint_weights(checkpoint_dir)
+
+        assert set(weights) == set(expected)
+        for key, tensor in expected.items():
+            assert torch.equal(weights[key], tensor)
+
+    def test_sharded_safetensors_precedes_single_pytorch_file(self, tmp_path):
+        checkpoint_dir = tmp_path / "checkpoint"
+        checkpoint_dir.mkdir()
+        expected = torch.tensor([1.0])
+        save_file({"a.w": expected}, str(checkpoint_dir / "model-00001.safetensors"))
+        (checkpoint_dir / "model.safetensors.index.json").write_text(
+            json.dumps({"weight_map": {"a.w": "model-00001.safetensors"}})
+        )
+        torch.save({"a.w": torch.tensor([2.0])}, checkpoint_dir / "pytorch_model.bin")
+
+        assert torch.equal(load_checkpoint_weights(checkpoint_dir)["a.w"], expected)
+
+    def test_sharded_index_rejects_weight_in_wrong_shard(self, tmp_path):
+        checkpoint_dir = tmp_path / "checkpoint"
+        checkpoint_dir.mkdir()
+        save_file(
+            {"b.w": torch.tensor([2.0])}, str(checkpoint_dir / "first.safetensors")
+        )
+        save_file(
+            {"a.w": torch.tensor([1.0]), "c.w": torch.tensor([3.0])},
+            str(checkpoint_dir / "second.safetensors"),
+        )
+        (checkpoint_dir / "model.safetensors.index.json").write_text(
+            json.dumps(
+                {
+                    "weight_map": {
+                        "a.w": "first.safetensors",
+                        "b.w": "first.safetensors",
+                        "c.w": "second.safetensors",
+                    }
+                }
+            )
+        )
+
+        with pytest.raises(ValueError, match="a.w"):
             load_checkpoint_weights(checkpoint_dir)
 
-    def test_sharded_pytorch_not_supported(self, tmp_path):
-        """Test error for sharded PyTorch checkpoints."""
+    def test_sharded_pytorch_loads(self, tmp_path):
+        "Sharded PyTorch-bin checkpoints load and merge across shards."
         checkpoint_dir = tmp_path / "checkpoint"
         checkpoint_dir.mkdir()
-        (checkpoint_dir / "pytorch_model.bin.index.json").touch()
+        expected = {"x": torch.randn(5), "y": torch.randn(2, 2)}
 
-        with pytest.raises(NotImplementedError, match="Sharded checkpoint detected"):
+        torch.save(
+            {"x": expected["x"]},
+            checkpoint_dir / "pytorch_model-00001-of-00002.bin",
+        )
+        torch.save(
+            {"y": expected["y"]},
+            checkpoint_dir / "pytorch_model-00002-of-00002.bin",
+        )
+        (checkpoint_dir / "pytorch_model.bin.index.json").write_text(
+            json.dumps(
+                {
+                    "weight_map": {
+                        "x": "pytorch_model-00001-of-00002.bin",
+                        "y": "pytorch_model-00002-of-00002.bin",
+                    }
+                }
+            )
+        )
+
+        weights = load_checkpoint_weights(checkpoint_dir)
+
+        assert set(weights) == set(expected)
+        for key, tensor in expected.items():
+            assert torch.equal(weights[key], tensor)
+
+    @pytest.mark.parametrize("sharded", [False, True])
+    def test_pytorch_weights_reject_non_weight_objects(
+        self, tmp_path, monkeypatch, sharded
+    ):
+        checkpoint_dir = tmp_path / "checkpoint"
+        checkpoint_dir.mkdir()
+        shard_name = (
+            "pytorch_model-00001-of-00001.bin" if sharded else "pytorch_model.bin"
+        )
+        torch.save(
+            {"weight": torch.tensor([1.0]), "extra": datetime.now()},
+            checkpoint_dir / shard_name,
+        )
+        if sharded:
+            (checkpoint_dir / "pytorch_model.bin.index.json").write_text(
+                json.dumps({"weight_map": {"weight": shard_name}})
+            )
+        monkeypatch.setenv("TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD", "1")
+
+        with pytest.raises(pickle.UnpicklingError):
+            load_checkpoint_weights(checkpoint_dir)
+
+    def test_sharded_missing_shard_raises(self, tmp_path):
+        "A referenced-but-missing shard raises FileNotFoundError."
+        checkpoint_dir = tmp_path / "checkpoint"
+        checkpoint_dir.mkdir()
+        (checkpoint_dir / "model.safetensors.index.json").write_text(
+            json.dumps({"weight_map": {"a.w": "model-00001-of-00002.safetensors"}})
+        )
+
+        with pytest.raises(FileNotFoundError, match="is missing"):
             load_checkpoint_weights(checkpoint_dir)
 
     def test_safetensors_takes_precedence(self, tmp_path):
