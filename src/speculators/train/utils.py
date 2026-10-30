@@ -38,24 +38,36 @@ def resolve_mask_token_id(
     )
     tokenizer = get_tokenizer(processor)
 
-    if tokenizer.mask_token_id is not None:
-        logger.info(f"Using tokenizer mask_token_id={tokenizer.mask_token_id}")
-        return tokenizer.mask_token_id
+    # Not every tokenizer backend defines mask_token_id (MistralCommonBackend
+    # raises AttributeError), so read it like the pad/eos/unk fallbacks below.
+    tokenizer_mask_token_id = getattr(tokenizer, "mask_token_id", None)
+    if tokenizer_mask_token_id is not None:
+        logger.info(f"Using tokenizer mask_token_id={tokenizer_mask_token_id}")
+        return tokenizer_mask_token_id
 
     if len(tokenizer) < vocab_size:
-        tokenizer.add_special_tokens({"mask_token": "<|MASK|>"})
-        added_id: int = tokenizer.mask_token_id  # type: ignore[assignment]
-        logger.warning(
-            f"Added <|MASK|> to tokenizer, mask_token_id={added_id} "
-            f"(tokenizer len={len(tokenizer)}, vocab_size={vocab_size})"
-        )
-        return added_id
+        try:
+            tokenizer.add_special_tokens({"mask_token": "<|MASK|>"})
+        except NotImplementedError:
+            # MistralCommonBackend can't add tokens; use the fallbacks below.
+            logger.warning(
+                f"{type(tokenizer).__name__} cannot add a <|MASK|> token; "
+                "falling back to pad/eos/unk."
+            )
+        else:
+            added_id: int = tokenizer.mask_token_id  # type: ignore[assignment]
+            logger.warning(
+                f"Added <|MASK|> to tokenizer, mask_token_id={added_id} "
+                f"(tokenizer len={len(tokenizer)}, vocab_size={vocab_size})"
+            )
+            return added_id
 
     for token_name in ("pad_token_id", "eos_token_id", "unk_token_id"):
         token_id = getattr(tokenizer, token_name, None)
         if token_id is not None:
             warnings.warn(
-                f"Tokenizer does not have mask_token and no unused embedding slots. "
+                "Tokenizer has no mask_token and no <|MASK|> token could be added "
+                "(no unused embedding slots, or the tokenizer can't add tokens). "
                 f"Using {token_name}={token_id} as fallback.",
                 stacklevel=2,
             )
@@ -63,7 +75,8 @@ def resolve_mask_token_id(
 
     raise ValueError(
         "Could not resolve mask_token_id: no --mask-token-id provided, tokenizer has "
-        "no mask_token, no unused embedding slots, and no pad/eos/unk fallback tokens."
+        "no mask_token, no <|MASK|> token could be added (no unused embedding slots, "
+        "or the tokenizer can't add tokens), and no pad/eos/unk fallback tokens."
     )
 
 
