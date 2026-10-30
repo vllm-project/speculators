@@ -70,15 +70,15 @@ if [[ "${TEST_TYPE}" =~ ^(smoke|e2e|regression|multi_gpu)$ ]]; then
       --extra-index-url https://wheels.vllm.ai/nightly/cu130
   fi
 
-  echo "~~~ vLLM environment"
-  uv pip freeze --python "${VLLM_VENV_PYTHON}"
-
   if [ "${TEST_TYPE}" = "e2e" ]; then
     echo "--- Installing hs_connectors dependencies"
     apt-get install -y -qq libibverbs1 ibverbs-providers libnuma1
     uv pip install .[mooncake-cuda13]
     uv pip install --python "${VLLM_VENV_PYTHON}" mooncake-transfer-engine-cuda13 ./hs_connectors
   fi
+
+  echo "~~~ vLLM environment"
+  uv pip freeze --python "${VLLM_VENV_PYTHON}"
 
   export VLLM_PYTHON="${VLLM_VENV_PYTHON}"
   export VLLM_USE_FLASHINFER_SAMPLER=0
