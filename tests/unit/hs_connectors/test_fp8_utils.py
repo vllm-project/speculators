@@ -117,3 +117,38 @@ def test_large_finite_absmax_quantizes_without_nan():
 
     assert torch.isfinite(fp8_hs.float()).all()
     assert torch.isfinite(restored).all()
+
+
+def test_float64_above_float32_range_quantizes_without_nan():
+    """A finite float64 value above the float32 range must stay finite in FP8.
+
+    ``tensor.float()`` turns ``1e40`` into Inf. The scale has to be computed
+    before that narrowing, and the other token must keep its own scale.
+    """
+    peak = 1e40
+    hidden_states = torch.tensor(
+        [[[peak, 1.0, -2.0]], [[3.0, -4.0, 0.5]]],
+        dtype=torch.float64,
+    )
+    assert torch.isfinite(hidden_states).all()
+    assert not torch.isfinite(hidden_states.float()).all()
+
+    fp8_hs, scales = quantize_tensor_to_fp8(hidden_states)
+    restored = dequantize_fp8_tensor(fp8_hs, scales, dtype=torch.float64)
+
+    assert scales.dtype == torch.float32
+    assert torch.isfinite(fp8_hs.float()).all()
+    assert torch.isfinite(scales).all()
+    assert torch.isfinite(restored).all()
+    fp8_max = torch.finfo(torch.float8_e4m3fn).max
+    assert scales[0].item() == pytest.approx(peak / fp8_max)
+    assert scales[1].item() == pytest.approx(4.0 / fp8_max)
+    assert restored[0, 0, 0].item() == pytest.approx(peak, rel=1e-6)
+
+
+def test_float64_scale_that_overflows_float32_is_rejected():
+    """The saved scale is float32, so a magnitude that overflows it is refused."""
+    hidden_states = torch.tensor([[[1e300]]], dtype=torch.float64)
+
+    with pytest.raises(NonFiniteTensorError, match="Non-finite producer tensor"):
+        quantize_tensor_to_fp8(hidden_states)
