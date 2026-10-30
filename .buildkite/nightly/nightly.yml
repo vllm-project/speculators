@@ -65,8 +65,11 @@ steps:
 
         matrix:
           setup:
-            python: ["3.13"]
+            python: ["3.11", "3.14"]
             transformers: ["latest", "main"]
+          adjustments:
+            - with: {python: "3.11", transformers: "main"}
+              skip: true
 
   - group: ":test_tube: Nightly Integration Tests (H100)"
     steps:
@@ -134,8 +137,11 @@ steps:
 
         matrix:
           setup:
-            python: ["3.13"]
+            python: ["3.11", "3.14"]
             transformers: ["latest", "main"]
+          adjustments:
+            - with: {python: "3.11", transformers: "main"}
+              skip: true
 
   - group: ":rocket: Nightly E2E Tests (H100)"
     steps:
@@ -207,7 +213,7 @@ steps:
 
         matrix:
           setup:
-            python: ["3.11", "3.12", "3.13"]
+            python: ["3.11", "3.12", "3.14"]
             transformers: ["latest", "main"]
             vllm: ["latest", "nightly"]
           adjustments:
@@ -219,7 +225,7 @@ steps:
               skip: true
             - with: {python: "3.12", vllm: "latest"}
               skip: true
-            - with: {python: "3.13", vllm: "nightly"}
+            - with: {python: "3.14", vllm: "nightly"}
               skip: true
 
   - group: ":rotating_light: Nightly Regression Tests (H100)"
@@ -290,21 +296,21 @@ steps:
 
         matrix:
           setup:
-            python: ["3.11", "3.12", "3.13"]
+            python: ["3.11", "3.12", "3.14"]
             vllm: ["latest", "nightly"]
           adjustments:
             - with: {python: "3.11", vllm: "nightly"}
               skip: true
             - with: {python: "3.12", vllm: "latest"}
               skip: true
-            - with: {python: "3.13", vllm: "nightly"}
+            - with: {python: "3.14", vllm: "nightly"}
               skip: true
 
-  - group: ":link: Nightly Multi-GPU Tests (H100)"
+  - group: ":link: Nightly Multi-GPU Tests (A100)"
     steps:
       - label: ":python: Multi-GPU Tests py{{matrix.python}} / transformers {{matrix.transformers}}"
         agents:
-          queue: RedHat-H100-WDC
+          queue: RedHat-A100-WDC
 
         retry:
           automatic:
@@ -324,7 +330,7 @@ steps:
                   runAsUser: 0
                   runAsGroup: 0
                 nodeSelector:
-                  vllm.ci/gpu-pool: upstream-ci-h100
+                  vllm.ci/gpu-pool: upstream-ci-a100
 
                 containers:
                   - name: tests
@@ -366,5 +372,8 @@ steps:
 
         matrix:
           setup:
-            python: ["3.13"]
+            python: ["3.11", "3.14"]
             transformers: ["latest", "main"]
+          adjustments:
+            - with: {python: "3.11", transformers: "main"}
+              skip: true

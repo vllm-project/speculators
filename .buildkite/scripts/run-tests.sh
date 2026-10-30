@@ -40,7 +40,7 @@ source testvenv/bin/activate
 
 export UV_TORCH_BACKEND=cu130
 export HF_HOME=/model-cache
-uv pip install .[dev,mooncake-cuda13]
+uv pip install .[dev]
 
 if [ -n "${TRANSFORMERS_VERSION:-}" ] && [ "${TRANSFORMERS_VERSION}" != "latest" ]; then
   if [ "${TRANSFORMERS_VERSION}" = "main" ]; then
@@ -69,6 +69,7 @@ if [[ "${TEST_TYPE}" =~ ^(smoke|e2e|regression|multi-gpu)$ ]]; then
 
   if [ "${TEST_TYPE}" = "e2e" ]; then
     echo "--- Installing hs_connectors dependencies"
+    uv pip install .[mooncake-cuda13]
     uv pip install --python "${VLLM_VENV_PYTHON}" mooncake-transfer-engine-cuda13 ./hs_connectors
   fi
 
