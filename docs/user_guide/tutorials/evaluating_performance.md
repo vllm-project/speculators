@@ -31,6 +31,8 @@ Both modes support a vLLM server running without speculative decoding. A success
 
 `perf_results.csv` contains performance metrics for each sweep load point. When speculative counters are available and drafts were generated, each row also carries the sweep's aggregate acceptance metrics (`num_drafts`, `num_accepted_tokens`, `acceptance_length`, etc.) — these values are measured across the entire sweep, not per load point, so they repeat unchanged across rows. The evaluator samples counters before and after the run and cannot attribute acceptance to individual load points. `acceptance.csv` additionally contains one aggregate acceptance row per subset: in `throughput` mode this covers the throughput run; in `sweep` mode it covers the entire sweep, excluding the preceding output-length estimation run.
 
+Acceptance metrics are omitted with a warning if a counter decreases for any matching labeled series, or if counter series appear or disappear between the baseline and final scrapes. Performance results are retained. This conservative check cannot detect a counter reset that has already grown beyond its baseline by the final scrape, and does not reconstruct the missing interval.
+
 ## Options
 
 Both `throughput` and `sweep` share the same options:

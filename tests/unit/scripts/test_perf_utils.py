@@ -466,3 +466,114 @@ class TestParseSweepFile:
         fp.write_text(json.dumps(_make_sweep_json()))
         rows = perf_utils.parse_sweep_file(fp)
         assert rows[0]["subset"] == "HumanEval"
+
+
+@pytest.mark.parametrize(
+    "counter",
+    [
+        "num_drafts",
+        "num_draft_tokens",
+        "num_accepted_tokens",
+        "num_accepted_tokens_per_pos",
+    ],
+)
+@pytest.mark.parametrize("reverse", [False, True])
+def test_masked_counter_decrease_omits_acceptance(perf_utils, caplog, counter, reverse):
+    baseline = _engine_metrics(0, 100, [80]) + "\n" + _engine_metrics(1, 100, [80])
+    current = _engine_metrics(0, 120, [90]) + "\n" + _engine_metrics(1, 240, [180])
+    prefix = f"vllm:spec_decode_{counter}_total"
+    rows = []
+    for line in current.splitlines():
+        if line.startswith(prefix) and 'engine="0"' in line:
+            line = line.rsplit(" ", 1)[0] + " 1"
+        rows.append(line)
+    if reverse:
+        rows.reverse()
+
+    result = perf_utils.extract_spec_decode_metrics(
+        perf_utils.parse_prometheus_metrics("\n".join(rows)),
+        perf_utils.parse_prometheus_metrics(baseline),
+    )
+
+    assert result == {}
+    assert "counter decreased" in caplog.text
+
+
+@pytest.mark.parametrize("change", ["appeared", "disappeared", "empty_baseline"])
+def test_changed_counter_series_omit_acceptance(perf_utils, caplog, change):
+    baseline = _engine_metrics(0, 100, [80])
+    current = _engine_metrics(0, 240, [180])
+    if change == "appeared":
+        current += "\n" + _engine_metrics(1, 100, [80])
+    elif change == "disappeared":
+        baseline += "\n" + _engine_metrics(1, 100, [80])
+    else:
+        baseline = ""
+
+    result = perf_utils.extract_spec_decode_metrics(
+        perf_utils.parse_prometheus_metrics(current),
+        perf_utils.parse_prometheus_metrics(baseline),
+    )
+
+    assert result == {}
+    assert "counter series changed" in caplog.text
+
+
+def test_counter_label_order_does_not_change_series_identity(perf_utils):
+    baseline = _engine_metrics(0, 100, [80]).replace(
+        'engine="0"', 'worker="pool,0",engine="0"'
+    )
+    current = _engine_metrics(0, 120, [90]).replace(
+        'engine="0"', 'engine="0",worker="pool,0"'
+    )
+
+    result = perf_utils.extract_spec_decode_metrics(
+        perf_utils.parse_prometheus_metrics(current),
+        perf_utils.parse_prometheus_metrics(baseline),
+    )
+
+    assert result["num_drafts"] == 20
+    assert result["acceptance_length"] == 1.5
+    assert result["acceptance_at_pos_0"] == 0.5
+
+
+def test_empty_scrapes_keep_no_speculation_baseline(perf_utils, caplog):
+    result = perf_utils.extract_spec_decode_metrics([], [])
+
+    assert result["num_drafts"] == 0
+    assert result["acceptance_length"] == 0
+    assert not caplog.records
+
+
+def test_invalid_acceptance_interval_keeps_performance_rows(perf_utils, tmp_path):
+    baseline = _engine_metrics(0, 100, [80]) + "\n" + _engine_metrics(1, 100, [80])
+    current = _engine_metrics(0, 20, [10]) + "\n" + _engine_metrics(1, 220, [170])
+    acceptance = perf_utils.extract_spec_decode_metrics(
+        perf_utils.parse_prometheus_metrics(current),
+        perf_utils.parse_prometheus_metrics(baseline),
+    )
+    sweep = tmp_path / "sweep_qa.json"
+    sweep.write_text(json.dumps(_make_sweep_json()))
+
+    rows = perf_utils.parse_sweep_results(sweep, acceptance)
+    output = tmp_path / "perf_results.csv"
+    perf_utils.CsvWriter(output, perf_utils.BASE_CSV_COLUMNS).append_rows(rows)
+
+    assert len(rows) == 1
+    assert rows[0]["rps_median"] == 9.5
+    assert "acceptance_length" not in rows[0]
+    assert "acceptance_length" not in output.read_text().splitlines()[0]
+    assert "9.5" in output.read_text()
+
+
+def test_non_counter_spec_gauges_do_not_invalidate_interval(perf_utils):
+    baseline = _engine_metrics(0, 100, [80]) + "\nvllm:spec_decode_gauge 100"
+    current = _engine_metrics(0, 120, [90]) + "\nvllm:spec_decode_gauge 1"
+
+    result = perf_utils.extract_spec_decode_metrics(
+        perf_utils.parse_prometheus_metrics(current),
+        perf_utils.parse_prometheus_metrics(baseline),
+    )
+
+    assert result["num_drafts"] == 20
+    assert result["acceptance_length"] == 1.5
