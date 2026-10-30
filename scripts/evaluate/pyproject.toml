@@ -1,0 +1,18 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "speculators-aiperf"
+version = "0.1.0"
+requires-python = ">=3.11,<3.14"
+dependencies = ["aiperf==0.13.0"]
+
+[project.entry-points."aiperf.plugins"]
+speculators = "eval_datasets:plugins.yaml"
+
+[tool.setuptools.packages.find]
+include = ["eval_datasets*"]
+
+[tool.setuptools.package-data]
+eval_datasets = ["plugins.yaml"]

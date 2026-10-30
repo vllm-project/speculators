@@ -1,0 +1,10 @@
+schema_version: "1.0"
+
+public_dataset_loader:
+  mrcr:
+    class: eval_datasets.mrcr:MRCRLoader
+    description: OpenAI MRCR, with each complete history sent in one request.
+    metadata:
+      hf_dataset_name: openai/mrcr
+      hf_split: train
+      streaming: true
