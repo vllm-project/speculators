@@ -63,9 +63,9 @@ def resolve_verifier_norm_class(config) -> type:
     """The RMSNorm class matching the verifier's final-norm weight convention.
 
     The frozen ``verifier_norm`` must apply the same gain convention the
-    verifier was trained under (`x * (1 + w)` for the Gemma/Qwen3.5
-    families, `x * w` otherwise), or the reconstructed verifier targets
-    are silently mis-scaled.
+    verifier was trained under (`x * (1 + w)` for the Gemma, Qwen3.5,
+    Qwen3-Next and Step3.5 families, `x * w` otherwise), or the
+    reconstructed verifier targets are silently mis-scaled.
     """
     if uses_gemma_style_final_norm(config):
         return Gemma3RMSNorm

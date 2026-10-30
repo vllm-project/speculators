@@ -2,8 +2,9 @@
 
 Some verifier families store the final RMSNorm weight in the Gemma
 convention — the applied gain is ``1 + w`` — while a plain ``Qwen3RMSNorm``
-applies gain ``w``. This family includes Gemma itself and the Qwen3.5/Qwen3.8
-models, whose ``Qwen3_5RMSNorm`` is an alias of vLLM's ``GemmaRMSNorm``.
+applies gain ``w``. This family includes Gemma itself, the Qwen3.5/Qwen3.8
+models, Qwen3-Next and Step3.5, whose final norms vLLM builds from
+``GemmaRMSNorm``.
 The frozen ``verifier_norm`` must therefore be constructed from the class
 matching the verifier's convention, or the reconstructed verifier targets
 are silently mis-scaled.
