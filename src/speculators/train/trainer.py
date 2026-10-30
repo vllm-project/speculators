@@ -190,6 +190,7 @@ class TrainerConfig(NamedTuple):
     hidden_states_dtype: torch.dtype = torch.bfloat16
     log_freq: int = 1
     fsdp_shard: bool = False
+    fsdp_replicate_frozen: bool = False
     gradient_checkpointing: bool = False
     max_steps: int | None = None
 
@@ -384,12 +385,17 @@ class Trainer:
             self._setup_model_ddp(load_checkpoint)
 
     def _setup_model_fsdp(self, load_checkpoint: bool):
+        """Wrap the model with FSDP, then restore or broadcast its weights."""
         # Capture full state dict on rank 0 before FSDP sharding
         full_state_dict = {}
         if not load_checkpoint and dist.get_rank() == 0:
             full_state_dict = self.model.state_dict()
 
-        apply_fully_sharded(self.model, param_dtype=self.config.hidden_states_dtype)
+        apply_fully_sharded(
+            self.model,
+            param_dtype=self.config.hidden_states_dtype,
+            replicate_frozen=self.config.fsdp_replicate_frozen,
+        )
 
         if load_checkpoint:
             self.checkpointer.load_model_state_dict(self.model)

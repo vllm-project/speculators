@@ -424,6 +424,13 @@ class TrainerArgs(_Group):
         "parameters are fully replicated (DDP-like). Enable when the model does not "
         "fit in a single GPU's memory.",
     )
+    fsdp_replicate_frozen: bool = Field(
+        default=False,
+        description="When FSDP sharding is enabled, exclude frozen "
+        "(requires_grad=False) parameters from sharding so they are replicated "
+        "on every rank instead of all-gathered on every step. Uses more per-rank "
+        "memory to reduce communication. No effect unless fsdp_shard is set.",
+    )
     gradient_checkpointing: bool = Field(
         default=False,
         description="Enable gradient checkpointing on decoder layers to save "

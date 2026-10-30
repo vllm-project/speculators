@@ -616,6 +616,7 @@ def build_draft_model(
 
 
 def main(cfg: TrainConfig):  # noqa: C901
+    """Build the configured model, data loaders, and trainer, then run training."""
     # Phase-1 adapter: the model layer still consumes a flat vars(args)-shaped
     # dict via **kwargs, so flatten the typed config back into a namespace here.
     # New code should read cfg.<group>.<field> directly and must NOT add new
@@ -788,6 +789,7 @@ def main(cfg: TrainConfig):  # noqa: C901
         hidden_states_dtype=hidden_states_dtype,
         log_freq=args.log_freq,
         fsdp_shard=args.fsdp_shard,
+        fsdp_replicate_frozen=args.fsdp_replicate_frozen,
         gradient_checkpointing=args.gradient_checkpointing,
         max_steps=args.max_steps,
     )
