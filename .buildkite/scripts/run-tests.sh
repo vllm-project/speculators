@@ -69,8 +69,13 @@ if [[ "${TEST_TYPE}" =~ ^(smoke|e2e|regression|multi-gpu)$ ]]; then
 
   if [ "${TEST_TYPE}" = "e2e" ]; then
     echo "--- Installing hs_connectors dependencies"
-    uv pip install .[mooncake-cuda13]
-    uv pip install --python "${VLLM_VENV_PYTHON}" mooncake-transfer-engine-cuda13 ./hs_connectors
+    # mooncake-transfer-engine-cuda13 has no wheel for Python 3.14+
+    if [[ ! "${PYTHON_VERSION}" =~ ^3\.1[4-9] ]]; then
+      uv pip install .[mooncake-cuda13]
+      uv pip install --python "${VLLM_VENV_PYTHON}" mooncake-transfer-engine-cuda13 ./hs_connectors
+    else
+      uv pip install --python "${VLLM_VENV_PYTHON}" ./hs_connectors
+    fi
   fi
 
   export VLLM_PYTHON="${VLLM_VENV_PYTHON}"
