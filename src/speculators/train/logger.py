@@ -49,15 +49,19 @@ Example Usage:
 # SPDX-License-Identifier: Apache-2.0
 
 # Standard
+import atexit
 import contextlib
+import copy
 import importlib
 import json
 import logging
 import os
+import queue
 import warnings
 from collections.abc import Mapping
 from datetime import UTC, datetime
 from logging.config import dictConfig
+from logging.handlers import QueueHandler, QueueListener
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Union
 
@@ -621,19 +625,44 @@ class MLFlowHandler(logging.Handler):
 ### Main functions
 
 
+class _SnapshotQueueHandler(QueueHandler):
+    """Enqueue a copy of each record, keeping dict messages as dicts.
+
+    ``QueueHandler.prepare`` would render the message to a string first, which
+    ``FormatDictFilter`` cannot format.
+    """
+
+    def prepare(self, record):
+        record = copy.copy(record)
+        if isinstance(record.msg, Mapping):
+            record.msg = _flatten_dict(record.msg)
+        else:
+            record.msg = record.getMessage()
+            record.args = None
+        return record
+
+
 def setup_root_logger(level="INFO"):
     """Configure the root logger with rich formatting.
 
     This function sets up the root logger with a RichHandler for
     console output and adds the FormatDictFilter for better dictionary message
-    formatting.
+    formatting. Rendering happens on a background listener thread.
     """
-    handler = RichHandler()
-    handler.addFilter(FormatDictFilter())
-    handler.addFilter(IsRank0Filter())
-    logging.basicConfig(
-        level=level, format="%(message)s", datefmt="[%X]", handlers=[handler]
-    )
+    if not logging.getLogger().handlers:
+        # basicConfig is a no-op once the root has handlers; don't start a
+        # listener it would never feed.
+        handler = RichHandler()
+        handler.setFormatter(logging.Formatter("%(message)s", datefmt="[%X]"))
+        handler.addFilter(FormatDictFilter())
+        handler.addFilter(IsRank0Filter())
+        log_queue: queue.SimpleQueue = queue.SimpleQueue()
+        listener = QueueListener(log_queue, handler, respect_handler_level=True)
+        listener.start()
+        # atexit runs LIFO and logging registers its shutdown first, so the
+        # queue drains before logging tears it down.
+        atexit.register(listener.stop)
+        logging.basicConfig(level=level, handlers=[_SnapshotQueueHandler(log_queue)])
 
     # Disable verbose HTTP response logs from httpx
     logging.getLogger("httpx").propagate = False
