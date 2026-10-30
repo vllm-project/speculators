@@ -2,8 +2,9 @@
 
 Some verifier families store the final RMSNorm weight in the Gemma
 convention — the applied gain is ``1 + w`` — while a plain ``Qwen3RMSNorm``
-applies gain ``w``. This family includes Gemma itself and the Qwen3.5/Qwen3.8
-models, whose ``Qwen3_5RMSNorm`` is an alias of vLLM's ``GemmaRMSNorm``.
+applies gain ``w``. This family includes Gemma itself, the Qwen3.5/Qwen3.8
+models, Qwen3-Next and Step3.5, whose final norms vLLM builds from
+``GemmaRMSNorm``.
 The frozen ``verifier_norm`` must therefore be constructed from the class
 matching the verifier's convention, or the reconstructed verifier targets
 are silently mis-scaled.
@@ -52,6 +53,8 @@ def _point_at_fake_verifier(
         ("qwen3_5", "qwen3_5_text", True),
         ("qwen3_5_moe", "", True),
         ("qwen3_5_moe", "qwen3_5_moe_text", True),
+        ("qwen3_next", "", True),
+        ("step3p7", "step3p5", True),
         ("gemma3_text", "", True),
         ("gemma2", "", True),
         ("gemma3n", "", False),  # dropped the (1 + w) convention
@@ -64,6 +67,8 @@ def _point_at_fake_verifier(
         "qwen3_5_text_nested",
         "qwen3_5_moe",
         "qwen3_5_moe_text_nested",
+        "qwen3_next",
+        "step3p5_text_nested",
         "gemma3_text",
         "gemma2",
         "gemma3n_negative",
@@ -104,8 +109,8 @@ def test_plain_construction_unchanged():
 
 @pytest.mark.parametrize(
     "model_type",
-    ["qwen3_5", "qwen3_5_moe", "gemma3_text"],
-    ids=["qwen3_5", "qwen3_5_moe", "gemma3"],
+    ["qwen3_5", "qwen3_5_moe", "qwen3_next", "gemma3_text"],
+    ids=["qwen3_5", "qwen3_5_moe", "qwen3_next", "gemma3"],
 )
 def test_gemma_style_construction_swaps_class(
     tmp_path, monkeypatch: pytest.MonkeyPatch, model_type: str
@@ -148,3 +153,25 @@ def test_gemma3_rmsnorm_matches_folded_qwen3_rmsnorm():
     qwen_folded = Qwen3RMSNorm(16, eps=1e-6)
     qwen_folded.weight.data = w + 1.0
     torch.testing.assert_close(gemma(x), qwen_folded(x), rtol=1e-5, atol=1e-5)
+
+
+@pytest.mark.parametrize(
+    ("module", "norm_class"),
+    [
+        ("transformers.models.qwen3_5.modeling_qwen3_5", "Qwen3_5RMSNorm"),
+        ("transformers.models.qwen3_next.modeling_qwen3_next", "Qwen3NextRMSNorm"),
+        ("transformers.models.step3p7.modeling_step3p7", "Step3p7RMSNorm"),
+    ],
+    ids=["qwen3_5", "qwen3_next", "step3p5"],
+)
+def test_gemma3_rmsnorm_matches_verifier_final_norm(module: str, norm_class: str):
+    """Gemma3RMSNorm reproduces the listed verifiers' own final-norm class."""
+    verifier_norm_cls = getattr(pytest.importorskip(module), norm_class)
+    torch.manual_seed(0)
+    w = torch.randn(16)
+    x = torch.randn(8, 16)
+    gemma = Gemma3RMSNorm(16, eps=1e-6)
+    gemma.weight.data = w.clone()
+    verifier_norm = verifier_norm_cls(16, eps=1e-6)
+    verifier_norm.weight.data = w.clone()
+    torch.testing.assert_close(gemma(x), verifier_norm(x), rtol=1e-5, atol=1e-5)
