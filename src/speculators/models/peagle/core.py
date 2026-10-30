@@ -100,6 +100,7 @@ class PEagleDraftModel(Eagle3DraftModel):
             down_sample_ratio=down_sample_ratio,
             down_sample_ratio_min=down_sample_ratio_min,
             max_anchors=max_anchors,
+            document_ids=document_ids,
         )
         total_sampled = anchor_pos.shape[0]
 

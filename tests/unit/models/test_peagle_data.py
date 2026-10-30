@@ -102,3 +102,42 @@ class TestMaxAnchors:
             d_anchors = anchor_pos[depth == d]
             if d_anchors.shape[0] > 1:
                 assert torch.all(d_anchors[1:] >= d_anchors[:-1])
+
+
+class TestAnchorBounds:
+    def test_anchors_stay_non_negative_when_position_zero_is_supervised(self):
+        """Supervised index 0 must not be stored as anchor -d."""
+        seq_len = 8
+        num_depths = 2
+        loss_mask = _loss_mask(seq_len)
+        assert loss_mask[0, 0].item() == 1
+        torch.manual_seed(0)
+        anchor_pos, depth = generate_cod_sample_indices(
+            seq_length=seq_len,
+            loss_mask=loss_mask,
+            num_depths=num_depths,
+        )
+        assert torch.all(anchor_pos >= 0)
+        assert torch.all((anchor_pos + depth) >= 0)
+
+    def test_samples_do_not_cross_packed_documents(self):
+        """Depth>0 anchor/target pairs must stay inside one document."""
+        seq_len = 6
+        num_depths = 3
+        document_ids = torch.tensor([0, 0, 0, 1, 1, 1])
+        torch.manual_seed(0)
+        anchor_pos, depth = generate_cod_sample_indices(
+            seq_length=seq_len,
+            loss_mask=_loss_mask(seq_len),
+            num_depths=num_depths,
+            document_ids=document_ids,
+        )
+        rows = depth > 0
+        assert rows.any()
+        anchors = anchor_pos[rows]
+        targets = anchors + depth[rows]
+        assert torch.all(anchors >= 0)
+        assert torch.all(targets < seq_len)
+        assert torch.all(document_ids[anchors] == document_ids[targets])
+        assert torch.all(document_ids[anchors] != -1)
+        assert torch.all(document_ids[targets] != -1)
