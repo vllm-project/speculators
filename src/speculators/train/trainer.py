@@ -350,9 +350,42 @@ class Trainer:
                     f"Restored best_val_loss={self.best_val_loss:.6f} from checkpoint"
                 )
 
+    def _precast_frozen_linear_weights(self):
+        """Store frozen linear weights in the autocast dtype.
+
+        Trainable weights keep their fp32 master copy.
+        """
+        if self.is_distributed and self.config.fsdp_shard:
+            # FSDP2 all-gathers in the autocast dtype, and one parameter
+            # group must share a single original dtype.
+            return
+
+        dtype = self.config.hidden_states_dtype
+        converted = 0
+        for module in self.model.modules():
+            if not isinstance(module, torch.nn.Linear):
+                continue
+            for name in ("weight", "bias"):
+                param = getattr(module, name, None)
+                if (
+                    param is None
+                    or param.requires_grad
+                    or not param.is_floating_point()
+                    or param.dtype == dtype
+                ):
+                    continue
+                param.data = param.data.to(dtype)
+                converted += param.numel()
+        if converted:
+            root_logger.info(f"Cast {converted:,} frozen linear parameters to {dtype}")
+
     def setup_model(self):
         # Verify model is compatible with training infrastructure
         SpeculatorModel.verify_training_compatible(self.model)
+
+        # Must run before wrapping or checkpoint load; both read the dtype
+        # the parameters already have.
+        self._precast_frozen_linear_weights()
 
         # Enable gradient checkpointing BEFORE FSDP/DDP wrapping to save
         # activation memory at the cost of recomputation during backward.
