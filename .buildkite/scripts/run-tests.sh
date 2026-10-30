@@ -75,7 +75,7 @@ if [[ "${TEST_TYPE}" =~ ^(smoke|e2e|regression|multi_gpu)$ ]]; then
 
   if [ "${TEST_TYPE}" = "e2e" ]; then
     echo "--- Installing hs_connectors dependencies"
-    apt-get install -y -qq libibverbs1 ibverbs-providers
+    apt-get install -y -qq libibverbs1 ibverbs-providers libnuma1
     uv pip install .[mooncake-cuda13]
     uv pip install --python "${VLLM_VENV_PYTHON}" mooncake-transfer-engine-cuda13 ./hs_connectors
   fi
