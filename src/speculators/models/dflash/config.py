@@ -5,6 +5,10 @@ from transformers import PretrainedConfig
 from transformers.models.qwen3.configuration_qwen3 import Qwen3Config
 
 from speculators import SpeculatorModelConfig
+from speculators.models.dflash.glm5 import (
+    GLM5_MLA_MODEL_TYPES,
+    Glm5Config,
+)
 
 __all__ = [
     "DFlashSpeculatorConfig",
@@ -79,6 +83,32 @@ class DFlashSpeculatorConfig(SpeculatorModelConfig):
         ),
     )
 
+<<<<<<< HEAD
+    @field_serializer("transformer_layer_config")
+    def serialize_transformer_config(self, value: PretrainedConfig) -> dict:
+        """Serialize transformer config to dict."""
+        return value.to_diff_dict()
+
+    @field_validator("transformer_layer_config", mode="before")
+    @classmethod
+    def validate_transformer_config(cls, value: Any) -> PretrainedConfig:
+        """Validate and convert transformer config."""
+        if isinstance(value, dict):
+            model_type = value.get("model_type")
+            # Always construct local Glm5Config so glm5 / glm5_dspark never
+            # resolve to HuggingFace's GLM config via AutoConfig.for_model.
+            if model_type in GLM5_MLA_MODEL_TYPES:
+                return Glm5Config(**value)
+            config_class: type[PretrainedConfig] = Qwen3Config
+            if "model_type" in value:
+                config_class = AutoConfig.for_model(
+                    model_type=value["model_type"]
+                ).__class__
+            return config_class(**value)
+        return value
+
+=======
+>>>>>>> main
     @property
     def target_vocab_size(self) -> int:
         """Get target vocabulary size from transformer config."""
