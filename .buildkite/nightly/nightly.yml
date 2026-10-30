@@ -227,7 +227,7 @@ steps:
               skip: true
             - with: {python: "3.12", transformers: "main"}
               skip: true
-            - with: {python: "3.12", vllm: "latest"}
+            - with: {python: "3.12", vllm: "nightly"}
               skip: true
             - with: {python: "3.13", vllm: "latest"}
               skip: true
