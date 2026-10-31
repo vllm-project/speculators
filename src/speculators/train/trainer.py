@@ -1,5 +1,6 @@
 import json
 import logging
+import math
 import time
 import warnings
 from collections.abc import Callable
@@ -738,7 +739,16 @@ class Trainer:
     def maybe_update_best(self, epoch: int, val_metrics: dict | None):
         if val_metrics is None or "loss_epoch" not in val_metrics:
             return
-        if val_metrics["loss_epoch"] >= self.best_val_loss:
+        loss_epoch = val_metrics["loss_epoch"]
+        # NaN and +/-Inf compare false against the current best, so they must
+        # not replace checkpoint_best.
+        if not math.isfinite(loss_epoch):
+            root_logger.warning(
+                f"Ignoring non-finite validation loss_epoch={loss_epoch} "
+                f"at epoch {epoch}"
+            )
+            return
+        if loss_epoch >= self.best_val_loss:
             return
 
         if self.config.save_best:
@@ -750,7 +760,7 @@ class Trainer:
         ):
             return
 
-        self.best_val_loss = val_metrics["loss_epoch"]
+        self.best_val_loss = loss_epoch
         self.checkpointer.save_val_metrics(epoch, val_metrics)
         self.checkpointer.update_best_symlink(epoch)
         root_logger.info(
