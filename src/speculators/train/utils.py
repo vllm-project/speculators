@@ -117,7 +117,8 @@ def _save_speculators_patch(save_dir: Path, repo_root: Path | None, sha: str) ->
         return
     try:
         diff = git_diff(repo_root)
-        content = f"# repo: {repo_root} ({sha})\n{diff}"
+        body = "# git diff failed" if diff is None else diff
+        content = f"# repo: {repo_root} ({sha})\n{body}"
         atomic_write(save_dir / "speculators.patch", content)
     except OSError:
         logger.warning("Failed to save speculators.patch", exc_info=True)
