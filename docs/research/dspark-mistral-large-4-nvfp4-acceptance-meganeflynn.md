@@ -79,6 +79,8 @@ Acceptance length (includes verifier token; max 4). Target-only baseline rows ar
 
 Throughput/speedup vs. a target-only baseline is being collected with `throughput_interactivity.py` (streams 1–32) and will be appended; concurrency-1 informational output rates were 232.5 tok/s (sampled) and 252.0 tok/s (greedy).
 
+Speculator-disabled reference (same flags minus `--speculative-config`, `--max-num-seqs 32`, prefix caching off, `--max-num-batched-tokens 8192`): the evaluator confirms no `vllm:spec_decode_*` counters exist, so acceptance length is N/A by construction. On the same workload (HumanEval + math_reasoning, 80 requests per subset, concurrency 1) the target-only server produced 105.0 output tok/s at T=1.0/top-p 0.95, versus 232.5 tok/s with DSpark depth 3 — ~2.2× at concurrency 1. A controlled speedup comparison across concurrency levels (streams 1–32) follows below.
+
 ## Observations
 
 - The bundled drafter accepts ~2.2–2.5 of its 3 drafted tokens per step at both sampling settings, i.e. depth 3 is well-matched to this target. `num_draft_tokens / num_drafts` was 3.000 in every run, matching the configured depth.
