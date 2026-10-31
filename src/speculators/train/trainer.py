@@ -250,7 +250,11 @@ class Trainer:
             }
             p = self._training_state_path(epoch)
             p.parent.mkdir(parents=True, exist_ok=True)
-            p.write_text(json.dumps(state))
+            # Atomic write: this file is the resume commit point, so a crash
+            # must never leave it truncated or half-written.
+            tmp = p.with_name(p.name + ".tmp")
+            tmp.write_text(json.dumps(state))
+            tmp.replace(p)
 
     def _load_training_state(self) -> dict:
         epoch = self.checkpointer.previous_epoch

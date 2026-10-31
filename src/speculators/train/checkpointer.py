@@ -111,7 +111,11 @@ class BaseCheckpointer:
         state_dicts = [sched.state_dict() for sched in schedulers]
         # Preserve the legacy single-scheduler format when there is only one.
         payload = state_dicts[0] if len(state_dicts) == 1 else state_dicts
-        torch.save(payload, self.scheduler_path(epoch))
+        # Atomic write: a crash mid-save must not leave a truncated pickle.
+        path = self.scheduler_path(epoch)
+        tmp = path.with_name(path.name + ".tmp")
+        torch.save(payload, tmp)
+        tmp.replace(path)
 
     @abstractmethod
     def save_checkpoint(
@@ -168,6 +172,36 @@ class BaseCheckpointer:
         src = self.path / self.TRAIN_COMMAND_FILENAME
         if src.exists():
             shutil.copy2(src, self.path / str(epoch) / self.TRAIN_COMMAND_FILENAME)
+
+    def _atomic_epoch_swap(self, epoch: int | str, write_fn) -> None:
+        """Write a checkpoint into a staging dir, then atomically swap it
+        into place, so a crash mid-save can never destroy the last complete
+        checkpoint of this epoch (an in-place overwrite did exactly that on
+        2026-10-30: SIGBUS during the optimizer write left no usable state).
+
+        A crash leaves at most a stale ``.staging-<epoch>`` dir, which
+        ``_get_previous_epoch`` ignores (non-numeric name); the previous
+        ``<epoch>`` dir only gives up its slot once the new one is complete.
+        """
+        staging = self.path / f".staging-{epoch}"
+        if staging.exists():
+            shutil.rmtree(staging)
+        staging.mkdir(parents=True)
+        write_fn(staging)
+        final_dir = self.path / str(epoch)
+        old = self.path / f".old-{epoch}"
+        if old.exists():
+            shutil.rmtree(old)
+        if final_dir.exists():
+            final_dir.rename(old)
+        try:
+            staging.replace(final_dir)
+        except OSError:
+            if old.exists() and not final_dir.exists():
+                old.rename(final_dir)  # restore the previous checkpoint
+            raise
+        if old.exists():
+            shutil.rmtree(old)
 
     @_rank0_only
     def save_val_metrics(self, epoch: int, val_metrics: dict[str, float]):
@@ -347,8 +381,6 @@ class SingleGPUCheckpointer(BaseCheckpointer):
             model.module if isinstance(model, DistributedDataParallel) else model
         )  # type: ignore[assignment]
         model_state_dict = convert_float_dtype(raw_model.state_dict(), float_dtype)
-        raw_model.save_pretrained(self.path / str(epoch), state_dict=model_state_dict)
-        patch_config_dtype(self.path / str(epoch) / "config.json", float_dtype)
 
         optimizers = _as_list(optimizer)
         state_dicts = [
@@ -356,8 +388,16 @@ class SingleGPUCheckpointer(BaseCheckpointer):
         ]
         # Preserve the legacy single-optimizer format when there is only one.
         payload = state_dicts[0] if len(state_dicts) == 1 else state_dicts
-        torch.save(payload, self.optimizer_path(epoch))
-        self._copy_train_command(epoch)
+
+        def _write(staging: Path) -> None:
+            raw_model.save_pretrained(staging, state_dict=model_state_dict)
+            patch_config_dtype(staging / "config.json", float_dtype)
+            torch.save(payload, staging / "optimizer_state_dict.pt")
+            src = self.path / self.TRAIN_COMMAND_FILENAME
+            if src.exists():
+                shutil.copy2(src, staging / self.TRAIN_COMMAND_FILENAME)
+
+        self._atomic_epoch_swap(epoch, _write)
 
 
 class DistributedCheckpointer(BaseCheckpointer):
@@ -433,10 +473,15 @@ class DistributedCheckpointer(BaseCheckpointer):
         optimizer_state_dict = convert_float_dtype(optimizer_state_dict, float_dtype)
 
         if get_rank() == 0:
-            # Only rank 0 saves the checkpoint
-            model.save_pretrained(self.path / str(epoch), state_dict=model_state_dict)
-            patch_config_dtype(self.path / str(epoch) / "config.json", float_dtype)
-            torch.save(optimizer_state_dict, self.optimizer_path(epoch))
-            self._copy_train_command(epoch)
+            # Only rank 0 saves the checkpoint, atomically (staging + rename).
+            def _write(staging: Path) -> None:
+                model.save_pretrained(staging, state_dict=model_state_dict)
+                patch_config_dtype(staging / "config.json", float_dtype)
+                torch.save(optimizer_state_dict, staging / "optimizer_state_dict.pt")
+                src = self.path / self.TRAIN_COMMAND_FILENAME
+                if src.exists():
+                    shutil.copy2(src, staging / self.TRAIN_COMMAND_FILENAME)
+
+            self._atomic_epoch_swap(epoch, _write)
 
         dist.barrier()
