@@ -180,18 +180,20 @@ second round: an extended 1-epoch sweep (lr 1.5e-5 and 7.5e-6, i.e. 1/40th
 and 1/80th of the from-scratch recipe) and 3-epoch runs at the three best
 LRs (3e-5, 7.5e-5, 1.5e-5) with per-epoch checkpoints.
 
-**Status (Oct 31):** both extended-sweep arms finished training (in-domain
-val accept_len: 6.796 at 1.5e-5, 6.689 at 7.5e-6 — both below the 6.957
-of the 3e-5 arm, an early hint that the sweet spot may sit near 3e-5);
-HumanEval evals are running. The first attempt at the 3-epoch runs
-crashed with CUDA OOM at startup (it raced the phase-2a trainer's
-teardown) and a relaunch stalled overnight on a zombie-process wait;
-both issues are fixed and the 3-epoch arms restarted Oct 31 ~07:00 UTC.
+**Status (Oct 31):** the extended sweep completed — HumanEval acceptance
+length **5.527 at lr 1.5e-5** and **5.505 at lr 7.5e-6**, both below the
+5.604 of lr 3e-5. The LR curve is unimodal with a peak at **3e-5**;
+in-domain val accept_len agrees (6.957 at 3e-5 vs 6.796 / 6.689 below
+it). The first attempt at the 3-epoch runs crashed with CUDA OOM at
+startup (it raced the phase-2a trainer's teardown), and a relaunch
+stalled overnight because the wait loop's own `grep` matched its own
+command line; both issues are fixed and the 3-epoch arms (3e-5, 7.5e-5,
+1.5e-5) are training as of Oct 31 ~07:10 UTC, ETA ~30h.
 
 | Configuration | Acceptance length, recommended sampling (0.6/0.95/20) |
 |---------------|------------------------------------------------------:|
-| @ lr 1.5e-5, 1 epoch | ⏳ |
-| @ lr 7.5e-6, 1 epoch | ⏳ |
+| @ lr 1.5e-5, 1 epoch | 5.527 |
+| @ lr 7.5e-6, 1 epoch | 5.505 |
 | @ lr 3e-5, 3 epochs | ⏳ |
 | @ lr 7.5e-5, 3 epochs | ⏳ |
 | @ lr 1.5e-5, 3 epochs | ⏳ |
