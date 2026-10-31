@@ -85,7 +85,7 @@ Acceptance length (includes verifier token; max 4). Target-only baseline rows ar
 
 | Target only (no drafter) | — | N/A | N/A | N/A | N/A | N/A | N/A |
 
-Greedy rows above are from the first two-subset pass; a full greedy run across all nine subsets is in collection and will replace them. `speculator_benchmarks` ships nine subsets (no MRCR — that is a separate mode of the evaluator, not run here).
+Greedy rows are from a two-subset pass (HumanEval, math_reasoning); the full greedy sweep across all nine subsets was not run. `speculator_benchmarks` ships nine subsets (no MRCR — that is a separate mode of the evaluator, not run here).
 
 Speculator-disabled reference (same flags minus `--speculative-config`, `--max-num-seqs 32`, prefix caching off, `--max-num-batched-tokens 8192`): the evaluator confirms no `vllm:spec_decode_*` counters exist, so acceptance length is N/A by construction. On the same workload (HumanEval + math_reasoning, 80 requests per subset, concurrency 1) the target-only server produced 105.0 output tok/s at T=1.0/top-p 0.95, versus 232.5 tok/s with DSpark depth 3 — ~2.2× at concurrency 1.
 
