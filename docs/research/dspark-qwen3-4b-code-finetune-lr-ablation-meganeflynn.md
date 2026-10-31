@@ -175,14 +175,18 @@ evaluation only).
 
 ## Phase 2: extended sweep and 3-epoch runs (in progress)
 
-The monotonic trend below 3e-5 and the single-epoch budget motivate a
-second round:
+The monotonic trend below 3e-5 and the single-epoch budget motivated a
+second round: an extended 1-epoch sweep (lr 1.5e-5 and 7.5e-6, i.e. 1/40th
+and 1/80th of the from-scratch recipe) and 3-epoch runs at the three best
+LRs (3e-5, 7.5e-5, 1.5e-5) with per-epoch checkpoints.
 
-- **Extended 1-epoch sweep:** lr 1.5e-5 and 7.5e-6 (1/40th and 1/80th of
-  the from-scratch recipe), same setup otherwise.
-- **3-epoch runs** at the three best LRs from phase 1 (3e-5, 7.5e-5, and
-  1.5e-5 pending its 1-epoch result), with per-epoch checkpoints, to test
-  whether more code-domain exposure compounds the gain.
+**Status (Oct 31):** both extended-sweep arms finished training (in-domain
+val accept_len: 6.796 at 1.5e-5, 6.689 at 7.5e-6 — both below the 6.957
+of the 3e-5 arm, an early hint that the sweet spot may sit near 3e-5);
+HumanEval evals are running. The first attempt at the 3-epoch runs
+crashed with CUDA OOM at startup (it raced the phase-2a trainer's
+teardown) and a relaunch stalled overnight on a zombie-process wait;
+both issues are fixed and the 3-epoch arms restarted Oct 31 ~07:00 UTC.
 
 | Configuration | Acceptance length, recommended sampling (0.6/0.95/20) |
 |---------------|------------------------------------------------------:|
