@@ -16,7 +16,7 @@ tags:
 
 ## Summary
 
-Serving `mistralai/Mistral-Large-4-1T-A52B-NVFP4` (1T-A52B MoE, day-0 vLLM support) with its bundled DSpark drafter at depth 3 on 4 × B300, the measured acceptance length spans 2.62–3.29 across all nine `speculator_benchmarks` subsets at temperature 1.0 / top-p 0.95 (best: math_reasoning 3.29; worst: qa 2.62); greedy decoding on the first two subsets measured raised AL by ~0.17 (3.33 HumanEval / 3.48 math_reasoning). Concurrency-1 output rate rose from 105.0 tok/s (target only) to 232.5 tok/s with DSpark (~2.2×). The drafter's trained depth is exactly 3; requesting `num_speculative_tokens=8` prevents the server from starting.
+Serving `mistralai/Mistral-Large-4-1T-A52B-NVFP4` (1T-A52B MoE, day-0 vLLM support) with its bundled DSpark drafter at depth 3 on 4 × B300, the measured acceptance length spans 2.62–3.29 across all nine `speculator_benchmarks` subsets at temperature 1.0 / top-p 0.95 (best: math_reasoning 3.29; worst: qa 2.62); greedy decoding on the first two subsets measured raised AL by ~0.17 (3.33 HumanEval / 3.48 math_reasoning). In the throughput sweep (streams 1–32, HumanEval) DSpark depth 3 delivers 1.9–2.4× higher aggregate output and per-user interactivity than the target-only baseline, with mean ITL falling 8.51 → 3.51 ms at one stream. The drafter's trained depth is exactly 3; requesting `num_speculative_tokens=8` prevents the server from starting.
 
 ## Setup
 
@@ -87,13 +87,30 @@ Acceptance length (includes verifier token; max 4). Target-only baseline rows ar
 
 Greedy rows above are from the first two-subset pass; a full greedy run across all nine subsets is in collection and will replace them. `speculator_benchmarks` ships nine subsets (no MRCR — that is a separate mode of the evaluator, not run here).
 
-Throughput/speedup vs. a target-only baseline is being collected with `throughput_interactivity.py` (streams 1–32) and will be appended; concurrency-1 informational output rates were 232.5 tok/s (sampled) and 252.0 tok/s (greedy).
+Speculator-disabled reference (same flags minus `--speculative-config`, `--max-num-seqs 32`, prefix caching off, `--max-num-batched-tokens 8192`): the evaluator confirms no `vllm:spec_decode_*` counters exist, so acceptance length is N/A by construction. On the same workload (HumanEval + math_reasoning, 80 requests per subset, concurrency 1) the target-only server produced 105.0 output tok/s at T=1.0/top-p 0.95, versus 232.5 tok/s with DSpark depth 3 — ~2.2× at concurrency 1.
 
-Speculator-disabled reference (same flags minus `--speculative-config`, `--max-num-seqs 32`, prefix caching off, `--max-num-batched-tokens 8192`): the evaluator confirms no `vllm:spec_decode_*` counters exist, so acceptance length is N/A by construction. On the same workload (HumanEval + math_reasoning, 80 requests per subset, concurrency 1) the target-only server produced 105.0 output tok/s at T=1.0/top-p 0.95, versus 232.5 tok/s with DSpark depth 3 — ~2.2× at concurrency 1. A controlled speedup comparison across concurrency levels (streams 1–32) follows below.
+## Throughput and interactivity
+
+`throughput_interactivity.py collect` on HumanEval (`max_tokens=1024`, temperature 1.0 / top-p 0.95, 100 s per point after 30 s warmup, streams 1–32). Both configs ran sequentially on the same four GPUs with identical server flags except `--speculative-config` (sweep config: `--max-num-seqs 32`, prefix caching off, `--max-num-batched-tokens 8192` — differs from the acceptance config above).
+
+| Streams | Baseline tok/s | DSpark tok/s | Aggregate speedup | Baseline 1/ITL (tok/s/user) | DSpark 1/ITL (tok/s/user) | Per-user speedup |
+|---------|---------------|--------------|-------------------|------------------------------|---------------------------|------------------|
+| 1 | 111.2 | 253.7 | 2.28× | 117.4 | 284.9 | 2.43× |
+| 2 | 205.4 | 457.6 | 2.23× | 107.8 | 252.6 | 2.34× |
+| 4 | 349.7 | 721.2 | 2.06× | 92.0 | 195.4 | 2.12× |
+| 8 | 573.3 | 1,089.2 | 1.90× | 75.4 | 145.8 | 1.93× |
+| 16 | 853.1 | 1,647.9 | 1.93× | 56.6 | 110.7 | 1.96× |
+| 32 | 1,222.2 | 2,356.6 | 1.93× | 41.1 | 82.4 | 2.00× |
+
+Mean inter-token latency drops from 8.51 → 3.51 ms at one stream and 24.33 → 12.14 ms at 32 streams. Neither config queues (`mean_waiting_requests` ≈ 0 at every level). Acceptance length measured during the sweep was 3.12–3.18, consistent with the acceptance table (HumanEval 3.175).
+
+![Throughput versus interactivity, DSpark depth 3 vs target-only baseline](../assets/research/le-chonk-nvfp4-dspark-throughput-interactivity.png)
 
 ## Observations
 
 - The bundled drafter accepts 1.6–2.3 of its 3 drafted tokens per step (AL 2.62–3.29) across all nine subsets, i.e. depth 3 is well-matched to this target. `num_draft_tokens / num_drafts` was 3.000 in every run, matching the configured depth.
+- Speedup from speculative decoding is largest where the target alone is decode-bound: 2.28× aggregate (2.43× per-user) at one stream, settling to ~1.9× at 8–32 streams. The concurrency-1 rate from the acceptance runs (~2.2×) reproduces in the sweep.
+- The DSpark curve keeps 82 tok/s/user at 32 streams where the baseline drops to 41 tok/s/user; equivalently, DSpark at 16 streams (1,648 tok/s aggregate) still beats the baseline's 32-stream ceiling (1,222 tok/s).
 - Greedy decoding raises acceptance length by ~0.17 on both first-pass subsets versus temperature 1.0 / top-p 0.95, with per-position rates rising uniformly (math_reasoning pos-0: 0.878 → 0.917).
 - Acceptance is strongly workload-dependent. Structured or high-confidence text accepts best (math_reasoning 3.293, translation 3.029, HumanEval 3.175, rag 2.991); open-ended generation accepts worst (qa 2.616, writing 2.626, question 2.639) with pos-2 rates falling to ~0.37. Summarization and tool_call sit in between (2.831 / 2.842).
 - The two first-pass subsets reproduce within noise under the full run (HumanEval 3.161 → 3.175, math_reasoning 3.313 → 3.293), confirming counter-delta measurement stability.
