@@ -10,8 +10,6 @@ From the repository root, use a client environment with Python 3.11–3.13:
 pip install -r scripts/evaluate/requirements.txt
 ```
 
-PNG/SVG plotting also requires Chrome or Chromium, which pip does not install. Set `BROWSER_PATH` to its executable if it is not discovered automatically.
-
 ## Serve the model
 
 All examples use [RedHatAI/Qwen3.8-27B-speculator.dspark](https://huggingface.co/RedHatAI/Qwen3.8-27B-speculator.dspark) with the `Qwen/Qwen3.8-27B` verifier, 7 speculative tokens, and adaptive verification disabled.
@@ -54,33 +52,6 @@ python scripts/evaluate/evaluate.py acceptance \
 The budget applies separately to each dataset. Each dataset keeps native reports under `<output-dir>/<dataset>/`, with combined acceptance CSVs at the root. A native run failure retains its results, subsequent datasets run, and the command returns nonzero.
 
 `gsm8k`, `math500`, `humaneval`, `mbpp`, and `mtbench` select the corresponding native `spec_al_*` public loaders. Native public dataset names also work. Their prompt templates and conversation handling are AIPerf's; MT-Bench includes both turns. Without an explicit budget, these public datasets use AIPerf's default ten requests. AIME26 and Arena-Hard have no equivalent registered presets in this version.
-
-## Custom datasets
-
-`--dataset` selects registered AIPerf loaders, not arbitrary Hugging Face repository IDs. For `RedHatAI/speculator_benchmarks`, select a file and convert it to AIPerf's native input format. This example uses the single-turn `HumanEval.jsonl` prompts:
-
-```bash
-python - <<'PYTHON'
-import json
-from huggingface_hub import hf_hub_download
-
-source = hf_hub_download("RedHatAI/speculator_benchmarks", "HumanEval.jsonl", repo_type="dataset")
-with open(source, encoding="utf-8") as rows, open("prompts.jsonl", "w", encoding="utf-8") as output:
-    for row in rows:
-        output.write(json.dumps({"text": json.loads(row)["prompt"]}) + "\n")
-PYTHON
-
-aiperf profile --custom-dataset-type single_turn --input-file prompts.jsonl \
-  --endpoint-type chat --model Qwen/Qwen3.8-27B --url http://localhost:9145 \
-  --request-count 8 --concurrency 64 --request-timeout-seconds 900 \
-  --dataset-sampling-strategy sequential --use-server-token-count --export-level raw \
-  --extra-inputs '{"temperature":1,"chat_template_kwargs":{"enable_thinking":true},"max_completion_tokens":32768}' \
-  --output-artifact-dir output/custom
-
-python scripts/evaluate/evaluate.py summarize --output-artifact-dir output/custom
-```
-
-Use AIPerf's `multi_turn` input format for conversation datasets; do not flatten histories into the single-turn format above.
 
 ## SPEED-Bench selection
 
@@ -159,5 +130,3 @@ python scripts/evaluate/evaluate.py speedup \
 # Generate plots
 aiperf plot output/speedup-qualitative --output output/plots
 ```
-
-For comparisons without confidence decorations, use the [plotting helper](../../../scripts/evaluate/README.md).

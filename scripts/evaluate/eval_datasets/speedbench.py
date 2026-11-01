@@ -35,12 +35,10 @@ def prepare_speedbench(dataset_type: str) -> Path:
         return prepared
     cache.mkdir(parents=True, exist_ok=True)
     script = cache / "prepare.py"
+    if not script.is_file():
+        with urlopen(SPEEDBENCH_PREPARE_URL, timeout=60) as response:  # noqa: S310
+            script.write_bytes(response.read())
     with TemporaryDirectory(dir=cache) as temporary:
-        if not script.is_file():
-            downloaded = Path(temporary) / "prepare.py"
-            with urlopen(SPEEDBENCH_PREPARE_URL, timeout=60) as response:  # noqa: S310
-                downloaded.write_bytes(response.read())
-            downloaded.replace(script)
         subprocess.run(  # noqa: S603
             [
                 sys.executable,

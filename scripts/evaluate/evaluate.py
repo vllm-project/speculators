@@ -15,7 +15,6 @@ from collections import Counter, defaultdict
 from datetime import UTC, datetime
 from pathlib import Path
 
-# Make scripts/_provenance.py importable when running this file directly.
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from _provenance import (
@@ -117,7 +116,7 @@ def prompt_bin(tokens: int | None) -> str:
 def write_csv(path: Path, rows: list[dict]) -> None:
     if rows:
         fields = list(dict.fromkeys(key for row in rows for key in row))
-        with path.open("w", newline="", encoding="utf-8") as handle:
+        with path.open("w", newline="") as handle:
             writer = csv.DictWriter(handle, fieldnames=fields)
             writer.writeheader()
             writer.writerows(rows)
@@ -130,7 +129,7 @@ def summarize_acceptance_run(
     metrics = []
     buckets = defaultdict(list)
     valid = True
-    with path.with_name("profile_export.jsonl").open(encoding="utf-8") as handle:
+    with path.with_name("profile_export.jsonl").open() as handle:
         for line in handle:
             try:
                 record = json.loads(line)
@@ -185,7 +184,7 @@ def summarize_output_directory(output_dir: Path, mode: str) -> bool:
     length_rows = []
     for path in paths:
         try:
-            report = json.loads(path.read_text(encoding="utf-8"))
+            report = json.loads(path.read_text())
             count = report["request_count"]["avg"]
             errors = report.get("error_request_count", {}).get("avg", 0)
             complete = report["is_complete"] and not report["was_cancelled"]
@@ -228,9 +227,7 @@ def run_profile(args: argparse.Namespace, profile_args: list[str], output: Path)
             if value is not None:
                 command.append(value)
     command.extend(["--output-artifact-dir", str(output)])
-    (output / "aiperf_command.txt").write_text(
-        shlex.join(command) + "\n", encoding="utf-8"
-    )
+    (output / "aiperf_command.txt").write_text(shlex.join(command) + "\n")
     return subprocess.run(command, check=False).returncode  # noqa: S603
 
 
@@ -274,12 +271,7 @@ def main(argv: list[str] | None = None) -> int:
     for dataset in datasets:
         output = args.output_artifact_dir / dataset
         output.mkdir()
-        try:
-            run_args = [*profile_args, *dataset_args(dataset, args)]
-        except Exception:
-            logger.exception("Failed to prepare dataset %s", dataset)
-            exit_code = exit_code or 1
-            continue
+        run_args = [*profile_args, *dataset_args(dataset, args)]
         returncode = run_profile(args, run_args, output)
         exit_code = exit_code or returncode
     valid = summarize_output_directory(args.output_artifact_dir, args.mode)
