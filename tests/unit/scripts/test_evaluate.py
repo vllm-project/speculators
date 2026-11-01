@@ -14,6 +14,7 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "scripts" / "evaluate"))
 
 import evaluate  # type: ignore[import-not-found]
+from eval_datasets import speedbench  # type: ignore[import-not-found]
 
 
 def request_record(histogram=None, *, tokens=100, conversation="q1", phase="profiling"):
@@ -435,3 +436,110 @@ def test_bad_record_does_not_discard_valid_records(tmp_path):
         handle.write("{\n")
     assert not evaluate.summarize_output_directory(tmp_path, "acceptance")
     assert read_csv(tmp_path)[0]["acceptance_length"] == "2.5"
+
+
+def test_preparation_failure_does_not_skip_later_datasets(
+    tmp_path, native_run, monkeypatch
+):
+    monkeypatch.setattr(
+        speedbench,
+        "prepare_speedbench",
+        Mock(side_effect=OSError("download interrupted")),
+    )
+    output = tmp_path / "out"
+    assert (
+        evaluate.main(
+            [
+                "acceptance",
+                "--dataset",
+                "qualitative",
+                "humaneval",
+                "--output-artifact-dir",
+                str(output),
+            ]
+        )
+        == 1
+    )
+    native_run.assert_called_once()
+    command = native_run.call_args.args[0]
+    assert command[command.index("--public-dataset") + 1] == "spec_al_humaneval"
+    evaluate.summarize_output_directory.assert_called_once_with(output, "acceptance")
+
+
+def test_interrupted_speedbench_download_is_not_cached(tmp_path, monkeypatch):
+    monkeypatch.setenv("HF_HOME", str(tmp_path))
+    script_bytes = b"# complete preparation script\n"
+    response = Mock()
+    response.__enter__ = Mock(return_value=response)
+    response.__exit__ = Mock(return_value=False)
+    response.read.return_value = script_bytes
+    download = Mock(return_value=response)
+    monkeypatch.setattr(speedbench, "urlopen", download)
+    write_bytes = Path.write_bytes
+
+    def interrupted(path, data):
+        write_bytes(path, data[:8])
+        raise OSError("disk write interrupted")
+
+    with monkeypatch.context() as interrupted_write:
+        interrupted_write.setattr(Path, "write_bytes", interrupted)
+        with pytest.raises(OSError, match="disk write interrupted"):
+            speedbench.prepare_speedbench("speed_bench_qualitative")
+    cache = tmp_path / "speculators/speedbench" / speedbench.SPEEDBENCH_PREPARE_COMMIT
+    assert not (cache / "prepare.py").exists()
+
+    def prepare(command, **kwargs):
+        assert Path(command[1]).read_bytes() == script_bytes
+        output = Path(command[command.index("--output_dir") + 1])
+        (output / "qualitative.jsonl").write_text("{}\n", encoding="utf-8")
+
+    monkeypatch.setattr(speedbench.subprocess, "run", prepare)
+    assert speedbench.prepare_speedbench("speed_bench_qualitative").is_file()
+    assert download.call_count == 2
+
+
+def test_unicode_artifacts_with_ascii_locale(tmp_path, monkeypatch):
+    root = tmp_path / "reports"
+    directory = root / "数学"
+    write_report(directory)
+    report = directory / "profile_export_aiperf.json"
+    native = json.loads(report.read_text())
+    native["description"] = "中文"
+    report.write_text(json.dumps(native, ensure_ascii=False), encoding="utf-8")
+    record = request_record(conversation="问题")
+    (directory / "profile_export.jsonl").write_text(
+        json.dumps(record, ensure_ascii=False) + "\n", encoding="utf-8"
+    )
+    open_path = Path.open
+
+    def ascii_open(path, *args, **kwargs):
+        if kwargs.get("encoding") in (None, "locale"):
+            kwargs["encoding"] = "ascii"
+        return open_path(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "open", ascii_open)
+    assert evaluate.summarize_output_directory(root, "acceptance")
+    with (root / "acceptance.csv").open(encoding="utf-8") as handle:
+        assert next(csv.DictReader(handle))["dataset"] == "数学"
+    monkeypatch.setattr(evaluate, "save_eval_provenance", Mock())
+    monkeypatch.setattr(evaluate, "summarize_output_directory", Mock(return_value=True))
+    monkeypatch.setattr(
+        evaluate.subprocess, "run", Mock(return_value=Mock(returncode=0))
+    )
+    output = tmp_path / "profile"
+    assert (
+        evaluate.main(
+            [
+                "acceptance",
+                "--dataset",
+                "humaneval",
+                "--extra-inputs",
+                '{"stop":["结束"]}',
+                "--output-artifact-dir",
+                str(output),
+            ]
+        )
+        == 0
+    )
+    command = (output / "humaneval/aiperf_command.txt").read_text(encoding="utf-8")
+    assert "结束" in command
