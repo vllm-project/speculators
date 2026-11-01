@@ -15,14 +15,14 @@ from collections import Counter, defaultdict
 from datetime import UTC, datetime
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from eval_datasets.speedbench import speedbench_args
 
-from _provenance import (
+from speculators.provenance import (
     atomic_write,
+    find_package_repo,
     git_sha,
     package_versions,
 )
-from eval_datasets.speedbench import speedbench_args
 
 logger = logging.getLogger("evaluate")
 
@@ -60,14 +60,19 @@ MODE_DEFAULTS: dict[str, dict[str, str | None]] = {
 
 
 def save_eval_provenance(output_dir: Path) -> None:
-    """Write the invocation, source revision, and package versions."""
+    """Write ``eval_command.txt`` into *output_dir*.
+
+    Records the full command line, timestamp, and package versions so the
+    eval can be reproduced.  Best-effort — never blocks the eval on failure.
+    """
     try:
-        sha = git_sha(Path(__file__).resolve().parents[2])
+        sha = git_sha(find_package_repo("speculators"))
+        versions = package_versions()
         header = "\n".join(
             [
                 f"# Timestamp: {datetime.now(UTC).isoformat()}",
                 f"# Git SHA: {sha}",
-                *package_versions(),
+                *versions,
             ]
         )
         atomic_write(
