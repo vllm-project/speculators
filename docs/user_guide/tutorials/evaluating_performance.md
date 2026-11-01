@@ -10,6 +10,12 @@ From the repository root, use a client environment with Python 3.11–3.13:
 pip install -r scripts/evaluate/requirements.txt
 ```
 
+PNG plotting requires Chrome or Chromium on the machine generating the graphs. If neither is installed, install Chrome with:
+
+```bash
+plotly_get_chrome
+```
+
 ## Serve the model
 
 All examples use [RedHatAI/Qwen3.8-27B-speculator.dspark](https://huggingface.co/RedHatAI/Qwen3.8-27B-speculator.dspark) with the `Qwen/Qwen3.8-27B` verifier, 7 speculative tokens, and adaptive verification disabled.
