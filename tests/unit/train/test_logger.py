@@ -160,9 +160,11 @@ def test_the_rank_filter_runs_before_the_record_is_queued(monkeypatch, clean_ran
 def test_closing_the_console_handler_drains_the_queue():
     """``logging.shutdown`` closes handlers at exit; queued metrics must print."""
     handler = _AsyncConsoleHandler()
+    listener = handler._listener
+    assert listener is not None
     capture = _Capture()
     capture.addFilter(FormatDictFilter())
-    handler._listener.handlers = (capture,)
+    listener.handlers = (capture,)
     record = _record()
     record.msg = {"train": {"loss": 1.5}}
 
