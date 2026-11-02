@@ -6,7 +6,7 @@ from typing import Literal, TypedDict
 
 import torch
 from datasets import Dataset as HFDataset
-from datasets import concatenate_datasets, load_dataset
+from datasets import List, Value, concatenate_datasets, load_dataset
 from huggingface_hub import hf_hub_download
 from transformers import (
     AutoProcessor,
@@ -15,8 +15,12 @@ from transformers import (
 )
 
 from speculators.data_generation.logging_utils import PipelineLogger
-from speculators.data_generation.render_client import render_conversation
+from speculators.data_generation.render_client import (
+    RenderRouteError,
+    render_conversation,
+)
 from speculators.data_generation.torch_utils import set_default_torch_num_threads
+from speculators.data_generation.vllm_client import has_multimodal_content
 from speculators.train.vocab_mapping import save_token_frequency_distribution
 
 __all__ = [
@@ -367,6 +371,8 @@ def _render_conversation_rows(
             max_length,
             tools=parsed_tools,
         )
+    except RenderRouteError:
+        raise
     # One row the render endpoint or boundary derivation can't handle must
     # not kill the run. The failure modes can't be enumerated -- templates
     # are swappable and raise arbitrary types -- so catch broadly and skip.
@@ -395,7 +401,7 @@ def _append_row(
     if minimum_valid_tokens is not None and num_valid_tokens < minimum_valid_tokens:
         return "filtered"
     results["input_ids"].append(torch.tensor(input_ids, dtype=torch.long))
-    results["loss_mask"].append(torch.tensor(loss_mask, dtype=torch.long))
+    results["loss_mask"].append(torch.tensor(loss_mask, dtype=torch.bool))
     results["seq_len"].append(len(input_ids))
     return "kept"
 
@@ -430,7 +436,9 @@ def _append_boundary_rows(
         if status == "kept":
             num_kept += 1
             if "messages" in results:
-                results["messages"].append(_adapt_conv_for_vllm(row["conv"]))
+                messages = _adapt_conv_for_vllm(row["conv"])
+                results["messages"].append(messages)
+                results["is_multimodal"].append(has_multimodal_content(messages))
 
     return num_kept, num_unsupervised, num_maybe_truncated
 
@@ -510,6 +518,7 @@ def _preprocess_batch(
     # original messages -- token ids alone cannot carry the images.
     if is_multimodal:
         results["messages"] = []
+        results["is_multimodal"] = []
 
     if not conversations:
         log.warning(f"No conversations key found. Keys: {list(examples.keys())}")
@@ -608,6 +617,8 @@ def build_speculator_training_dataset(
 
     if pretokenized:
         log.info("Speculator-format rows: using their loss mask, skipping render")
+        # Dataset.map otherwise preserves an existing integer mask schema.
+        dataset = dataset.cast_column("loss_mask", List(Value("bool")))
     elif render_endpoint is None:
         raise ValueError(
             "render_endpoint is required to convert natural-language "
@@ -635,8 +646,26 @@ def build_speculator_training_dataset(
             keep_in_memory=True,  # skip caching
         )
 
+    dataset = _drop_unused_messages(dataset)
     dataset.set_format(type="torch")
     return dataset
+
+
+def _drop_unused_messages(dataset: HFDataset) -> HFDataset:
+    """Drop the ``messages`` column when no row is multimodal.
+
+    Processor-based models write ``messages`` for every row, but the trainer
+    only forwards it for multimodal rows, so a text-only dataset would store
+    the full conversation text unused. Decided after ``map`` rather than per
+    batch so every map shard keeps the same schema.
+    """
+    if "is_multimodal" not in dataset.column_names:
+        return dataset
+    drop = ["is_multimodal"]
+    if not any(dataset["is_multimodal"]):
+        log.info("No multimodal rows: not storing the messages column")
+        drop.append("messages")
+    return dataset.remove_columns(drop)
 
 
 def _load_hf_dataset(spec: str) -> tuple[HFDataset, None]:

@@ -1,10 +1,8 @@
-from typing import Any, Literal
+from typing import Literal
 
-from pydantic import Field, field_serializer, field_validator
-from transformers import AutoConfig, PretrainedConfig
-from transformers.models.qwen3.modeling_qwen3 import (
-    Qwen3Config,
-)
+from pydantic import Field
+from transformers import PretrainedConfig
+from transformers.models.qwen3.configuration_qwen3 import Qwen3Config
 
 from speculators import SpeculatorModelConfig
 
@@ -80,24 +78,6 @@ class DFlashSpeculatorConfig(SpeculatorModelConfig):
             "(block_size speculative tokens). "
         ),
     )
-
-    @field_serializer("transformer_layer_config")
-    def serialize_transformer_config(self, value: PretrainedConfig) -> dict:
-        """Serialize transformer config to dict."""
-        return value.to_diff_dict()
-
-    @field_validator("transformer_layer_config", mode="before")
-    @classmethod
-    def validate_transformer_config(cls, value: Any) -> PretrainedConfig:
-        """Validate and convert transformer config."""
-        if isinstance(value, dict):
-            config_class: type[PretrainedConfig] = Qwen3Config
-            if "model_type" in value:
-                config_class = AutoConfig.for_model(
-                    model_type=value["model_type"]
-                ).__class__
-            return config_class(**value)
-        return value
 
     @property
     def target_vocab_size(self) -> int:
