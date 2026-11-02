@@ -18,7 +18,7 @@ tags:
 
 DFlash2's draft-model training had several open design questions worth investigating: whether the per-position loss weight `dpace` improves over the alternative, how the selector should handle a missing gold token among its top-K candidates, and how the per-position selector loss should be normalized. This report covers ablations on all three questions on Qwen3.8-27B.
 
-For the per-position loss weight, `dpace` improves acceptance length for DFlash2 at 5k training steps but not consistently at 25k steps, and does not improve DSpark at either step count; `dpace` was kept for DFlash2 and not adopted for DSpark. For the selector miss policy, `strict` improves acceptance length over `replace` on every subset at 5k training steps, which motivated adding `strict` as a selectable policy in [Speculators PR #1217](https://github.com/vllm-project/speculators/pull/1217). At 25k steps the difference narrows and becomes mixed. For loss normalization, `valid_token_count` and `effective_weight_sum` produce comparable acceptance lengths at 20k training steps, with no consistent winner across subsets.
+For the per-position loss weight, `dpace` improves acceptance length over `ce+tv, fixed-exp-decay` for DFlash2 at both 5k and 25k steps, and is worse for DSpark at both. The training default is still `fixed-exp-decay` for both architectures. This ablation is the evidence for using `dpace` on DFlash2, not a default change that already landed. For the selector miss policy, `strict` improves acceptance length over `replace` on every subset at 5k training steps, which motivated adding `strict` as a selectable policy in [Speculators PR #1217](https://github.com/vllm-project/speculators/pull/1217). At 25k steps the difference narrows and becomes mixed. For loss normalization, `valid_token_count` and `effective_weight_sum` produce comparable acceptance lengths at 20k training steps, with no consistent winner across subsets.
 
 ## Setup
 
@@ -57,7 +57,7 @@ The strict selector miss policy is implemented in [Speculators PR #1217](https:/
 | translation    |  3.36 |                   3.32 |                          +0.04 |
 | writing        |  2.84 |                   2.88 |                          −0.05 |
 
-Mixed: `dpace` is higher on six subsets, lower on three. Mean acceptance length is approximately 3.26 for `dpace` and 3.24 for `ce+tv, fixed-exp-decay`.
+`dpace` is higher on six subsets and lower on three. Mean acceptance length is approximately 3.26 for `dpace` and 3.24 for `ce+tv, fixed-exp-decay`.
 
 ![DFlash2 per-position loss weight, dpace vs ce+tv, fixed-exp-decay, 25k training steps: acceptance length by subset and per-position acceptance rate](../assets/research/dflash2_dpace_25k_dflash2.png)
 
@@ -115,7 +115,7 @@ Mixed: `dpace` is higher on six subsets, lower on three. Mean acceptance length 
 
 ![DSpark per-position loss weight, dpace vs ce+tv, fixed-exp-decay, 5k training steps: acceptance length by subset and per-position acceptance rate](../assets/research/dflash2_dpace_5k_dspark.png)
 
-Across both step counts, `dpace` is at best mixed for DFlash2 and consistently worse than `ce+tv, fixed-exp-decay` for DSpark. `fixed-exp-decay` remains the default per-position loss weight for both architectures; these ablations did not surface a clear case for switching DFlash2 to `dpace`.
+Across both step counts, `dpace` improves acceptance length over `ce+tv, fixed-exp-decay` for DFlash2 at both 5k and 25k steps, and is worse for DSpark at both. The training default is still `fixed-exp-decay` for both architectures. This ablation is the evidence for using `dpace` on DFlash2, not a default change that already landed.
 
 ### Strict versus replace selector policy
 
@@ -191,7 +191,7 @@ Mean acceptance length is very similar between the two normalization schemes, an
 
 ## Observations
 
-- `dpace` gives a mixed-to-favorable result for DFlash2 (higher at 5k steps, mixed at 25k) but a consistently unfavorable one for DSpark at both step counts; `dpace` was kept for DFlash2 and not adopted for DSpark.
+- `dpace` improves acceptance length over `ce+tv, fixed-exp-decay` for DFlash2 at both 5k and 25k steps, and is worse for DSpark at both. The training default is still `fixed-exp-decay` for both architectures. This ablation is the evidence for using `dpace` on DFlash2, not a default change that already landed.
 - The `strict` selector miss policy improved acceptance length over `replace` on every subset at 5k training steps, motivating its addition as a selectable training option; at 25k training steps the difference narrows and becomes mixed.
 - `val/unary_candidate_recall_at_16_epoch` consistently favors `strict` over `replace` at both 5k and 25k training steps, even where downstream acceptance length does not.
 - `valid_token_count` and `effective_weight_sum` loss normalization produce comparable acceptance lengths at 20k training steps, with no consistent subset-level winner.
