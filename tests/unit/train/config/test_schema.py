@@ -77,6 +77,18 @@ def test_flatten_resolves_dflash2_derived_defaults():
     assert flat["sliding_window_non_causal"] is True
 
 
+def test_flatten_resolves_dspine_derived_defaults():
+    flat = TrainConfig(speculator_type="dspine").flatten()
+    assert flat["num_layers"] == 5
+    assert flat["block_size"] == 16
+    assert flat["dflash_decay_gamma"] == pytest.approx(7.0)
+    assert flat["sample_from_anchor"] is False
+    assert flat["sliding_window_non_causal"] is False
+    assert flat["transfer_dim"] == 1024
+    assert flat["message_dim"] == 512
+    assert flat["transition_top_k"] == 16
+
+
 def test_flatten_leaves_non_dflash_derived_defaults_unchanged():
     # DSpark shares only the DFlash layer default; the remaining derived defaults
     # keep their pre-existing behavior.

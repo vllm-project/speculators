@@ -333,6 +333,7 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
             block_size=self.block_size,
             sliding_window=sliding_window,
             sliding_window_non_causal=sliding_window_non_causal,
+            block_causal=self.config.block_causal_attention,
         )
         return self._create_mask_fn(
             mask_mod,

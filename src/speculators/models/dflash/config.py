@@ -68,6 +68,11 @@ class DFlashSpeculatorConfig(SpeculatorModelConfig):
         "bidirectional.",
     )
 
+    block_causal_attention: bool = Field(
+        default=False,
+        description="Use causal attention within every synthetic draft block.",
+    )
+
     sample_from_anchor: bool = Field(
         default=False,
         description=(
