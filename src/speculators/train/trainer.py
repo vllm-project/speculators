@@ -151,6 +151,11 @@ _RECOVERY_SYNC_INTERVAL = 50
 # Bound rank skew before the validation metrics reduction.
 _VAL_SYNC_INTERVAL = 50
 
+# Training state is fp32 whatever the frozen weights are stored in. The default
+# is `model.dtype`, which just takes the first floating parameter it finds, so
+# precasting a frozen head could silently make the whole load bf16.
+_CHECKPOINT_FLOAT_DTYPE = torch.float32
+
 
 def _should_sync_recovery(
     step: int,
@@ -408,7 +413,9 @@ class Trainer:
         if not self.is_distributed:
             self.model.to(self.local_rank)  # type: ignore[arg-type]
             if load_checkpoint:
-                self.checkpointer.load_model_state_dict(self.model)
+                self.checkpointer.load_model_state_dict(
+                    self.model, float_dtype=_CHECKPOINT_FLOAT_DTYPE
+                )
             return
 
         if self.config.fsdp_shard:
@@ -425,7 +432,9 @@ class Trainer:
         apply_fully_sharded(self.model, param_dtype=self.config.hidden_states_dtype)
 
         if load_checkpoint:
-            self.checkpointer.load_model_state_dict(self.model)
+            self.checkpointer.load_model_state_dict(
+                self.model, float_dtype=_CHECKPOINT_FLOAT_DTYPE
+            )
         else:
             # Broadcast full state dict from rank 0 to all ranks
             set_model_state_dict(
@@ -445,7 +454,9 @@ class Trainer:
 
         if load_checkpoint:
             if dist.get_rank() == 0:
-                self.checkpointer.load_model_state_dict(self.model)
+                self.checkpointer.load_model_state_dict(
+                    self.model, float_dtype=_CHECKPOINT_FLOAT_DTYPE
+                )
         else:
             # Fresh init: broadcast rank 0's random initialization to all ranks
             for param in self.model.parameters():
@@ -461,7 +472,9 @@ class Trainer:
         self.optimizers = build_optimizers(self.model, self.config)
         last_epoch = -1
         if self.resume_from_checkpoint and self.checkpointer.previous_epoch != -1:
-            self.checkpointer.load_optimizer_state_dict(self.model, self.optimizers)
+            self.checkpointer.load_optimizer_state_dict(
+                self.model, self.optimizers, float_dtype=_CHECKPOINT_FLOAT_DTYPE
+            )
             last_epoch = self.checkpointer.previous_epoch
 
         # Setup scheduler(s) — one per optimizer so each optimizer's base LR (e.g.

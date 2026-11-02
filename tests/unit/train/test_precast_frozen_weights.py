@@ -2,10 +2,12 @@
 
 from types import SimpleNamespace
 from typing import cast
+from unittest.mock import Mock
 
 import torch
 from torch import nn
 
+from speculators.train import trainer as trainer_module
 from speculators.train.trainer import Trainer
 
 
@@ -105,3 +107,62 @@ def test_a_single_process_run_still_casts_with_fsdp_shard_set():
     _precast(model, is_distributed=False, fsdp_shard=True)
 
     assert model.frozen.weight.dtype == torch.bfloat16
+
+
+def test_a_precast_model_no_longer_reports_one_dtype():
+    """Why the loads below cannot fall back to `model.dtype`: it returns the
+    first floating parameter's dtype, and that may now be a cast frozen one."""
+    model = _Model()
+
+    _precast(model)
+
+    assert {p.dtype for p in model.parameters()} == {torch.float32, torch.bfloat16}
+
+
+def test_resume_loads_the_model_as_fp32(monkeypatch):
+    """A bf16 load would round the fp32 master weights on resume."""
+    monkeypatch.setattr(
+        trainer_module.SpeculatorModel, "verify_training_compatible", lambda _m: None
+    )
+    model = _Model()
+    checkpointer = Mock(previous_epoch=0)
+    stand_in = cast(
+        "Trainer",
+        SimpleNamespace(
+            model=model,
+            is_distributed=False,
+            local_rank="cpu",
+            resume_from_checkpoint=True,
+            checkpointer=checkpointer,
+            config=SimpleNamespace(gradient_checkpointing=False),
+            _precast_frozen_linear_weights=lambda: None,
+        ),
+    )
+
+    Trainer.setup_model(stand_in)
+
+    checkpointer.load_model_state_dict.assert_called_once_with(
+        model, float_dtype=torch.float32
+    )
+
+
+def test_resume_loads_the_optimizer_state_as_fp32(monkeypatch):
+    """Momentum buffers and Adam moments are fp32 too."""
+    monkeypatch.setattr(trainer_module, "build_optimizers", lambda _m, _c: [])
+    model = _Model()
+    checkpointer = Mock(previous_epoch=0)
+    stand_in = cast(
+        "Trainer",
+        SimpleNamespace(
+            model=model,
+            resume_from_checkpoint=True,
+            checkpointer=checkpointer,
+            config=SimpleNamespace(scheduler_type="none"),
+        ),
+    )
+
+    Trainer.setup_optimizer(stand_in)
+
+    checkpointer.load_optimizer_state_dict.assert_called_once_with(
+        model, [], float_dtype=torch.float32
+    )
