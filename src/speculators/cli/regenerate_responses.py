@@ -566,14 +566,23 @@ def sanitize_filename(name: str) -> str:
     return name.strip("._")
 
 
+def _resolve_dataset_config(dataset_name: str) -> DatasetConfig:
+    """Preset registry entry, or a local JSON config. Does not load data."""
+    if dataset_name in REGEN_DATASETS:
+        return DATASET_CONFIGS[dataset_name]
+    return DatasetConfig(
+        name=Path(dataset_name).stem,
+        hf_path=dataset_name,
+        split="train",
+        prompt_field="prompt",
+    )
+
+
 def _default_outfile(dataset_name: str, model: str) -> str:
     """Stable ``{dataset}_{model}.jsonl`` path used when ``--outfile`` is omitted."""
     model_short = model.rsplit("/", maxsplit=1)[-1] if "/" in model else model
     model_short = sanitize_filename(model_short)
-    if dataset_name in REGEN_DATASETS:
-        source_name = DATASET_CONFIGS[dataset_name].name
-    else:
-        source_name = Path(dataset_name).stem
+    source_name = _resolve_dataset_config(dataset_name).name
     return f"{sanitize_filename(source_name)}_{model_short}.jsonl"
 
 
@@ -695,19 +704,13 @@ def load_input_dataset(
     dataset_name: str, split: str | None, subset: str | None
 ) -> tuple[DatasetConfig, Any, str]:
     """Load either a registered Hugging Face preset or a local JSON/JSONL file."""
+    config = _resolve_dataset_config(dataset_name)
     if dataset_name not in REGEN_DATASETS:
-        config = DatasetConfig(
-            name=Path(dataset_name).stem,
-            hf_path=dataset_name,
-            split="train",
-            prompt_field="prompt",
-        )
         dataset = load_dataset(
             "json", data_files=config.hf_path, split=config.split, streaming=True
         )
         return config, dataset, config.split
 
-    config = DATASET_CONFIGS[dataset_name]
     resolved_split = split if split is not None else config.split
     resolved_subset = subset if subset is not None else config.subset
     dataset = load_dataset(
