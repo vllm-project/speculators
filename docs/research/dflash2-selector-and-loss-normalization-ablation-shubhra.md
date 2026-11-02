@@ -49,13 +49,13 @@ The strict selector miss policy is implemented in [Speculators PR #1217](https:/
 | -------------- | ----: | ---------------------: | -----------------------------: |
 | HumanEval      |  3.32 |                   3.27 |                          +0.05 |
 | math_reasoning |  4.05 |                   4.00 |                          +0.05 |
-| qa             |  3.26 |                   3.35 |                          −0.08 |
+| qa             |  3.26 |                   3.35 |                          −0.09 |
 | question       |  2.90 |                   2.87 |                          +0.03 |
-| rag            |  3.73 |                   3.64 |                          +0.08 |
+| rag            |  3.73 |                   3.64 |                          +0.09 |
 | summarization  |  2.99 |                   2.90 |                          +0.09 |
 | tool_call      |  2.88 |                   2.91 |                          −0.03 |
 | translation    |  3.36 |                   3.32 |                          +0.04 |
-| writing        |  2.84 |                   2.88 |                          −0.05 |
+| writing        |  2.84 |                   2.88 |                          −0.04 |
 
 `dpace` is higher on six subsets and lower on three. Mean acceptance length is approximately 3.26 for `dpace` and 3.24 for `ce+tv, fixed-exp-decay`.
 
@@ -65,14 +65,14 @@ The strict selector miss policy is implemented in [Speculators PR #1217](https:/
 
 | Subset         | dpace | ce+tv, fixed-exp-decay | dpace − ce+tv, fixed-exp-decay |
 | -------------- | ----: | ---------------------: | -----------------------------: |
-| HumanEval      |  3.28 |                   3.44 |                          −0.17 |
-| math_reasoning |  4.13 |                   4.25 |                          −0.13 |
+| HumanEval      |  3.28 |                   3.44 |                          −0.16 |
+| math_reasoning |  4.13 |                   4.25 |                          −0.12 |
 | qa             |  3.35 |                   3.41 |                          −0.06 |
 | question       |  2.96 |                   3.07 |                          −0.11 |
 | rag            |  3.72 |                   3.80 |                          −0.08 |
-| summarization  |  2.95 |                   3.10 |                          −0.14 |
+| summarization  |  2.95 |                   3.10 |                          −0.15 |
 | tool_call      |  2.91 |                   3.02 |                          −0.11 |
-| translation    |  3.35 |                   3.42 |                          −0.06 |
+| translation    |  3.35 |                   3.42 |                          −0.07 |
 | writing        |  2.93 |                   2.98 |                          −0.05 |
 
 `ce+tv, fixed-exp-decay` is higher on all nine subsets for DSpark at 25k steps. Mean acceptance length is approximately 3.29 for `dpace` and 3.39 for `ce+tv, fixed-exp-decay`.
@@ -86,14 +86,14 @@ The strict selector miss policy is implemented in [Speculators PR #1217](https:/
 | HumanEval      |  3.02 |                   2.97 |                          +0.05 |
 | math_reasoning |  3.83 |                   3.66 |                          +0.17 |
 | qa             |  3.15 |                   3.08 |                          +0.07 |
-| question       |  2.63 |                   2.60 |                          +0.04 |
+| question       |  2.63 |                   2.60 |                          +0.03 |
 | rag            |  3.35 |                   3.38 |                          −0.03 |
-| summarization  |  2.67 |                   2.62 |                          +0.04 |
+| summarization  |  2.67 |                   2.62 |                          +0.05 |
 | tool_call      |  2.63 |                   2.63 |                           0.00 |
 | translation    |  3.05 |                   2.91 |                          +0.14 |
 | writing        |  2.67 |                   2.58 |                          +0.09 |
 
-`dpace` is higher on eight of nine subsets for DFlash2 at 5k steps. Mean acceptance length is approximately 3.00 for `dpace` and 2.94 for `ce+tv, fixed-exp-decay`.
+`dpace` is higher on seven of nine subsets for DFlash2 at 5k steps and tied on one. Mean acceptance length is approximately 3.00 for `dpace` and 2.94 for `ce+tv, fixed-exp-decay`.
 
 ![DFlash2 per-position loss weight, dpace vs ce+tv, fixed-exp-decay, 5k training steps: acceptance length by subset and per-position acceptance rate](../assets/research/dflash2_dpace_5k_dflash2.png)
 
@@ -102,16 +102,16 @@ The strict selector miss policy is implemented in [Speculators PR #1217](https:/
 | Subset         | dpace | ce+tv, fixed-exp-decay | dpace − ce+tv, fixed-exp-decay |
 | -------------- | ----: | ---------------------: | -----------------------------: |
 | HumanEval      |  3.05 |                   3.12 |                          −0.07 |
-| math_reasoning |  3.79 |                   3.80 |                          −0.00 |
+| math_reasoning |  3.79 |                   3.80 |                          −0.01 |
 | qa             |  3.00 |                   2.98 |                          +0.02 |
 | question       |  2.64 |                   2.75 |                          −0.11 |
-| rag            |  3.26 |                   3.34 |                          −0.09 |
-| summarization  |  2.66 |                   2.73 |                          −0.08 |
-| tool_call      |  2.61 |                   2.72 |                          −0.12 |
+| rag            |  3.26 |                   3.34 |                          −0.08 |
+| summarization  |  2.66 |                   2.73 |                          −0.07 |
+| tool_call      |  2.61 |                   2.72 |                          −0.11 |
 | translation    |  2.84 |                   2.88 |                          −0.04 |
-| writing        |  2.65 |                   2.72 |                          −0.06 |
+| writing        |  2.65 |                   2.72 |                          −0.07 |
 
-`ce+tv, fixed-exp-decay` is higher on seven of nine subsets for DSpark at 5k steps. Mean acceptance length is approximately 2.94 for `dpace` and 3.00 for `ce+tv, fixed-exp-decay`.
+`ce+tv, fixed-exp-decay` is higher on eight of nine subsets for DSpark at 5k steps. Mean acceptance length is approximately 2.94 for `dpace` and 3.00 for `ce+tv, fixed-exp-decay`.
 
 ![DSpark per-position loss weight, dpace vs ce+tv, fixed-exp-decay, 5k training steps: acceptance length by subset and per-position acceptance rate](../assets/research/dflash2_dpace_5k_dspark.png)
 
