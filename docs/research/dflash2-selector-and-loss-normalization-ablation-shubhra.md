@@ -165,8 +165,8 @@ The training-time validation metric `val/unary_candidate_recall_at_16_epoch` (ho
 
 The two loss reductions differ in their denominator:
 
-- `valid_token_count`: divides the weighted loss by the number of valid tokens, using `loss_mask.sum()`.
-- `effective_weight_sum`: rescales the loss by `valid.sum() / (valid * decay_weight).sum()`, so the effective denominator is the sum of valid per-position decay weights.
+- `valid_token_count`: divides the weighted loss by the number of valid tokens, using `loss_mask.sum()`. This is the normalization in the repository.
+- `effective_weight_sum`: rescales the loss by `valid.sum() / (valid * decay_weight).sum()`, so the effective denominator is the sum of valid per-position decay weights. This was a local change, trained and evaluated for this comparison, and not merged: at 20k steps it did not improve acceptance length over `valid_token_count`.
 
 Acceptance length by subset (tokens per round):
 
@@ -194,7 +194,7 @@ Mean acceptance length is very similar between the two normalization schemes, an
 - `dpace` improves acceptance length over `ce+tv, fixed-exp-decay` for DFlash2 at both 5k and 25k steps, and is worse for DSpark at both. The training default is still `fixed-exp-decay` for both architectures. This ablation is the evidence for using `dpace` on DFlash2, not a default change that already landed.
 - The `strict` selector miss policy improved acceptance length over `replace` on every subset at 5k training steps, motivating its addition as a selectable training option; at 25k training steps the difference narrows and becomes mixed.
 - `val/unary_candidate_recall_at_16_epoch` consistently favors `strict` over `replace` at both 5k and 25k training steps, even where downstream acceptance length does not.
-- `valid_token_count` and `effective_weight_sum` loss normalization produce comparable acceptance lengths at 20k training steps, with no consistent subset-level winner.
+- `valid_token_count` and `effective_weight_sum` loss normalization produce comparable acceptance lengths at 20k training steps, with no consistent subset-level winner. `effective_weight_sum` was a local change and was not merged.
 - Results above do not include run-to-run variance or confidence intervals; subset-level differences should be interpreted descriptively rather than as statistically significant.
 
 ## Next steps
