@@ -1,13 +1,15 @@
 import logging
 import queue
-from logging.handlers import QueueListener
+from logging.handlers import QueueHandler, QueueListener
 
 import pytest
 
 from speculators.train.logger import (
     FormatDictFilter,
     IsRank0Filter,
+    _AsyncConsoleHandler,
     _SnapshotQueueHandler,
+    setup_metric_logger,
     setup_root_logger,
 )
 
@@ -69,11 +71,8 @@ def _through_listener(records):
 
 
 def test_queue_handler_keeps_the_flat_metric_formatting():
-    """Dict messages render as ``k=v`` even though rendering moved to a thread.
-
-    ``QueueHandler.prepare`` would stringify the message first, leaving
-    FormatDictFilter a str; downstream tooling greps the flat form.
-    """
+    """``QueueHandler.prepare`` would stringify the message, leaving
+    FormatDictFilter a str; downstream tooling greps the ``k=v`` form."""
     record = _record()
     record.msg = {"train": {"loss": 1.5, "step": 7}}
 
@@ -83,11 +82,8 @@ def test_queue_handler_keeps_the_flat_metric_formatting():
 
 
 def test_queue_handler_snapshots_the_metric_dict():
-    """The queued record holds the values from log time, not render time.
-
-    The listener formats on another thread, so a metrics dict reused across
-    steps would otherwise print later values against the earlier step.
-    """
+    """The listener formats on another thread, so a metrics dict reused
+    across steps would otherwise print later values for this step."""
     metrics = {"train": {"loss": 1.5}}
     record = _record()
     record.msg = metrics
@@ -99,18 +95,79 @@ def test_queue_handler_snapshots_the_metric_dict():
     assert prepared.msg == {"train/loss": 1.5}
 
 
-def test_setup_root_logger_leaves_a_configured_root_alone():
-    """A root that already has handlers keeps them and gets no listener.
-
-    ``basicConfig`` is a no-op there, so an unconditional listener would have
-    nothing feeding it and would never stop.
-    """
+@pytest.fixture
+def restore_logging():
+    """Put the root and metric loggers back as the session found them."""
     root = logging.getLogger()
-    existing = list(root.handlers)
+    metrics = logging.getLogger("speculators.metrics")
+    saved = (list(root.handlers), list(metrics.handlers), metrics.propagate)
+    yield
+    for handler in metrics.handlers:
+        handler.close()
+    root.handlers, metrics.handlers, metrics.propagate = saved
+
+
+def test_the_root_console_handler_renders_inline(restore_logging):
+    """Everything but metrics renders on the calling thread, so a queue
+    cannot still be holding a warning or a traceback at exit."""
+    root = logging.getLogger()
+    root.handlers = []
+
+    setup_root_logger()
+
+    assert root.handlers
+    assert not any(isinstance(h, QueueHandler) for h in root.handlers)
+
+
+def test_metrics_render_off_thread_and_skip_the_root(restore_logging, tmp_path):
+    """Only the hot path is async. Without ``propagate=False`` the root would
+    render every metric a second time, synchronously."""
+    setup_metric_logger(loggers="", run_name="run", output_dir=str(tmp_path))
+
+    metrics = logging.getLogger("speculators.metrics")
+    console = [h for h in metrics.handlers if isinstance(h, _AsyncConsoleHandler)]
+
+    assert len(console) == 1
+    assert metrics.propagate is False
+
+
+def test_the_rank_filter_runs_before_the_record_is_queued(monkeypatch, clean_rank_env):
+    """With the filter on the listener's handler instead, every rank would
+    copy, flatten and enqueue each metric only to discard it."""
+    handler = _AsyncConsoleHandler()
+    handler.addFilter(IsRank0Filter())
+    prepared = []
+    original = handler.prepare
+
+    def spy(record):
+        prepared.append(record)
+        return original(record)
+
+    monkeypatch.setattr(handler, "prepare", spy)
+
     try:
-        root.handlers = [logging.NullHandler()]
-        setup_root_logger()
-        assert len(root.handlers) == 1
-        assert isinstance(root.handlers[0], logging.NullHandler)
+        monkeypatch.setenv("RANK", "1")
+        handler.handle(_record())
+        assert prepared == []
+
+        monkeypatch.setenv("RANK", "0")
+        handler.handle(_record())
+        assert len(prepared) == 1
     finally:
-        root.handlers = existing
+        handler.close()
+
+
+def test_closing_the_console_handler_drains_the_queue():
+    """``logging.shutdown`` closes handlers at exit; queued metrics must print."""
+    handler = _AsyncConsoleHandler()
+    capture = _Capture()
+    capture.addFilter(FormatDictFilter())
+    handler._listener.handlers = (capture,)
+    record = _record()
+    record.msg = {"train": {"loss": 1.5}}
+
+    handler.handle(record)
+    handler.close()
+
+    assert capture.lines == ["train/loss=1.500"]
+    assert handler._listener is None

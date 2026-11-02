@@ -49,7 +49,6 @@ Example Usage:
 # SPDX-License-Identifier: Apache-2.0
 
 # Standard
-import atexit
 import contextlib
 import copy
 import importlib
@@ -628,8 +627,9 @@ class MLFlowHandler(logging.Handler):
 class _SnapshotQueueHandler(QueueHandler):
     """Enqueue a copy of each record, keeping dict messages as dicts.
 
-    ``QueueHandler.prepare`` would render the message to a string first, which
-    ``FormatDictFilter`` cannot format.
+    ``QueueHandler.prepare`` would stringify the message, which
+    ``FormatDictFilter`` cannot format. Flattening also freezes the values at
+    log time, so a reused metrics dict can't print later values for this step.
     """
 
     def prepare(self, record):
@@ -642,27 +642,52 @@ class _SnapshotQueueHandler(QueueHandler):
         return record
 
 
+class _AsyncConsoleHandler(_SnapshotQueueHandler):
+    """Rich console handler that renders on a listener thread.
+
+    Only ``speculators.metrics`` uses this: at the default ``log_freq`` of 1
+    its rendering lands in every training step, and the GIL it holds delays
+    the step's next CUDA call. Everything else stays synchronous on the root,
+    where a queue could still hold a warning when the process exits.
+
+    Filters here run on the logging thread, before the copy and the enqueue.
+    ``logging.shutdown`` calls :meth:`close`, which drains the queue.
+    """
+
+    def __init__(self, level=logging.NOTSET):
+        log_queue: queue.SimpleQueue = queue.SimpleQueue()
+        super().__init__(log_queue)
+        self.setLevel(level)
+        render = RichHandler()
+        render.setFormatter(logging.Formatter("%(message)s", datefmt="[%X]"))
+        render.addFilter(FormatDictFilter())
+        self._listener: QueueListener | None = QueueListener(
+            log_queue, render, respect_handler_level=True
+        )
+        self._listener.start()
+
+    def close(self):
+        listener, self._listener = self._listener, None
+        if listener is not None:
+            listener.stop()
+        super().close()
+
+
 def setup_root_logger(level="INFO"):
     """Configure the root logger with rich formatting.
 
     This function sets up the root logger with a RichHandler for
     console output and adds the FormatDictFilter for better dictionary message
-    formatting. Rendering happens on a background listener thread.
+    formatting. Rendering is synchronous: these records are rare, and a queue
+    could still hold a traceback at exit. The hot path is the metric logger,
+    which renders off-thread via :class:`_AsyncConsoleHandler`.
     """
-    if not logging.getLogger().handlers:
-        # basicConfig is a no-op once the root has handlers; don't start a
-        # listener it would never feed.
-        handler = RichHandler()
-        handler.setFormatter(logging.Formatter("%(message)s", datefmt="[%X]"))
-        handler.addFilter(FormatDictFilter())
-        handler.addFilter(IsRank0Filter())
-        log_queue: queue.SimpleQueue = queue.SimpleQueue()
-        listener = QueueListener(log_queue, handler, respect_handler_level=True)
-        listener.start()
-        # atexit runs LIFO and logging registers its shutdown first, so the
-        # queue drains before logging tears it down.
-        atexit.register(listener.stop)
-        logging.basicConfig(level=level, handlers=[_SnapshotQueueHandler(log_queue)])
+    handler = RichHandler()
+    handler.addFilter(FormatDictFilter())
+    handler.addFilter(IsRank0Filter())
+    logging.basicConfig(
+        level=level, format="%(message)s", datefmt="[%X]", handlers=[handler]
+    )
 
     # Disable verbose HTTP response logs from httpx
     logging.getLogger("httpx").propagate = False
@@ -717,6 +742,12 @@ def setup_metric_logger(loggers, run_name, output_dir):
             },
         },
         "handlers": {
+            # Rank filtered here, not in the listener: a rank that prints
+            # nothing shouldn't pay to copy and enqueue the record.
+            "console": {
+                "()": _AsyncConsoleHandler,
+                "filters": ["is_rank0"],
+            },
             "tensorboard": {
                 "()": TensorBoardHandler,
                 "log_dir": output_dir,
@@ -744,10 +775,12 @@ def setup_metric_logger(loggers, run_name, output_dir):
         },
         "loggers": {
             "speculators.metrics": {
-                "handlers": loggers,
+                # Console output goes through the async handler above rather
+                # than propagating to the root's synchronous one.
+                "handlers": ["console", *loggers],
                 "filters": ["is_mapping"],
                 "level": "INFO",
-                "propagate": True,
+                "propagate": False,
             },
             "speculators": {
                 "level": "INFO",
