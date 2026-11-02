@@ -1,6 +1,6 @@
 # Loss Functions
 
-The training loss controls what the draft model is optimized for. Select it with `--loss-fn` in [`speculators train`](../cli/train.md), which accepts either a single loss name or a JSON dict for a weighted combination. It applies to Eagle-3, P-EAGLE, DFlash, and DSpark. MTP uses its own multi-step cross-entropy loss and ignores this flag.
+The training loss controls what the draft model is optimized for. Select it with `--loss-fn` in [`speculators train`](../cli/train.md), which accepts either a single loss name or a JSON dict for a weighted combination. It applies to Eagle-3, P-EAGLE, DFlash, DFlash2, and DSpark. DSpine uses its paper-specific unary/refinement CE-L1 objective plus layer-wise cosine supervision, and MTP uses its own multi-step cross-entropy loss; both ignore this flag.
 
 The fused Triton implementation is the default. Use `--loss-implementation eager` for compatibility or numerical validation; eager losses may OOM with DFlash or DSpark.
 

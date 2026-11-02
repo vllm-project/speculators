@@ -26,13 +26,17 @@ Extends DFlash with a Markov head for intra-block token dependencies and a confi
 
 Extends DFlash with a causal refiner resolved by Jacobi iteration, giving each draft position visibility of the ones before it at a constant number of refine passes. Experimental training support.
 
+## [DSpine](dspine.md)
+
+Adds gated adjacent causal injection at every DFlash backbone layer, a unified output-embedding transfer space, and transition-cached predecessor-conditioned decoding. Experimental training and checkpoint support.
+
 ## [MTP](mtp.md)
 
 Finetunes the model's native multi-token prediction head on domain-specific data. Available for models with built-in MTP support (e.g. Qwen3-Next, Qwen3.5).
 
 ## Choosing an Algorithm
 
-Most algorithms can be paired with any supported verifier model. DFlash2 currently requires the verifier's full vocabulary and an unquantized language-model head; MTP requires a model with native MTP layers. For help choosing between them, see the [Decision Guide](decision_guide.md).
+Most algorithms can be paired with any supported verifier model. DFlash2 and DSpine currently require the verifier's full vocabulary and an unquantized language-model head; MTP requires a model with native MTP layers. For help choosing between them, see the [Decision Guide](decision_guide.md).
 
 ## Adding New Algorithms
 

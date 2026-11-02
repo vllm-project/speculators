@@ -46,7 +46,7 @@ torchrun --standalone --nproc_per_node=4 -m speculators.train \
 
 - **`--trust-remote-code`** (flag) Allow executing code from HF Hub when loading the verifier's tokenizer.
 
-- **`--speculator-type`** (str, default: `"eagle3"`) Type of speculator model to train. Options: `eagle3`, `dflash`, `dflash2`, `dspark`, `peagle`, `mtp`. `peagle` is deprecated and scheduled for removal in Speculators 0.11.
+- **`--speculator-type`** (str, default: `"eagle3"`) Type of speculator model to train. Options: `eagle3`, `dflash`, `dflash2`, `dspark`, `dspine`, `peagle`, `mtp`. `peagle` is deprecated and scheduled for removal in Speculators 0.11.
 
 - **`--from-pretrained`** (str, default: `""`) Path or HF id of an existing draft checkpoint to load weights from and train — either a previously trained draft or the initialized-but-untrained checkpoint produced by `--dry-run`. May also point to a local directory containing only a `config.json`, in which case a fresh draft is initialized from that full speculator config. Takes precedence over all other model-definition options: it is mutually exclusive with `--draft-config` and the decoder-shaping flags (`--num-layers`, `--draft-arch`, `--draft-hidden-act`, `--sliding-window`, `--full-attention-indices`).
 
@@ -179,11 +179,11 @@ torchrun --standalone --nproc_per_node=4 -m speculators.train \
 
 - **`--block-size`** (int, default: `16` for dflash, `8` otherwise) Block size for DFlash-family models.
 
-- **`--sample-from-anchor`** / **`--no-sample-from-anchor`** (bool, default: algorithm-specific) Whether to sample from the anchor position. `True`: sample from anchor and all mask positions (default for dspark, produces block_size tokens). `False`: anchor is bonus token (default for dflash/dflash2, produces block_size-1 tokens).
+- **`--sample-from-anchor`** / **`--no-sample-from-anchor`** (bool, default: algorithm-specific) Whether to sample from the anchor position. `True`: sample from anchor and all mask positions (default for dspark, produces block_size tokens). `False`: anchor is bonus token (default for dflash/dflash2/dspine, produces block_size-1 tokens).
 
 - **`--max-anchors`** (int, default: `512`) Maximum anchor positions for DFlash-family and P-EAGLE training.
 
-- **`--dflash-decay-gamma`** (float, default: `4.0`) Decay gamma for DFlash-family loss weighting.
+- **`--dflash-decay-gamma`** (float, default: `7.0` for dspine, `4.0` otherwise) Decay gamma for DFlash-family loss weighting.
 
 - **`--per-position-loss-weight`** (str, default: `"dpace"` for dflash, `"fixed-exp-decay"` otherwise) Per-position loss weighting scheme. Options: `fixed-exp-decay`, `dpace`. Applies to DFlash-family models. `dpace` requires `--loss-fn ce`.
 
@@ -219,6 +219,23 @@ DSpark builds on DFlash, so all DFlash-specific arguments apply as well.
 
 - **`--confidence-head-alpha`** (float, default: `1.0`) Weight of the confidence-head BCE term.
 
+### DSpine-Specific Arguments
+
+DSpine builds on DFlash and requires the full verifier vocabulary. It defaults to five draft layers, block size 16, causal block attention, and the paper's loss schedule.
+
+- **`--transfer-dim`** (int, default: `1024`) PCA-whitened output-embedding transfer-space dimension.
+- **`--message-dim`** (int, default: `512`) Gated adjacent-injection message dimension.
+- **`--transition-top-k`** (int, default: `16`) Unary candidates retained per position for refinement and transition caching.
+- **`--distribution-loss-alpha`** (float, default: `0.1`) Cross-entropy weight in the CE/L1 distribution objective.
+- **`--embedding-loss-beta`** (float, default: `0.5`) Maximum layer-wise embedding-supervision multiplier.
+- **`--embedding-loss-warmup-steps`** (int, default: `146`) Linear warmup steps for embedding supervision.
+- **`--curriculum-probability`** (float, default: `0.5`) Initial probability of correct-predecessor substitution.
+- **`--curriculum-hold-ratio`** (float, default: `1/6`) Training fraction holding the initial curriculum probability.
+- **`--curriculum-end-ratio`** (float, default: `1/3`) Training fraction at which substitution reaches zero.
+- **`--curriculum-layers`** (int, default: `3`) Number of shallow layers receiving curriculum substitution.
+- **`--transition-min-target-mass`** (float, default: `1e-4`) Minimum verifier mass in top-K required for the refinement L1 term.
+- **`--transfer-space-eps`** (float, default: `1e-6`) Numerical floor for PCA whitening and normalization.
+
 ### Sliding Window Attention Arguments
 
 All speculator types (except `mtp`) use sliding window attention on all draft layers by default.
@@ -227,7 +244,7 @@ All speculator types (except `mtp`) use sliding window attention on all draft la
 
 - **`--full-attention-indices`** (int list, default: none) Space-separated draft layer indices that should use full attention instead of sliding window. Example: `--full-attention-indices 0 2` makes layers 0 and 2 use full attention; the rest use sliding window.
 
-- **`--sliding-window-non-causal`** (flag) Use non-causal (bidirectional) masking within draft blocks for sliding window attention layers. Full attention layers are always bidirectional. Note: vLLM currently doesn't support these models.
+- **`--sliding-window-non-causal`** (flag) Use non-causal (bidirectional) masking within draft blocks for sliding window attention layers. Full attention layers are bidirectional for existing DFlash variants; DSpine always uses block-causal attention. Note: vLLM currently doesn't support these training-time attention overrides.
 
 ### Dataloader Arguments
 

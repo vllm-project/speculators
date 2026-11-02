@@ -14,6 +14,7 @@ nav:
                 - Dflash: user_guide/algorithms/dflash.md
                 - DFlash2: user_guide/algorithms/dflash2.md
                 - DSpark: user_guide/algorithms/dspark.md
+                - DSpine: user_guide/algorithms/dspine.md
                 - P-Eagle: user_guide/algorithms/peagle.md
                 - MTP: user_guide/algorithms/mtp.md
                 - Decision Guide: user_guide/algorithms/decision_guide.md

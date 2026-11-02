@@ -1,6 +1,6 @@
 # Algorithm Decision Guide
 
-Speculators currently supports six speculative decoding algorithms: **Eagle-3**, **P-EAGLE**, **DFlash**, **DFlash2**, **DSpark**, and **MTP**. All are lossless -- they produce output from the same distribution as the target model.
+Speculators currently supports seven speculative decoding algorithms: **Eagle-3**, **P-EAGLE**, **DFlash**, **DFlash2**, **DSpark**, **DSpine**, and **MTP**. All are lossless -- they produce output from the same distribution as the target model.
 
 > ⚠️ **Warning: P-EAGLE is deprecated**
 >
@@ -18,25 +18,27 @@ Speculators currently supports six speculative decoding algorithms: **Eagle-3**,
 
 **DSpark** extends DFlash with a Markov head, so positions inside a block depend on earlier ones, plus a confidence head that predicts per-position acceptance.
 
+**DSpine** extends DFlash with adjacent causal injection at every backbone layer, output-embedding supervision, and top-K transition-cached decoding. Training and checkpoint support are experimental; serving needs a DSpine-aware runtime.
+
 **MTP** finetunes the model's native multi-token prediction head on domain-specific data. Unlike the other algorithms, MTP does not train from scratch -- it starts from pre-existing MTP layers and is only available for models with native MTP support.
 
-Eagle-3, P-EAGLE, DFlash, and DSpark can be paired with any supported verifier model (including quantized variants) -- the draft architecture is independent of the verifier architecture. DFlash2 currently requires the verifier's full, unquantized language-model head because its selector operates in the complete verifier vocabulary. MTP requires a model with native MTP layers (e.g. Qwen3-Next, Qwen3.5).
+Eagle-3, P-EAGLE, DFlash, and DSpark can be paired with any supported verifier model (including quantized variants) -- the draft architecture is independent of the verifier architecture. DFlash2 and DSpine currently require the verifier's full, unquantized language-model head because their conditional decoding operates in the complete verifier vocabulary. MTP requires a model with native MTP layers (e.g. Qwen3-Next, Qwen3.5).
 
 ## Current Support
 
-|                     | Eagle-3       | P-EAGLE             | DFlash              | DFlash2              | DSpark              | MTP                         |
-| ------------------- | ------------- | ------------------- | ------------------- | -------------------- | ------------------- | --------------------------- |
-| **Draft layers**    | Llama-style   | Llama-style         | Qwen3-style         | Qwen3-style          | Qwen3-style         | Native MTP layers           |
-| **Verifier models** | Any supported | Any supported       | Any supported       | Full vocabulary only | Any supported       | Models with native MTP only |
-| **Training mode**   | From scratch  | From scratch        | From scratch        | Experimental         | From scratch        | Finetune existing MTP head  |
-| **Speculators**     | Mature        | Newer, growing fast | Newer, growing fast | Experimental         | Newer, growing fast | Newer, growing fast         |
-| **vLLM**            | Mature        | Newer, growing fast | Newer, growing fast | Experimental         | Newer, growing fast | Newer, growing fast         |
+|                     | Eagle-3       | P-EAGLE             | DFlash              | DFlash2              | DSpark              | DSpine               | MTP                         |
+| ------------------- | ------------- | ------------------- | ------------------- | -------------------- | ------------------- | -------------------- | --------------------------- |
+| **Draft layers**    | Llama-style   | Llama-style         | Qwen3-style         | Qwen3-style          | Qwen3-style         | Qwen3-style          | Native MTP layers           |
+| **Verifier models** | Any supported | Any supported       | Any supported       | Full vocabulary only | Any supported       | Full vocabulary only | Models with native MTP only |
+| **Training mode**   | From scratch  | From scratch        | From scratch        | Experimental         | From scratch        | Experimental         | Finetune existing MTP head  |
+| **Speculators**     | Mature        | Newer, growing fast | Newer, growing fast | Experimental         | Newer, growing fast | Experimental         | Newer, growing fast         |
+| **vLLM**            | Mature        | Newer, growing fast | Newer, growing fast | Experimental         | Newer, growing fast | Not yet integrated   | Newer, growing fast         |
 
-Eagle-3 has been available longer and has broader support in both Speculators and vLLM. P-EAGLE, DFlash, DSpark, and MTP were added more recently and support is improving rapidly. DFlash2 is an experimental prototype pending broader training and serving evaluation.
+Eagle-3 has been available longer and has broader support in both Speculators and vLLM. P-EAGLE, DFlash, DSpark, and MTP were added more recently and support is improving rapidly. DFlash2 and DSpine are experimental prototypes pending broader training and serving evaluation.
 
 ## Which Should I Use?
 
-If you're unsure, start with Eagle-3 -- it has the most mature tooling and documentation. P-EAGLE offers parallel multi-token prediction with an Eagle-3-based architecture, but it is **DEPRECATED**; see its [guide](peagle.md) for the removal timeline. DFlash offers single-forward-pass block prediction. DFlash2 adds local convolution and candidate reranking, while DSpark adds intra-block dependencies and confidence scheduling. If your model already has native MTP layers (e.g. Qwen3-Next, Qwen3.5), MTP finetuning lets you improve the existing MTP head on domain-specific data without training a separate draft model.
+If you're unsure, start with Eagle-3 -- it has the most mature tooling and documentation. P-EAGLE offers parallel multi-token prediction with an Eagle-3-based architecture, but it is **DEPRECATED**; see its [guide](peagle.md) for the removal timeline. DFlash offers single-forward-pass block prediction. DFlash2 adds local convolution and candidate reranking, DSpark adds intra-block dependencies and confidence scheduling, and DSpine propagates adjacent conditioning through backbone depth. If your model already has native MTP layers (e.g. Qwen3-Next, Qwen3.5), MTP finetuning lets you improve the existing MTP head on domain-specific data without training a separate draft model.
 
 For more details on each algorithm, see:
 
@@ -45,4 +47,5 @@ For more details on each algorithm, see:
 - [DFlash](dflash.md)
 - [DFlash2](dflash2.md)
 - [DSpark](dspark.md)
+- [DSpine](dspine.md)
 - [MTP](mtp.md)
