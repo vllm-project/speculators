@@ -13,20 +13,22 @@ tags:
 
 # Fine-tuning a DSpark Qwen3-4B speculator on code data: learning-rate ablation
 
-> All four learning-rate arms completed training and evaluation.
+> All phases complete: 9 training runs, 9 HumanEval evaluations, best
+> model published to HuggingFace.
 
 We fine-tuned the published DSpark speculator
 [`MeganEFlynn/Qwen3-4B-speculator-tulu3-b16.dspark`](https://huggingface.co/MeganEFlynn/Qwen3-4B-speculator-tulu3-b16.dspark)
 (trained on the tulu3 subset of `Qwen3-8B-Regenerated-Collection`) on a newly
 regenerated code-heavy dataset — 114k instruction/response pairs from
-`nvidia/OpenCodeInstruct` regenerated with `Qwen/Qwen3-8B` — for 1 epoch,
-ablating the fine-tuning learning rate over {3e-4, 1.5e-4, 7.5e-5, 3e-5}
-(Muon LR scaled proportionally at 5x). HumanEval acceptance length shows a
-clean monotonic trend: 5.11 at lr 3e-4 (below the 5.41 tulu3 baseline),
-recovering through 5.35 at 1.5e-4, and **beating the baseline at 7.5e-5
-(5.53) and 3e-5 (5.60, +3.7%)**. Fine-tuning on code data helps, but only
-at learning rates well below the from-scratch recipe value (6e-4); the
-best value tested was 20x smaller.
+`nvidia/OpenCodeInstruct` regenerated with `Qwen/Qwen3-8B` — ablating the
+fine-tuning learning rate over {3e-4 … 7.5e-6} (Muon LR scaled
+proportionally at 5x) at 1 epoch, then running 3-epoch training at the
+best LRs. The 1-epoch LR curve is unimodal, peaking at 3e-5 (5.60 vs the
+5.41 tulu3 baseline on HumanEval acceptance length); below 3e-5 it
+regresses. **The overall winner is 3 epochs at lr 7.5e-5: 5.646, +4.4%
+over baseline** — a slightly-too-high LR compensated by more training
+steps beat the 1-epoch optimum. Fine-tuning on code data helps, but only
+at learning rates ~8x below the from-scratch recipe value (6e-4).
 
 ## Setup
 
@@ -173,32 +175,47 @@ evaluation only).
   subsets, more than 1 epoch, non-proportional Muon/AdamW LR ratios, and
   data-mixture effects (e.g., blending tulu3 + OpenCodeInstruct).
 
-## Phase 2: extended sweep and 3-epoch runs (in progress)
+## Phase 2: extended sweep and 3-epoch runs
 
 The monotonic trend below 3e-5 and the single-epoch budget motivated a
 second round: an extended 1-epoch sweep (lr 1.5e-5 and 7.5e-6, i.e. 1/40th
 and 1/80th of the from-scratch recipe) and 3-epoch runs at the three best
 LRs (3e-5, 7.5e-5, 1.5e-5) with per-epoch checkpoints.
 
-**Status (Oct 31):** the extended sweep completed — HumanEval acceptance
-length **5.527 at lr 1.5e-5** and **5.505 at lr 7.5e-6**, both below the
-5.604 of lr 3e-5. The LR curve is unimodal with a peak at **3e-5**;
-in-domain val accept_len agrees (6.957 at 3e-5 vs 6.796 / 6.689 below
-it). The first attempt at the 3-epoch runs crashed with CUDA OOM at
-startup (it raced the phase-2a trainer's teardown), and a relaunch
-stalled overnight because the wait loop's own `grep` matched its own
-command line; both issues are fixed and the 3-epoch arms (3e-5, 7.5e-5,
-1.5e-5) are training as of Oct 31 ~07:10 UTC, ETA ~30h.
-
 | Configuration | Acceptance length, recommended sampling (0.6/0.95/20) |
 |---------------|------------------------------------------------------:|
-| @ lr 1.5e-5, 1 epoch | 5.527 |
-| @ lr 7.5e-6, 1 epoch | 5.505 |
-| @ lr 3e-5, 3 epochs | ⏳ |
-| @ lr 7.5e-5, 3 epochs | ⏳ |
-| @ lr 1.5e-5, 3 epochs | ⏳ |
+| @ lr 1.5e-5, 1 epoch | 5.540 |
+| @ lr 7.5e-6, 1 epoch | 5.469 |
+| @ lr 3e-5, 3 epochs | 5.609 |
+| **@ lr 7.5e-5, 3 epochs** | **5.646 (best overall, +4.4% over baseline)** |
+| @ lr 1.5e-5, 3 epochs | 5.544 |
 
-The best final model will be published to
-`MeganEFlynn/Qwen3-4B-speculator-opencodeinstruct-b16.dspark`, with all
-final-state checkpoints in the companion
-`...-lrcollection` repo.
+**Findings:**
+
+- The 1-epoch LR curve is unimodal with a peak at **3e-5** (5.604): both
+  lower LRs regress (5.540 / 5.469), and in-domain val accept_len agrees
+  (6.957 at 3e-5 vs 6.796 / 6.689 below it).
+- **3 epochs at 7.5e-5 is the overall winner (5.646, +4.4% over the
+  5.406 tulu3 baseline).** Extra epochs helped most where the 1-epoch LR
+  was slightly too high: +0.112 at 7.5e-5, +0.005 (flat) at 3e-5, and
+  +0.004 at 1.5e-5. The 1-epoch optimum (3e-5) appears converged after
+  one epoch, while 7.5e-5 needed more steps — consistent with a
+  LR/steps tradeoff where the product matters, not either alone.
+- In-domain val accept_len for the 3-epoch arms ranked the winner
+  correctly this time (7.269 at 7.5e-5 vs 7.115 / 6.893 at 3e-5 /
+  1.5e-5), in contrast to phase 1's nearly flat val response; overall,
+  in-domain validation has been an unreliable proxy for benchmark
+  acceptance across the study.
+
+**Published models:**
+
+- Best overall (lr 7.5e-5, 3 epochs, HumanEval accept_len 5.646):
+  [`MeganEFlynn/Qwen3-4B-speculator-opencodeinstruct-b16.dspark`](https://huggingface.co/MeganEFlynn/Qwen3-4B-speculator-opencodeinstruct-b16.dspark)
+- All nine final-state checkpoints (1-epoch and 3-epoch arms), one
+  subfolder per LR/epoch configuration:
+  [`MeganEFlynn/Qwen3-4B-speculator-opencodeinstruct-b16.dspark-lrcollection`](https://huggingface.co/MeganEFlynn/Qwen3-4B-speculator-opencodeinstruct-b16.dspark-lrcollection)
+
+Ops notes for phase 2: the first 3-epoch attempt OOM'd at startup by
+racing the previous trainer's GPU teardown (fixed with a settle wait),
+and a relaunch stalled overnight because the wait loop's `grep` matched
+its own command line in `ps` output (fixed with a bracket-class pattern).
