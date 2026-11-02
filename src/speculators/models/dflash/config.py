@@ -68,6 +68,11 @@ class DFlashSpeculatorConfig(SpeculatorModelConfig):
         "Overridden by transformer_layer_config.is_causal when set.",
     )
 
+    block_causal_attention: bool = Field(
+        default=False,
+        description="Use causal attention within every synthetic draft block.",
+    )
+
     sample_from_anchor: bool = Field(
         default=False,
         description=(

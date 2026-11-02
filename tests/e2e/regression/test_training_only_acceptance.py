@@ -204,6 +204,56 @@ def test_dspark_qwen3_8b_sharegpt(tmp_path: Path, prompts: list[list[dict[str, s
 
 @requires_cadence("nightly")
 @pytest.mark.regression
+def test_dspine_qwen3_8b_sharegpt(tmp_path: Path, prompts: list[list[dict[str, str]]]):
+    save_path = tmp_path / "checkpoints"
+    with _resolve_repo(
+        "inference-optimization/Qwen3-8b-sharegpt-5k"
+    ) as hidden_states_dir:
+        epochs = 5
+        run_training(
+            model="Qwen/Qwen3-8B",
+            speculator_type="dspine",
+            data_path=hidden_states_dir,
+            save_path=save_path,
+            seq_length=8192,
+            epochs=epochs,
+            lr=3e-4,
+            draft_vocab_size=None,  # DSpine requires the full verifier vocabulary.
+            num_layers=3,
+            online=False,
+            log_freq=50,
+            timeout=45 * 60,
+            extra_train_args=[
+                "--block-size",
+                "8",
+                "--max-anchors",
+                "512",  # Bound full-vocabulary loss memory, unlike reduced-vocab tests.
+                "--transition-top-k",
+                "16",
+                "--transfer-dim",
+                "1024",
+                "--message-dim",
+                "512",
+                "--curriculum-layers",
+                "3",
+                "--dflash-decay-gamma",
+                "7",
+                "--known-anchor-injection",
+                "--no-sample-from-anchor",
+            ],
+        )
+    final_checkpoint = str(save_path / str(epochs - 1))
+    run_vllm_engine(
+        model_path=final_checkpoint,
+        tmp_path=tmp_path,
+        max_tokens=512,
+        ignore_eos=True,
+        prompts=prompts,
+    )
+
+
+@requires_cadence("nightly")
+@pytest.mark.regression
 def test_peagle_qwen3_8b_sharegpt(tmp_path: Path, prompts: list[list[dict[str, str]]]):
     save_path = tmp_path / "checkpoints"
     with _resolve_repo(
