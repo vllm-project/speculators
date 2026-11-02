@@ -1,5 +1,5 @@
 ---
-title: "DSpark data ablation on Qwen3-4B: tulu3-only vs an 8-file blend vs the full 13-file mix tie at matched compute"
+title: "DSpark data ablation on Qwen3-4B: the two subset runs tie at matched compute; the full mix leads by ~1.7%"
 tags:
   - DSpark
   - Qwen3
@@ -12,7 +12,7 @@ tags:
 **[@MeganEFlynn](https://github.com/MeganEFlynn)** posted on **2026-11-02**
 </div>
 
-# DSpark data ablation on Qwen3-4B: tulu3-only vs an 8-file blend vs the full 13-file mix tie at matched compute
+# DSpark data ablation on Qwen3-4B: the two subset runs tie at matched compute; the full mix leads by ~1.7%
 
 ## Summary
 
@@ -30,7 +30,7 @@ We trained three DSpark speculators for `Qwen/Qwen3-4B` on different slices of t
   - The tulu3 and perfect-blend runs share an identical recipe: Muon (Muon LR 3e-3, LR 6e-4), cosine schedule with 4% warmup, loss `0.1·CE + 0.9·TV` (fused), fixed exponential position decay gamma 7.0, seed 42, seq len 8,192, max anchors 1,024, 6 ranks (FSDP), speculators `1c800f2` (0.10.0a0), vLLM 0.31.0
 - Evaluation: speculator_benchmarks acceptance eval, 9 subsets (HumanEval, math_reasoning, qa, question, rag, summarization, tool_call, translation, writing), max generation length 128, up to ~200-400 requests per category, ~26k draft iterations per run; temperature 0 and Qwen3-4B default sampling (0.6 / 0.95 / 20)
 - Serving: vLLM 0.31.0, one server, `--spec-tokens 16 --spec-method dspark`, `scripts/launch_vllm.py eval`
-- Software: speculators `1c800f2b053bcd538fc11bf49ec843d4dfa81a95`, transformers 5.17.0, torch 2.13.0+cu130
+- Software (tulu3-only and perfect-blend runs): speculators `1c800f2b053bcd538fc11bf49ec843d4dfa81a95`, transformers 5.17.0, torch 2.13.0+cu130
 - Hardware: 8×A100-80GB per run (render/extraction server on GPUs 0-1 DP-2, training on GPUs 2-7); ~2.5 days wall per run
 
 Published checkpoints:
@@ -71,13 +71,11 @@ Acceptance length = `1 + total accepted speculative tokens / total draft iterati
 | Perfect blend, ~2.7 epochs (252,775 steps) |            4.487 | **5.691** | **7.323** |     3.475 |     4.197 |     4.509 | 3.646 |     4.061 |   4.737 |   4.331 |
 | Tulu3 only, 4 epochs (259,361 steps)       |            4.501 |     5.406 |     7.004 | **3.509** | **4.200** | **4.374** | 3.574 | **4.082** |   6.013 |   4.227 |
 
-An external reference point, `shanjiaz/Qwen3-4B-speculator-b16.dspark` (different recipe: AdamW, anchors 512, gamma 4.0, own data), scores 3.773 greedy / 3.718 default-sampling on the same harness — all three of our runs beat it by 21–25%.
-
 ## Observations
 
 - **Compute-matched subsets tie.** The tulu3-only and perfect-blend runs land within 0.001 acceptance length of each other at temperature 0 (4.611 vs 4.610) and within 0.3% at default sampling, despite completely different data: general instruction (tulu3) vs a math/code-heavy 8-file mix. At ~250k steps, which slices of this corpus you pick matters much less than training long enough.
-- **The full mixture still wins, but only by ~1.7%.** Cutting the corpus to 26–49% of its files and re-spending the same step budget on more epochs recovers most — not all — of the full-mix acceptance length.
+- **The full mixture still wins, but only by ~1.7%.** Cutting the corpus to 26–49% of the mixture (by token volume) and re-spending the same step budget on more epochs recovers most — not all — of the full-mix acceptance length.
 - **Per-subset results do track the training data.** The perfect blend (with metamathqa + orca_math ≈ 595k rows and evol_codealpaca) is the best of the three on HumanEval at both temperatures (5.83 greedy) and on math under sampling (7.32); tulu3 leads on qa, question, rag, and translation. Domain-targeted data curation shows up per-domain but nets out in the aggregate.
 - **Training-data val metrics are misleading across mixtures.** The tulu3-only run's validation acceptance length (7.15 on its own tulu3 split) reads higher than the perfect blend's (7.10 on its blend split), yet their benchmark results tie — validation splits drawn from the training mixture are not comparable across runs.
-- **Recommended sampling costs ~1.5-2.4%** acceptance length vs greedy across all three runs (full mix −2.0%, tulu3 −2.4%, perfect blend −2.7%); code (HumanEval) is nearly flat, qa/rag drop most.
+- **Recommended sampling costs ~2.0-2.7%** acceptance length vs greedy across all three runs (full mix −2.0%, tulu3 −2.4%, perfect blend −2.7%); code (HumanEval) is nearly flat, qa/rag drop most.
 - Not tested: throughput/speedup at serving concurrency (acceptance length only), smaller step budgets (whether subset choice matters more at 50-100k steps), and the magpie/nemotron subsets (a fourth run was staged but paused).
