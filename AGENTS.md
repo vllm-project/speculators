@@ -8,6 +8,10 @@ Read [CONTRIBUTING.md](./CONTRIBUTING.md) before contributing. Install the git h
 pre-commit install
 ```
 
+Before opening or updating a PR, run `make quality` and fix any failures. Use `make style` to apply automatic fixes, review the resulting diff, and rerun `make quality` until it passes. If a pre-commit hook modifies files, review and stage those changes before retrying the commit.
+
+Sign off every commit, including quality-fix commits, with `git commit -s` so the DCO check passes. If your latest commit is missing its sign-off, add it with `git commit --amend --no-edit -s`.
+
 Fill in the PR template's **Purpose** and **Tests** sections (see [PULL_REQUEST_TEMPLATE.md](./.github/PULL_REQUEST_TEMPLATE.md)). A reviewer should get the point in under 30 seconds:
 
 - **Purpose**: 1–3 sentences or a few bullets on *why*, plus the issue link if available. Not a restatement of the diff.
