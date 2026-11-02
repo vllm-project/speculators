@@ -69,19 +69,19 @@ python scripts/evaluate/evaluate.py throughput \
 
 Acceptance length (includes verifier token; max 4). Target-only baseline rows are N/A: without a drafter there are no draft tokens to accept, and the `vllm:spec_decode_*` counters are absent from `/metrics`.
 
-| Configuration | Subset | Drafts | Accepted draft tokens | Acceptance length | Pos 0 | Pos 1 | Pos 2 |
-|---------------|--------|--------|-----------------------|-------------------|-------|-------|-------|
-| DSpark depth 3, T=1.0 / top-p 0.95 | HumanEval | 46,899 | 102,027 | 3.175 | 0.852 | 0.718 | 0.605 |
-| DSpark depth 3, T=1.0 / top-p 0.95 | math_reasoning | 10,560 | 24,217 | 3.293 | 0.878 | 0.759 | 0.655 |
-| DSpark depth 3, T=1.0 / top-p 0.95 | qa | 28,576 | 46,167 | 2.616 | 0.734 | 0.518 | 0.364 |
-| DSpark depth 3, T=1.0 / top-p 0.95 | question | 50,259 | 82,374 | 2.639 | 0.738 | 0.525 | 0.377 |
-| DSpark depth 3, T=1.0 / top-p 0.95 | rag | 26,719 | 53,194 | 2.991 | 0.820 | 0.657 | 0.515 |
-| DSpark depth 3, T=1.0 / top-p 0.95 | summarization | 21,293 | 38,988 | 2.831 | 0.790 | 0.600 | 0.441 |
-| DSpark depth 3, T=1.0 / top-p 0.95 | tool_call | 16,875 | 31,091 | 2.842 | 0.779 | 0.600 | 0.464 |
-| DSpark depth 3, T=1.0 / top-p 0.95 | translation | 28,448 | 57,723 | 3.029 | 0.828 | 0.667 | 0.534 |
-| DSpark depth 3, T=1.0 / top-p 0.95 | writing | 50,588 | 82,273 | 2.626 | 0.733 | 0.521 | 0.372 |
-| DSpark depth 3, greedy | HumanEval | 40,614 | 94,627 | 3.330 | 0.890 | 0.775 | 0.664 |
-| DSpark depth 3, greedy | math_reasoning | 9,601 | 23,851 | 3.484 | 0.917 | 0.828 | 0.740 |
+| Configuration                      | Subset         | Drafts | Accepted draft tokens | Acceptance length | Pos 0 | Pos 1 | Pos 2 |
+| ---------------------------------- | -------------- | ------ | --------------------- | ----------------- | ----- | ----- | ----- |
+| DSpark depth 3, T=1.0 / top-p 0.95 | HumanEval      | 46,899 | 102,027               | 3.175             | 0.852 | 0.718 | 0.605 |
+| DSpark depth 3, T=1.0 / top-p 0.95 | math_reasoning | 10,560 | 24,217                | 3.293             | 0.878 | 0.759 | 0.655 |
+| DSpark depth 3, T=1.0 / top-p 0.95 | qa             | 28,576 | 46,167                | 2.616             | 0.734 | 0.518 | 0.364 |
+| DSpark depth 3, T=1.0 / top-p 0.95 | question       | 50,259 | 82,374                | 2.639             | 0.738 | 0.525 | 0.377 |
+| DSpark depth 3, T=1.0 / top-p 0.95 | rag            | 26,719 | 53,194                | 2.991             | 0.820 | 0.657 | 0.515 |
+| DSpark depth 3, T=1.0 / top-p 0.95 | summarization  | 21,293 | 38,988                | 2.831             | 0.790 | 0.600 | 0.441 |
+| DSpark depth 3, T=1.0 / top-p 0.95 | tool_call      | 16,875 | 31,091                | 2.842             | 0.779 | 0.600 | 0.464 |
+| DSpark depth 3, T=1.0 / top-p 0.95 | translation    | 28,448 | 57,723                | 3.029             | 0.828 | 0.667 | 0.534 |
+| DSpark depth 3, T=1.0 / top-p 0.95 | writing        | 50,588 | 82,273                | 2.626             | 0.733 | 0.521 | 0.372 |
+| DSpark depth 3, greedy             | HumanEval      | 40,614 | 94,627                | 3.330             | 0.890 | 0.775 | 0.664 |
+| DSpark depth 3, greedy             | math_reasoning | 9,601  | 23,851                | 3.484             | 0.917 | 0.828 | 0.740 |
 
 | Target only (no drafter) | — | N/A | N/A | N/A | N/A | N/A | N/A |
 
@@ -94,13 +94,13 @@ Speculator-disabled reference (same flags minus `--speculative-config`, `--max-n
 `throughput_interactivity.py collect` on HumanEval (`max_tokens=1024`, temperature 1.0 / top-p 0.95, 100 s per point after 30 s warmup, streams 1–32). Both configs ran sequentially on the same four GPUs with identical server flags except `--speculative-config` (sweep config: `--max-num-seqs 32`, prefix caching off, `--max-num-batched-tokens 8192` — differs from the acceptance config above).
 
 | Streams | Baseline tok/s | DSpark tok/s | Aggregate speedup | Baseline 1/ITL (tok/s/user) | DSpark 1/ITL (tok/s/user) | Per-user speedup |
-|---------|---------------|--------------|-------------------|------------------------------|---------------------------|------------------|
-| 1 | 111.2 | 253.7 | 2.28× | 117.4 | 284.9 | 2.43× |
-| 2 | 205.4 | 457.6 | 2.23× | 107.8 | 252.6 | 2.34× |
-| 4 | 349.7 | 721.2 | 2.06× | 92.0 | 195.4 | 2.12× |
-| 8 | 573.3 | 1,089.2 | 1.90× | 75.4 | 145.8 | 1.93× |
-| 16 | 853.1 | 1,647.9 | 1.93× | 56.6 | 110.7 | 1.96× |
-| 32 | 1,222.2 | 2,356.6 | 1.93× | 41.1 | 82.4 | 2.00× |
+| ------- | -------------- | ------------ | ----------------- | --------------------------- | ------------------------- | ---------------- |
+| 1       | 111.2          | 253.7        | 2.28×             | 117.4                       | 284.9                     | 2.43×            |
+| 2       | 205.4          | 457.6        | 2.23×             | 107.8                       | 252.6                     | 2.34×            |
+| 4       | 349.7          | 721.2        | 2.06×             | 92.0                        | 195.4                     | 2.12×            |
+| 8       | 573.3          | 1,089.2      | 1.90×             | 75.4                        | 145.8                     | 1.93×            |
+| 16      | 853.1          | 1,647.9      | 1.93×             | 56.6                        | 110.7                     | 1.96×            |
+| 32      | 1,222.2        | 2,356.6      | 1.93×             | 41.1                        | 82.4                      | 2.00×            |
 
 Mean inter-token latency drops from 8.51 → 3.51 ms at one stream and 24.33 → 12.14 ms at 32 streams. Neither config queues (`mean_waiting_requests` ≈ 0 at every level). Acceptance length measured during the sweep was 3.12–3.18, consistent with the acceptance table (HumanEval 3.175).
 
