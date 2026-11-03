@@ -1,7 +1,9 @@
 # LiLiCorr Speculator for Qwen3-4B on Regenerated PerfectBlend (Full Pool, 1 Epoch)
 
 **Date started:** 2026-11-02 21:08
-**Status:** IN PROGRESS — ~38% complete as of 2026-11-03 15:23 (step 85,082 / 225,504)
+**Status:** STOPPED at 38% (step 85,082 / 225,504) — externally SIGTERM'd on
+2026-11-03 14:48; last durable checkpoint is the quarter epoch (step 56,376).
+Run halted per operator decision; see "Interruption" below.
 **Code:** `speculators` @ `74ffda8` (branch `lilicorr-qwen38-fresh-2ep-argmax`), trainer `0.9.0a72`, vLLM `0.32.0` (lilicorr fork)
 **Verifier:** `Qwen/Qwen3-4B`
 
@@ -54,22 +56,27 @@ and has already passed the 100k run's final train EAL (5.29). Caveat: the
 100k sample was uniform over the same pool, so the full run is seeing the
 same distribution — the gap is fresh-data diversity plus a longer LR schedule.
 
-## Checkpoints & ETA
+## Interruption (2026-11-03 14:48)
 
-- Saved: `epoch0_step56376` (quarter epoch). Next: half epoch at step
-  112,752 (~2026-11-03 21:15), then 169,128, then final.
-- Projected finish: **~2026-11-04 21:00** (0.76 s/step × 225,504 steps),
-  ~24 h inside the reservation expiry.
+- The trainer received an external SIGTERM ("Received 15 death signal") at
+  step 85,082; the 4B extraction server died in the same event. No OOM, NCCL
+  fault, or storage issue preceded it — tmpfs was at 53% with 360G free.
+- The graceful-shutdown checkpoint attempt timed out, so the last durable
+  checkpoint remains `epoch0_step56376` (25%; the `0/` dir mirrors it).
+  ~28.7k steps (~6 h) of progress past it were lost.
+- The GPU reservation was subsequently released; the run was stopped per
+  operator decision and has not been relaunched.
 
-## Next Steps
+### Resuming later
 
-1. Optionally probe served acceptance at the half-epoch checkpoint
-   (mirroring the 100k eval: 8-GPU DP8 serve, 15 spec tokens,
-   `evaluate.py throughput`).
-2. On completion: final-window train metrics + full served acceptance table
-   (HumanEval temp-1/greedy + 9-subset bench), appended here.
-3. Compare against the 100k arm (HumanEval AL 4.29 temp-1 / 4.74 greedy) to
-   quantify the full-data gain.
+Everything needed is durable under `/tmp/lilicorr_check/qwen3-4b-regen/`
+(`datafull/`, hidden-state cache, checkpoints). To resume from step 56,376:
+relaunch the extraction server (GPU 2, port 8001 — command in
+`vllm_command.txt`), then rerun `run_full.sh` with
+`no_resume_from_checkpoint: false` (the current `full.yaml` sets it `true`).
+Consider launching under `tmux`/`setsid` so an external process-group signal
+cannot take the run down with it. Remaining cost from the checkpoint:
+~169k steps ≈ 36 h at the observed 0.76 s/step.
 
 ## Artifacts
 
