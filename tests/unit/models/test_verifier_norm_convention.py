@@ -16,14 +16,19 @@ from typing import cast
 
 import pytest
 import torch
+from transformers import LlamaConfig
 from transformers.models.gemma3.modeling_gemma3 import Gemma3RMSNorm
 from transformers.models.qwen3.modeling_qwen3 import Qwen3RMSNorm
 
+from speculators import SpeculatorsConfig, VerifierConfig
 from speculators.models.dflash.core import DFlashDraftModel, DFlashSpeculatorConfig
+from speculators.models.eagle3 import Eagle3DraftModel, Eagle3SpeculatorConfig
+from speculators.models.peagle import PEagleDraftModel, PEagleSpeculatorConfig
 from speculators.models.utils import (
     resolve_verifier_norm_class,
     uses_gemma_style_final_norm,
 )
+from speculators.proposals import GreedyTokenProposalConfig
 
 from .test_checkpoint_key_ownership import (
     _fake_verifier,
@@ -148,3 +153,53 @@ def test_gemma3_rmsnorm_matches_folded_qwen3_rmsnorm():
     qwen_folded = Qwen3RMSNorm(16, eps=1e-6)
     qwen_folded.weight.data = w + 1.0
     torch.testing.assert_close(gemma(x), qwen_folded(x), rtol=1e-5, atol=1e-5)
+
+
+@pytest.mark.parametrize(
+    ("model_cls", "config_cls"),
+    [
+        (Eagle3DraftModel, Eagle3SpeculatorConfig),
+        (PEagleDraftModel, PEagleSpeculatorConfig),
+    ],
+    ids=["eagle3", "peagle"],
+)
+@pytest.mark.parametrize(
+    ("model_type", "expected_cls"),
+    [
+        ("qwen3_5", Gemma3RMSNorm),
+        ("gemma3_text", Gemma3RMSNorm),
+        ("llama", Qwen3RMSNorm),
+    ],
+    ids=["qwen3_5", "gemma3", "llama"],
+)
+def test_eagle3_family_resolves_verifier_norm_class(
+    tmp_path,
+    model_cls: type[Eagle3DraftModel],
+    config_cls: type[Eagle3SpeculatorConfig],
+    model_type: str,
+    expected_cls: type,
+):
+    """Eagle3 and P-EAGLE rebuild their targets with verifier_norm too, so
+    they must pick the same class as DFlash for the same verifier."""
+    verifier_dir = tmp_path / model_type
+    verifier_dir.mkdir()
+    (verifier_dir / "config.json").write_text(json.dumps({"model_type": model_type}))
+    config = config_cls(
+        transformer_layer_config=LlamaConfig(
+            vocab_size=64,
+            hidden_size=16,
+            intermediate_size=32,
+            num_hidden_layers=1,
+            num_attention_heads=2,
+            num_key_value_heads=1,
+        ),
+        draft_vocab_size=64,
+        speculators_config=SpeculatorsConfig(
+            algorithm=config_cls.model_fields["speculators_model_type"].default,
+            proposal_methods=[GreedyTokenProposalConfig(speculative_tokens=3)],
+            default_proposal_method="greedy",
+            verifier=VerifierConfig(name_or_path=str(verifier_dir), architectures=[]),
+        ),
+    )
+    model = model_cls(config)
+    assert type(model.verifier_norm) is expected_cls

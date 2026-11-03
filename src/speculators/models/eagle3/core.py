@@ -21,6 +21,7 @@ from speculators.models.utils import (
     conditional_torch_compile,
     flatten_rope_parameters,
     resolve_target_layer_ids,
+    resolve_verifier_norm_class,
 )
 from speculators.proposals.greedy import GreedyTokenProposalConfig
 
@@ -116,7 +117,9 @@ class Eagle3DraftModel(DraftVocabMixin, SpeculatorModel):
         self.norm = norm_class(
             self.hidden_size, eps=config.transformer_layer_config.rms_norm_eps
         )
-        self.verifier_norm = norm_class(self.hidden_size, eps=tl_config.rms_norm_eps)
+        self.verifier_norm = resolve_verifier_norm_class(config)(
+            self.hidden_size, eps=tl_config.rms_norm_eps
+        )
         self.verifier_norm.weight.requires_grad = False
 
         if config.norm_before_fc:
