@@ -138,6 +138,28 @@ class TestEagle3ConverterFixes:
         assert llama_config.num_hidden_layers == 1
 
     @pytest.mark.sanity
+    @pytest.mark.parametrize("dtype_key", ["torch_dtype", "dtype"])
+    @patch(
+        "speculators.convert.eagle.eagle3_converter.PretrainedConfig.get_config_dict"
+    )
+    def test_config_dtype_from_either_key(
+        self, mock_get_config, dtype_key, sample_eagle3_config
+    ):
+        """Checkpoints saved by newer transformers write ``dtype``, older ones
+        ``torch_dtype``; both must set the dtype the weights are saved in."""
+        mock_get_config.return_value = ({}, None)
+        sample_eagle3_config[dtype_key] = "bfloat16"
+
+        llama_config = Eagle3Converter()._create_transformer_config_from_eagle(
+            sample_eagle3_config, "meta-llama/Llama-3.1-8B-Instruct"
+        )
+        # The dtype _save_converted_checkpoint casts the weights to.
+        saved_dtype = getattr(llama_config, "dtype", None) or getattr(
+            llama_config, "torch_dtype", None
+        )
+        assert saved_dtype == torch.bfloat16
+
+    @pytest.mark.sanity
     @patch(
         "speculators.convert.eagle.eagle3_converter.PretrainedConfig.get_config_dict"
     )
