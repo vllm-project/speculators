@@ -216,7 +216,7 @@ steps:
         matrix:
           setup:
             python: ["3.11"]
-            transformers: ["latest"]
+            transformers: ["main"]
             vllm: ["latest"]
           adjustments:
             - with:
