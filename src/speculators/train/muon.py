@@ -2,14 +2,13 @@
 
 ``A = X @ X.T`` and ``B = b * A + c * A @ A`` are symmetric, so only the upper
 block-triangle is computed and mirrored. Matrices too small or unaligned for the
-split, and DTensors, take ``torch.optim._muon``'s reference path.
+split, DTensors, and CUDA builds without Triton take ``torch.optim._muon``'s
+reference path.
 """
 
 # ruff: noqa: N803
 
 import torch
-import triton
-import triton.language as tl
 from torch import Tensor
 from torch.distributed.tensor import DTensor
 from torch.optim._muon import (
@@ -19,6 +18,19 @@ from torch.optim._muon import (
 )
 
 __all__ = ["Muon", "zeropower_via_newtonschulz"]
+
+# Triton is optional (``losses/utils.py`` guards the fused losses the same way),
+# but ``optimizers.py`` imports ``Muon`` at module scope for every optimizer
+# choice -- importing Triton here would make an AdamW-only run fail at import on
+# a build without it. CUDA without Triton takes the reference path; see
+# ``_mirror_lower_blocks``.
+try:
+    import triton
+    import triton.language as tl
+
+    HAS_TRITON = True
+except ImportError:  # pragma: no cover -- only on a build without Triton
+    HAS_TRITON = False
 
 # Row blocks per Gram product. Four is the measured optimum on H100 for a
 # [4096, 12288] update; eight loses to the narrower trailing GEMMs.
@@ -34,21 +46,33 @@ _MAX_NS_STEPS = 100
 _NS_COEFFICIENT_COUNT = 3
 
 
-@triton.jit
-def _mirror_lower_blocks_kernel(A, stride, block_rows, TILE: tl.constexpr):
-    """Mirror the upper off-diagonal blocks into the lower half."""
-    ti = tl.program_id(0)
-    tj = tl.program_id(1)
-    # Diagonal blocks were computed whole; leave them.
-    if (ti * TILE) // block_rows <= (tj * TILE) // block_rows:
-        return
-    rows = ti * TILE + tl.arange(0, TILE)
-    cols = tj * TILE + tl.arange(0, TILE)
-    upper = tl.load(A + cols[None, :] * stride + rows[:, None])
-    tl.store(A + rows[:, None] * stride + cols[None, :], upper)
+if HAS_TRITON:
+
+    @triton.jit
+    def _mirror_lower_blocks_kernel(A, stride, block_rows, TILE: tl.constexpr):
+        """Mirror the upper off-diagonal blocks into the lower half."""
+        ti = tl.program_id(0)
+        tj = tl.program_id(1)
+        # Diagonal blocks were computed whole; leave them.
+        if (ti * TILE) // block_rows <= (tj * TILE) // block_rows:
+            return
+        rows = ti * TILE + tl.arange(0, TILE)
+        cols = tj * TILE + tl.arange(0, TILE)
+        upper = tl.load(A + cols[None, :] * stride + rows[:, None])
+        tl.store(A + rows[:, None] * stride + cols[None, :], upper)
 
 
 def _mirror_lower_blocks(out: Tensor, block_rows: int) -> None:
+    """Copy the upper off-diagonal blocks into the lower half, in place.
+
+    The kernel does this in one launch at 1.8 TB/s on H100 at 4096 rows and
+    2.4-2.6 from 8192 on, against a flat ~0.5 TB/s for the block-copy loop
+    below -- 3x at 2048 rows rising to 5x from 8192 on. The loop is the CPU
+    path. It is also correct on CUDA, but the crossover in
+    :func:`_use_symmetric` was measured against the kernel and does not survive
+    the swap (4096 square: 2.94 ms dense, 2.64 ms split, 3.21 ms split with the
+    loop), so a Triton-less CUDA build takes the reference path, not this one.
+    """
     size = out.size(0)
     if out.is_cuda:
         grid = (size // _MIRROR_TILE, size // _MIRROR_TILE)
@@ -100,10 +124,16 @@ def zeropower_via_newtonschulz(
 ) -> Tensor:
     """``torch.optim._muon._zeropower_via_newtonschulz`` with symmetric Gram GEMMs.
 
-    Falls back to the reference implementation for DTensors and for matrices
-    whose short side is too small (or not tile-aligned) for the split to pay.
+    Falls back to the reference implementation for DTensors, for matrices whose
+    short side is too small (or not tile-aligned) for the split to pay, and on
+    CUDA without Triton, where the mirror the crossover was measured against is
+    unavailable.
     """
-    if isinstance(grad, DTensor) or not _use_symmetric(min(grad.shape)):
+    if (
+        isinstance(grad, DTensor)
+        or (grad.is_cuda and not HAS_TRITON)
+        or not _use_symmetric(min(grad.shape))
+    ):
         return _zeropower_via_newtonschulz(grad, ns_coefficients, ns_steps, eps)
     if ns_steps >= _MAX_NS_STEPS:
         raise ValueError(
