@@ -60,14 +60,6 @@ def find_corrupt_hidden_state_indices(
 
     Returns a mapping of file index to the reason that file is unreadable.
 
-    A file can be present and still be unusable. When the directory vLLM stages
-    hidden states in and ``output_path`` are on different filesystems, the
-    ``shutil.move`` in ``generate_offline_data`` hits ``EXDEV`` and falls back to
-    a non-atomic byte copy, so a run interrupted mid-copy leaves a truncated
-    file at its final name. :func:`get_existing_hidden_state_indices` only
-    inspects filenames and reports such a file as done, so every later run skips
-    it and training fails when it reads it.
-
     ``safe_open`` performs safetensors' own header validation in its constructor
     -- header length, header JSON, offset contiguity, dtype/shape/offset
     consistency, and exact buffer coverage -- without reading any tensor data, so

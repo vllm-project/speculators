@@ -40,7 +40,7 @@ Trained models are saved in a special speculators format that vLLM can load dire
 
 ## Model Conversion
 
-Speculators can convert pre-trained models from third-party repositories (EAGLE v1/v2/v3, HASS) into Speculators format for direct deployment with vLLM.
+Speculators can convert pre-trained models from third-party repositories (EAGLE v1/v2/v3, HASS) into Speculators format for direct deployment with vLLM. The EAGLE-3 and DFlash converters accept single-file or indexed sharded checkpoints in safetensors and PyTorch `.bin` formats.
 
 ______________________________________________________________________
 

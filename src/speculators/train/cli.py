@@ -110,6 +110,29 @@ def _maybe_apply_mrope_full_head_hack(
         )
 
 
+# Verifier config attribute names for the final-norm epsilon, in lookup order.
+# NemotronH and Falcon use ``layer_norm_epsilon``; Nemotron and LFM2 ``norm_eps``;
+# Cohere, Phi, StableLM and GPT-NeoX ``layer_norm_eps``; Starcoder2 ``norm_epsilon``.
+_NORM_EPS_ATTRS = (
+    "rms_norm_eps",
+    "layer_norm_epsilon",
+    "norm_eps",
+    "layer_norm_eps",
+    "norm_epsilon",
+)
+
+
+def _resolve_norm_eps(verifier_config: PretrainedConfig) -> float:
+    for attr in _NORM_EPS_ATTRS:
+        eps = getattr(verifier_config, attr, None)
+        if eps is not None:
+            return float(eps)
+    raise AttributeError(
+        f"{type(verifier_config).__name__} has none of {list(_NORM_EPS_ATTRS)}; "
+        "pass --draft-config to set the draft rms_norm_eps explicitly."
+    )
+
+
 def create_transformer_layer_config(  # noqa: C901
     verifier_name_or_path: str,
     num_layers: int,
@@ -223,7 +246,7 @@ def create_transformer_layer_config(  # noqa: C901
         hidden_act=hidden_act,
         max_position_embeddings=verifier_config.max_position_embeddings,
         initializer_range=verifier_config.initializer_range,
-        rms_norm_eps=verifier_config.rms_norm_eps,
+        rms_norm_eps=_resolve_norm_eps(verifier_config),
         head_dim=head_dim,
         tie_word_embeddings=False,
         sliding_window=sliding_window,
@@ -731,6 +754,7 @@ def main(cfg: TrainConfig):  # noqa: C901
         num_target_layers=num_target_layers,
         num_workers=args.num_workers,
         prefetch_factor=args.prefetch_factor,
+        max_transfer_workers=args.max_transfer_workers,
         preprocess=preprocess,
         train_data_ratio=args.train_data_ratio,
         seed=args.seed,

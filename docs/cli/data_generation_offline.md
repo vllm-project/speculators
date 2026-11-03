@@ -41,7 +41,7 @@ speculators generate-offline-data \
 
 - **`--concurrency`** (int, default: `32`) Number of active vLLM requests at a time. The number of async workers is set to `2 * concurrency`.
 
-- **`--validate-outputs`** (flag) Load generated safetensor files and verify that output token IDs match prompt tokens and hidden states sequence length matches the number of tokens.
+- **`--validate-outputs`** (flag) Load generated safetensor files and verify that output token IDs match prompt tokens and hidden states sequence length matches the number of tokens. A sample that fails is not saved, so the next run regenerates it.
 
 - **`--request-timeout`** (float) Timeout in seconds for each individual vLLM request.
 
