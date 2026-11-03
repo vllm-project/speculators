@@ -289,8 +289,16 @@ def _time_tile(launch, block, warps):
 
 @requires_cuda
 @pytest.mark.slow
-def test_autotuner_never_picks_a_spilling_tile():
+@pytest.mark.parametrize(
+    "term_names",
+    [("kl_div",), ("kl_div", "rkl", "jsd", "ce", "tv")],
+    ids=["kl_div", "all_terms"],
+)
+def test_autotuner_never_picks_a_spilling_tile(term_names):
     """Tune over the *unbounded* space and show a spilling tile never wins.
+
+    Checked for one KL term and for every term at once, where the backward
+    keeps the most fp32 vectors live.
 
     ``_tile_configs()`` prunes the search to the register-resident region up
     front, which is only sound if nothing worth having lives outside it. So
@@ -311,34 +319,38 @@ def test_autotuner_never_picks_a_spilling_tile():
         for config in fused_losses._tile_configs()
         if config.kwargs["BLOCK_SIZE"] <= cap
     }
+    # 32 warps is 1024 threads on NVIDIA but 2048 on AMD's 64-wide
+    # wavefronts, past the 1024-thread program limit.
+    warp_size = 64 if getattr(torch.version, "hip", None) is not None else 32
     widened = sorted(
         offered
         | {
             (block, warps)
             for block in _SPILLING_BLOCK_SIZES
             for warps in (4, 8, 16, 32)
-            if block <= cap
+            if block <= cap and warps * warp_size <= 1024
         }
     )
 
     rows, vocab = _SWEEP_ROWS, _SWEEP_VOCAB
     logits = torch.randn(rows, vocab, device="cuda", dtype=torch.bfloat16)
     targets = torch.randn(rows, vocab, device="cuda", dtype=torch.bfloat16)
-    loss = torch.empty(rows, device="cuda", dtype=torch.float32)
+    loss = torch.empty(fused_losses._N_TERMS, rows, device="cuda", dtype=torch.float32)
     stats = torch.empty(fused_losses._N_STATS, rows, device="cuda", dtype=torch.float32)
     grad_in = torch.empty_like(logits)
-    grad_out = torch.ones(rows, device="cuda", dtype=torch.float32)
-    op = fused_losses._OP_KL.value
+    grad_out = torch.ones_like(loss)
+    terms = sum(fused_losses._BITS[name] for name in term_names)
 
     def run_forward(block, warps):
         return fused_losses.loss_forward_kernel.fn[(rows,)](
             logits,
             targets,
             loss,
+            loss.stride(0),
             stats,
             stats.stride(0),
             vocab,
-            OP=op,
+            TERMS=terms,
             BLOCK_SIZE=block,
             num_warps=warps,
         )
@@ -349,10 +361,11 @@ def test_autotuner_never_picks_a_spilling_tile():
             targets,
             grad_in,
             grad_out,
+            grad_out.stride(0),
             stats,
             stats.stride(0),
             vocab,
-            OP=op,
+            TERMS=terms,
             BLOCK_SIZE=block,
             num_warps=warps,
         )

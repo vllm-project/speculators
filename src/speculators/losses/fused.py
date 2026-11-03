@@ -1,12 +1,15 @@
 """Fused Triton kernels for the dense draft/target logit losses.
 
-One kernel pair serves every fused loss configured in ``losses.utils``: forward
-streams the selected reduction from online-softmax statistics; backward
-recomputes probabilities from five saved scalars per row and applies the
-closed-form gradient. No ``[T, V]`` intermediate is ever materialized or
-saved -- the memory win over the eager losses. ``OP`` picks the reduction at
-Triton specialization time; ``nla`` and ``lk_hybrid`` are ``[1, T]`` torch
-compositions of the primitives instead of kernel branches.
+One kernel pair serves every fused loss configured in ``losses.utils``, and
+every combination of them. Forward computes the draft and target
+online-softmax statistics once per row and then streams all requested terms in
+a single pass; backward recomputes probabilities from the saved per-row
+scalars and writes one gradient, the per-row ``grad_output``-weighted sum of
+each term's closed form. No ``[T, V]`` intermediate is materialized or saved
+-- the memory win over the eager losses -- and a multi-term loss allocates one
+``grad_in`` instead of one per term. ``TERMS`` is a bitmask of primitive terms
+baked in at Triton specialization time; ``nla`` and ``lk_hybrid`` are
+``[1, T]`` torch compositions of the primitives.
 
 Per-row gradients (dp = softmax(logits), draft; tp = softmax(targets),
 treated as constant), L the row loss:
@@ -26,6 +29,8 @@ lineage); TV gradient sign convention matches Liger ops/tvd.py.
 # that convention.
 # ruff: noqa: N803, N806
 
+from collections.abc import Sequence
+
 import torch
 import triton
 import triton.language as tl
@@ -34,16 +39,17 @@ from speculators.utils.util import is_npu_available
 
 # Ascend NPU's Unified Buffer (~192 KB) cannot fit the double-row load these
 # kernels perform (logits + targets per block) beyond 4096 elements per block;
-# triton-ascend raises "ub overflow" at BLOCK_SIZE >= 8192. CE is single-row
-# but shares the same cap so all _FusedLoss OPs use one path.
+# triton-ascend raises "ub overflow" at BLOCK_SIZE >= 8192. CE-only launches
+# share the same cap so every term set uses one path.
 MAX_FUSED_SIZE_NPU = 4096
 
-# Search space for the row-per-program tile, autotuned per (vocab, OP) on the
-# first launch. Each program keeps several fp32 vectors of BLOCK_SIZE / threads
-# elements live at once, so what bounds the tile is elements *per thread*, not
-# BLOCK_SIZE: register use grows at roughly two per element, exhausting the
-# 255-register budget around 128, after which Triton spills to local memory.
-# Measured registers/spill-bytes per thread, forward kernel, V=151936, A100:
+# Search space for the row-per-program tile, autotuned per (vocab, TERMS) on
+# the first launch. Each program keeps several fp32 vectors of BLOCK_SIZE /
+# threads elements live at once, so what bounds the tile is elements *per
+# thread*, not BLOCK_SIZE: register use grows at roughly two per element,
+# exhausting the 255-register budget around 128, after which Triton spills to
+# local memory. Measured registers/spill-bytes per thread, forward kernel
+# (single KL term), V=151936, A100:
 #
 #     BLOCK_SIZE     warps=4      warps=8     warps=16     warps=32
 #          4096     54/0         32/0         31/0         27/0
@@ -73,20 +79,38 @@ _THREADS_PER_PROGRAM = (128, 256, 512, 1024)
 # tl.constexpr instances: Triton kernels may only read globals wrapped this way.
 _LOG2 = tl.constexpr(0.6931471805599453)
 
-# Reduction selector, baked into the kernel at specialization time. Pass
-# ``.value`` (a plain int) across the autograd boundary -- Dynamo cannot
-# represent a constexpr object as an autograd.Function argument and would
-# graph-break; the ``OP: tl.constexpr`` parameter re-wraps it in the kernel.
-_OP_KL = tl.constexpr(0)
-_OP_RKL = tl.constexpr(1)
-_OP_JSD = tl.constexpr(2)
-_OP_CE = tl.constexpr(3)
-_OP_TV = tl.constexpr(4)
+# Primitive terms and their output slot. A term set crosses the autograd
+# boundary as a plain int bitmask (bit = 1 << slot) -- Dynamo cannot represent
+# a constexpr object as an autograd.Function argument and would graph-break;
+# the ``TERMS: tl.constexpr`` parameter re-wraps it in the kernel.
+TERM_SLOTS = {"kl_div": 0, "rkl": 1, "jsd": 2, "ce": 3, "tv": 4}
+_N_TERMS = len(TERM_SLOTS)
+_BITS = {name: 1 << slot for name, slot in TERM_SLOTS.items()}
+_KL = tl.constexpr(_BITS["kl_div"])
+_RKL = tl.constexpr(_BITS["rkl"])
+_JSD = tl.constexpr(_BITS["jsd"])
+_CE = tl.constexpr(_BITS["ce"])
+_TV = tl.constexpr(_BITS["tv"])
+# Terms that need the target softmax; CE needs only the target argmax.
+_DIST_MASK = _BITS["kl_div"] | _BITS["rkl"] | _BITS["jsd"] | _BITS["tv"]
+_DIST = tl.constexpr(_DIST_MASK)
 
-# stats [_N_STATS, n_rows]: [0]/[1] draft row max / sum-exp, [2]/[3] same for
-# targets (unused by ce), [4] per-OP -- kl_div/rkl: row loss L | jsd:
-# KL(dp||mix) | tv: s_s | ce: argmax as float32 (exact: vocab < 2**24).
-_N_STATS = 5
+# stats [_N_STATS, n_rows], fp32: [0]/[1] draft row max / sum-exp, [2]/[3]
+# the same for targets (distribution terms only), [4] rkl row loss L, [5] jsd
+# KL(dp || mix), [6] ce target argmax as float32 (exact: vocab < 2**24),
+# [7] tv s_s. Rows of terms not in TERMS are left unwritten.
+_N_STATS = 8
+
+# Named losses and the primitive terms each is composed from.
+LOSS_TERMS: dict[str, tuple[str, ...]] = {
+    "kl_div": ("kl_div",),
+    "rkl": ("rkl",),
+    "jsd": ("jsd",),
+    "ce": ("ce",),
+    "tv": ("tv",),
+    "nla": ("tv",),
+    "lk_hybrid": ("kl_div", "tv"),
+}
 
 
 def _tile_configs():
@@ -126,33 +150,18 @@ def _prune_oversized_tiles(configs, nargs, **_):
 def _autotune_tile(kernel):
     """Autotune ``kernel`` over the register-resident tiles.
 
-    Keyed on OP as well as the vocab: CE, KL and RKL stream the row once
-    where JSD and TV stream it three times, so they do not share an
-    optimum. Each kernel gets its own config list: Dynamo tracks the
-    autotuner's ``configs`` as a mutable list, and two kernels sharing one
-    list fail to trace ("already tracked for mutation").
+    Keyed on TERMS as well as the vocab: CE, KL and RKL stream the row once
+    where JSD and TV stream it twice, and each extra term adds live
+    registers, so term sets do not share an optimum. Each kernel gets its
+    own config list: Dynamo tracks the autotuner's ``configs`` as a mutable
+    list, and two kernels sharing one list fail to trace ("already tracked for
+    mutation").
     """
     return triton.autotune(
         configs=_tile_configs(),
-        key=["n_cols", "OP"],
+        key=["n_cols", "TERMS"],
         prune_configs_by={"early_config_prune": _prune_oversized_tiles},
     )(kernel)
-
-
-@triton.jit
-def _online_stats(row_ptr, n_cols, BLOCK_SIZE: tl.constexpr):
-    """Online max (m) and sum-exp (d) over one row."""
-    m = float("-inf")
-    d = 0.0
-    for i in range(0, n_cols, BLOCK_SIZE):
-        offsets = i + tl.arange(0, BLOCK_SIZE)
-        mask = offsets < n_cols
-        x = tl.load(row_ptr + offsets, mask=mask, other=float("-inf")).cast(tl.float32)
-        block_max = tl.max(tl.where(mask, x, float("-inf")))
-        m_new = tl.maximum(m, block_max)
-        d = d * tl.exp(m - m_new) + tl.sum(tl.where(mask, tl.exp(x - m_new), 0.0))
-        m = m_new
-    return m, d
 
 
 @triton.jit
@@ -164,17 +173,18 @@ def _log_mix(ldp, ltp):
 
 @_autotune_tile
 @triton.jit
-def loss_forward_kernel(  # noqa: C901 -- constexpr OP branches, pruned per instance
+def loss_forward_kernel(  # noqa: C901 -- constexpr TERMS branches
     logits_ptr,
     targets_ptr,
     loss_ptr,
+    loss_row,
     stats_ptr,
     stats_row,
     n_cols,
-    OP: tl.constexpr,
+    TERMS: tl.constexpr,
     BLOCK_SIZE: tl.constexpr,
 ):
-    """One row per program: online softmax stats, then the OP's reduction.
+    """One row per program: shared softmax stats, then every TERMS reduction.
 
     Masked tail lanes can hold inf/nan before ``tl.where`` selects; they
     never enter an accumulator.
@@ -183,155 +193,152 @@ def loss_forward_kernel(  # noqa: C901 -- constexpr OP branches, pruned per inst
     logits_ptr += pid * n_cols
     targets_ptr += pid * n_cols
 
-    # Lint exemptions: `in`/merged compares aren't constexpr-foldable here.
-    if OP == _OP_KL or OP == _OP_RKL:  # noqa: PLR1714, SIM109
-        # Single pass. Expanding the log-softmaxes turns either divergence
-        # into one cross term plus two log-sum-exps, and that cross term is an
-        # exponential the online loop can normalize as it goes -- so neither
-        # direction needs a finished log-sum-exp before it starts summing.
-        #
-        # Write x for the draft logits and y for the target's, so that
-        # dp = softmax(x), tp = softmax(y), and per row lse = m + log z with
-        # m the max and z = sum e^(v - m). Then
-        #
-        #   KL(tp || dp) = sum tp (log tp - log dp)              [definition]
-        #                = sum tp ((y - lse_t) - (x - lse_d))
-        #                = sum tp (y - x) + lse_d - lse_t        [sum tp = 1]
-        #                = s / z_t + lse_d - lse_t,              [tp = e^(y-m_t)/z_t]
-        #                  s = sum e^(y - m_t) (y - x)
-        #
-        # The three-pass version evaluated the third line as written, which
-        # needs lse_t -- a finished pass over y -- before its first term.
-        # Taking the constant 1/z_t out of the sum defers that division to the
-        # end and leaves s as the only quantity the loop carries. RKL, which
-        # is KL(dp || tp), is the same derivation with the roles swapped:
-        #
-        #   RKL = s / z_d + lse_t - lse_d,  s = sum e^(x - m_d) (x - y)
-        #
-        # s is then safe against a running max for the same reason z is: when
-        # m_t grows to m_t', the partial sum holds stale e^(y - m_t) factors,
-        # and the weight (y - x) does not depend on m_t, so the whole of s
-        # rescales by exp(m_t - m_t') just as z_t does. One read of the row
-        # replaces three (draft stats, target stats, divergence); the stats
-        # rows stored below are the same ones, so the backward is unchanged.
-        m_d = float("-inf")
-        z_d = 0.0
-        m_t = float("-inf")
-        z_t = 0.0
-        acc = 0.0
-        for i in range(0, n_cols, BLOCK_SIZE):
-            offsets = i + tl.arange(0, BLOCK_SIZE)
-            mask = offsets < n_cols
-            x = tl.load(logits_ptr + offsets, mask=mask, other=float("-inf")).cast(
-                tl.float32
-            )
-            y = tl.load(targets_ptr + offsets, mask=mask, other=float("-inf")).cast(
-                tl.float32
-            )
-            m_d_new = tl.maximum(m_d, tl.max(x))
-            scale_d = tl.exp(m_d - m_d_new)
-            ex = tl.where(mask, tl.exp(x - m_d_new), 0.0)
-            z_d = z_d * scale_d + tl.sum(ex)
-            m_t_new = tl.maximum(m_t, tl.max(y))
-            scale_t = tl.exp(m_t - m_t_new)
-            ey = tl.where(mask, tl.exp(y - m_t_new), 0.0)
+    # Pass 1: online max (m) and sum-exp (z) of the draft row, plus the target
+    # row's (distribution terms) and its first-index argmax (CE), in one stream.
+    # KL and RKL finish here too: with tp = e^(y - m_t) / z_t,
+    #
+    #   KL(tp || dp) = sum tp (y - x) + lse_d - lse_t = s_kl / z_t + lse_d - lse_t,
+    #   s_kl = sum e^(y - m_t) (y - x),
+    #
+    # and RKL likewise with the roles swapped. s rescales by exp(m_old - m_new)
+    # under a running max exactly as z does, so it accumulates alongside the
+    # online softmaxes; only JSD and TV need a second stream.
+    m_d = float("-inf")
+    z_d = 0.0
+    m_t = float("-inf")
+    z_t = 0.0
+    s_kl = 0.0
+    s_rkl = 0.0
+    best_val = float("-inf")
+    best_idx = 0
+    for i in range(0, n_cols, BLOCK_SIZE):
+        offsets = i + tl.arange(0, BLOCK_SIZE)
+        mask = offsets < n_cols
+        x = tl.load(logits_ptr + offsets, mask=mask, other=float("-inf")).cast(
+            tl.float32
+        )
+        m_new = tl.maximum(m_d, tl.max(tl.where(mask, x, float("-inf"))))
+        scale_d = tl.exp(m_d - m_new)
+        ex = tl.where(mask, tl.exp(x - m_new), 0.0)
+        z_d = z_d * scale_d + tl.sum(ex)
+        m_d = m_new
+        y = tl.load(targets_ptr + offsets, mask=mask, other=float("-inf")).cast(
+            tl.float32
+        )
+        if TERMS & _DIST:
+            m_new_t = tl.maximum(m_t, tl.max(tl.where(mask, y, float("-inf"))))
+            scale_t = tl.exp(m_t - m_new_t)
+            ey = tl.where(mask, tl.exp(y - m_new_t), 0.0)
             z_t = z_t * scale_t + tl.sum(ey)
-            if OP == _OP_KL:
-                acc = acc * scale_t + tl.sum(tl.where(mask, ey * (y - x), 0.0))
-            else:
-                acc = acc * scale_d + tl.sum(tl.where(mask, ex * (x - y), 0.0))
-            m_d = m_d_new
-            m_t = m_t_new
-        lse_d = m_d + tl.log(z_d)
-        lse_t = m_t + tl.log(z_t)
-        loss = acc / z_t + lse_d - lse_t if OP == _OP_KL else acc / z_d + lse_t - lse_d
-        tl.store(stats_ptr + 0 * stats_row + pid, m_d)
-        tl.store(stats_ptr + 1 * stats_row + pid, z_d)
-        tl.store(stats_ptr + 2 * stats_row + pid, m_t)
-        tl.store(stats_ptr + 3 * stats_row + pid, z_t)
-        tl.store(loss_ptr + pid, loss)
-        # The RKL backward reads row 4 as the loss value itself.
-        tl.store(stats_ptr + 4 * stats_row + pid, loss)
-        return
-
-    m_d, z_d = _online_stats(logits_ptr, n_cols, BLOCK_SIZE)
-    lse_d = m_d + tl.log(z_d)
-    tl.store(stats_ptr + 0 * stats_row + pid, m_d)
-    tl.store(stats_ptr + 1 * stats_row + pid, z_d)
-
-    if OP == _OP_CE:
-        # Only the target argmax is needed; no target softmax stats.
-        best_val = float("-inf")
-        best_idx = 0
-        for i in range(0, n_cols, BLOCK_SIZE):
-            offsets = i + tl.arange(0, BLOCK_SIZE)
-            mask = offsets < n_cols
-            y = tl.load(targets_ptr + offsets, mask=mask, other=float("-inf")).cast(
-                tl.float32
-            )
+            m_t = m_new_t
+            # Masked lanes: ey / ex are 0 but (y - x) is nan; where drops them.
+            if TERMS & _KL:
+                s_kl = s_kl * scale_t + tl.sum(tl.where(mask, ey * (y - x), 0.0))
+            if TERMS & _RKL:
+                s_rkl = s_rkl * scale_d + tl.sum(tl.where(mask, ex * (x - y), 0.0))
+        if TERMS & _CE:
             block_max = tl.max(y)
             block_arg = tl.argmax(y, axis=0)
             # strict > keeps the first occurrence, the torch.argmax convention
             update = block_max > best_val
             best_idx = tl.where(update, i + block_arg, best_idx)
             best_val = tl.where(update, block_max, best_val)
+
+    lse_d = m_d + tl.log(z_d)
+    tl.store(stats_ptr + 0 * stats_row + pid, m_d)
+    tl.store(stats_ptr + 1 * stats_row + pid, z_d)
+
+    if TERMS & _CE:
         logit_at_target = tl.load(logits_ptr + best_idx).cast(tl.float32)
-        tl.store(loss_ptr + pid, lse_d - logit_at_target)
+        tl.store(loss_ptr + 3 * loss_row + pid, lse_d - logit_at_target)
         # mypy reads traced Triton code as Python and types best_idx as int
-        tl.store(stats_ptr + 4 * stats_row + pid, best_idx.to(tl.float32))  # type: ignore[attr-defined]
-    else:
-        m_t, z_t = _online_stats(targets_ptr, n_cols, BLOCK_SIZE)
+        tl.store(stats_ptr + 6 * stats_row + pid, best_idx.to(tl.float32))  # type: ignore[attr-defined]
+
+    if TERMS & _DIST:
         lse_t = m_t + tl.log(z_t)
         tl.store(stats_ptr + 2 * stats_row + pid, m_t)
         tl.store(stats_ptr + 3 * stats_row + pid, z_t)
 
-        acc = 0.0
-        extra = 0.0
-        for i in range(0, n_cols, BLOCK_SIZE):
-            offsets = i + tl.arange(0, BLOCK_SIZE)
-            mask = offsets < n_cols
-            x = tl.load(logits_ptr + offsets, mask=mask, other=0.0).cast(tl.float32)
-            y = tl.load(targets_ptr + offsets, mask=mask, other=0.0).cast(tl.float32)
-            ldp = x - lse_d
-            ltp = y - lse_t
-            dp = tl.exp(ldp)
-            tp = tl.exp(ltp)
-            if OP == _OP_JSD:
-                lmp = _log_mix(ldp, ltp)
-                acc += tl.sum(tl.where(mask, dp * (ldp - lmp), 0.0))
-                extra += tl.sum(tl.where(mask, tp * (ltp - lmp), 0.0))
-            elif OP == _OP_TV:
-                acc += tl.sum(tl.where(mask, tl.minimum(dp, tp), 0.0))
-                extra += tl.sum(tl.where(mask & (dp <= tp), dp, 0.0))
+        kl = s_kl / z_t + lse_d - lse_t
+        rkl = s_rkl / z_d + lse_t - lse_d
 
-        if OP == _OP_JSD:
-            tl.store(loss_ptr + pid, 0.5 * (acc + extra))
-            tl.store(stats_ptr + 4 * stats_row + pid, acc)
-        elif OP == _OP_TV:
-            tl.store(loss_ptr + pid, 1.0 - acc)
-            tl.store(stats_ptr + 4 * stats_row + pid, extra)
+        # Pass 2: JSD and TV need both finished log-sum-exps per element.
+        jsd_draft = 0.0
+        jsd_target = 0.0
+        tv_overlap = 0.0
+        tv_s = 0.0
+        if TERMS & (_JSD | _TV):
+            for i in range(0, n_cols, BLOCK_SIZE):
+                offsets = i + tl.arange(0, BLOCK_SIZE)
+                mask = offsets < n_cols
+                x = tl.load(logits_ptr + offsets, mask=mask, other=0.0).cast(tl.float32)
+                y = tl.load(targets_ptr + offsets, mask=mask, other=0.0).cast(
+                    tl.float32
+                )
+                ldp = x - lse_d
+                ltp = y - lse_t
+                dp = tl.exp(ldp)
+                tp = tl.exp(ltp)
+                if TERMS & _JSD:
+                    lmp = _log_mix(ldp, ltp)
+                    jsd_draft += tl.sum(tl.where(mask, dp * (ldp - lmp), 0.0))
+                    jsd_target += tl.sum(tl.where(mask, tp * (ltp - lmp), 0.0))
+                if TERMS & _TV:
+                    tv_overlap += tl.sum(tl.where(mask, tl.minimum(dp, tp), 0.0))
+                    tv_s += tl.sum(tl.where(mask & (dp <= tp), dp, 0.0))
+
+        if TERMS & _KL:
+            tl.store(loss_ptr + 0 * loss_row + pid, kl)
+        if TERMS & _RKL:
+            tl.store(loss_ptr + 1 * loss_row + pid, rkl)
+            tl.store(stats_ptr + 4 * stats_row + pid, rkl)
+        if TERMS & _JSD:
+            tl.store(loss_ptr + 2 * loss_row + pid, 0.5 * (jsd_draft + jsd_target))
+            tl.store(stats_ptr + 5 * stats_row + pid, jsd_draft)
+        if TERMS & _TV:
+            tl.store(loss_ptr + 4 * loss_row + pid, 1.0 - tv_overlap)
+            tl.store(stats_ptr + 7 * stats_row + pid, tv_s)
 
 
 @_autotune_tile
 @triton.jit
-def loss_backward_kernel(
+def loss_backward_kernel(  # noqa: C901 -- constexpr TERMS branches
     logits_ptr,
     targets_ptr,
     grad_in_ptr,
     grad_out_ptr,
+    grad_out_row,
     stats_ptr,
     stats_row,
     n_cols,
-    OP: tl.constexpr,
+    TERMS: tl.constexpr,
     BLOCK_SIZE: tl.constexpr,
 ):
-    """Recompute probabilities from the saved stats and apply the OP gradient."""
+    """Recompute probabilities from the saved stats; write the weighted sum of
+    every TERMS gradient."""
     pid = tl.program_id(0).to(tl.int64)
     logits_ptr += pid * n_cols
     grad_in_ptr += pid * n_cols
 
-    go = tl.load(grad_out_ptr + pid).cast(tl.float32)
-    if go == 0.0:
+    go_kl = 0.0
+    go_rkl = 0.0
+    go_jsd = 0.0
+    go_ce = 0.0
+    go_tv = 0.0
+    if TERMS & _KL:
+        go_kl = tl.load(grad_out_ptr + 0 * grad_out_row + pid).cast(tl.float32)
+    if TERMS & _RKL:
+        go_rkl = tl.load(grad_out_ptr + 1 * grad_out_row + pid).cast(tl.float32)
+    if TERMS & _JSD:
+        go_jsd = tl.load(grad_out_ptr + 2 * grad_out_row + pid).cast(tl.float32)
+    if TERMS & _CE:
+        go_ce = tl.load(grad_out_ptr + 3 * grad_out_row + pid).cast(tl.float32)
+    if TERMS & _TV:
+        go_tv = tl.load(grad_out_ptr + 4 * grad_out_row + pid).cast(tl.float32)
+
+    go_any = tl.abs(go_kl) + tl.abs(go_rkl) + tl.abs(go_jsd) + tl.abs(go_ce)
+    go_any += tl.abs(go_tv)
+    if go_any == 0.0:
         for i in range(0, n_cols, BLOCK_SIZE):
             offsets = i + tl.arange(0, BLOCK_SIZE)
             mask = offsets < n_cols
@@ -341,15 +348,20 @@ def loss_backward_kernel(
     m_d = tl.load(stats_ptr + 0 * stats_row + pid)
     z_d = tl.load(stats_ptr + 1 * stats_row + pid)
     lse_d = m_d + tl.log(z_d)
-    extra = tl.load(stats_ptr + 4 * stats_row + pid)
-    if OP != _OP_CE:
-        # CE passes None for targets_ptr.
+    if TERMS & _DIST:
+        # targets_ptr is None for CE-only launches; only offset it when used.
         targets_ptr += pid * n_cols
         m_t = tl.load(stats_ptr + 2 * stats_row + pid)
         z_t = tl.load(stats_ptr + 3 * stats_row + pid)
         lse_t = m_t + tl.log(z_t)
-    else:
-        target_idx = extra.to(tl.int32)
+    if TERMS & _RKL:
+        rkl_loss = tl.load(stats_ptr + 4 * stats_row + pid)
+    if TERMS & _JSD:
+        jsd_kl_mix = tl.load(stats_ptr + 5 * stats_row + pid)
+    if TERMS & _CE:
+        target_idx = tl.load(stats_ptr + 6 * stats_row + pid).to(tl.int32)
+    if TERMS & _TV:
+        tv_s = tl.load(stats_ptr + 7 * stats_row + pid)
 
     for i in range(0, n_cols, BLOCK_SIZE):
         offsets = i + tl.arange(0, BLOCK_SIZE)
@@ -357,68 +369,75 @@ def loss_backward_kernel(
         x = tl.load(logits_ptr + offsets, mask=mask, other=0.0).cast(tl.float32)
         ldp = x - lse_d
         dp = tl.exp(ldp)
-        if OP == _OP_CE:
-            grad = dp - (offsets == target_idx).to(tl.float32)
-        else:
+        grad = tl.zeros([BLOCK_SIZE], dtype=tl.float32)
+        if TERMS & _CE:
+            grad += go_ce * (dp - (offsets == target_idx).to(tl.float32))
+        if TERMS & _DIST:
             y = tl.load(targets_ptr + offsets, mask=mask, other=0.0).cast(tl.float32)
             ltp = y - lse_t
             tp = tl.exp(ltp)
-            if OP == _OP_KL:
-                grad = dp - tp
-            elif OP == _OP_RKL:
-                grad = dp * (ldp - ltp - extra)
-            elif OP == _OP_JSD:
-                grad = 0.5 * dp * (ldp - _log_mix(ldp, ltp) - extra)
-            elif OP == _OP_TV:
-                grad = -dp * ((dp <= tp).to(tl.float32) - extra)
-        tl.store(grad_in_ptr + offsets, go * grad, mask=mask)
+            if TERMS & _KL:
+                grad += go_kl * (dp - tp)
+            if TERMS & _RKL:
+                grad += go_rkl * (dp * (ldp - ltp - rkl_loss))
+            if TERMS & _JSD:
+                grad += go_jsd * (0.5 * dp * (ldp - _log_mix(ldp, ltp) - jsd_kl_mix))
+            if TERMS & _TV:
+                grad += go_tv * (-dp * ((dp <= tp).to(tl.float32) - tv_s))
+        tl.store(grad_in_ptr + offsets, grad, mask=mask)
 
 
 class _FusedLoss(torch.autograd.Function):
-    """Shared autograd wrapper; ``op`` selects the loss reduction.
+    """Shared autograd wrapper; ``terms`` is the primitive-term bitmask.
 
-    Targets intentionally receive no gradient; use the eager implementation when
-    target gradients are required.
+    Returns ``[_N_TERMS, B, T]`` fp32 per-position losses indexed by
+    ``TERM_SLOTS``; slots of terms not in the mask are uninitialized and must
+    not be read. Targets intentionally receive no gradient; use the eager
+    implementation when target gradients are required.
     """
 
     @staticmethod
-    def forward(ctx, logits, targets, op):
+    def forward(ctx, logits, targets, terms):
         B, T, V = logits.shape
         logits_flat = logits.contiguous().view(B * T, V)
         targets_flat = targets.contiguous().view(B * T, V)
-        loss = torch.empty(B * T, device=logits.device, dtype=torch.float32)
+        losses = torch.empty(_N_TERMS, B * T, device=logits.device, dtype=torch.float32)
         stats = torch.empty(_N_STATS, B * T, device=logits.device, dtype=torch.float32)
         loss_forward_kernel[(B * T,)](
             logits_flat,
             targets_flat,
-            loss,
+            losses,
+            losses.stride(0),
             stats,
             stats.stride(0),
             V,
-            OP=op,
+            TERMS=terms,
         )
-        # CE backward only needs the target argmax cached in stats.
+        # CE backward only needs the target argmax cached in stats, so a
+        # CE-only launch releases the targets after forward.
         ctx.save_for_backward(
-            logits_flat, None if op == _OP_CE.value else targets_flat, stats
+            logits_flat, targets_flat if terms & _DIST_MASK else None, stats
         )
-        ctx.op = op
+        ctx.terms = terms
         ctx.shape = (B, T, V)
-        return loss.view(B, T)
+        return losses.view(_N_TERMS, B, T)
 
     @staticmethod
     def backward(ctx, grad_output):
         logits_flat, targets_flat, stats = ctx.saved_tensors
         B, T, V = ctx.shape
+        grad_out = grad_output.contiguous().view(_N_TERMS, B * T)
         grad_in = torch.empty_like(logits_flat)
         loss_backward_kernel[(B * T,)](
             logits_flat,
             targets_flat,
             grad_in,
-            grad_output.contiguous().view(-1),
+            grad_out,
+            grad_out.stride(0),
             stats,
             stats.stride(0),
             V,
-            OP=ctx.op,
+            TERMS=ctx.terms,
         )
         return grad_in.view(B, T, V), None, None
 
@@ -426,41 +445,83 @@ class _FusedLoss(torch.autograd.Function):
 _NLA_EPS = 1e-5
 
 
+def fused_terms(
+    logits: torch.Tensor, targets: torch.Tensor, terms: Sequence[str]
+) -> dict[str, torch.Tensor]:
+    """Per-position primitive losses ``[B, T]`` for each name in ``terms``.
+
+    One forward kernel pass computes them all and one backward pass writes a
+    single combined gradient. Names are keys of ``TERM_SLOTS``.
+    """
+    mask = 0
+    for term in terms:
+        mask |= _BITS[term]
+    losses = _FusedLoss.apply(logits, targets, mask)
+    return {term: losses[TERM_SLOTS[term]] for term in terms}
+
+
+def _compose(
+    name: str, terms: dict[str, torch.Tensor], eta: float = 3.0
+) -> torch.Tensor:
+    """Build a named loss from its primitive terms (see ``LOSS_TERMS``)."""
+    if name == "nla":
+        # negative log acceptance, -log(alpha) with alpha = 1 - TV
+        return -torch.log((1.0 - terms["tv"]).clamp_min(_NLA_EPS))
+    if name == "lk_hybrid":
+        kl, tv = terms["kl_div"], terms["tv"]
+        weight = torch.exp(-eta * (1.0 - tv).detach())
+        return weight * kl + (1.0 - weight) * tv
+    return terms[name]
+
+
+def fused_compound_losses(
+    logits: torch.Tensor, targets: torch.Tensor, names: Sequence[str]
+) -> dict[str, torch.Tensor]:
+    """Per-position ``[B, T]`` loss for each named loss, from one kernel call.
+
+    ``names`` are keys of ``LOSS_TERMS``; the union of their primitive terms
+    is computed in a single forward pass.
+    """
+    needed = sorted(
+        {t for name in names for t in LOSS_TERMS[name]}, key=lambda t: _BITS[t]
+    )
+    terms = fused_terms(logits, targets, needed)
+    return {name: _compose(name, terms) for name in names}
+
+
 def fused_kl_div_loss(logits, targets):
     """Per-position forward KL ``[1, T]``; fused twin of ``kl_div_loss``."""
-    return _FusedLoss.apply(logits, targets, _OP_KL.value)
+    return fused_terms(logits, targets, ("kl_div",))["kl_div"]
 
 
 def fused_reverse_kl_div_loss(logits, targets):
     """Per-position reverse KL ``[1, T]``; fused twin of ``reverse_kl_div_loss``."""
-    return _FusedLoss.apply(logits, targets, _OP_RKL.value)
+    return fused_terms(logits, targets, ("rkl",))["rkl"]
 
 
 def fused_js_div_loss(logits, targets):
     """Per-position JSD ``[1, T]``; fused twin of ``js_div_loss``."""
-    return _FusedLoss.apply(logits, targets, _OP_JSD.value)
+    return fused_terms(logits, targets, ("jsd",))["jsd"]
 
 
 def fused_ce_loss(logits, targets):
     """Per-position CE vs argmax(targets) ``[1, T]``; fused twin of ``ce_loss``."""
-    return _FusedLoss.apply(logits, targets, _OP_CE.value)
+    return fused_terms(logits, targets, ("ce",))["ce"]
 
 
 def fused_tv_loss(logits, targets):
     """Per-position TV distance ``[1, T]`` from draft/target logits (fused Triton)."""
-    return _FusedLoss.apply(logits, targets, _OP_TV.value)
+    return fused_terms(logits, targets, ("tv",))["tv"]
 
 
 def fused_nla_loss(logits, targets):
     """Per-position negative-log-acceptance ``[1, T] = -log(alpha)``; composes on TV."""
-    return -torch.log((1.0 - fused_tv_loss(logits, targets)).clamp_min(_NLA_EPS))
+    return _compose("nla", fused_terms(logits, targets, ("tv",)))
 
 
 def fused_lk_hybrid_loss(logits, targets, eta: float = 3.0):
-    """Per-position hybrid LK ``[1, T]``; fused KL + TV composed as in
-    ``lk_hybrid_loss`` (blend weight detached).
+    """Per-position hybrid LK ``[1, T]``; fused KL + TV from one kernel pass,
+    composed as in ``lk_hybrid_loss`` (blend weight detached).
     """
-    kl = fused_kl_div_loss(logits, targets)
-    tv = fused_tv_loss(logits, targets)
-    weight = torch.exp(-eta * (1.0 - tv).detach())
-    return weight * kl + (1.0 - weight) * tv
+    terms = fused_terms(logits, targets, ("kl_div", "tv"))
+    return _compose("lk_hybrid", terms, eta=eta)
