@@ -227,6 +227,10 @@ steps:
                 python: "3.13"
                 transformers: "latest"
                 vllm: "nightly"
+            - with:
+                python: "3.13"
+                transformers: "main"
+                vllm: "latest"
 
   - group: ":rotating_light: Nightly Regression Tests (H100)"
     steps:
