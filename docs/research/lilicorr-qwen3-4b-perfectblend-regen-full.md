@@ -59,8 +59,10 @@ same distribution — the gap is fresh-data diversity plus a longer LR schedule.
 ## Interruption (2026-11-03 14:48)
 
 - The trainer received an external SIGTERM ("Received 15 death signal") at
-  step 85,082; the 4B extraction server died in the same event. No OOM, NCCL
-  fault, or storage issue preceded it — tmpfs was at 53% with 360G free.
+  step 85,082; the 4B extraction server died in the same event. Root cause:
+  the operator's client session (VS Code window) was closed, tearing down the
+  agent process tree both processes belonged to. No OOM, NCCL fault, or
+  storage issue preceded it — tmpfs was at 53% with 360G free.
 - The graceful-shutdown checkpoint attempt timed out, so the last durable
   checkpoint remains `epoch0_step56376` (25%; the `0/` dir mirrors it).
   ~28.7k steps (~6 h) of progress past it were lost.
