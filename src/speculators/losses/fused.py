@@ -123,13 +123,20 @@ def _prune_oversized_tiles(configs, nargs, **_):
     return [config for config in configs if config.kwargs["BLOCK_SIZE"] == floor]
 
 
-# Keyed on OP as well as the vocab: CE, KL and RKL stream the row once where
-# JSD and TV stream it three times, so they do not share an optimum.
-_autotune_tile = triton.autotune(
-    configs=_tile_configs(),
-    key=["n_cols", "OP"],
-    prune_configs_by={"early_config_prune": _prune_oversized_tiles},
-)
+def _autotune_tile(kernel):
+    """Autotune ``kernel`` over the register-resident tiles.
+
+    Keyed on OP as well as the vocab: CE, KL and RKL stream the row once
+    where JSD and TV stream it three times, so they do not share an
+    optimum. Each kernel gets its own config list: Dynamo tracks the
+    autotuner's ``configs`` as a mutable list, and two kernels sharing one
+    list fail to trace ("already tracked for mutation").
+    """
+    return triton.autotune(
+        configs=_tile_configs(),
+        key=["n_cols", "OP"],
+        prune_configs_by={"early_config_prune": _prune_oversized_tiles},
+    )(kernel)
 
 
 @triton.jit
