@@ -178,15 +178,35 @@ def loss_forward_kernel(  # noqa: C901 -- constexpr OP branches, pruned per inst
 
     # Lint exemptions: `in`/merged compares aren't constexpr-foldable here.
     if OP == _OP_KL or OP == _OP_RKL:  # noqa: PLR1714, SIM109
-        # Single pass. Both directions reduce to one cross term over an
-        # online-normalized exponential, because the probabilities sum to one:
+        # Single pass. Expanding the log-softmaxes turns either divergence
+        # into one cross term plus two log-sum-exps, and that cross term is an
+        # exponential the online loop can normalize as it goes -- so neither
+        # direction needs a finished log-sum-exp before it starts summing.
         #
-        #     KL(tp || dp)  = s / z_t + lse_d - lse_t,  s = sum e^(y-m_t)(y-x)
-        #     RKL(tp || dp) = s / z_d + lse_t - lse_d,  s = sum e^(x-m_d)(x-y)
+        # Write x for the draft logits and y for the target's, so that
+        # dp = softmax(x), tp = softmax(y), and per row lse = m + log z with
+        # m the max and z = sum e^(v - m). Then
         #
-        # s rescales by exp(m_old - m_new) exactly as the sum-exp z does, so it
-        # accumulates alongside the two online softmaxes without needing either
-        # log-sum-exp up front. The row is read once instead of three times.
+        #   KL(tp || dp) = sum tp (log tp - log dp)              [definition]
+        #                = sum tp ((y - lse_t) - (x - lse_d))
+        #                = sum tp (y - x) + lse_d - lse_t        [sum tp = 1]
+        #                = s / z_t + lse_d - lse_t,              [tp = e^(y-m_t)/z_t]
+        #                  s = sum e^(y - m_t) (y - x)
+        #
+        # The three-pass version evaluated the third line as written, which
+        # needs lse_t -- a finished pass over y -- before its first term.
+        # Taking the constant 1/z_t out of the sum defers that division to the
+        # end and leaves s as the only quantity the loop carries. RKL, which
+        # is KL(dp || tp), is the same derivation with the roles swapped:
+        #
+        #   RKL = s / z_d + lse_t - lse_d,  s = sum e^(x - m_d) (x - y)
+        #
+        # s is then safe against a running max for the same reason z is: when
+        # m_t grows to m_t', the partial sum holds stale e^(y - m_t) factors,
+        # and the weight (y - x) does not depend on m_t, so the whole of s
+        # rescales by exp(m_t - m_t') just as z_t does. One read of the row
+        # replaces three (draft stats, target stats, divergence); the stats
+        # rows stored below are the same ones, so the backward is unchanged.
         m_d = float("-inf")
         z_d = 0.0
         m_t = float("-inf")
