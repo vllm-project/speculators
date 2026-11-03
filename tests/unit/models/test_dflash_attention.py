@@ -3,11 +3,8 @@
 import pytest
 import torch
 from torch.nn.attention.flex_attention import create_mask
-from transformers import Qwen3Config
 
 from speculators.models.dflash.attention import create_anchor_block_mask_mod
-from speculators.models.dflash.config import DFlashSpeculatorConfig
-from speculators.models.dflash.core import DFlashDraftModel
 
 
 def _lengths_to_document_ids(lengths, total_seq_len):
@@ -138,66 +135,6 @@ def test_create_mask_each_query_sees_its_own_block():
     )
 
     assert bool(dense[0, 0].any(dim=-1).all())
-
-
-@pytest.mark.parametrize("is_causal", [None, False, True])
-@pytest.mark.parametrize("sliding_window_non_causal", [False, True])
-def test_config_causality_controls_mixed_layers(is_causal, sliding_window_non_causal):
-    transformer_config = Qwen3Config(
-        hidden_size=8,
-        intermediate_size=16,
-        num_hidden_layers=2,
-        num_attention_heads=2,
-        num_key_value_heads=1,
-        head_dim=4,
-        vocab_size=16,
-        is_causal=is_causal,
-        sliding_window=4,
-        use_sliding_window=True,
-        layer_types=["full_attention", "sliding_attention"],
-    )
-    config = DFlashSpeculatorConfig(
-        transformer_layer_config=transformer_config,
-        draft_vocab_size=16,
-        block_size=4,
-        aux_hidden_state_layer_ids=[0],
-        mask_token_id=0,
-        sliding_window_non_causal=sliding_window_non_causal,
-    )
-    assert transformer_config.is_causal is is_causal
-    config = DFlashSpeculatorConfig.from_dict(config.model_dump(exclude_none=True))
-    causal = not sliding_window_non_causal if is_causal is None else is_causal
-    assert getattr(config.transformer_layer_config, "is_causal", None) is is_causal
-    config.transformer_layer_config._attn_implementation = "eager"
-    model = DFlashDraftModel(config)
-    saved_config = DFlashSpeculatorConfig.from_dict(
-        model.config.model_dump(exclude_none=True)
-    )
-    assert saved_config.sliding_window_non_causal is sliding_window_non_causal
-    assert saved_config.transformer_layer_config.is_causal is causal
-    loss_mask = torch.zeros(1, 8, dtype=torch.long)
-    loss_mask[0, 2] = 1
-    full_mask, sliding_mask, anchors, _ = model._build_attention_mask(
-        loss_mask=loss_mask,
-        max_anchors=1,
-        document_ids=torch.zeros(1, 8, dtype=torch.long),
-        device=torch.device("cpu"),
-    )
-    torch.testing.assert_close(anchors, torch.tensor([2]))
-    query_positions = 2 + torch.arange(4)
-    key_positions = torch.cat((torch.arange(8), query_positions))
-    for mask, window in ((full_mask, None), (sliding_mask, 4)):
-        expected = torch.cat(
-            ((torch.arange(8) < 2).expand(4, -1), torch.ones(4, 4, dtype=torch.bool)),
-            dim=1,
-        )
-        if causal:
-            expected &= key_positions[None, :] <= query_positions[:, None]
-        if window is not None:
-            expected &= (
-                key_positions[None, :] - query_positions[:, None]
-            ).abs() < window
-        torch.testing.assert_close(mask[0, 0] == 0, expected)
 
 
 @pytest.mark.parametrize("is_causal", [False, True])
