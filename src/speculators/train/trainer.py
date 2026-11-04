@@ -181,6 +181,7 @@ class TrainerConfig(NamedTuple):
     optimizer_implementation: Literal["fused", "eager"] = "fused"
     weight_decay: float = 0.01
     muon_lr: float = 0.02
+    lilicorr_lr: float | None = None
     muon_momentum: float = 0.95
     muon_weight_decay: float = 0.1
     muon_ns_steps: int = 5

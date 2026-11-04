@@ -1,6 +1,6 @@
 # Algorithm Decision Guide
 
-Speculators currently supports six speculative decoding algorithms: **Eagle-3**, **P-EAGLE**, **DFlash**, **DFlash2**, **DSpark**, and **MTP**. All are lossless -- they produce output from the same distribution as the target model.
+Speculators currently supports seven speculative decoding algorithms: **Eagle-3**, **P-EAGLE**, **DFlash**, **DFlash2**, **DSpark**, **LiLiCorr**, and **MTP**. All are lossless -- they produce output from the same distribution as the target model.
 
 > ⚠️ **Warning: P-EAGLE is deprecated**
 >
@@ -17,6 +17,8 @@ Speculators currently supports six speculative decoding algorithms: **Eagle-3**,
 **DFlash2** extends DFlash with local dynamic convolutions and a low-rank candidate selector. Its current training objective is experimental because the public inference implementation does not include training code.
 
 **DSpark** extends DFlash with a Markov head, so positions inside a block depend on earlier ones, plus a confidence head that predicts per-position acceptance.
+
+**LiLiCorr** extends DFlash with a candidate-lattice reranker that rescores the backbone's per-slot top-k candidates jointly, so serving commits a consistent path through the block instead of independent top-1 tokens.
 
 **MTP** finetunes the model's native multi-token prediction head on domain-specific data. Unlike the other algorithms, MTP does not train from scratch -- it starts from pre-existing MTP layers and is only available for models with native MTP support.
 
@@ -45,4 +47,5 @@ For more details on each algorithm, see:
 - [DFlash](dflash.md)
 - [DFlash2](dflash2.md)
 - [DSpark](dspark.md)
+- [LiLiCorr](lilicorr.md)
 - [MTP](mtp.md)

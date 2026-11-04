@@ -46,7 +46,7 @@ torchrun --standalone --nproc_per_node=4 -m speculators.train \
 
 - **`--trust-remote-code`** (flag) Allow executing code from HF Hub when loading the verifier's tokenizer.
 
-- **`--speculator-type`** (str, default: `"eagle3"`) Type of speculator model to train. Options: `eagle3`, `dflash`, `dflash2`, `dspark`, `peagle`, `mtp`. `peagle` is deprecated and scheduled for removal in Speculators 0.11.
+- **`--speculator-type`** (str, default: `"eagle3"`) Type of speculator model to train. Options: `eagle3`, `dflash`, `dflash2`, `dspark`, `lilicorr`, `peagle`, `mtp`. `peagle` is deprecated and scheduled for removal in Speculators 0.11.
 
 - **`--from-pretrained`** (str, default: `""`) Path or HF id of an existing draft checkpoint to load weights from and train — either a previously trained draft or the initialized-but-untrained checkpoint produced by `--dry-run`. May also point to a local directory containing only a `config.json`, in which case a fresh draft is initialized from that full speculator config. Takes precedence over all other model-definition options: it is mutually exclusive with `--draft-config` and the decoder-shaping flags (`--num-layers`, `--draft-arch`, `--draft-hidden-act`, `--sliding-window`, `--full-attention-indices`).
 
@@ -139,6 +139,8 @@ torchrun --standalone --nproc_per_node=4 -m speculators.train \
 
 - **`--muon-lr`** (float, default: `lr`) Learning rate for the Muon (2D weights) group. Only used with `--optimizer muon`. Defaults to the `--lr` value.
 
+- **`--lilicorr-lr`** (float, default: `lr`) Learning rate for the LiLiCorr reranker head, separate from the DFlash backbone. Only used with `--speculator-type lilicorr`. Defaults to the `--lr` value.
+
 - **`--muon-momentum`** (float, default: `0.95`) Momentum for the Muon optimizer. Only used with `--optimizer muon`.
 
 - **`--muon-weight-decay`** (float, default: `0.1`) Weight decay for the Muon optimizer. Only used with `--optimizer muon`.
@@ -190,6 +192,12 @@ torchrun --standalone --nproc_per_node=4 -m speculators.train \
 - **`--per-position-loss-weight`** (str, default: `"dpace"` for dflash, `"fixed-exp-decay"` otherwise) Per-position loss weighting scheme. Options: `fixed-exp-decay`, `dpace`. Applies to DFlash-family models. `dpace` requires `--loss-fn ce`.
 
 - **`--dpace-alpha`** (float, default: `0.5`) Confidence smoothing constant for the D-PACE loss. Only used with `--per-position-loss-weight dpace`.
+
+### LiLiCorr-Specific Arguments
+
+LiLiCorr builds on DFlash, so all DFlash-specific arguments apply as well. It defaults to five draft layers, block size 16, CE loss, and the full verifier vocabulary (reduced draft vocabularies are not servable in vLLM).
+
+- **`--loss-chunk-anchors`** (int, default: `None`) Compute the draft/verifier head projections and losses in gradient-checkpointed chunks of this many anchor blocks. Without it, the `[anchors*block, vocab]` logits/targets tensors dominate memory at scale. The chunked loss equals the unchunked reduction exactly. Only used with `--speculator-type lilicorr`.
 
 ### DFlash2-Specific Arguments
 

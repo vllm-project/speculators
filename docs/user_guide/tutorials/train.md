@@ -44,6 +44,12 @@ DFlash plus a Markov logit-bias head and a per-position confidence head. ([detai
 
 ///
 
+/// tab | LiLiCorr
+
+DFlash plus a candidate-lattice reranker that rescores per-slot top-k candidates jointly. ([details](../algorithms/lilicorr.md))
+
+///
+
 /// tab | MTP
 
 Finetunes the verifier's own multi-token prediction head instead of training a draft from scratch. Needs a verifier with native MTP layers. ([details](../algorithms/mtp.md))
@@ -784,6 +790,7 @@ Each of these runs the full pipeline end to end:
 - [`dflash_qwen3_8b_ultrachat_online_5k_bestpractices.sh`](https://github.com/vllm-project/speculators/blob/main/examples/train/dflash_qwen3_8b_ultrachat_online_5k_bestpractices.sh) -- DFlash, online, with the [best-practices recipe](https://github.com/vllm-project/speculators/issues/979) (D-PACE, block_size=16)
 - [`dflash2_qwen3_8b_ultrachat_online_5k.sh`](https://github.com/vllm-project/speculators/blob/main/examples/train/dflash2_qwen3_8b_ultrachat_online_5k.sh) -- DFlash2, online
 - [`dspark_qwen3_0_6b_sharegpt_online.sh`](https://github.com/vllm-project/speculators/blob/main/examples/train/dspark_qwen3_0_6b_sharegpt_online.sh) -- DSpark, online (targets Qwen3-0.6B)
+- [`lilicorr_qwen3_8b_online.sh`](https://github.com/vllm-project/speculators/blob/main/examples/train/lilicorr_qwen3_8b_online.sh) -- LiLiCorr, online
 - [`mtp_qwen3_5_9b_gsm8k_online.sh`](https://github.com/vllm-project/speculators/blob/main/examples/train/mtp_qwen3_5_9b_gsm8k_online.sh) -- MTP, online
 
 ## Next Steps

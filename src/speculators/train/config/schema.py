@@ -363,6 +363,11 @@ class OptimizerArgs(_Group):
         description="LR for the Muon (2D weights) group. Only used with --optimizer "
         "muon. Defaults to --lr (and --lr defaults to 1e-3).",
     )
+    lilicorr_lr: float | None = Field(
+        default=None,
+        description="LR for the LiLiCorr transformer head, separate from the DFlash "
+        "backbone. Only used with --speculator-type lilicorr. Defaults to --lr.",
+    )
     muon_momentum: float = Field(
         default=0.95, description="Momentum for the Muon group."
     )
@@ -504,6 +509,17 @@ class DFlashArgs(_Group):
         default=0.5,
         description="Smoothing constant for the D-PACE loss (default: 0.5). Must be in "
         "(0, 1] when --per-position-loss-weight=dpace.",
+    )
+    loss_chunk_anchors: int | None = Field(
+        default=None,
+        ge=1,
+        description="LiLiCorr only: compute the draft/verifier head projections and "
+        "losses in checkpointed chunks of this many anchor blocks. The "
+        "[anchors*block, vocab] logits/targets otherwise dominate memory at "
+        "large anchor counts and vocab sizes (e.g. 1024 anchors x 248K vocab "
+        "retains ~16 GiB per loss copy on top of everything else); chunking "
+        "bounds them to one chunk at a time with exact loss/gradient parity. "
+        "None (default) runs the monolithic path.",
     )
 
 
@@ -666,9 +682,10 @@ _GROUPS: dict[str, type[_Group]] = {
 # falls back to the generic default below.
 _DEFAULT_LOSS_FN: dict[str, str] = {
     "dflash": "ce",
+    "lilicorr": "ce",
     "xpress": '{"ce": 0.1, "tv": 0.9}',
 }
-_DEFAULT_BLOCK_SIZE: dict[str, int] = {"dflash": 16, "xpress": 16}
+_DEFAULT_BLOCK_SIZE: dict[str, int] = {"dflash": 16, "xpress": 16, "lilicorr": 16}
 
 # Default block size of torch flex attention block masks. Kept here rather than
 # imported, so this module does not import torch.
@@ -753,7 +770,7 @@ class TrainConfig(BaseSettings):
     speculator_type: str = Field(
         default="eagle3",
         description="Type of speculator model to train "
-        "(eagle3, dflash, dflash2, dspark, xpress, peagle, mtp).",
+        "(eagle3, dflash, dflash2, dspark, xpress, lilicorr, peagle, mtp).",
     )
     dry_run: bool = Field(
         default=False,
@@ -785,11 +802,12 @@ class TrainConfig(BaseSettings):
     mtp: MTPArgs = Field(default_factory=MTPArgs)
 
     @model_validator(mode="after")
-    def _resolve_derived_defaults(self) -> "TrainConfig":
+    def _resolve_derived_defaults(self) -> "TrainConfig":  # noqa: C901 -- flat sequence of field defaults
         """Fill defaults that derive from other fields, mirroring the tail of the
         pre-refactor ``parse_args``: unset ``draft_arch`` -> ``llama`` for eagle3 else
         ``qwen3``; unset ``norm_before_fc`` / ``norm_output`` -> ``True`` for eagle3
-        else ``False``; unset ``muon_lr`` -> ``lr``; unset ``num_layers`` -> ``5``
+        else ``False``; unset ``muon_lr`` -> ``lr``; unset ``lilicorr_lr`` -> ``lr``;
+        unset ``num_layers`` -> ``5``
         for dflash/dspark/dflash2/xpress else ``1``; unset
         ``per_position_loss_weight`` -> ``dpace`` for dflash else
         ``fixed-exp-decay``; unset ``loss_fn`` -> ``ce`` for dflash,
@@ -822,6 +840,7 @@ class TrainConfig(BaseSettings):
             "dspark",
             "dflash2",
             "xpress",
+            "lilicorr",
         }
         if self.draft.draft_arch is None:
             self.draft.draft_arch = "llama" if is_eagle3 else "qwen3"
@@ -833,6 +852,8 @@ class TrainConfig(BaseSettings):
             self.draft.sliding_window_non_causal = self.speculator_type == "dflash2"
         if self.optimizer.muon_lr is None:
             self.optimizer.muon_lr = self.optimizer.lr
+        if self.optimizer.lilicorr_lr is None:
+            self.optimizer.lilicorr_lr = self.optimizer.lr
         if self.draft.num_layers is None:
             self.draft.num_layers = 5 if is_dflash_family else 1
         if self.dflash.per_position_loss_weight is None:

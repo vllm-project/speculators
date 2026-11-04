@@ -779,6 +779,7 @@ def main(cfg: TrainConfig):  # noqa: C901
         optimizer_implementation=args.optimizer_implementation,
         weight_decay=args.weight_decay,
         muon_lr=args.muon_lr,
+        lilicorr_lr=args.lilicorr_lr,
         muon_momentum=args.muon_momentum,
         muon_weight_decay=args.muon_weight_decay,
         muon_ns_steps=args.muon_ns_steps,

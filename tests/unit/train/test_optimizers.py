@@ -23,6 +23,7 @@ def _config(optimizer: str, implementation: str = "fused") -> SimpleNamespace:
         muon_weight_decay=0.01,
         muon_ns_steps=5,
         muon_adjust_lr_fn=None,
+        lilicorr_lr=None,
     )
 
 
