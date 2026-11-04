@@ -102,6 +102,12 @@ _DIST = tl.constexpr(_DIST_MASK)
 # [7] tv s_s. Rows of terms not in TERMS are left unwritten.
 _N_STATS = 8
 
+# Shared with losses.fused_linear, which drives the same kernels on chunks.
+TERM_BITS = _BITS
+DIST_MASK = _DIST_MASK
+N_TERMS = _N_TERMS
+N_STATS = _N_STATS
+
 # Named losses and the primitive terms each is composed from.
 LOSS_TERMS: dict[str, tuple[str, ...]] = {
     "kl_div": ("kl_div",),
@@ -471,7 +477,7 @@ class _FusedLoss(torch.autograd.Function):
 _NLA_EPS = 1e-5
 
 
-def _mask(terms: Sequence[str]) -> int:
+def terms_mask(terms: Sequence[str]) -> int:
     mask = 0
     for term in terms:
         mask |= _BITS[term]
@@ -486,12 +492,12 @@ def fused_terms(
     One forward kernel pass computes them all and one backward pass writes a
     single combined gradient. Names are keys of ``TERM_SLOTS``.
     """
-    mask = _mask(terms)
+    mask = terms_mask(terms)
     losses, _ = _FusedLoss.apply(logits, targets, mask, mask)
     return {term: losses[TERM_SLOTS[term]] for term in terms}
 
 
-def _compose(
+def compose_loss(
     name: str, terms: dict[str, torch.Tensor], eta: float = 3.0
 ) -> torch.Tensor:
     """Build a named loss from its primitive terms (see ``LOSS_TERMS``)."""
@@ -536,13 +542,13 @@ def fused_compound(
     loss_terms = sorted(
         {t for name in names for t in LOSS_TERMS[name]}, key=lambda t: _BITS[t]
     )
-    grad_mask = _mask(loss_terms)
+    grad_mask = terms_mask(loss_terms)
     losses, argmax = _FusedLoss.apply(
-        logits, targets, grad_mask | _mask(metric_terms), grad_mask
+        logits, targets, grad_mask | terms_mask(metric_terms), grad_mask
     )
     terms = {t: losses[TERM_SLOTS[t]] for t in loss_terms}
     return FusedOutputs(
-        losses={name: _compose(name, terms) for name in names},
+        losses={name: compose_loss(name, terms) for name in names},
         metrics={t: losses[TERM_SLOTS[t]].detach() for t in metric_terms},
         pred_ids=argmax[0],
         target_ids=argmax[1],
@@ -587,7 +593,7 @@ def fused_tv_loss(logits, targets):
 
 def fused_nla_loss(logits, targets):
     """Per-position negative-log-acceptance ``[1, T] = -log(alpha)``; composes on TV."""
-    return _compose("nla", fused_terms(logits, targets, ("tv",)))
+    return compose_loss("nla", fused_terms(logits, targets, ("tv",)))
 
 
 def fused_lk_hybrid_loss(logits, targets, eta: float = 3.0):
@@ -595,4 +601,4 @@ def fused_lk_hybrid_loss(logits, targets, eta: float = 3.0):
     composed as in ``lk_hybrid_loss`` (blend weight detached).
     """
     terms = fused_terms(logits, targets, ("kl_div", "tv"))
-    return _compose("lk_hybrid", terms, eta=eta)
+    return compose_loss("lk_hybrid", terms, eta=eta)
