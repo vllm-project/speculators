@@ -312,6 +312,7 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
             "dpace_alpha": dpace_alpha,
             "fused_linear": fused_linear,
             "fused_linear_targets": kwargs.get("fused_linear_targets", "recompute"),
+            "fused_linear_logits": kwargs.get("fused_linear_logits", "input"),
         }
         return dict(shared), dict(shared)
 
@@ -533,6 +534,7 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
         dpace_alpha: float = 0.5,
         fused_linear: bool = False,
         fused_linear_targets: str = "recompute",
+        fused_linear_logits: str = "input",
         **kwargs,
     ):
         recompute_targets = fused_linear and fused_linear_targets == "recompute"
@@ -567,6 +569,10 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
                 target_weight=(
                     self.verifier_lm_head.weight if recompute_targets else None
                 ),
+                logits_dtype=fused_linear_logits,
+                # aligned_loss_mask masks slot 0 when not sampling from the
+                # anchor (above), so those rows need not be projected at all.
+                skip_anchor_rows=True,
                 **metric_kwargs,
             )
             return None, loss, metrics
