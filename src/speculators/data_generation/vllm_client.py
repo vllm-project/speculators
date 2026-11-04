@@ -4,12 +4,11 @@ import functools
 import logging
 import os
 import time
-from typing import TYPE_CHECKING, Any, TypedDict
+from typing import TYPE_CHECKING, Any, NotRequired, TypedDict
 
 import openai
 from openai.types.chat import ChatCompletion, ChatCompletionMessageParam
 from openai.types.completion import Completion
-from typing_extensions import NotRequired
 
 if TYPE_CHECKING:
     from collections.abc import Coroutine
@@ -131,6 +130,51 @@ class ClientItem(TypedDict):
     instead of passing `token_ids` to Completions API."""
 
 
+def has_multimodal_content(messages: list[dict]) -> bool:
+    """True when any turn carries non-text content (images, video, audio).
+
+    Turns store ``content`` as a plain string or, after ``_adapt_conv_for_vllm``,
+    as a list of typed parts, e.g. ``[{"type": "text", ...}, {"type": "image_url",
+    ...}]``. Only a part whose type is not ``text`` makes the turn multimodal.
+    """
+    return any(
+        isinstance(m.get("content"), list)
+        and any(part.get("type") != "text" for part in m["content"])
+        for m in messages
+    )
+
+
+def validate_vllm_model(
+    endpoint: str,
+    requested_model: str,
+) -> None:
+    """Validate that a vLLM endpoint exposes the requested model.
+
+    This synchronous startup check is intended to run in the training process
+    before DataLoader workers are created. Generation workers do not repeat
+    endpoint discovery.
+    """
+    client = openai.OpenAI(
+        base_url=endpoint,
+        api_key="EMPTY",
+        max_retries=0,
+    )
+    try:
+        list_models = client.models.list()
+        if not list_models.data:
+            raise RuntimeError("No models found on the vLLM server")
+        model_id = list_models.data[0].id
+        if requested_model != model_id:
+            raise ValueError(
+                f"An explicit model name was passed ({requested_model}) which "
+                f"doesn't match found model_id {model_id}."
+                "Please make sure --endpoint is set to the correct vllm "
+                "instance."
+            )
+    finally:
+        client.close()
+
+
 async def _poll_lock_async(fd, poll_interval):
     while True:
         try:
@@ -140,10 +184,15 @@ async def _poll_lock_async(fd, poll_interval):
             await asyncio.sleep(poll_interval)
 
 
-async def wait_for_lock_async(lock_path, timeout=10.0, poll_interval=0.1):
+async def wait_for_lock_async(
+    lock_path,
+    timeout=10.0,  # noqa: ASYNC109
+    poll_interval=0.1,
+):
     fd = os.open(lock_path, os.O_RDWR)
     try:
-        await asyncio.wait_for(_poll_lock_async(fd, poll_interval), timeout=timeout)
+        async with asyncio.timeout(timeout):
+            await _poll_lock_async(fd, poll_interval)
     except BaseException:
         os.close(fd)
         raise
@@ -192,7 +241,7 @@ async def generate_hidden_states_async(
     model: str,
     client_item: ClientItem,
     *,
-    timeout: float | None = DEFAULT_REQUEST_TIMEOUT,
+    timeout: float | None = DEFAULT_REQUEST_TIMEOUT,  # noqa: ASYNC109
 ) -> tuple[str, dict[str, Any]]:
     """
     Runs decode with ``max_tokens=1`` and returns the generation handle together
@@ -232,7 +281,8 @@ async def generate_hidden_states_async(
 
     res: Completion | ChatCompletion
     if timeout is not None:
-        res = await asyncio.wait_for(coro, timeout=timeout)
+        async with asyncio.timeout(timeout):
+            res = await coro
     else:
         res = await coro
 

@@ -345,6 +345,24 @@ def test_on_generate_yaml_warns_deprecated(tmp_path):
         )
 
 
+def test_peagle_flag_warns_deprecated():
+    with pytest.warns(FutureWarning, match="P-EAGLE is deprecated"):
+        TrainConfig.from_sources(
+            cli={"verifier_name_or_path": "m", "speculator_type": "peagle"},
+            argv=["train.py"],
+        )
+
+
+def test_peagle_yaml_warns_deprecated(tmp_path):
+    config_path = _write(tmp_path, "train:\n  speculator_type: peagle\n")
+    with pytest.warns(FutureWarning, match="P-EAGLE is deprecated"):
+        TrainConfig.from_sources(
+            cli={"verifier_name_or_path": "m"},
+            config_path=config_path,
+            argv=["train.py"],
+        )
+
+
 def test_default_on_generate_does_not_warn():
     with warnings.catch_warnings():
         warnings.simplefilter("error")
@@ -402,6 +420,8 @@ def test_resolve_dflash2_flags_and_derived_defaults():
             "12",
             "--selector-loss-alpha",
             "0.3",
+            "--selector-miss-policy",
+            "strict",
         ]
     )
     flat = cfg.flatten()
@@ -414,6 +434,7 @@ def test_resolve_dflash2_flags_and_derived_defaults():
     assert flat["selector_rank"] == 128
     assert flat["selector_top_k"] == 12
     assert flat["selector_loss_alpha"] == pytest.approx(0.3)
+    assert flat["selector_miss_policy"] == "strict"
 
 
 def test_resolve_dflash2_allows_explicit_causal_override():
@@ -482,6 +503,14 @@ def test_resolve_flag_overrides_config_file(tmp_path):
         ["--verifier-name-or-path", "m", "--config", str(config), "--lr", "0.5"]
     )
     assert cfg.flatten()["lr"] == 0.5
+
+
+def test_resolve_max_transfer_workers():
+    cfg = TrainConfig.resolve(
+        ["--verifier-name-or-path", "m", "--max-transfer-workers", "1"]
+    )
+
+    assert cfg.flatten()["max_transfer_workers"] == 1
 
 
 def test_help_is_grouped_by_concern():

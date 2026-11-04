@@ -10,6 +10,10 @@ embedding / LM-head matrices, following standard Muon practice).
 Muon works transparently for both single-GPU and multi-GPU (FSDP2) training: when the
 model is sharded with ``fully_shard`` the parameters become ``DTensor``s and Muon's
 Newton-Schulz orthogonalization dispatches across ranks automatically.
+
+AdamW runs its update in a single fused kernel by default. ``--optimizer-implementation
+eager`` selects PyTorch's default (foreach) path instead, for accelerators or dtypes
+where the fused kernel is unsupported.
 """
 
 import logging
@@ -74,12 +78,15 @@ def build_optimizers(model: Module, config) -> list[torch.optim.Optimizer]:
     :return: A list of optimizers for the trainer to step in tandem. The default
         "adamw" returns a single optimizer; "muon" returns ``[Muon, AdamW]``.
     """
+    fused = config.optimizer_implementation == "fused"
+
     if config.optimizer == "adamw":
         return [
             torch.optim.AdamW(
                 model.named_parameters(),
                 lr=config.lr,
                 weight_decay=config.weight_decay,
+                fused=fused,
             )
         ]
 
@@ -109,6 +116,7 @@ def build_optimizers(model: Module, config) -> list[torch.optim.Optimizer]:
                     adamw_params,
                     lr=config.lr,
                     weight_decay=config.weight_decay,
+                    fused=fused,
                 )
             )
         if not optimizers:

@@ -1,12 +1,8 @@
 import os
 import re
+import tomllib
 import warnings
 from pathlib import Path
-
-try:
-    import tomllib
-except ImportError:
-    import tomli as tomllib
 
 from packaging.version import Version
 from setuptools import setup

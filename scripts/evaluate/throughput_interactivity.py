@@ -660,7 +660,7 @@ def write_provenance(out_dir: Path, args: argparse.Namespace) -> None:
     One block per `collect` invocation, since a sweep is often built up by
     several calls into one directory (short and long windows, added points).
     """
-    now = datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds")
+    now = datetime.datetime.now(datetime.UTC).isoformat(timespec="seconds")
     lines = [
         f"timestamp: {now}",
         f"command: {shlex.join([sys.executable, *sys.argv])}",

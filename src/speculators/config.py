@@ -23,8 +23,15 @@ from importlib.metadata import version
 from typing import Any, ClassVar
 
 import torch
-from pydantic import BaseModel, ConfigDict, Field, model_validator
-from transformers import PretrainedConfig
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    field_serializer,
+    field_validator,
+    model_validator,
+)
+from transformers import AutoConfig, PretrainedConfig
 
 from speculators.proposals import TokenProposalConfig
 from speculators.utils import PydanticClassRegistryMixin, ReloadableBaseModel
@@ -306,6 +313,25 @@ class SpeculatorModelConfig(PydanticClassRegistryMixin, PretrainedConfig):
         # ensure we always update the transformers version
         self.transformers_version = version("transformers")
 
+    @field_serializer("transformer_layer_config", check_fields=False)
+    def serialize_transformer_config(self, value: PretrainedConfig) -> dict[str, Any]:
+        """Serialize a decoder config using the Transformers diff format."""
+        return value.to_diff_dict()
+
+    @field_validator("transformer_layer_config", mode="before", check_fields=False)
+    @classmethod
+    def validate_transformer_config(cls, value: Any) -> PretrainedConfig:
+        """Resolve decoder dictionaries, retaining each subclass's default type."""
+        if not isinstance(value, dict):
+            return value
+
+        if "model_type" in value:
+            config_class = AutoConfig.for_model(value["model_type"]).__class__
+        else:
+            field = cls.model_fields["transformer_layer_config"]
+            config_class = type(field.get_default(call_default_factory=True))
+        return config_class(**value)
+
     def to_dict(self) -> dict[str, Any]:
         """
         :return: A dictionary representation of the full config, including the
@@ -378,9 +404,10 @@ class SpeculatorModelConfig(PydanticClassRegistryMixin, PretrainedConfig):
 
 def reload_schemas():
     """
-    Automatically populates the registry for all PydanticClassRegistryMixin subclasses
-    and reloads schemas for all Config classes to ensure their schemas are up-to-date
-    with the current registry state.
+    Rebuild config schemas after importing and registering implementations.
+
+    Registration does not rebuild Pydantic's tagged unions. Rebuild proposals
+    before their containing config, then rebuild model configs.
     """
     TokenProposalConfig.reload_schema()
     SpeculatorsConfig.reload_schema()
