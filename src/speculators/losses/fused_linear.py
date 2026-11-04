@@ -58,10 +58,16 @@ def _out_dtype(hidden: torch.Tensor) -> torch.dtype:
 
 
 def _project(hidden: torch.Tensor, weight: torch.Tensor) -> torch.Tensor:
-    """``hidden @ weight.T`` with an fp32 (or wider) result from the accumulator."""
-    if hidden.dtype in (torch.float16, torch.bfloat16):
-        return torch.mm(hidden, weight.t(), out_dtype=torch.float32)
-    return hidden @ weight.t()
+    """``hidden @ weight.T`` with an fp32 (or wider) result from the accumulator.
+
+    Autocast is disabled: forward and backward must compute bit-identical
+    logits from the operands as given (the wrapper casts them for autocast),
+    or the saved softmax statistics would not match the recomputed logits.
+    """
+    with torch.autocast(hidden.device.type, enabled=False):
+        if hidden.dtype in (torch.float16, torch.bfloat16):
+            return torch.mm(hidden, weight.t(), out_dtype=torch.float32)
+        return hidden @ weight.t()
 
 
 def _chunks(rows: int, chunk_rows: int):
@@ -239,7 +245,8 @@ def _fused_linear_bwd(
                 vocab,
                 TERMS=grad_terms,
             )
-        torch.mm(dz, weight, out=d_hidden[start:end])
+        with torch.autocast(hidden.device.type, enabled=False):
+            torch.mm(dz, weight, out=d_hidden[start:end])
         del z, dz
     return d_hidden
 
@@ -318,6 +325,19 @@ def fused_linear_compound(
     # the inputs already are.
     flat_hidden = hidden.reshape(-1, hidden.shape[-1]).contiguous()
     flat_targets = targets.reshape(-1, targets.shape[-1]).contiguous()
+    device_type = flat_hidden.device.type
+    if torch.is_autocast_enabled(device_type):
+        # The operands autocast would give lm_head (the same bf16 weight copy);
+        # the ops run with autocast off, so forward and the backward recompute
+        # see identical logits.
+        compute_dtype = torch.get_autocast_dtype(device_type)
+        flat_hidden = flat_hidden.to(compute_dtype)
+        weight = weight.to(compute_dtype)
+    elif weight.dtype != flat_hidden.dtype:
+        raise ValueError(
+            f"hidden ({flat_hidden.dtype}) and weight ({weight.dtype}) dtypes "
+            "differ; cast them or run under torch.autocast"
+        )
     rows, vocab = flat_hidden.shape[0], weight.shape[0]
     if flat_targets.shape != (rows, vocab):
         raise ValueError(

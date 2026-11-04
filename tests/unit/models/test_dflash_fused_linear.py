@@ -166,3 +166,36 @@ def test_training_step_bf16():
             grads_fl[name].flatten(), grad.flatten(), dim=0
         )
         assert cosine > 0.99, (name, float(cosine))
+
+
+@requires_gpu
+@pytest.mark.parametrize("params", [torch.float32, torch.bfloat16], ids=str)
+@pytest.mark.parametrize("compiled", [False, True])
+def test_training_step_under_autocast(params, compiled):
+    """As the trainer runs it: autocast(bf16), fp32 params (DDP) or bf16 params
+    (FSDP param_dtype). fused_linear keeps the logits fp32, so it differs from
+    the bf16-logit path by bf16 rounding only."""
+    if compiled:
+        torch._dynamo.reset()
+    model = _model(False, params)
+    inputs = _inputs(torch.bfloat16)
+    stance = "default" if compiled else "force_eager"
+    results = {}
+    for implementation in ("fused", "fused_linear"):
+        with (
+            torch.compiler.set_stance(stance),
+            torch.autocast("cuda", dtype=torch.bfloat16),
+        ):
+            results[implementation] = _step(
+                model, inputs, "kl_div", implementation, "fixed-exp-decay"
+            )
+    loss, _, grads = results["fused"]
+    loss_fl, _, grads_fl = results["fused_linear"]
+    torch.testing.assert_close(loss_fl, loss, rtol=1e-2, atol=1e-4)
+    assert grads_fl.keys() == grads.keys()
+    for name, grad in grads.items():
+        assert torch.isfinite(grads_fl[name]).all(), name
+        cosine = torch.nn.functional.cosine_similarity(
+            grads_fl[name].flatten(), grad.flatten(), dim=0
+        )
+        assert cosine > 0.99, (name, float(cosine))
