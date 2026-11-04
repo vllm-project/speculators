@@ -458,3 +458,55 @@ def test_ce_only_loss_releases_targets(names, keeps_targets):
         assert freed < nbytes // 2
     else:
         assert freed >= nbytes
+
+
+def test_mismatched_dtypes_without_autocast_raise():
+    h, w, t = _inputs(8, 4, 10, torch.float32, "cpu")
+    with pytest.raises(ValueError, match="dtypes differ"):
+        fl.fused_linear_compound(h, w.double(), t, ("kl_div",))
+
+
+@requires_accelerator
+@pytest.mark.parametrize("compiled", [False, True])
+def test_autocast_uses_one_operand_dtype_in_both_directions(compiled):
+    """The trainer runs under autocast(bf16) with fp32 params (DDP). Forward
+    and the backward recompute must see the same bf16 operands; result is
+    bitwise that of passing the bf16 operands explicitly."""
+    h, w, t = _inputs(200, 64, 3000, torch.float32, DEVICE, seed=15)
+    t = t.bfloat16()
+    names = ("kl_div", "tv")
+
+    def under_autocast(x):
+        with torch.autocast(str(DEVICE), dtype=torch.bfloat16):
+            return fl.fused_linear_compound(x, w, t, names, chunk_rows=64)
+
+    fn = torch.compile(under_autocast, fullgraph=True) if compiled else under_autocast
+    out, grad = _run(fn, h, names)
+    explicit, explicit_grad = _run(
+        lambda x: fl.fused_linear_compound(
+            x.bfloat16(), w.bfloat16(), t, names, chunk_rows=64
+        ),
+        h,
+        names,
+    )
+    for name in names:
+        assert torch.equal(out.losses[name], explicit.losses[name]), name
+    assert torch.equal(grad, explicit_grad)
+    assert grad.dtype == torch.float32
+
+    # and consistent with the materialized loss on those fp32 logits
+    def materialized(x):
+        # bf16 products are exact in fp32: same math as the out_dtype GEMM,
+        # but differentiable
+        logits = x.bfloat16().float() @ w.bfloat16().float().T
+        return _materialized(logits, t, names)
+
+    ref, ref_grad = _run(materialized, h, names)
+    for name in names:
+        torch.testing.assert_close(
+            out.losses[name], ref.losses[name], rtol=1e-5, atol=1e-6
+        )
+    # d hidden is formed in bf16 (dz and dz @ W), as on today's path; the
+    # reference is fp32 throughout, so allow one bf16 ulp of the largest entry
+    atol = 4e-3 * float(ref_grad.abs().max())
+    torch.testing.assert_close(grad, ref_grad, rtol=1e-2, atol=atol)
