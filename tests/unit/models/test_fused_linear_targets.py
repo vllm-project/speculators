@@ -94,12 +94,17 @@ def test_validation():
 
 
 def test_chunk_rows_count_the_target_tile(monkeypatch):
-    monkeypatch.delenv("SPECULATORS_FUSED_LINEAR_BUDGET_MIB", raising=False)
-    # 4 GiB / (151936 * (4 + 4 + 2) B) = 2826 -> 2048 rows
+    monkeypatch.setenv("SPECULATORS_FUSED_LINEAR_BUDGET_MIB", "1024")
+    v, bf16 = 151936, torch.bfloat16
+    # fp32 tiles: 1 GiB / (v * (4 + 4 + 2) B) = 706 -> 512 rows
     assert (
-        fl.chunk_rows_for(151936, torch.bfloat16, 16384, recompute_targets=True) == 2048
+        fl.chunk_rows_for(v, bf16, 16384, recompute_targets=True, fp32_logits=True)
+        == 512
     )
-    assert fl.chunk_rows_for(151936, torch.bfloat16, 16384) == 4096
+    # bf16 tiles: 1 GiB / (v * (2 + 2 + 2) B) = 1177 -> 1024 rows
+    assert fl.chunk_rows_for(v, bf16, 16384, recompute_targets=True) == 1024
+    # deferred kl_div + tv holds two dz tiles: 1 GiB / (v * 8 B) = 883 -> 512
+    assert fl.chunk_rows_for(v, bf16, 16384, recompute_targets=True, dz_tiles=2) == 512
 
 
 # ---------------------------------------------------------------------------
@@ -113,20 +118,40 @@ TERM_SETS = [("kl_div",), ("ce",), ("kl_div", "tv"), ("jsd", "rkl", "ce", "tv")]
 @pytest.mark.parametrize("dtype", [torch.float32, torch.bfloat16], ids=str)
 @pytest.mark.parametrize("names", TERM_SETS, ids=["+".join(n) for n in TERM_SETS])
 @pytest.mark.parametrize("vocab", [1000, 151936])
-def test_matches_materialized_fp32_targets(dtype, names, vocab):
-    """CE-only sets also check that backward skips the target GEMM."""
+@pytest.mark.parametrize("logits_dtype", ["input", "float32"])
+def test_matches_materialized_targets(dtype, names, vocab, logits_dtype):
+    """Recomputed target logits equal the same logits materialized (fp32 tiles:
+    fp32 logits; input tiles: logits in the input dtype). CE-only sets also
+    check that a recompute backward skips the target GEMM."""
+    tol = {"rtol": 1e-5, "atol": 1e-5}
+    if logits_dtype == "input" and dtype == torch.bfloat16:
+        # chunked vs full bf16 GEMM may round a logit differently by one ulp
+        tol = {"rtol": 2e-2, "atol": 2e-3}
     h, w, vh, tw = _inputs(300, 64, 48, vocab, dtype, DEVICE, seed=2)
     out, grad = _run(
         lambda x: fl.fused_linear_compound(
-            x, w, vh, names, metric_terms=("tv",), chunk_rows=128, target_weight=tw
+            x,
+            w,
+            vh,
+            names,
+            metric_terms=("tv",),
+            chunk_rows=128,
+            target_weight=tw,
+            logits_dtype=logits_dtype,
         ),
         h,
         names,
     )
-    logits = _target_logits(vh, tw)
+    logits = _target_logits(vh, tw) if logits_dtype == "float32" else (vh @ tw.T)
     ref, ref_grad = _run(
         lambda x: fl.fused_linear_compound(
-            x, w, logits, names, metric_terms=("tv",), chunk_rows=128
+            x,
+            w,
+            logits,
+            names,
+            metric_terms=("tv",),
+            chunk_rows=128,
+            logits_dtype=logits_dtype,
         ),
         h,
         names,
@@ -134,15 +159,21 @@ def test_matches_materialized_fp32_targets(dtype, names, vocab):
     # same GEMM per chunk vs one full GEMM: equal up to accumulation order
     for name in names:
         torch.testing.assert_close(
-            out.losses[name], ref.losses[name], rtol=1e-5, atol=1e-5
+            out.losses[name], ref.losses[name], rtol=tol["rtol"], atol=tol["atol"]
         )
     torch.testing.assert_close(
-        out.metrics["tv"], ref.metrics["tv"], rtol=1e-5, atol=1e-5
+        out.metrics["tv"], ref.metrics["tv"], rtol=tol["rtol"], atol=tol["atol"]
     )
-    assert torch.equal(out.pred_ids, ref.pred_ids)
-    assert torch.equal(out.target_ids, ref.target_ids)
-    atol = 1e-4 * float(ref_grad.abs().max())
-    torch.testing.assert_close(grad, ref_grad, rtol=1e-3, atol=atol)
+    if tol["rtol"] < 1e-3:
+        assert torch.equal(out.pred_ids, ref.pred_ids)
+        assert torch.equal(out.target_ids, ref.target_ids)
+        atol = 1e-4 * float(ref_grad.abs().max())
+        torch.testing.assert_close(grad, ref_grad, rtol=1e-3, atol=atol)
+    else:  # one-ulp bf16 logit differences can flip near-ties
+        assert (out.pred_ids == ref.pred_ids).float().mean() > 0.99
+        assert (out.target_ids == ref.target_ids).float().mean() > 0.99
+        atol = 2e-2 * float(ref_grad.abs().max())
+        torch.testing.assert_close(grad, ref_grad, rtol=2e-2, atol=atol)
 
 
 @requires_cuda

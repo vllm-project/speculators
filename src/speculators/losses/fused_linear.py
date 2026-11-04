@@ -1,28 +1,36 @@
 """Fused linear losses: drafter losses straight from hidden states.
 
 The draft logits ``hidden @ weight.T`` are computed one row chunk at a time
-into an fp32 scratch tile, reduced by the multi-term vocab kernel from
-``losses.fused``, and dropped; backward recomputes each chunk's logits and
-writes ``d hidden = dz @ weight`` chunk by chunk. Neither the ``[N, V]``
-draft logits nor their ``[N, V]`` gradient ever exist, and the logits reach
-the reduction in fp32 straight from the GEMM accumulator (``out_dtype``)
-instead of rounded to bf16.
+into a scratch tile, reduced by the vocab kernels from ``losses.fused``, and
+dropped, so the ``[N, V]`` draft logits and their gradient never exist.
+Targets come in either as materialized ``[N, V]`` logits, or as the post-norm
+verifier hidden states ``[N, H_t]`` plus the frozen verifier ``lm_head``
+weight, in which case each chunk's target logits are computed the same way
+and no ``[N, V]`` tensor exists at all. Targets receive no gradient; the
+draft weight must be frozen.
 
-The per-row loss contract is unchanged: the op returns unreduced per-term
-losses and takes a per-row ``grad_output`` per term, so masking, decay,
-D-PACE and term weights stay in ``losses.utils``.
+Gradients, two modes:
 
-Two ``torch.library.custom_op``s (forward and backward) keep the chunk loop
-opaque to torch.compile: traced, it would be unrolled per chunk count and
-recompile whenever the row count changes. Per-row statistics are returned
-as an output and saved in ``setup_context``.
+- **deferred** (default for at most two differentiated terms): forward also
+  writes each term's unit-weight logits gradient for the chunk and contracts
+  it with the weight right away, ``jac_t = (d loss_t / d z) @ W``. Backward is
+  ``d hidden = sum_t grad_output_t[:, None] * jac_t``: no GEMM, nothing
+  recomputed, and only ``jac`` (``[terms, N, H]``) is kept for backward. This
+  is exact because every loss weight -- mask, decay, D-PACE, term weight --
+  is a per-row scalar applied after the loss. Same GEMM count as
+  materialized logits (draft, target, ``dz @ W``).
+- **recompute**: forward computes losses and per-row statistics only;
+  backward recomputes each chunk's logits and writes ``dz @ W``.
 
-Targets come in either as materialized ``[N, V]`` logits, or as the
-(post-norm) verifier hidden states ``[N, H_t]`` plus the frozen verifier
-``lm_head`` weight, in which case the target logits are recomputed per chunk
-the same way and no ``[N, V]`` tensor exists at all. Targets receive no
-gradient. The draft weight must be frozen; trainable draft weights are not
-supported yet.
+Logit tiles are in the input dtype by default (bf16 in training, like
+materialized logits); ``logits_dtype="float32"`` takes them in fp32 straight
+from the GEMM accumulator -- more accurate, ~20% slower GEMMs.
+
+The per-row loss contract is unchanged: unreduced per-term losses, a per-row
+``grad_output`` per term, so masking, decay, D-PACE and term weights stay in
+``losses.utils``. The chunk loops are ``torch.library.custom_op``s, opaque to
+torch.compile (traced, they would unroll per chunk count and recompile when
+the row count changes).
 """
 
 import os
@@ -34,32 +42,47 @@ from speculators.losses import fused
 
 __all__ = ["chunk_rows_for", "fused_linear_compound"]
 
-# Peak scratch the chunk loop may use, in MiB. Measured on MI355X: chunks of
-# <= 256 rows cost 1.5-4.6x a full GEMM at V = 152k and 1024 rows 1.2-1.45x,
-# 2048 rows about 1.18x (PR 0 gemm-sweep). 4 GiB gives 2048-row chunks with
-# recomputed targets (10 B per row and vocab entry at bf16): 16k x 110k
-# loss head 165 -> 140 ms vs 2 GiB, still ~0.65x one [N, V] tensor.
+# Peak scratch the chunk loop may use, in MiB, and the chunk-size cap.
+# Measured on MI355X (hipBLASLt, H = 4096, V = 152k, ms per 1k rows): the
+# projection runs at full-GEMM speed from ~768 rows up; the dz @ W
+# contraction is shape-sensitive -- 1.80-1.91 at 1024, 1792, 2048, 4096,
+# 6144 and 8192 rows but 2.4-3.1 at 1536, 3072, 3584, 3840 and 5120. 2048-row
+# chunks are the fastest for both GEMMs and halve the scratch of 4096, so the
+# budget only lowers the chunk below that (e.g. fp32 tiles at large V).
 _BUDGET_ENV = "SPECULATORS_FUSED_LINEAR_BUDGET_MIB"
 _DEFAULT_BUDGET_MIB = 4096
 _MIN_CHUNK_ROWS = 64
+_MAX_CHUNK_ROWS = 2048
 _LOG2 = 0.6931471805599453
+GRAD_MODES = ("auto", "deferred", "recompute")
+LOGITS_DTYPES = ("input", "float32")
+# auto picks deferred up to this many differentiated terms: jac costs one
+# [N, H] tensor and one dz @ W GEMM per term in forward.
+_MAX_DEFERRED_TERMS = 2
 
 
 def chunk_rows_for(
-    vocab: int, dtype: torch.dtype, rows: int, recompute_targets: bool = False
+    vocab: int,
+    dtype: torch.dtype,
+    rows: int,
+    recompute_targets: bool = False,
+    fp32_logits: bool = False,
+    dz_tiles: int = 1,
 ) -> int:
-    """Rows per chunk: the largest power of two whose scratch fits the budget.
+    """Rows per chunk: the largest power of two whose scratch fits the
+    budget, capped at ``_MAX_CHUNK_ROWS``; the last chunk takes the remainder.
 
-    Per row the loop holds an fp32 draft-logits row, an fp32 target-logits
-    row when targets are recomputed, and, in backward, an input-dtype ``dz``
-    row.
+    Per row the loop holds a draft-logits row, a target-logits row when
+    targets are recomputed (both fp32 or input dtype), and ``dz_tiles``
+    input-dtype gradient rows (one per term in deferred mode).
     """
     budget = int(os.environ.get(_BUDGET_ENV, _DEFAULT_BUDGET_MIB)) * 1024**2
-    target_bytes = 4 if recompute_targets else 0
-    per_row = vocab * (4 + target_bytes + torch.empty((), dtype=dtype).element_size())
+    elem = torch.empty((), dtype=dtype).element_size()
+    tile = 4 if fp32_logits else elem
+    per_row = vocab * (tile * (2 if recompute_targets else 1) + elem * dz_tiles)
     fit = max(budget // per_row, 1)
     chunk = max(1 << (fit.bit_length() - 1), _MIN_CHUNK_ROWS)
-    return min(chunk, max(rows, 1))
+    return min(chunk, _MAX_CHUNK_ROWS, max(rows, 1))
 
 
 def _out_dtype(hidden: torch.Tensor) -> torch.dtype:
@@ -67,22 +90,37 @@ def _out_dtype(hidden: torch.Tensor) -> torch.dtype:
     return torch.promote_types(torch.float32, hidden.dtype)
 
 
-def _project(hidden: torch.Tensor, weight: torch.Tensor) -> torch.Tensor:
-    """``hidden @ weight.T`` with an fp32 (or wider) result from the accumulator.
+def _project(hidden: torch.Tensor, weight: torch.Tensor, fp32: bool) -> torch.Tensor:
+    """``hidden @ weight.T``; fp32 straight from the accumulator if ``fp32``.
 
-    Autocast is disabled: forward and backward must compute bit-identical
-    logits from the operands as given (the wrapper casts them for autocast),
-    or the saved softmax statistics would not match the recomputed logits.
+    Autocast is disabled: forward and a backward recompute must produce
+    bit-identical logits from the operands as given (the wrapper casts them
+    for autocast), or saved statistics would not match recomputed logits.
     """
     with torch.autocast(hidden.device.type, enabled=False):
-        if hidden.dtype in (torch.float16, torch.bfloat16):
+        if fp32 and hidden.dtype in (torch.float16, torch.bfloat16):
             return torch.mm(hidden, weight.t(), out_dtype=torch.float32)
         return hidden @ weight.t()
+
+
+def _contract(dz: torch.Tensor, weight: torch.Tensor) -> torch.Tensor:
+    """``dz @ weight`` with an fp32 (or wider) result: ``jac`` stays unrounded
+    until backward scales and sums it (the output is small, so this costs no
+    GEMM time)."""
+    with torch.autocast(dz.device.type, enabled=False):
+        if dz.dtype in (torch.float16, torch.bfloat16):
+            return torch.mm(dz, weight, out_dtype=torch.float32)
+        return dz @ weight
 
 
 def _chunks(rows: int, chunk_rows: int):
     for start in range(0, rows, chunk_rows):
         yield start, min(start + chunk_rows, rows)
+
+
+def _grad_term_names(grad_terms: int) -> list[str]:
+    """Differentiated primitive terms in slot order (the jac / dz order)."""
+    return [name for name, bit in fused.TERM_BITS.items() if grad_terms & bit]
 
 
 # ---------------------------------------------------------------------------
@@ -157,16 +195,56 @@ def _ref_backward_chunk(z, targets, grad_out, stats, terms) -> torch.Tensor:
 # ---------------------------------------------------------------------------
 
 
-def _target_chunk(
-    targets: torch.Tensor,
-    target_weight: torch.Tensor | None,
-    start: int,
-    end: int,
-) -> torch.Tensor:
+def _target_chunk(targets, target_weight, start, end, fp32):
     """Target logits for rows ``start:end``: a slice of the materialized
-    logits, or recomputed from the verifier hidden states (fp32 tile)."""
+    logits, or computed from the verifier hidden states."""
     rows = targets[start:end]
-    return rows if target_weight is None else _project(rows, target_weight)
+    return rows if target_weight is None else _project(rows, target_weight, fp32)
+
+
+def _forward_deferred_chunk(
+    z, chunk_targets, weight, terms, grad_terms, losses, argmax, jac, start, end
+):
+    """Losses, argmaxes and ``jac[:, start:end]`` for one chunk."""
+    names = _grad_term_names(grad_terms)
+    rows, vocab = end - start, z.shape[1]
+    if z.device.type == "cpu":
+        stats = z.new_zeros((fused.N_STATS, rows))
+        _ref_forward_chunk(
+            z, chunk_targets, terms, losses[:, start:end], argmax[:, start:end], stats
+        )
+        for k, name in enumerate(names):
+            unit = z.new_zeros((fused.N_TERMS, rows))
+            unit[fused.TERM_SLOTS[name]] = 1.0
+            dz = _ref_backward_chunk(
+                z, chunk_targets, unit, stats, fused.TERM_BITS[name]
+            ).to(weight.dtype)
+            jac[k, start:end] = _contract(dz, weight)
+        return
+    # dz in the weight (input) dtype, like the materialized grad_in; jac is
+    # accumulated in fp32 so the gradient is rounded to the input dtype once.
+    dz = torch.empty((len(names), rows, vocab), device=z.device, dtype=weight.dtype)
+    slot = {name: k for k, name in enumerate(names)}
+    fused.loss_grad_kernel[(rows,)](
+        z,
+        chunk_targets,
+        losses[:, start:],
+        losses.stride(0),
+        argmax[:, start:],
+        argmax.stride(0),
+        dz,
+        rows * vocab,
+        vocab,
+        TERMS=terms,
+        GRAD_TERMS=grad_terms,
+        DZ_KL=slot.get("kl_div", 0),
+        DZ_RKL=slot.get("rkl", 0),
+        DZ_JSD=slot.get("jsd", 0),
+        DZ_CE=slot.get("ce", 0),
+        DZ_TV=slot.get("tv", 0),
+    )
+    for k in range(len(names)):
+        jac[k, start:end] = _contract(dz[k], weight)
 
 
 @torch.library.custom_op("speculators::fused_linear_loss_fwd", mutates_args=())
@@ -178,24 +256,42 @@ def _fused_linear_fwd(
     terms: int,
     grad_terms: int,
     chunk_rows: int,
-) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-    """Per-term losses ``[_N_TERMS, N]``, argmax ``[2, N]`` and stats ``[_N_STATS, N]``.
+    deferred: bool,
+    fp32_logits: bool,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+    """Losses ``[_N_TERMS, N]``, argmax ``[2, N]``, stats ``[_N_STATS, N]``, jac.
 
     ``targets`` is ``[N, V]`` logits, or ``[N, H_t]`` verifier hidden states
-    when ``target_weight`` (``[V, H_t]``) is given. ``grad_terms`` (a subset
-    of ``terms``) is only consumed by the autograd registration; slots of
-    terms outside ``terms`` are zero.
+    when ``target_weight`` (``[V, H_t]``) is given. With ``deferred``, ``jac``
+    is ``[n_grad_terms, N, H]`` (one unit-weight ``d loss / d hidden`` per
+    differentiated term, slot order) and stats are unused; otherwise ``jac``
+    is empty and stats feed the recompute backward. Slots of terms outside
+    ``terms`` are zero.
     """
-    del grad_terms
     rows, vocab = hidden.shape[0], weight.shape[0]
     dtype = _out_dtype(hidden)
     losses = hidden.new_zeros((fused.N_TERMS, rows), dtype=dtype)
     argmax = hidden.new_zeros((2, rows), dtype=torch.int64)
     stats = hidden.new_zeros((fused.N_STATS, rows), dtype=dtype)
+    n_jac = len(_grad_term_names(grad_terms)) if deferred else 0
+    jac = hidden.new_empty((n_jac, rows if n_jac else 0, hidden.shape[1]), dtype=dtype)
     for start, end in _chunks(rows, chunk_rows):
-        z = _project(hidden[start:end], weight)
-        chunk_targets = _target_chunk(targets, target_weight, start, end)
-        if hidden.device.type == "cpu":
+        z = _project(hidden[start:end], weight, fp32_logits)
+        chunk_targets = _target_chunk(targets, target_weight, start, end, fp32_logits)
+        if deferred:
+            _forward_deferred_chunk(
+                z,
+                chunk_targets,
+                weight,
+                terms,
+                grad_terms,
+                losses,
+                argmax,
+                jac,
+                start,
+                end,
+            )
+        elif hidden.device.type == "cpu":
             _ref_forward_chunk(
                 z,
                 chunk_targets,
@@ -219,17 +315,30 @@ def _fused_linear_fwd(
             )
         # Release the tiles before the next chunk allocates its own.
         del z, chunk_targets
-    return losses, argmax, stats
+    return losses, argmax, stats, jac
 
 
 @_fused_linear_fwd.register_fake
-def _(hidden, weight, targets, target_weight, terms, grad_terms, chunk_rows):  # noqa: ARG001
+def _(
+    hidden,
+    weight,
+    targets,
+    target_weight,
+    terms,
+    grad_terms,
+    chunk_rows,
+    deferred,
+    fp32_logits,
+):
+    del weight, targets, target_weight, terms, chunk_rows, fp32_logits
     rows = hidden.shape[0]
     dtype = _out_dtype(hidden)
+    n_jac = len(_grad_term_names(grad_terms)) if deferred else 0
     return (
         hidden.new_empty((fused.N_TERMS, rows), dtype=dtype),
         hidden.new_empty((2, rows), dtype=torch.int64),
         hidden.new_empty((fused.N_STATS, rows), dtype=dtype),
+        hidden.new_empty((n_jac, rows if n_jac else 0, hidden.shape[1]), dtype=dtype),
     )
 
 
@@ -243,19 +352,18 @@ def _fused_linear_bwd(
     stats: torch.Tensor,
     grad_terms: int,
     chunk_rows: int,
+    fp32_logits: bool,
 ) -> torch.Tensor:
-    """``d hidden``: per chunk, recompute the logits, form ``dz``, ``dz @ weight``.
-
-    Target logits are only needed (sliced or recomputed) for distribution
-    terms; CE reads its cached target argmax from ``stats``.
-    """
+    """Recompute backward: per chunk, recompute the logits, form ``dz``,
+    write ``dz @ weight``. Target logits are only needed for distribution
+    terms; CE reads its cached target argmax from ``stats``."""
     rows, vocab = hidden.shape[0], weight.shape[0]
     needs_targets = bool(grad_terms & fused.DIST_MASK)
     d_hidden = torch.empty_like(hidden)
     for start, end in _chunks(rows, chunk_rows):
-        z = _project(hidden[start:end], weight)
+        z = _project(hidden[start:end], weight, fp32_logits)
         chunk_targets = (
-            _target_chunk(targets, target_weight, start, end)
+            _target_chunk(targets, target_weight, start, end, fp32_logits)
             if needs_targets
             else targets[:0]
         )
@@ -293,24 +401,68 @@ def _(grad_losses, hidden, weight, targets, target_weight, stats, *_):
     return torch.empty_like(hidden)
 
 
+@torch.library.custom_op("speculators::fused_linear_deferred_bwd", mutates_args=())
+def _fused_linear_deferred_bwd(
+    grad_losses: torch.Tensor,
+    jac: torch.Tensor,
+    slots: list[int],
+    out_dtype: torch.dtype,
+) -> torch.Tensor:
+    """Deferred backward: ``d hidden = sum_t grad_losses[slot_t][:, None] * jac_t``,
+    accumulated in ``jac``'s dtype (fp32) and rounded once to ``out_dtype``."""
+    acc = torch.zeros(jac.shape[1:], device=jac.device, dtype=jac.dtype)
+    for k, slot in enumerate(slots):
+        acc.addcmul_(grad_losses[slot].to(jac.dtype)[:, None], jac[k])
+    return acc.to(out_dtype)
+
+
+@_fused_linear_deferred_bwd.register_fake
+def _(grad_losses, jac, slots, out_dtype):
+    del grad_losses, slots
+    return jac.new_empty(jac.shape[1:], dtype=out_dtype)
+
+
 def _setup_context(ctx, inputs, output):
-    hidden, weight, targets, target_weight, _terms, grad_terms, chunk_rows = inputs
-    _, argmax, stats = output
-    ctx.mark_non_differentiable(argmax, stats)
+    (
+        hidden,
+        weight,
+        targets,
+        target_weight,
+        _terms,
+        grad_terms,
+        chunk_rows,
+        deferred,
+        fp32_logits,
+    ) = inputs
+    _, argmax, stats, jac = output
+    ctx.mark_non_differentiable(argmax, stats, jac)
+    ctx.grad_terms = grad_terms
+    ctx.chunk_rows = chunk_rows
+    ctx.deferred = deferred
+    ctx.fp32_logits = fp32_logits
+    if deferred:
+        # Everything backward needs is already contracted into jac.
+        ctx.grad_slots = [fused.TERM_SLOTS[n] for n in _grad_term_names(grad_terms)]
+        ctx.hidden_dtype = hidden.dtype
+        ctx.save_for_backward(jac)
+        return
     # Backward reads the targets only for distribution terms; a CE-only loss
     # releases them after forward (CE caches the target argmax in stats).
     if not grad_terms & fused.DIST_MASK:
         targets = targets.new_empty((0, targets.shape[-1]))
         target_weight = None
     ctx.save_for_backward(hidden, weight, targets, target_weight, stats)
-    ctx.grad_terms = grad_terms
-    ctx.chunk_rows = chunk_rows
 
 
-def _backward(ctx, grad_losses, _grad_argmax, _grad_stats):
-    hidden, weight, targets, target_weight, stats = ctx.saved_tensors
+def _backward(ctx, grad_losses, _grad_argmax, _grad_stats, _grad_jac):
     d_hidden = None
-    if ctx.grad_terms and ctx.needs_input_grad[0]:
+    if ctx.deferred and ctx.needs_input_grad[0]:
+        (jac,) = ctx.saved_tensors
+        d_hidden = _fused_linear_deferred_bwd(
+            grad_losses.contiguous(), jac, ctx.grad_slots, ctx.hidden_dtype
+        )
+    elif ctx.grad_terms and ctx.needs_input_grad[0]:
+        hidden, weight, targets, target_weight, stats = ctx.saved_tensors
         d_hidden = _fused_linear_bwd(
             grad_losses.contiguous(),
             hidden,
@@ -320,8 +472,9 @@ def _backward(ctx, grad_losses, _grad_argmax, _grad_stats):
             stats,
             ctx.grad_terms,
             ctx.chunk_rows,
+            ctx.fp32_logits,
         )
-    return d_hidden, None, None, None, None, None, None
+    return d_hidden, None, None, None, None, None, None, None, None
 
 
 _fused_linear_fwd.register_autograd(_backward, setup_context=_setup_context)
@@ -332,32 +485,10 @@ _fused_linear_fwd.register_autograd(_backward, setup_context=_setup_context)
 # ---------------------------------------------------------------------------
 
 
-def fused_linear_compound(
-    hidden: torch.Tensor,
-    weight: torch.Tensor,
-    targets: torch.Tensor,
-    names: Sequence[str],
-    metric_terms: Sequence[str] = (),
-    chunk_rows: int | None = None,
-    target_weight: torch.Tensor | None = None,
-) -> "fused.FusedOutputs":
-    """``fused.fused_compound`` without materializing ``hidden @ weight.T``.
+def _prepare_inputs(hidden, weight, targets, target_weight):
+    """Validate and flatten the inputs; cast them for autocast.
 
-    Args:
-        hidden: ``[..., H]`` final (post-norm) draft hidden states.
-        weight: ``[V, H]`` frozen draft ``lm_head`` weight.
-        targets: rows aligned with ``hidden``: ``[..., V]`` target logits, or
-            ``[..., H_t]`` post-norm verifier hidden states when
-            ``target_weight`` is given.
-        names: named losses (keys of ``fused.LOSS_TERMS``) to differentiate.
-        metric_terms: primitive terms computed in the same pass, detached.
-        chunk_rows: rows per chunk; ``None`` sizes chunks from the budget
-            (``SPECULATORS_FUSED_LINEAR_BUDGET_MIB``, default 4096).
-        target_weight: ``[V, H_t]`` frozen verifier ``lm_head`` weight; the
-            target logits are then recomputed per chunk, never materialized.
-
-    Returns:
-        ``FusedOutputs`` whose tensors have ``hidden``'s leading shape.
+    Returns ``(flat_hidden, weight, flat_targets, target_weight)``.
     """
     if weight.requires_grad:
         raise ValueError(
@@ -366,7 +497,6 @@ def fused_linear_compound(
         )
     if target_weight is not None and target_weight.requires_grad:
         raise ValueError("target_weight (verifier lm_head) must be frozen")
-    lead = hidden.shape[:-1]
     # The kernels index targets as contiguous rows; both are no-ops when
     # the inputs already are.
     flat_hidden = hidden.reshape(-1, hidden.shape[-1]).contiguous()
@@ -374,7 +504,7 @@ def fused_linear_compound(
     device_type = flat_hidden.device.type
     if torch.is_autocast_enabled(device_type):
         # The operands autocast would give lm_head (the same bf16 weight copy);
-        # the ops run with autocast off, so forward and the backward recompute
+        # the ops run with autocast off, so forward and a backward recompute
         # see identical logits.
         compute_dtype = torch.get_autocast_dtype(device_type)
         flat_hidden = flat_hidden.to(compute_dtype)
@@ -393,40 +523,114 @@ def fused_linear_compound(
             f"({target_weight.dtype}) dtypes differ; cast them or run under "
             "torch.autocast"
         )
-    rows, vocab = flat_hidden.shape[0], weight.shape[0]
+    total_rows, vocab = flat_hidden.shape[0], weight.shape[0]
     if target_weight is not None and (
         target_weight.shape[0] != vocab
-        or flat_targets.shape != (rows, target_weight.shape[1])
+        or flat_targets.shape != (total_rows, target_weight.shape[1])
     ):
         raise ValueError(
             f"verifier hidden {tuple(targets.shape)} and target_weight "
-            f"{tuple(target_weight.shape)} do not match hidden rows {rows} and "
-            f"vocab {vocab}"
-        )
-    if target_weight is None and flat_targets.shape != (rows, vocab):
-        raise ValueError(
-            f"targets {tuple(targets.shape)} do not match hidden rows {rows} "
+            f"{tuple(target_weight.shape)} do not match hidden rows {total_rows} "
             f"and vocab {vocab}"
         )
-    if chunk_rows is None:
-        chunk_rows = chunk_rows_for(
-            vocab, flat_hidden.dtype, rows, recompute_targets=target_weight is not None
+    if target_weight is None and flat_targets.shape != (total_rows, vocab):
+        raise ValueError(
+            f"targets {tuple(targets.shape)} do not match hidden rows "
+            f"{total_rows} and vocab {vocab}"
         )
+    return flat_hidden, weight, flat_targets, target_weight
+
+
+def fused_linear_compound(
+    hidden: torch.Tensor,
+    weight: torch.Tensor,
+    targets: torch.Tensor,
+    names: Sequence[str],
+    metric_terms: Sequence[str] = (),
+    chunk_rows: int | None = None,
+    target_weight: torch.Tensor | None = None,
+    grad_mode: str = "auto",
+    logits_dtype: str = "input",
+    rows: torch.Tensor | None = None,
+) -> "fused.FusedOutputs":
+    """``fused.fused_compound`` without materializing ``hidden @ weight.T``.
+
+    Args:
+        hidden: ``[..., H]`` final (post-norm) draft hidden states.
+        weight: ``[V, H]`` frozen draft ``lm_head`` weight.
+        targets: rows aligned with ``hidden``: ``[..., V]`` target logits, or
+            ``[..., H_t]`` post-norm verifier hidden states when
+            ``target_weight`` is given.
+        names: named losses (keys of ``fused.LOSS_TERMS``) to differentiate.
+        metric_terms: primitive terms computed in the same pass, detached.
+        chunk_rows: rows per chunk; ``None`` sizes chunks from the budget
+            (``SPECULATORS_FUSED_LINEAR_BUDGET_MIB``, default 4096).
+        target_weight: ``[V, H_t]`` frozen verifier ``lm_head`` weight; the
+            target logits are then computed per chunk, never materialized.
+        grad_mode: ``"deferred"``, ``"recompute"`` or ``"auto"`` (deferred
+            for at most two differentiated terms). Without a backward pass
+            (no grad) only the losses are computed.
+        logits_dtype: ``"input"`` (logit tiles in the input dtype, as
+            materialized logits) or ``"float32"`` (fp32 from the GEMM
+            accumulator: more accurate, slower GEMMs).
+        rows: optional 1-D index of the rows to compute; every other row is
+            treated as fully masked (zero loss, zero gradient, ids 0). Use it
+            to skip rows that are masked by construction.
+
+    Returns:
+        ``FusedOutputs`` whose tensors have ``hidden``'s leading shape.
+    """
+    if grad_mode not in GRAD_MODES:
+        raise ValueError(f"grad_mode must be one of {GRAD_MODES}, got {grad_mode!r}")
+    if logits_dtype not in LOGITS_DTYPES:
+        raise ValueError(
+            f"logits_dtype must be one of {LOGITS_DTYPES}, got {logits_dtype!r}"
+        )
+    flat_hidden, weight, flat_targets, target_weight = _prepare_inputs(
+        hidden, weight, targets, target_weight
+    )
+    lead = hidden.shape[:-1]
+    total_rows, vocab = flat_hidden.shape[0], weight.shape[0]
+    if rows is not None:
+        flat_hidden = flat_hidden.index_select(0, rows)
+        flat_targets = flat_targets.index_select(0, rows)
 
     loss_terms = sorted(
         {t for name in names for t in fused.LOSS_TERMS[name]},
         key=lambda t: fused.TERM_BITS[t],
     )
     grad_mask = fused.terms_mask(loss_terms)
-    losses, argmax, _ = _fused_linear_fwd(
+    needs_grad = torch.is_grad_enabled() and flat_hidden.requires_grad
+    deferred = needs_grad and (
+        grad_mode == "deferred"
+        or (grad_mode == "auto" and len(loss_terms) <= _MAX_DEFERRED_TERMS)
+    )
+    fp32_logits = logits_dtype == "float32"
+    if chunk_rows is None:
+        chunk_rows = chunk_rows_for(
+            vocab,
+            flat_hidden.dtype,
+            flat_hidden.shape[0],
+            recompute_targets=target_weight is not None,
+            fp32_logits=fp32_logits,
+            dz_tiles=len(loss_terms) if deferred else 1,
+        )
+    losses, argmax, _, _ = _fused_linear_fwd(
         flat_hidden,
         weight,
         flat_targets,
         target_weight,
         grad_mask | fused.terms_mask(metric_terms),
-        grad_mask,
+        grad_mask if needs_grad else 0,
         chunk_rows,
+        deferred,
+        fp32_logits,
     )
+    if rows is not None:
+        losses = losses.new_zeros((losses.shape[0], total_rows)).index_copy(
+            1, rows, losses
+        )
+        argmax = argmax.new_zeros((2, total_rows)).index_copy(1, rows, argmax)
     terms = {t: losses[fused.TERM_SLOTS[t]].view(lead) for t in loss_terms}
     return fused.FusedOutputs(
         losses={name: fused.compose_loss(name, terms) for name in names},

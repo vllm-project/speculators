@@ -321,6 +321,14 @@ class LossArgs(_Group):
         "(no target recompute; keeps one [T, V] tensor). Ignored by the other "
         "implementations.",
     )
+    fused_linear_logits: Literal["input", "float32"] = Field(
+        default="input",
+        description="With loss_implementation=fused_linear: dtype of the logit "
+        "tiles. input keeps them in the training dtype (bf16), like materialized "
+        "logits; float32 takes them from the GEMM accumulator -- more accurate "
+        "gradients (notably for TV-based losses), slower GEMMs. Ignored by the "
+        "other implementations.",
+    )
     loss_fn: str | None = Field(
         default=None,
         description="Loss function specification. A name (kl_div, rkl, jsd, ce, tv, "

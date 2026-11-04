@@ -38,6 +38,7 @@ EAGER = {
     "lk_hybrid": eager.lk_hybrid_loss,
 }
 ALL_TERMS = 0b11111
+DEFERRED_TERMS = 0b10001  # kl_div + tv: deferred mode holds one jac per term
 
 
 def _inputs(rows, hidden, vocab, dtype, device, seed=0):
@@ -97,25 +98,36 @@ def test_lk_hybrid_gradient_matches_eager():
     torch.testing.assert_close(x.grad, y.grad, rtol=1e-4, atol=1e-6)
 
 
-def _opcheck_args(device, dtype, recompute_targets):
+def _opcheck_args(device, dtype, recompute_targets, deferred=False):
     h, w, t = _inputs(13, 8, 40, dtype, device, seed=3)
     target_weight = None
     if recompute_targets:
         # verifier hidden [N, H_t] and verifier lm_head [V, H_t]
         t = torch.randn(13, 6, device=device, dtype=dtype)
         target_weight = torch.randn(40, 6, device=device, dtype=dtype)
-    _, _, stats = torch.ops.speculators.fused_linear_loss_fwd(
-        h, w, t, target_weight, ALL_TERMS, ALL_TERMS, 5
+    _, _, stats, _ = torch.ops.speculators.fused_linear_loss_fwd(
+        h, w, t, target_weight, ALL_TERMS, ALL_TERMS, 5, False, False
     )
     grad = torch.randn(5, 13, device=device, dtype=stats.dtype)
-    fwd = (h.clone().requires_grad_(True), w, t, target_weight, ALL_TERMS, ALL_TERMS, 5)
-    bwd = (grad, h, w, t, target_weight, stats, ALL_TERMS, 5)
+    fwd = (
+        h.clone().requires_grad_(True),
+        w,
+        t,
+        target_weight,
+        ALL_TERMS,
+        DEFERRED_TERMS if deferred else ALL_TERMS,
+        5,
+        deferred,
+        False,
+    )
+    bwd = (grad, h, w, t, target_weight, stats, ALL_TERMS, 5, False)
     return fwd, bwd
 
 
+@pytest.mark.parametrize("deferred", [False, True])
 @pytest.mark.parametrize("recompute_targets", [False, True])
-def test_opcheck_cpu(recompute_targets):
-    fwd, bwd = _opcheck_args("cpu", torch.float64, recompute_targets)
+def test_opcheck_cpu(recompute_targets, deferred):
+    fwd, bwd = _opcheck_args("cpu", torch.float64, recompute_targets, deferred)
     opcheck(torch.ops.speculators.fused_linear_loss_fwd.default, fwd)
     opcheck(torch.ops.speculators.fused_linear_loss_bwd.default, bwd)
 
@@ -130,8 +142,8 @@ def test_rejects_trainable_weight_and_misaligned_targets():
 
 def test_chunk_rows_for(monkeypatch):
     monkeypatch.delenv("SPECULATORS_FUSED_LINEAR_BUDGET_MIB", raising=False)
-    # 4 GiB / (151936 * (4 + 2) B) = 4710 -> 4096 rows
-    assert fl.chunk_rows_for(151936, torch.bfloat16, 16384) == 4096
+    # 4 GiB / (151936 * (4 + 2) B) fits 4710 rows; capped at 2048
+    assert fl.chunk_rows_for(151936, torch.bfloat16, 16384) == 2048
     assert fl.chunk_rows_for(151936, torch.bfloat16, 100) == 100
     monkeypatch.setenv("SPECULATORS_FUSED_LINEAR_BUDGET_MIB", "1")
     assert fl.chunk_rows_for(151936, torch.bfloat16, 16384) == 64
@@ -285,9 +297,10 @@ def test_no_host_syncs():
 
 
 @requires_accelerator
+@pytest.mark.parametrize("deferred", [False, True])
 @pytest.mark.parametrize("recompute_targets", [False, True])
-def test_opcheck_gpu(recompute_targets):
-    fwd, bwd = _opcheck_args(DEVICE, torch.float32, recompute_targets)
+def test_opcheck_gpu(recompute_targets, deferred):
+    fwd, bwd = _opcheck_args(DEVICE, torch.float32, recompute_targets, deferred)
     opcheck(torch.ops.speculators.fused_linear_loss_fwd.default, fwd)
     opcheck(torch.ops.speculators.fused_linear_loss_bwd.default, bwd)
 
@@ -444,15 +457,26 @@ def test_deterministic_across_runs():
 
 @requires_cuda
 @pytest.mark.parametrize(
-    ("names", "keeps_targets"), [(("ce",), False), (("kl_div",), True)]
+    ("names", "grad_mode", "keeps_targets"),
+    [
+        (("ce",), "recompute", False),
+        (("kl_div",), "recompute", True),
+        (("kl_div",), "deferred", False),
+        (("kl_div", "tv"), "deferred", False),
+    ],
 )
-def test_ce_only_loss_releases_targets(names, keeps_targets):
-    """CE backward needs only the cached target argmax; distribution terms
-    need the target logits themselves."""
+def test_backward_keeps_targets_only_when_it_needs_them(
+    names, grad_mode, keeps_targets
+):
+    """Recompute backward needs the target logits for distribution terms;
+    CE needs only the cached target argmax, and deferred mode needs nothing
+    but jac."""
     h, w, _ = _inputs(2048, 256, 8000, torch.bfloat16, "cuda", seed=14)
     x = h.clone().requires_grad_(True)
     targets = torch.randn(2048, 8000, device="cuda", dtype=torch.bfloat16)
-    out = fl.fused_linear_compound(x, w, targets, names, metric_terms=("tv",))
+    out = fl.fused_linear_compound(
+        x, w, targets, names, metric_terms=("tv",), grad_mode=grad_mode
+    )
     loss = out.losses[names[0]].sum()
     nbytes = targets.nbytes
     del out
@@ -477,7 +501,8 @@ def test_mismatched_dtypes_without_autocast_raise():
 
 @requires_accelerator
 @pytest.mark.parametrize("compiled", [False, True])
-def test_autocast_uses_one_operand_dtype_in_both_directions(compiled):
+@pytest.mark.parametrize("logits_dtype", ["input", "float32"])
+def test_autocast_uses_one_operand_dtype_in_both_directions(compiled, logits_dtype):
     """The trainer runs under autocast(bf16) with fp32 params (DDP). Forward
     and the backward recompute must see the same bf16 operands; result is
     bitwise that of passing the bf16 operands explicitly."""
@@ -487,7 +512,9 @@ def test_autocast_uses_one_operand_dtype_in_both_directions(compiled):
 
     def under_autocast(x):
         with torch.autocast(str(DEVICE), dtype=torch.bfloat16):
-            return fl.fused_linear_compound(x, w, t, names, chunk_rows=64)
+            return fl.fused_linear_compound(
+                x, w, t, names, chunk_rows=64, logits_dtype=logits_dtype
+            )
 
     fn = (
         torch.compile(under_autocast, fullgraph=True, backend="aot_eager")
@@ -497,7 +524,12 @@ def test_autocast_uses_one_operand_dtype_in_both_directions(compiled):
     out, grad = _run(fn, h, names)
     explicit, explicit_grad = _run(
         lambda x: fl.fused_linear_compound(
-            x.bfloat16(), w.bfloat16(), t, names, chunk_rows=64
+            x.bfloat16(),
+            w.bfloat16(),
+            t,
+            names,
+            chunk_rows=64,
+            logits_dtype=logits_dtype,
         ),
         h,
         names,
@@ -507,7 +539,10 @@ def test_autocast_uses_one_operand_dtype_in_both_directions(compiled):
     assert torch.equal(grad, explicit_grad)
     assert grad.dtype == torch.float32
 
-    # and consistent with the materialized loss on those fp32 logits
+    if logits_dtype != "float32":
+        return
+
+    # fp32 tiles: consistent with the materialized loss on those fp32 logits
     def materialized(x):
         # bf16 products are exact in fp32: same math as the out_dtype GEMM,
         # but differentiable

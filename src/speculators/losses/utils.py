@@ -368,6 +368,9 @@ def compound_loss_from_hidden(
     metric_terms: Sequence[str] = (),
     chunk_rows: int | None = None,
     target_weight: torch.Tensor | None = None,
+    grad_mode: str = "auto",
+    logits_dtype: str = "input",
+    rows: torch.Tensor | None = None,
 ) -> CompoundLossOutput:
     """``compound_loss_with_outputs`` from hidden states and the ``lm_head``
     weight, without materializing the ``[1, T, V]`` draft logits.
@@ -376,7 +379,8 @@ def compound_loss_from_hidden(
     every term of ``loss_config`` must be a fused loss. With
     ``target_weight`` (the verifier ``lm_head``), ``targets`` holds the
     post-norm verifier hidden states and the target logits are recomputed
-    per chunk too.
+    per chunk too. ``grad_mode``, ``logits_dtype`` and ``rows`` are passed to
+    ``fused_linear_compound``.
     """
     names: list[str] = []
     for fn, _ in loss_config.values():
@@ -399,6 +403,9 @@ def compound_loss_from_hidden(
         metric_terms,
         chunk_rows=chunk_rows,
         target_weight=target_weight,
+        grad_mode=grad_mode,
+        logits_dtype=logits_dtype,
+        rows=rows,
     )
     elementwise = [out.losses[name] for name in names]
     total, term_losses = _weighted_sum(

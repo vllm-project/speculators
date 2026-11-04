@@ -79,6 +79,9 @@ def compute_metrics_from_hidden(
     sample_from_anchor: bool = False,
     chunk_rows: int | None = None,
     target_weight: torch.Tensor | None = None,
+    logits_dtype: str = "input",
+    grad_mode: str = "auto",
+    skip_anchor_rows: bool = False,
 ) -> tuple[torch.Tensor, dict]:
     """``compute_metrics`` without materializing the draft logits.
 
@@ -88,8 +91,22 @@ def compute_metrics_from_hidden(
     resolved with the ``"fused"`` implementation. With ``target_weight``
     (the verifier ``lm_head``), ``targets`` holds the gathered post-norm
     verifier hidden states ``[1, T, H]`` and the target logits are recomputed
-    per chunk as well.
+    per chunk as well. ``logits_dtype`` and ``grad_mode`` are passed to
+    ``fused_linear_compound``.
+
+    With ``skip_anchor_rows`` and ``sample_from_anchor=False``, slot 0 of every
+    block (the anchor, which DFlash always masks) is not projected at all:
+    1 / ``block_size`` fewer rows in every GEMM. The caller guarantees that
+    those rows are masked; their losses and ids are reported as 0.
     """
+    rows = None
+    if skip_anchor_rows and not sample_from_anchor and block_size > 1:
+        seq_len = loss_mask.shape[1]
+        rows = (
+            torch.arange(seq_len, device=loss_mask.device)
+            .view(-1, block_size)[:, 1:]
+            .reshape(-1)
+        )
     return _compute_metrics(
         partial(
             compound_loss_from_hidden,
@@ -98,6 +115,9 @@ def compute_metrics_from_hidden(
             targets,
             chunk_rows=chunk_rows,
             target_weight=target_weight,
+            logits_dtype=logits_dtype,
+            grad_mode=grad_mode,
+            rows=rows,
         ),
         loss_mask,
         block_size=block_size,
