@@ -39,6 +39,7 @@ class TestRootApp:
         assert "stitch-mtp" in output
         assert "generate-offline-data" in output
         assert "regenerate-responses" in output
+        assert "generate-agentic-traces" in output
         assert "train" in output
 
     def test_tools_commands_in_help(self):
