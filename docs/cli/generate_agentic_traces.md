@@ -13,9 +13,10 @@ flowchart LR
 
 ## Prerequisites
 
-- A running vLLM server serving the target model, reachable from the host (used for rendering/tokenization) and from inside the task container (used by the agent).
+- The optional agent runtime: `pip install 'speculators[agentic]'`. The Docker SDK is imported lazily, so the command (and its `--help`) works without it until a task is actually run.
+- A running vLLM server serving the target model, reachable from the host (used for rendering/tokenization) and from inside the task container (used by the agent). The server must be started with `--enable-scale-out`: the render step calls `/v1/chat/completions/render`, which otherwise returns `403` with `"Scale-out endpoints are disabled. Restart vllm serve with --enable-scale-out to enable them."`.
 - A prepared Pi runtime directory (`--pi-runtime`).
-- A container runtime able to start the SWE-smith task images.
+- A container runtime able to start the SWE-smith task images. Missing task images are pulled on first use.
 
 ## Basic Usage
 

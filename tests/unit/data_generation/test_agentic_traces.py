@@ -109,6 +109,33 @@ def test_pi_messages_to_conversation_flattens_everything():
     assert conversation[4]["content"] == "/testbed"
 
 
+def test_pi_messages_to_conversation_wraps_pi_tool_schema():
+    messages = [
+        {
+            "role": "system",
+            "content": "sys",
+            "toolsAdded": [
+                {
+                    "name": "read",
+                    "description": "Read a file",
+                    "parameters": {"type": "object", "properties": {}},
+                }
+            ],
+        }
+    ]
+    _, tools = pi_messages_to_conversation(messages)
+    assert tools == [
+        {
+            "type": "function",
+            "function": {
+                "name": "read",
+                "description": "Read a file",
+                "parameters": {"type": "object", "properties": {}},
+            },
+        }
+    ]
+
+
 def test_pi_messages_to_conversation_without_tools():
     conversation, tools = pi_messages_to_conversation(
         [{"role": "user", "content": [{"type": "text", "text": "hi"}]}]

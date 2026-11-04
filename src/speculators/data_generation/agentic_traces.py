@@ -39,6 +39,21 @@ def _system_content(message: dict) -> str:
     )
 
 
+def _tool_to_openai(tool: dict) -> dict:
+    """Wrap a Pi tool definition in the OpenAI function-tool envelope."""
+    if tool.get("type") == "function" or "function" in tool:
+        return tool
+    return {
+        "type": "function",
+        "function": {
+            "name": tool.get("name"),
+            "description": tool.get("description", ""),
+            "parameters": tool.get("parameters")
+            or {"type": "object", "properties": {}},
+        },
+    }
+
+
 def _block_text(content: Any) -> str:
     """Join the text blocks of a Pi content list (or pass a string through)."""
     if isinstance(content, str):
@@ -69,7 +84,7 @@ def pi_messages_to_conversation(
             conversation.append({"role": "system", "content": _system_content(message)})
             added = message.get("toolsAdded")
             if added:
-                tools = list(added)
+                tools = [_tool_to_openai(tool) for tool in added]
 
         elif role == "user":
             conversation.append(

@@ -249,14 +249,14 @@ def run_pi_trace(
 
     client = docker.from_env()
     name = f"pi-trace-{uuid.uuid4().hex[:12]}"
-    container = client.containers.create(
-        image=task["image_name"],
-        name=name,
-        detach=True,
-        command="tail -f /dev/null",
-        platform="linux/x86_64",
-        mem_limit="10g",
-        volumes={
+    create_kwargs: dict[str, Any] = {
+        "image": task["image_name"],
+        "name": name,
+        "detach": True,
+        "command": "tail -f /dev/null",
+        "platform": "linux/x86_64",
+        "mem_limit": "10g",
+        "volumes": {
             str(Path(pi_runtime).resolve()): {
                 "bind": "/opt/pi-runtime",
                 "mode": "ro",
@@ -264,14 +264,20 @@ def run_pi_trace(
             str(pi_home.resolve()): {"bind": _PI_HOME, "mode": "rw"},
             str(run_dir.resolve()): {"bind": "/run-input", "mode": "ro"},
         },
-        extra_hosts={"host.docker.internal": "host-gateway"},
-        environment={
+        "extra_hosts": {"host.docker.internal": "host-gateway"},
+        "environment": {
             "HOME": "/root",
             "PI_CODING_AGENT_DIR": _PI_HOME,
             "PATH": "/opt/pi-runtime/bin:/opt/pi-runtime/node_modules/.bin:"
             "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
         },
-    )
+    }
+    try:
+        container = client.containers.create(**create_kwargs)
+    except (docker.errors.ImageNotFound, docker.errors.NotFound):
+        logger.info("Image %s missing locally, pulling", task["image_name"])
+        client.images.pull(task["image_name"])
+        container = client.containers.create(**create_kwargs)
 
     started = time.time()
     try:
