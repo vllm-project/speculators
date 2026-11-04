@@ -177,6 +177,8 @@ torchrun --standalone --nproc_per_node=4 -m speculators.train \
 
 ### DFlash-Specific Arguments
 
+- **`--is-causal` / `--no-is-causal`** (bool, default: unset) Override causality for every draft layer when building a fresh DFlash-family model. The choice is saved as `transformer_layer_config.is_causal`, which vLLM reads before its legacy causality settings. Without an explicit setting in the decoder config or this flag, full-attention layers remain bidirectional and sliding-window layers follow `--sliding-window-non-causal`. Loading with `--from-pretrained` retains the checkpoint's attention configuration.
+
 - **`--block-size`** (int, default: `16` for dflash, `8` otherwise) Block size for DFlash-family models.
 
 - **`--sample-from-anchor`** / **`--no-sample-from-anchor`** (bool, default: algorithm-specific) Whether to sample from the anchor position. `True`: sample from anchor and all mask positions (default for dspark, produces block_size tokens). `False`: anchor is bonus token (default for dflash/dflash2, produces block_size-1 tokens).

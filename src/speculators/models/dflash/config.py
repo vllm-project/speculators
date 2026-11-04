@@ -63,7 +63,8 @@ class DFlashSpeculatorConfig(SpeculatorModelConfig):
 
     sliding_window_non_causal: bool = Field(
         default=False,
-        description="Use non-causal (bidirectional) masking within draft blocks. "
+        description="Use non-causal (bidirectional) masking in sliding-window layers. "
+        "Full-attention layers remain bidirectional by default. "
         "Overridden by transformer_layer_config.is_causal when set.",
     )
 

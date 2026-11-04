@@ -170,6 +170,7 @@ class DraftArgs(_Group):
     )
     sliding_window: int = Field(
         default=2048,
+        gt=0,
         description="Sliding window size for sliding window attention layers "
         "(default: 2048). All draft layers use sliding window by default (except mtp).",
     )
@@ -467,6 +468,13 @@ class LoggingArgs(_Group):
 class DFlashArgs(_Group):
     """Shared DFlash-family backbone knobs."""
 
+    is_causal: bool | None = Field(
+        default=None,
+        description="Set causality for all DFlash-family draft layers when building "
+        "a fresh model. Saved as transformer_layer_config.is_causal for inference. "
+        "When unset, full-attention layers stay bidirectional and sliding-window "
+        "layers follow sliding_window_non_causal.",
+    )
     block_size: int | None = Field(
         default=None,
         description="Block size for DFlash model (default: 16 for dflash, 8 "
