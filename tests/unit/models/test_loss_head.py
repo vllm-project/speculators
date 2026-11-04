@@ -244,11 +244,11 @@ def _assert_head_close(cfg, dtype, loss_tol, grad_tol, implementation="fused"):
 
 
 # fused_linear (no materialized draft logits) covers DFlash only.
-IMPLEMENTATIONS = ["fused", "fused_linear"]
+IMPLEMENTATIONS = ["fused", "fused_linear", "fused_linear_materialize"]
 
 
 def _skip_unsupported(name: str, implementation: str) -> None:
-    if implementation == "fused_linear" and CASES[name].model != "dflash":
+    if implementation.startswith("fused_linear") and CASES[name].model != "dflash":
         pytest.skip("fused_linear supports DFlash only")
 
 

@@ -313,6 +313,14 @@ class LossArgs(_Group):
         "fused_linear (DFlash only) computes the loss from hidden states in row "
         "chunks without materializing the draft logits.",
     )
+    fused_linear_targets: Literal["recompute", "materialize"] = Field(
+        default="recompute",
+        description="With loss_implementation=fused_linear: recompute the target "
+        "logits per chunk from the verifier hidden states (no [T, V] tensor; one "
+        "extra verifier GEMM per chunk in backward), or materialize them once "
+        "(no target recompute; keeps one [T, V] tensor). Ignored by the other "
+        "implementations.",
+    )
     loss_fn: str | None = Field(
         default=None,
         description="Loss function specification. A name (kl_div, rkl, jsd, ce, tv, "

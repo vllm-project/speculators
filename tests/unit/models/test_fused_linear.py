@@ -97,19 +97,25 @@ def test_lk_hybrid_gradient_matches_eager():
     torch.testing.assert_close(x.grad, y.grad, rtol=1e-4, atol=1e-6)
 
 
-def _opcheck_args(device, dtype):
+def _opcheck_args(device, dtype, recompute_targets):
     h, w, t = _inputs(13, 8, 40, dtype, device, seed=3)
+    target_weight = None
+    if recompute_targets:
+        # verifier hidden [N, H_t] and verifier lm_head [V, H_t]
+        t = torch.randn(13, 6, device=device, dtype=dtype)
+        target_weight = torch.randn(40, 6, device=device, dtype=dtype)
     _, _, stats = torch.ops.speculators.fused_linear_loss_fwd(
-        h, w, t, ALL_TERMS, ALL_TERMS, 5
+        h, w, t, target_weight, ALL_TERMS, ALL_TERMS, 5
     )
     grad = torch.randn(5, 13, device=device, dtype=stats.dtype)
-    fwd = (h.clone().requires_grad_(True), w, t, ALL_TERMS, ALL_TERMS, 5)
-    bwd = (grad, h, w, t, stats, ALL_TERMS, 5)
+    fwd = (h.clone().requires_grad_(True), w, t, target_weight, ALL_TERMS, ALL_TERMS, 5)
+    bwd = (grad, h, w, t, target_weight, stats, ALL_TERMS, 5)
     return fwd, bwd
 
 
-def test_opcheck_cpu():
-    fwd, bwd = _opcheck_args("cpu", torch.float64)
+@pytest.mark.parametrize("recompute_targets", [False, True])
+def test_opcheck_cpu(recompute_targets):
+    fwd, bwd = _opcheck_args("cpu", torch.float64, recompute_targets)
     opcheck(torch.ops.speculators.fused_linear_loss_fwd.default, fwd)
     opcheck(torch.ops.speculators.fused_linear_loss_bwd.default, bwd)
 
@@ -124,8 +130,8 @@ def test_rejects_trainable_weight_and_misaligned_targets():
 
 def test_chunk_rows_for(monkeypatch):
     monkeypatch.delenv("SPECULATORS_FUSED_LINEAR_BUDGET_MIB", raising=False)
-    # 2 GiB / (151936 * (4 + 2) B) = 2355 -> 2048 rows
-    assert fl.chunk_rows_for(151936, torch.bfloat16, 16384) == 2048
+    # 4 GiB / (151936 * (4 + 2) B) = 4710 -> 4096 rows
+    assert fl.chunk_rows_for(151936, torch.bfloat16, 16384) == 4096
     assert fl.chunk_rows_for(151936, torch.bfloat16, 100) == 100
     monkeypatch.setenv("SPECULATORS_FUSED_LINEAR_BUDGET_MIB", "1")
     assert fl.chunk_rows_for(151936, torch.bfloat16, 16384) == 64
@@ -279,8 +285,9 @@ def test_no_host_syncs():
 
 
 @requires_accelerator
-def test_opcheck_gpu():
-    fwd, bwd = _opcheck_args(DEVICE, torch.float32)
+@pytest.mark.parametrize("recompute_targets", [False, True])
+def test_opcheck_gpu(recompute_targets):
+    fwd, bwd = _opcheck_args(DEVICE, torch.float32, recompute_targets)
     opcheck(torch.ops.speculators.fused_linear_loss_fwd.default, fwd)
     opcheck(torch.ops.speculators.fused_linear_loss_bwd.default, bwd)
 

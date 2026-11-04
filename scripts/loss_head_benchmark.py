@@ -38,6 +38,7 @@ from typing import TYPE_CHECKING, Any
 import torch
 
 from speculators.models.loss_head import (
+    FUSED_LINEAR_IMPLEMENTATIONS,
     IMPLEMENTATIONS,
     MODELS,
     WEIGHTINGS,
@@ -221,7 +222,9 @@ def cmd_run(args: argparse.Namespace) -> dict:
     configs = [
         cfg
         for cfg in configs
-        if not (cfg.implementation == "fused_linear" and cfg.model != "dflash")
+        if not (
+            cfg.implementation in FUSED_LINEAR_IMPLEMENTATIONS and cfg.model != "dflash"
+        )
     ]
     _device()
 
@@ -288,7 +291,7 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument(
         "--implementation",
         default="fused",
-        help=f"comma list of {','.join(IMPLEMENTATIONS)} (fused_linear: dflash only)",
+        help=f"comma list of {','.join(IMPLEMENTATIONS)} (fused_linear*: dflash only)",
     )
     run.add_argument(
         "--dtype", default="bfloat16", choices=("bfloat16", "float16", "float32")
