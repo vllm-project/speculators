@@ -263,3 +263,22 @@ def test_max_steps_explicit(monkeypatch):
 def test_max_steps_rejects_non_positive(monkeypatch):
     with pytest.raises(SystemExit):
         _parse(monkeypatch, ["--max-steps", "0"])
+
+
+@pytest.mark.parametrize("total_seq_len", ["100", "200", "8191"])
+def test_eagle3_flex_rejects_unaligned_total_seq_len(monkeypatch, total_seq_len):
+    with pytest.raises(SystemExit):
+        _parse(monkeypatch, ["--total-seq-len", total_seq_len])
+
+
+@pytest.mark.parametrize(
+    "extra",
+    [
+        ["--total-seq-len", "256"],
+        ["--total-seq-len", "200", "--draft-attn-impl", "sdpa"],
+        ["--total-seq-len", "200", "--speculator-type", "dflash"],
+    ],
+)
+def test_unaligned_total_seq_len_allowed_elsewhere(monkeypatch, extra):
+    args = _parse(monkeypatch, extra)
+    assert args.total_seq_len == int(extra[1])

@@ -655,6 +655,10 @@ _DEFAULT_LOSS_FN: dict[str, str] = {
 }
 _DEFAULT_BLOCK_SIZE: dict[str, int] = {"dflash": 16, "xpress": 16}
 
+# Default block size of torch flex attention block masks. Kept here rather than
+# imported, so this module does not import torch.
+FLEX_ATTENTION_BLOCK_SIZE = 128
+
 
 class TrainConfig(BaseSettings):
     """Top-level trainer configuration -- the package's one public type.
@@ -840,6 +844,25 @@ class TrainConfig(BaseSettings):
                 raise ValueError(
                     f"--dpace-alpha must be in (0, 1], got {self.dflash.dpace_alpha}"
                 )
+        return self
+
+    @model_validator(mode="after")
+    def _validate_eagle3_flex_seq_len(self) -> "TrainConfig":
+        """Eagle3 with flex attention extends its block mask by whole blocks at each
+        TTT step, which matches the KV cache only when ``total_seq_len`` is a multiple
+        of the flex attention block size. Batches are padded to ``total_seq_len``, so
+        checking it here covers every batch."""
+        if (
+            self.speculator_type == "eagle3"
+            and self.draft.draft_attn_impl == "simple_flex_attention"
+            and self.data.total_seq_len % FLEX_ATTENTION_BLOCK_SIZE != 0
+        ):
+            raise ValueError(
+                "--total-seq-len must be a multiple of "
+                f"{FLEX_ATTENTION_BLOCK_SIZE} for eagle3 with "
+                f"--draft-attn-impl=simple_flex_attention, got "
+                f"{self.data.total_seq_len}"
+            )
         return self
 
     def flatten(self) -> dict[str, Any]:
