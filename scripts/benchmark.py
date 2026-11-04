@@ -49,7 +49,7 @@ import socket
 import statistics
 import subprocess
 import sys
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from html import escape as html_escape
 from pathlib import Path
 
@@ -216,7 +216,7 @@ def collect_provenance() -> dict:
 
     return {
         "git_sha": git_sha,
-        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "timestamp": datetime.now(UTC).isoformat(),
         "hostname": socket.gethostname(),
         "python_version": sys.version.split()[0],
         "pytorch_version": torch.__version__,
@@ -387,6 +387,7 @@ def _build_train_loader(
         num_target_layers=num_target_layers,
         num_workers=train_args.num_workers,
         prefetch_factor=train_args.prefetch_factor,
+        max_transfer_workers=train_args.max_transfer_workers,
         preprocess=preprocess,
         train_data_ratio=train_args.train_data_ratio,
         max_train_batches=total_steps,
@@ -694,6 +695,7 @@ def run_benchmark(bench_args, train_args) -> dict:
             "hidden_states_backend": train_args.hidden_states_backend,
             "num_workers": train_args.num_workers,
             "prefetch_factor": train_args.prefetch_factor,
+            "max_transfer_workers": train_args.max_transfer_workers,
             "fsdp_shard": train_args.fsdp_shard,
             "num_gpus_used": num_gpus_used,
             "warmup_steps": bench_args.warmup_steps,

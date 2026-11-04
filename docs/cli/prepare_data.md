@@ -28,7 +28,7 @@ speculators prepare-data \
   --max-samples 5000
 ```
 
-`--render-endpoint` is not needed when every input row already contains `input_ids` and `loss_mask`.
+`--render-endpoint` is not needed when every input row already contains `input_ids` and `loss_mask`. For conversation inputs, launch the rendering vLLM server with `--max-model-len` greater than `prepare-data --seq-length` so the render endpoint has room for an output token. If the server reports `max_tokens must be at least 1`, increase `--max-model-len`, relaunch vLLM, and rerun `prepare-data`.
 
 ## Arguments
 

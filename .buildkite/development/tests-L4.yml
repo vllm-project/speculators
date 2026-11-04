@@ -57,7 +57,7 @@ steps:
 
         matrix:
           setup:
-            python: ["3.10", "3.13"]
+            python: ["3.11", "3.13"]
             transformers: ["latest"]
 
   - group: ":test_tube: Integration Tests (L4)"
@@ -118,7 +118,7 @@ steps:
 
         matrix:
           setup:
-            python: ["3.10", "3.13"]
+            python: ["3.11", "3.13"]
             transformers: ["latest"]
 
   - block: ":vertical_traffic_light: Run Smoke Tests (L4)?"

@@ -5,6 +5,9 @@ nav:
           - Getting Started: user_guide/getting_started.md
           - Features: user_guide/features.md
           - Loss Functions: user_guide/loss_functions.md
+          - Hyperparameter Selection:
+                - user_guide/hyperparameter_selection/index.md
+                - Hidden State Layer ID Selection: user_guide/hyperparameter_selection/hidden_state_layer_id_selection.md
           - Algorithms:
                 - user_guide/algorithms/index.md
                 - Eagle3: user_guide/algorithms/eagle3.md
@@ -19,6 +22,7 @@ nav:
                 - Train a Speculator: user_guide/tutorials/train.md
                 - Multi-Node Training: user_guide/tutorials/multi_node_training.md
                 - Response Regeneration: user_guide/tutorials/response_regeneration.md
+                - RAG Training Data: user_guide/tutorials/rag.md
                 - Evaluating Model Performance: user_guide/tutorials/evaluating_performance.md
                 - Throughput vs. Interactivity: user_guide/tutorials/throughput_interactivity.md
                 - Serve in vLLM: user_guide/tutorials/serve_vllm.md
@@ -40,6 +44,7 @@ nav:
           - train.py: cli/train.md
           - response_regeneration: cli/response_regeneration.md
           - throughput_interactivity.py: cli/throughput_interactivity.md
+    - Open Research Hub: research
     - Community:
           - community/index.md
           - Contact Us: community/contact_us.md

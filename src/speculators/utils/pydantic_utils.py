@@ -27,8 +27,7 @@ class ReloadableBaseModel(BaseModel):
     @classmethod
     def reload_schema(cls):
         """
-        Reloads the schema for the class, ensuring that the registry is populated
-        and that the schema is up-to-date.
+        Rebuild the schema using the currently registered classes.
 
         This method is useful when the registry has been modified or when the
         class needs to be re-validated with the latest schema.
@@ -94,7 +93,7 @@ class PydanticClassRegistryMixin(ReloadableBaseModel, ABC, ClassRegistryMixin):
     """
 
     schema_discriminator: ClassVar[str] = "model_type"
-    registry: ClassVar[dict[str, BaseModel] | None] = None  # type: ignore[assignment]
+    registry: ClassVar[dict[str, type[BaseModel]] | None] = None
 
     @classmethod
     def register_decorator(

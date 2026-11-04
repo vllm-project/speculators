@@ -7,3 +7,21 @@
 .md-nav__title {
   display: none;
 }
+
+.entry-byline {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin: 1rem 0;
+}
+
+.entry-byline p {
+  display: contents;
+}
+
+.entry-avatar {
+  width: 2rem;
+  height: 2rem;
+  border-radius: 50%;
+}
