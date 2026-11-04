@@ -2,9 +2,9 @@
 Generate agentic traces with Pi and convert them to speculator-format rows.
 
 For each SWE-smith-style dataset instance, a Pi agent runs inside the task
-container against a vLLM endpoint, producing a raw execution trace. Each trace
-is then rendered and tokenized into speculator-format rows (``input_ids`` and
-``loss_mask``) ready for training.
+container against a vLLM endpoint and writes a raw execution trace. The command
+then renders and tokenizes each trace into speculator-format rows with
+``input_ids`` and ``loss_mask``, ready for training.
 
 Usage::
 
@@ -119,8 +119,8 @@ def generate_agentic_traces(  # noqa: PLR0917
     """Generate agentic traces and convert them to speculator-format rows.
 
     Runs a Pi agent for each task in ``--data`` against the vLLM endpoint, then
-    renders and tokenizes each trace into rows with ``input_ids``/``loss_mask``,
-    writing them to ``--output`` as JSONL.
+    renders and tokenizes each trace into rows with ``input_ids``/``loss_mask``
+    and writes them to ``--output`` as JSONL.
     """
     # Imported here so `--help` works without the (optional) agentic runtime.
     from speculators.data_generation.agentic_runner import (  # noqa: PLC0415

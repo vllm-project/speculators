@@ -186,7 +186,7 @@ def test_rows_from_pi_trace_uses_builder(tmp_path, monkeypatch):
     assert captured["num_proc"] == 1
     assert captured["render_endpoint"] == "http://localhost:8000"
     assert captured["minimum_valid_tokens"] == 1
-    # The last agent_end event wins, so the full conversation was converted.
+    # The last agent_end event wins, so the converter used the full conversation.
     assert captured["dataset"][0]["conversations"][-1]["role"] == "tool"
     assert captured["dataset"][0]["tools"] == _pi_messages()[0]["toolsAdded"]
 

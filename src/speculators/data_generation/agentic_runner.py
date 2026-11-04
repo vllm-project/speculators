@@ -6,8 +6,8 @@ container per task, mounts a prepared Pi runtime read-only, points Pi at an
 OpenAI-compatible endpoint, and collects the raw Pi event trace and the final
 ``git diff`` as the candidate patch.
 
-Docker and Hugging Face ``datasets`` are imported lazily so this module stays
-importable (and testable) without either dependency.
+The module imports Docker and Hugging Face ``datasets`` lazily, so it stays
+importable and testable without either dependency.
 """
 
 import json
@@ -37,8 +37,8 @@ def build_pi_prompt(task: dict) -> str:
         "that contains a bug.\n"
         "Fix the issue described below with minimal changes to non-test source "
         "files. Do not modify tests.\n"
-        "You may inspect and run commands and edit files. When you believe the "
-        "fix is complete, stop; the harness will collect `git diff`.\n\n"
+        "You may inspect files, run commands, and edit files. Stop when the "
+        "fix is complete. The harness collects `git diff`.\n\n"
         "<problem_statement>\n"
         f"{task['problem_statement']}\n"
         "</problem_statement>\n"
@@ -320,7 +320,7 @@ def generate_traces(
 ) -> list[dict]:
     """Run Pi traces for many tasks, isolating per-task failures.
 
-    Each result is also written to ``<out_dir>/<instance_id>/result.json``.
+    The function also writes each result to ``<out_dir>/<instance_id>/result.json``.
     """
     results: list[dict | None] = [None] * len(tasks)
 

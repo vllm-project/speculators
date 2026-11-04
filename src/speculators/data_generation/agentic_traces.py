@@ -1,9 +1,9 @@
 """Convert agentic (Pi) event traces into speculator training rows.
 
-Pi records a session as a JSONL event stream. The final ``agent_end`` event
-carries the full ordered message list, which this module flattens into an
-OpenAI-style conversation and feeds through the regular speculator
-preprocessing pipeline (render-boundary loss masks).
+Pi records a session as a JSONL event stream. The last ``agent_end`` event
+holds the full ordered message list. This module flattens that list into an
+OpenAI-style conversation and runs it through the regular speculator
+preprocessing pipeline, which applies render-boundary loss masks.
 """
 
 from __future__ import annotations
@@ -55,7 +55,7 @@ def _tool_to_openai(tool: dict) -> dict:
 
 
 def _block_text(content: Any) -> str:
-    """Join the text blocks of a Pi content list (or pass a string through)."""
+    """Join the text blocks of a Pi content list, or pass a string through."""
     if isinstance(content, str):
         return content
     return "".join(
@@ -68,9 +68,9 @@ def _block_text(content: Any) -> str:
 def pi_messages_to_conversation(
     messages: list[dict],
 ) -> tuple[list[dict], list[dict] | None]:
-    """Convert Pi's ordered message list to OpenAI-style conversation + tools.
+    """Convert Pi's ordered message list to an OpenAI-style conversation and tools.
 
-    Multiple ``toolCall`` blocks in one assistant message are preserved as
+    The converter keeps multiple ``toolCall`` blocks in one assistant message as
     separate ``tool_calls`` entries. Thinking blocks populate both ``thinking``
     and ``reasoning_content`` so either consumer convention works.
     """
@@ -164,7 +164,7 @@ def _to_list(values: Any) -> list:
 
 
 def _safe_decode(processor: ProcessorLike, input_ids: list[int]) -> str:
-    """Decode a token sequence for review; never fail row construction."""
+    """Decode a token sequence for review, and return an empty string on failure."""
     try:
         decoded = processor.decode(input_ids)
     except Exception:

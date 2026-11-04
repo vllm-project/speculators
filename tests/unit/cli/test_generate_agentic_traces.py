@@ -1,7 +1,7 @@
 """Help and argument-parsing tests for ``generate-agentic-traces``.
 
-The command body imports the agentic runtime lazily, so these tests exercise the
-CLI surface only -- no docker, network, or model downloads.
+The command body imports the agentic runtime lazily, so these tests exercise only
+the CLI surface, with no docker, network, or model downloads.
 """
 
 import click
