@@ -311,6 +311,7 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
             "per_position_loss_weight": per_position_loss_weight,
             "dpace_alpha": dpace_alpha,
             "fused_linear": fused_linear,
+            "fused_linear_targets": kwargs.get("fused_linear_targets", "recompute"),
         }
         return dict(shared), dict(shared)
 
@@ -395,6 +396,7 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
         document_ids: torch.Tensor,  # [1, total_seq_len]
         position_ids: torch.Tensor | None = None,  # [1, total_seq_len]
         materialize_logits: bool = True,
+        materialize_targets: bool = True,
         **kwargs,
     ):
         """Run the anchored-block draft transformer up to the draft logits.
@@ -403,7 +405,9 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
         anchored_block_indices)``. DSpark reuses this and adds its Markov and
         confidence heads before computing its own loss. With
         ``materialize_logits=False`` the ``lm_head`` projection is skipped and
-        ``logits`` is None (the fused_linear loss projects ``hidden`` itself).
+        ``logits`` is None (the fused_linear loss projects ``hidden`` itself);
+        with ``materialize_targets=False`` ``targets`` holds the gathered
+        post-norm verifier hidden states ``[1, N, H]`` instead of their logits.
         """
         device = hidden_states.device
         total_seq_len = hidden_states.shape[1]
@@ -449,7 +453,20 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
         )  # shape: [num_anchors*block_size]
 
         with torch.no_grad():
-            if anchored_block_indices.numel() < total_seq_len:
+            if not materialize_targets:
+                # fused_linear recomputes the target logits per chunk from the
+                # verifier hidden states. Gathering the rows first is the same
+                # as both branches below: RMSNorm and the projection are
+                # per-row, and roll(x, 1)[i] == x[(i - 1) % T].
+                target_indices = (
+                    anchored_block_indices
+                    if self.config.sample_from_anchor
+                    else (anchored_block_indices - 1) % total_seq_len
+                )
+                targets = self.verifier_norm(
+                    verifier_last_hidden_states[:, target_indices]
+                )
+            elif anchored_block_indices.numel() < total_seq_len:
                 target_indices = (
                     anchored_block_indices
                     if self.config.sample_from_anchor
@@ -515,8 +532,10 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
         per_position_loss_weight: str = "fixed-exp-decay",
         dpace_alpha: float = 0.5,
         fused_linear: bool = False,
+        fused_linear_targets: str = "recompute",
         **kwargs,
     ):
+        recompute_targets = fused_linear and fused_linear_targets == "recompute"
         hidden, logits, targets, aligned_loss_mask, _ = self._backbone_forward(
             hidden_states,
             input_ids,
@@ -525,6 +544,7 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
             document_ids,
             position_ids,
             materialize_logits=not fused_linear,
+            materialize_targets=not recompute_targets,
             max_anchors=max_anchors,
             **kwargs,
         )
@@ -536,13 +556,17 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
             "sample_from_anchor": self.config.sample_from_anchor,
         }
         if fused_linear:
-            # loss_implementation="fused_linear": no [1, T, V] draft logits.
+            # loss_implementation="fused_linear": no [1, T, V] draft logits, and
+            # with recomputed targets no [1, T, V] target logits either.
             loss, metrics = compute_metrics_from_hidden(
                 hidden,
                 self.lm_head.weight,
                 targets,
                 aligned_loss_mask,
                 self.block_size,
+                target_weight=(
+                    self.verifier_lm_head.weight if recompute_targets else None
+                ),
                 **metric_kwargs,
             )
             return None, loss, metrics
