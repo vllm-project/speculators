@@ -1,3 +1,4 @@
-# Installs the pinned AIPerf client and the MRCR dataset plugin.
+# Installs Speculators, the pinned AIPerf client, and the MRCR dataset plugin.
 # Run from the repository root.
+-e .
 -e ./scripts/evaluate
