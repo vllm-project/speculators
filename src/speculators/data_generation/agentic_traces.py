@@ -177,8 +177,11 @@ def rows_from_pi_trace(
     )
 
     sample: dict[str, Any] = {"conversations": conversation}
-    if tools:
-        sample["tools"] = tools
+    if tools is not None:
+        # Keep tools as an opaque JSON string: Arrow unions heterogeneous
+        # parameter structs when each tool is its own column value, injecting
+        # null-valued keys that alter the rendered prompt.
+        sample["tools"] = json.dumps(tools)
     dataset = HFDataset.from_list([sample])
 
     built = build_speculator_training_dataset(

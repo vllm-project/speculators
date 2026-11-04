@@ -188,7 +188,9 @@ def test_rows_from_pi_trace_uses_builder(tmp_path, monkeypatch):
     assert captured["minimum_valid_tokens"] == 1
     # The last agent_end event wins, so the converter used the full conversation.
     assert captured["dataset"][0]["conversations"][-1]["role"] == "tool"
-    assert captured["dataset"][0]["tools"] == _pi_messages()[0]["toolsAdded"]
+    assert isinstance(captured["dataset"][0]["tools"], str)
+    parsed_tools = json.loads(captured["dataset"][0]["tools"])
+    assert parsed_tools == _pi_messages()[0]["toolsAdded"]
 
     assert [row["id"] for row in rows] == ["inst.abc_gen0", "inst.abc_gen1"]
     assert [row["primary_id"] for row in rows] == ["inst.abc", "inst.abc"]
@@ -197,3 +199,70 @@ def test_rows_from_pi_trace_uses_builder(tmp_path, monkeypatch):
     assert rows[1]["loss_mask"] == [0, 1]
     assert rows[0]["text"] == "<3 tokens>"
     assert rows[0]["metadata"] == {"instance_id": "inst.abc", "source": "pi"}
+
+
+def test_rows_from_pi_trace_preserves_heterogeneous_tools(tmp_path, monkeypatch):
+    tools = [
+        {
+            "type": "function",
+            "function": {
+                "name": "read",
+                "description": "Read a file",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "path": {"type": "string"},
+                        "offset": {"type": "integer"},
+                    },
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "bash",
+                "description": "Run a command",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "command": {"type": "string"},
+                        "timeout": {"type": "integer"},
+                    },
+                },
+            },
+        },
+    ]
+    messages = [
+        {"role": "system", "content": "sys", "toolsAdded": tools},
+        {"role": "user", "content": [{"type": "text", "text": "hi"}]},
+    ]
+    trace_path = tmp_path / "pi.jsonl"
+    trace_path.write_text(
+        json.dumps({"type": "agent_end", "messages": messages}) + "\n"
+    )
+
+    captured = {}
+
+    def fake_build(dataset, processor, max_length, num_proc, **kwargs):
+        captured["dataset"] = dataset
+        return HFDataset.from_list([])
+
+    monkeypatch.setattr(agentic_traces, "build_speculator_training_dataset", fake_build)
+
+    rows_from_pi_trace(
+        trace_path,
+        processor=_FakeProcessor(),
+        render_endpoint="http://localhost:8000",
+        seq_length=64,
+        primary_id="inst.abc",
+    )
+
+    cell = captured["dataset"][0]["tools"]
+    assert isinstance(cell, str)
+    parsed = json.loads(cell)
+    assert parsed == tools
+    for tool, original in zip(parsed, tools, strict=True):
+        assert (
+            tool["function"]["parameters"]["properties"]
+            == (original["function"]["parameters"]["properties"])
+        )
