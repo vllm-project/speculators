@@ -73,6 +73,7 @@ def compute_metrics_from_hidden(
     loss_mask: torch.Tensor,  # shape: [1, num_anchors*block_size]
     block_size: int = 1,
     chunk_rows: int | None = None,
+    target_weight: torch.Tensor | None = None,
     **kwargs: Any,
 ) -> tuple[torch.Tensor, dict]:
     """``compute_metrics`` without materializing the draft logits.
@@ -80,8 +81,11 @@ def compute_metrics_from_hidden(
     The loss, both argmaxes and the metrics come from the final hidden states
     and the frozen ``lm_head`` weight in row chunks
     (``loss_implementation="fused_linear"``); ``loss_config`` must be
-    resolved with the ``"fused"`` implementation. The remaining keyword
-    arguments are those of ``compute_metrics``.
+    resolved with the ``"fused"`` implementation. With ``target_weight``
+    (the verifier ``lm_head``), ``targets`` holds the gathered post-norm
+    verifier hidden states ``[1, T, H]`` and the target logits are recomputed
+    per chunk as well. The remaining keyword arguments are those of
+    ``compute_metrics``.
     """
     return _compute_metrics(
         partial(
@@ -90,6 +94,7 @@ def compute_metrics_from_hidden(
             lm_head_weight,
             targets,
             chunk_rows=chunk_rows,
+            target_weight=target_weight,
         ),
         loss_mask,
         block_size=block_size,

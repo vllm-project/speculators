@@ -368,12 +368,16 @@ def compound_loss_from_hidden(
     decay_fn: Callable[..., torch.Tensor] | None = None,
     metric_terms: Sequence[str] = (),
     chunk_rows: int | None = None,
+    target_weight: torch.Tensor | None = None,
 ) -> CompoundLossOutput:
     """``compound_loss_with_outputs`` from hidden states and the ``lm_head``
     weight, without materializing the ``[1, T, V]`` draft logits.
 
     The logits are produced chunk by chunk inside ``fused_linear_compound``;
-    every term of ``loss_config`` must be a fused loss.
+    every term of ``loss_config`` must be a fused loss. With
+    ``target_weight`` (the verifier ``lm_head``), ``targets`` holds the
+    post-norm verifier hidden states and the target logits are recomputed
+    per chunk too.
     """
     names: list[str] = []
     for fn, _ in loss_config.values():
@@ -389,7 +393,13 @@ def compound_loss_from_hidden(
     except ImportError as error:
         raise RuntimeError("Fused linear losses require Triton.") from error
     out = fused_linear.fused_linear_compound(
-        hidden, weight, targets, names, metric_terms, chunk_rows=chunk_rows
+        hidden,
+        weight,
+        targets,
+        names,
+        metric_terms,
+        chunk_rows=chunk_rows,
+        target_weight=target_weight,
     )
     elementwise = [out.losses[name] for name in names]
     total, term_losses = _weighted_sum(
