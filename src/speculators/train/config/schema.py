@@ -306,10 +306,12 @@ class GenerationArgs(_Group):
 
 
 class LossArgs(_Group):
-    loss_implementation: Literal["fused", "eager"] = Field(
+    loss_implementation: Literal["fused", "eager", "fused_linear"] = Field(
         default="fused",
         description="Loss implementation to use; eager is for compatibility and "
-        "numerical validation and may OOM with DFlash-family models.",
+        "numerical validation and may OOM with DFlash-family models. "
+        "fused_linear (DFlash only) computes the loss from hidden states in row "
+        "chunks without materializing the draft logits.",
     )
     loss_fn: str | None = Field(
         default=None,
