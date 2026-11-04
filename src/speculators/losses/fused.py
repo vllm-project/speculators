@@ -407,6 +407,194 @@ def loss_backward_kernel(  # noqa: C901 -- constexpr TERMS branches
         tl.store(grad_in_ptr + offsets, grad, mask=mask)
 
 
+def _autotune_grad_tile(kernel):
+    """``_autotune_tile`` for ``loss_grad_kernel``, also keyed on GRAD_TERMS."""
+    return triton.autotune(
+        configs=_tile_configs(),
+        key=["n_cols", "TERMS", "GRAD_TERMS"],
+        prune_configs_by={"early_config_prune": _prune_oversized_tiles},
+    )(kernel)
+
+
+@triton.jit
+def _lane_online_update(m, s, v, mask):
+    """Per-lane online max / sum-exp update; lanes still at -inf stay at 0."""
+    m_new = tl.maximum(m, v)
+    scale = tl.exp(tl.where(m_new == float("-inf"), 0.0, m - m_new))
+    s = s * scale + tl.where(mask, tl.exp(v - m_new), 0.0)
+    return m_new, s
+
+
+@triton.jit
+def _lane_lse(m, s):
+    """log-sum-exp of a row from its per-lane (max, sum-exp) pairs."""
+    row_max = tl.max(m)
+    lanes = tl.where(m == float("-inf"), 0.0, s * tl.exp(m - row_max))
+    return row_max + tl.log(tl.sum(lanes))
+
+
+@triton.jit
+def _lane_argmax_update(best_val, best_idx, v, offsets):
+    """Strict > keeps each lane's first maximum (masked lanes load -inf)."""
+    update = v > best_val
+    return tl.where(update, v, best_val), tl.where(update, offsets, best_idx)
+
+
+@triton.jit
+def _lane_argmax(best_val, best_idx, n_cols):
+    """Row argmax with first-index ties: the smallest index among the lanes
+    holding the row maximum (each lane holds its own first occurrence)."""
+    row_max = tl.max(best_val)
+    return tl.min(tl.where(best_val == row_max, best_idx, n_cols))
+
+
+@_autotune_grad_tile
+@triton.jit
+def loss_grad_kernel(  # noqa: C901 -- constexpr TERMS branches
+    logits_ptr,
+    targets_ptr,
+    loss_ptr,
+    loss_row,
+    argmax_ptr,
+    argmax_row,
+    dz_ptr,
+    dz_term_stride,
+    n_cols,
+    TERMS: tl.constexpr,
+    GRAD_TERMS: tl.constexpr,
+    DZ_KL: tl.constexpr,
+    DZ_RKL: tl.constexpr,
+    DZ_JSD: tl.constexpr,
+    DZ_CE: tl.constexpr,
+    DZ_TV: tl.constexpr,
+    BLOCK_SIZE: tl.constexpr,
+):
+    """Forward losses plus each GRAD_TERMS term's unit-weight logits gradient.
+
+    For deferred gradients: ``dz_ptr`` holds one ``[rows, n_cols]`` slab per
+    differentiated term (slab index ``DZ_<term>``), the gradient of that
+    term's row loss with ``grad_output = 1``; the caller contracts each slab
+    with the weight right away and scales by the real per-row
+    ``grad_output`` in backward. Pass 1 streams both rows once for the
+    softmax statistics and both argmaxes; pass 2 computes every term and
+    writes the gradients that need only the statistics (KL, CE); a third
+    pass writes those that need a finished row total (RKL, JSD, TV).
+    Accumulators are per lane and reduced once per row.
+    """
+    pid = tl.program_id(0).to(tl.int64)
+    logits_ptr += pid * n_cols
+    targets_ptr += pid * n_cols
+    dz_ptr += pid * n_cols
+    lanes = tl.arange(0, BLOCK_SIZE)
+    neg = float("-inf")
+
+    # Pass 1: per-lane online softmax statistics and argmaxes.
+    m_d = tl.full([BLOCK_SIZE], neg, tl.float32)
+    s_d = tl.zeros([BLOCK_SIZE], tl.float32)
+    m_t = tl.full([BLOCK_SIZE], neg, tl.float32)
+    s_t = tl.zeros([BLOCK_SIZE], tl.float32)
+    best_d = tl.full([BLOCK_SIZE], neg, tl.float32)
+    best_t = tl.full([BLOCK_SIZE], neg, tl.float32)
+    idx_d = tl.zeros([BLOCK_SIZE], tl.int32)
+    idx_t = tl.zeros([BLOCK_SIZE], tl.int32)
+    for i in range(0, n_cols, BLOCK_SIZE):
+        offsets = i + lanes
+        mask = offsets < n_cols
+        x = tl.load(logits_ptr + offsets, mask=mask, other=neg).cast(tl.float32)
+        y = tl.load(targets_ptr + offsets, mask=mask, other=neg).cast(tl.float32)
+        m_d, s_d = _lane_online_update(m_d, s_d, x, mask)
+        best_d, idx_d = _lane_argmax_update(best_d, idx_d, x, offsets)
+        best_t, idx_t = _lane_argmax_update(best_t, idx_t, y, offsets)
+        if TERMS & _DIST:
+            m_t, s_t = _lane_online_update(m_t, s_t, y, mask)
+
+    lse_d = _lane_lse(m_d, s_d)
+    target_idx = _lane_argmax(best_t, idx_t, n_cols)
+    tl.store(
+        argmax_ptr + 0 * argmax_row + pid,
+        _lane_argmax(best_d, idx_d, n_cols).to(tl.int64),
+    )
+    tl.store(argmax_ptr + 1 * argmax_row + pid, target_idx.to(tl.int64))
+    if TERMS & _CE:
+        logit_at_target = tl.load(logits_ptr + target_idx).cast(tl.float32)
+        tl.store(loss_ptr + 3 * loss_row + pid, lse_d - logit_at_target)
+    lse_t = 0.0
+    if TERMS & _DIST:
+        lse_t = _lane_lse(m_t, s_t)
+
+    # Pass 2: every term, plus the gradients that need only the statistics.
+    kl = tl.zeros([BLOCK_SIZE], tl.float32)
+    rkl = tl.zeros([BLOCK_SIZE], tl.float32)
+    jsd_d = tl.zeros([BLOCK_SIZE], tl.float32)
+    jsd_t = tl.zeros([BLOCK_SIZE], tl.float32)
+    tv_min = tl.zeros([BLOCK_SIZE], tl.float32)
+    tv_s = tl.zeros([BLOCK_SIZE], tl.float32)
+    if (TERMS & _DIST) | (GRAD_TERMS & _CE):
+        for i in range(0, n_cols, BLOCK_SIZE):
+            offsets = i + lanes
+            mask = offsets < n_cols
+            x = tl.load(logits_ptr + offsets, mask=mask, other=0.0).cast(tl.float32)
+            ldp = x - lse_d
+            dp = tl.exp(ldp)
+            if GRAD_TERMS & _CE:
+                grad = dp - (offsets == target_idx).to(tl.float32)
+                tl.store(dz_ptr + DZ_CE * dz_term_stride + offsets, grad, mask=mask)
+            if TERMS & _DIST:
+                y = tl.load(targets_ptr + offsets, mask=mask, other=0.0).cast(
+                    tl.float32
+                )
+                ltp = y - lse_t
+                tp = tl.exp(ltp)
+                if TERMS & _KL:
+                    kl += tl.where(mask, tp * (ltp - ldp), 0.0)
+                if TERMS & _RKL:
+                    rkl += tl.where(mask, dp * (ldp - ltp), 0.0)
+                if TERMS & _JSD:
+                    lmp = _log_mix(ldp, ltp)
+                    jsd_d += tl.where(mask, dp * (ldp - lmp), 0.0)
+                    jsd_t += tl.where(mask, tp * (ltp - lmp), 0.0)
+                if TERMS & _TV:
+                    tv_min += tl.where(mask, tl.minimum(dp, tp), 0.0)
+                    tv_s += tl.where(mask & (dp <= tp), dp, 0.0)
+                if GRAD_TERMS & _KL:
+                    tl.store(
+                        dz_ptr + DZ_KL * dz_term_stride + offsets, dp - tp, mask=mask
+                    )
+
+    rkl_loss = tl.sum(rkl)
+    jsd_kl_mix = tl.sum(jsd_d)
+    tv_ss = tl.sum(tv_s)
+    if TERMS & _KL:
+        tl.store(loss_ptr + 0 * loss_row + pid, tl.sum(kl))
+    if TERMS & _RKL:
+        tl.store(loss_ptr + 1 * loss_row + pid, rkl_loss)
+    if TERMS & _JSD:
+        tl.store(loss_ptr + 2 * loss_row + pid, 0.5 * (jsd_kl_mix + tl.sum(jsd_t)))
+    if TERMS & _TV:
+        tl.store(loss_ptr + 4 * loss_row + pid, 1.0 - tl.sum(tv_min))
+
+    # Pass 3: gradients that need a finished row total.
+    if GRAD_TERMS & (_RKL | _JSD | _TV):
+        for i in range(0, n_cols, BLOCK_SIZE):
+            offsets = i + lanes
+            mask = offsets < n_cols
+            x = tl.load(logits_ptr + offsets, mask=mask, other=0.0).cast(tl.float32)
+            y = tl.load(targets_ptr + offsets, mask=mask, other=0.0).cast(tl.float32)
+            ldp = x - lse_d
+            ltp = y - lse_t
+            dp = tl.exp(ldp)
+            tp = tl.exp(ltp)
+            if GRAD_TERMS & _RKL:
+                grad = dp * (ldp - ltp - rkl_loss)
+                tl.store(dz_ptr + DZ_RKL * dz_term_stride + offsets, grad, mask=mask)
+            if GRAD_TERMS & _JSD:
+                grad = 0.5 * dp * (ldp - _log_mix(ldp, ltp) - jsd_kl_mix)
+                tl.store(dz_ptr + DZ_JSD * dz_term_stride + offsets, grad, mask=mask)
+            if GRAD_TERMS & _TV:
+                grad = -dp * ((dp <= tp).to(tl.float32) - tv_ss)
+                tl.store(dz_ptr + DZ_TV * dz_term_stride + offsets, grad, mask=mask)
+
+
 class _FusedLoss(torch.autograd.Function):
     """Shared autograd wrapper over the term bitmasks.
 

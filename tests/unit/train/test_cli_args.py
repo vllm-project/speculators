@@ -295,3 +295,11 @@ def test_dflash_fused_linear_target_mode(monkeypatch):
     )
     train_kw, _ = DFlashDraftModel.get_trainer_kwargs(**vars(args))
     assert train_kw["fused_linear_targets"] == "materialize"
+    assert train_kw["fused_linear_logits"] == "input"
+
+    args = _parse(
+        monkeypatch,
+        ["--loss-implementation", "fused_linear", "--fused-linear-logits", "float32"],
+    )
+    train_kw, _ = DFlashDraftModel.get_trainer_kwargs(**vars(args))
+    assert train_kw["fused_linear_logits"] == "float32"
