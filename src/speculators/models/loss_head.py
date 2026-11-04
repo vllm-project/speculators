@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import dataclasses
 import functools
+from typing import Any
 
 import torch
 import torch.nn.functional as F  # noqa: N812
@@ -34,7 +35,7 @@ __all__ = [
 
 MODELS = ("dflash", "dspark")
 WEIGHTINGS = ("fixed-exp-decay", "dpace")
-IMPLEMENTATIONS = ("fused", "eager")
+IMPLEMENTATIONS = ("fused", "eager", "fused_linear")
 # Relative noise between the draft and verifier sides in make_inputs.
 DRAFT_NOISE = 0.5
 # Model defaults (models/{dflash,dspark}/config.py).
@@ -120,30 +121,46 @@ def make_inputs(
 
 
 def loss_head(cfg: HeadConfig, inputs: HeadInputs) -> tuple[torch.Tensor, dict]:
-    """Run the materialised loss head with the model's own ``compute_metrics``.
+    """Run the loss head with the model's own ``compute_metrics``.
+
+    ``fused`` and ``eager`` project the draft logits with ``lm_head`` first;
+    ``fused_linear`` (DFlash only) never materialises them.
 
     Eager, without ``torch.autocast`` or ``torch.compile``: inputs are created
     in ``cfg.dtype``, as the trainer precasts the frozen heads. DSpark runs
     without its confidence head (per-row work, not ``[N, V]``).
     """
-    loss_config = cached_loss_config(cfg.loss, cfg.implementation)
+    fused_linear = cfg.implementation == "fused_linear"
+    loss_config = cached_loss_config(
+        cfg.loss, "fused" if fused_linear else cfg.implementation
+    )
     n = cfg.num_rows
     with torch.no_grad():
         # verifier_lm_head(verifier_norm(h_v[:, idx])); the norm is outside the
         # head and the rows are already gathered.
         targets = F.linear(inputs.verifier_hidden, inputs.verifier_weight)
         targets = targets.unsqueeze(0)
+    dflash_kwargs: dict[str, Any] = {
+        "block_size": cfg.block_size,
+        "loss_config": loss_config,
+        "per_position_loss_weight": cfg.weighting,
+        "sample_from_anchor": SAMPLE_FROM_ANCHOR["dflash"],
+    }
+    if fused_linear:
+        if cfg.model != "dflash":
+            raise ValueError("fused_linear is only supported for dflash")
+        return dflash_metrics.compute_metrics_from_hidden(
+            inputs.hidden.unsqueeze(0),
+            inputs.weight,
+            targets,
+            inputs.loss_mask,
+            **dflash_kwargs,
+        )
     logits = F.linear(inputs.hidden, inputs.weight)
 
     if cfg.model == "dflash":
         return dflash_metrics.compute_metrics(
-            logits.unsqueeze(0),
-            targets,
-            inputs.loss_mask,
-            block_size=cfg.block_size,
-            loss_config=loss_config,
-            per_position_loss_weight=cfg.weighting,
-            sample_from_anchor=SAMPLE_FROM_ANCHOR["dflash"],
+            logits.unsqueeze(0), targets, inputs.loss_mask, **dflash_kwargs
         )
 
     if inputs.markov_input is None or inputs.markov_weight is None:

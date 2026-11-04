@@ -211,9 +211,18 @@ def cmd_run(args: argparse.Namespace) -> dict:
         if cfg.num_rows <= 0:
             sys.exit(f"--rows {cfg.rows} is smaller than --block-size {cfg.block_size}")
         try:
-            cached_loss_config(cfg.loss, cfg.implementation)
+            # fused_linear* compute the fused losses from hidden states.
+            impl = cfg.implementation
+            loss_impl = "fused" if impl.startswith("fused_linear") else impl
+            cached_loss_config(cfg.loss, loss_impl)
         except ValueError as err:
             sys.exit(f"invalid --loss {cfg.loss!r}: {err}")
+    # fused_linear covers DFlash only; skip the other models' combinations.
+    configs = [
+        cfg
+        for cfg in configs
+        if not (cfg.implementation == "fused_linear" and cfg.model != "dflash")
+    ]
     _device()
 
     results = []
@@ -279,7 +288,7 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument(
         "--implementation",
         default="fused",
-        help=f"comma list of {','.join(IMPLEMENTATIONS)}",
+        help=f"comma list of {','.join(IMPLEMENTATIONS)} (fused_linear: dflash only)",
     )
     run.add_argument(
         "--dtype", default="bfloat16", choices=("bfloat16", "float16", "float32")

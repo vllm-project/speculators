@@ -193,6 +193,13 @@ def resolve_loss_config(spec: str, implementation: str = "fused") -> LossConfig:
     Accepts either a plain loss name (``"kl_div"``) or a JSON dict mapping
     loss names to weights (``'{"ce": 0.1, "tv": 0.9}'``).
     """
+    if implementation == "fused_linear":
+        # Models that support it (DFlash) resolve their config with "fused"
+        # and take the hidden-state path themselves.
+        raise ValueError(
+            "loss_implementation='fused_linear' is only supported by DFlash; "
+            "use 'fused' or 'eager' for this model"
+        )
     try:
         loss_fn_map = _LOSS_FN_MAPS[implementation]
     except KeyError:
@@ -328,9 +335,6 @@ def _compound_loss(
     metric_terms: Sequence[str],
     with_ids: bool,
 ) -> CompoundLossOutput:
-    total = torch.zeros((), device=logits.device, dtype=torch.float32)
-    term_losses: dict[str, torch.Tensor] = {}
-    multi = len(loss_config) > 1
     fused_names = [_FUSED_NAME_BY_FN.get(fn) for fn, _ in loss_config.values()]
     metrics: dict[str, torch.Tensor] = {}
     if fused_names and all(name is not None for name in fused_names):
@@ -347,6 +351,59 @@ def _compound_loss(
             target_ids = torch.argmax(targets, dim=-1)
         else:
             pred_ids = target_ids = torch.empty(0, dtype=torch.long)
+    total, term_losses = _weighted_sum(
+        loss_config, elementwise, loss_mask, pos_idx, decay_fn
+    )
+    return CompoundLossOutput(total, term_losses, pred_ids, target_ids, metrics)
+
+
+def compound_loss_from_hidden(
+    hidden: torch.Tensor,
+    weight: torch.Tensor,
+    targets: torch.Tensor,
+    loss_mask: torch.Tensor,
+    pos_idx: torch.Tensor,
+    loss_config: LossConfig,
+    decay_fn: Callable[..., torch.Tensor] | None = None,
+    metric_terms: Sequence[str] = (),
+    chunk_rows: int | None = None,
+) -> CompoundLossOutput:
+    """``compound_loss_with_outputs`` from hidden states and the ``lm_head``
+    weight, without materializing the ``[1, T, V]`` draft logits.
+
+    The logits are produced chunk by chunk inside ``fused_linear_compound``;
+    every term of ``loss_config`` must be a fused loss.
+    """
+    names: list[str] = []
+    for fn, _ in loss_config.values():
+        name = _FUSED_NAME_BY_FN.get(fn)
+        if name is None:
+            raise ValueError(
+                "compound_loss_from_hidden needs a loss config resolved with "
+                "the 'fused' implementation"
+            )
+        names.append(name)
+    try:
+        from speculators.losses import fused_linear  # noqa: PLC0415
+    except ImportError as error:
+        raise RuntimeError("Fused linear losses require Triton.") from error
+    out = fused_linear.fused_linear_compound(
+        hidden, weight, targets, names, metric_terms, chunk_rows=chunk_rows
+    )
+    elementwise = [out.losses[name] for name in names]
+    total, term_losses = _weighted_sum(
+        loss_config, elementwise, loss_mask, pos_idx, decay_fn
+    )
+    return CompoundLossOutput(
+        total, term_losses, out.pred_ids, out.target_ids, out.metrics
+    )
+
+
+def _weighted_sum(loss_config, elementwise, loss_mask, pos_idx, decay_fn):
+    """Reduce each term's per-position loss and sum them with their weights."""
+    total = torch.zeros((), device=loss_mask.device, dtype=torch.float32)
+    term_losses: dict[str, torch.Tensor] = {}
+    multi = len(loss_config) > 1
     for (name, (_, weight)), term_elementwise in zip(
         loss_config.items(), elementwise, strict=True
     ):
@@ -354,7 +411,7 @@ def _compound_loss(
         if multi:
             term_losses[f"{name}_loss"] = term.detach()
         total = total + weight * term
-    return CompoundLossOutput(total, term_losses, pred_ids, target_ids, metrics)
+    return total, term_losses
 
 
 def loss_function(
