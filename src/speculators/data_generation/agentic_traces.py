@@ -156,20 +156,11 @@ def _last_agent_end_messages(trace_path: Path) -> list[dict]:
     return messages
 
 
-def _to_list(values: Any) -> list:
+def _to_list(values: Any) -> list[int]:
     """Normalize a dataset cell (list, tensor, or array) to a Python list."""
     if hasattr(values, "tolist"):
         return values.tolist()
     return list(values)
-
-
-def _safe_decode(processor: ProcessorLike, input_ids: list[int]) -> str:
-    """Decode a token sequence for review, and return an empty string on failure."""
-    try:
-        decoded = processor.decode(input_ids)
-    except Exception:
-        return ""
-    return decoded if isinstance(decoded, str) else ""
 
 
 def rows_from_pi_trace(
@@ -209,7 +200,7 @@ def rows_from_pi_trace(
                 "primary_id": primary_id,
                 "input_ids": input_ids,
                 "loss_mask": loss_mask,
-                "text": _safe_decode(processor, input_ids),
+                "text": processor.decode(input_ids),
                 "metadata": {"instance_id": primary_id, "source": "pi"},
             }
         )

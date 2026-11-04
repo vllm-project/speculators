@@ -98,7 +98,7 @@ def _normalize_row(row: Any, *, source: str, index: int) -> dict | None:
 
 
 def _rows_from_json_file(path: Path) -> list[Any]:
-    text = path.read_text()
+    text = path.read_text(encoding="utf-8")
     if path.suffix == ".jsonl":
         rows = []
         for line in text.splitlines():
@@ -190,10 +190,7 @@ def _docker_exec(
 
 
 def _collect_file(container_name: str, remote: str, dest: Path) -> None:
-    try:
-        proc = _docker_exec(container_name, ["cat", remote])
-    except (OSError, subprocess.TimeoutExpired):
-        return
+    proc = _docker_exec(container_name, ["cat", remote])
     if proc.returncode == 0:
         dest.write_bytes(proc.stdout)
 

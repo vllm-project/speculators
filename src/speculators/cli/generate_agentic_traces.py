@@ -20,14 +20,19 @@ import json
 import logging
 import shutil
 from pathlib import Path
-from typing import Annotated, Any
+from typing import Annotated
 
 import typer
 
+from speculators.data_generation.agentic_runner import (
+    generate_traces,
+    load_trace_tasks,
+)
+from speculators.data_generation.agentic_traces import rows_from_pi_trace
 from speculators.data_generation.logging_utils import PipelineLogger
+from speculators.data_generation.preprocessing import load_processor
 
 log = PipelineLogger(__name__)
-logger = logging.getLogger(__name__)
 
 
 def generate_agentic_traces(  # noqa: PLR0917
@@ -122,18 +127,6 @@ def generate_agentic_traces(  # noqa: PLR0917
     renders and tokenizes each trace into rows with ``input_ids``/``loss_mask``
     and writes them to ``--output`` as JSONL.
     """
-    # Imported here so `--help` works without the (optional) agentic runtime.
-    from speculators.data_generation.agentic_runner import (  # noqa: PLC0415
-        generate_traces,
-        load_trace_tasks,
-    )
-    from speculators.data_generation.agentic_traces import (  # noqa: PLC0415
-        rows_from_pi_trace,
-    )
-    from speculators.data_generation.preprocessing import (  # noqa: PLC0415
-        load_processor,
-    )
-
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
@@ -183,7 +176,7 @@ def generate_agentic_traces(  # noqa: PLR0917
 
     processor = load_processor(model)
 
-    rows: list[dict[str, Any]] = []
+    rows: list[dict] = []
     for result in succeeded:
         try:
             rows.extend(
@@ -196,8 +189,8 @@ def generate_agentic_traces(  # noqa: PLR0917
                 )
             )
         except Exception as exc:  # noqa: BLE001
-            logger.warning(
-                "Failed to convert trace for %s: %r", result.get("instance_id"), exc
+            log.warning(
+                f"Failed to convert trace for {result.get('instance_id')}: {exc!r}"
             )
         if max_samples is not None and len(rows) >= max_samples:
             break
