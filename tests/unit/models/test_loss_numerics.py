@@ -33,6 +33,7 @@ API differences:
   Generalized-JSD endpoint cases (beta=1e-6 and 1-1e-6) are not applicable.
 
 Known failures use strict xfails; use pytest --runxfail to see the raw assertions.
+Loss and gradient assertions run as separate cases so neither failure hides the other.
 """
 
 import math
@@ -85,7 +86,8 @@ class TestLossNumerics:
         raises=AssertionError,
         reason="Softmax collapse: confident CE loses the small loss/target gradient",
     )
-    def test_confident_target_large_vocabulary(self, device, loss_fn):
+    @pytest.mark.parametrize("check", ["loss", "gradient"])
+    def test_confident_target_large_vocabulary(self, device, loss_fn, check):
         """TRL's across_triton_blocks case, with the same 2053 logits."""
         targets = torch.tensor([0, 1024, 2052], device=device)
         weight = torch.full((2053, 3), -9.0, device=device)
@@ -108,10 +110,12 @@ class TestLossNumerics:
         expected_grad[targets, torch.arange(3, device=device)] = -tail_mass / (
             1 + tail_mass
         )
-        torch.testing.assert_close(
-            loss.double().sum(), expected_loss, atol=0, rtol=1e-5
-        )
-        torch.testing.assert_close(grad.double(), expected_grad, atol=0, rtol=1e-5)
+        if check == "loss":
+            torch.testing.assert_close(
+                loss.double().sum(), expected_loss, atol=0, rtol=1e-5
+            )
+        else:
+            torch.testing.assert_close(grad.double(), expected_grad, atol=0, rtol=1e-5)
 
     @pytest.mark.xfail(
         strict=True,
@@ -121,7 +125,8 @@ class TestLossNumerics:
     @pytest.mark.parametrize(
         "dtype", [torch.float32, torch.bfloat16], ids=["fp32", "bf16"]
     )
-    def test_confident_target(self, device, loss_fn, dtype):
+    @pytest.mark.parametrize("check", ["loss", "gradient"])
+    def test_confident_target(self, device, loss_fn, dtype, check):
         # BF16 inputs retain BF16 leaf gradients; fused loss math/output are FP32.
         weight = torch.tensor(
             [[9.0, -9.0, -9.0], [-9.0, 9.0, -9.0], [-9.0, -9.0, 9.0]],
@@ -140,13 +145,15 @@ class TestLossNumerics:
         ref_logps = logits.log_softmax(-1)
         ref_loss = -2 * (ref_logps.diagonal() * advantages.double()).sum()
         ref_loss.backward()
-        torch.testing.assert_close(loss.double(), ref_loss, atol=0, rtol=1e-5)
-        torch.testing.assert_close(
-            grad.double(),
-            _grad(logits).t(),
-            atol=0,
-            rtol=1e-2 if dtype == torch.bfloat16 else 1e-5,
-        )
+        if check == "loss":
+            torch.testing.assert_close(loss.double(), ref_loss, atol=0, rtol=1e-5)
+        else:
+            torch.testing.assert_close(
+                grad.double(),
+                _grad(logits).t(),
+                atol=0,
+                rtol=1e-2 if dtype == torch.bfloat16 else 1e-5,
+            )
 
     @pytest.mark.parametrize("beta", [0.0, 0.5, 1.0], ids=["kl", "jsd", "rkl"])
     @pytest.mark.parametrize(
@@ -194,13 +201,22 @@ class TestLossNumerics:
                 _grad(student).double().t(), _grad(logits), atol=1e-15, rtol=1e-5
             )
 
-    @pytest.mark.xfail(
-        strict=True,
-        raises=AssertionError,
-        reason="Concentrated distributions lose small divergence gradients",
+    @pytest.mark.parametrize(
+        "check",
+        [
+            "loss",
+            pytest.param(
+                "gradient",
+                marks=pytest.mark.xfail(
+                    strict=True,
+                    raises=AssertionError,
+                    reason="Concentrated distributions lose small divergence gradients",
+                ),
+            ),
+        ],
     )
     @pytest.mark.parametrize("beta", [0.0, 0.5, 1.0], ids=["kl", "jsd", "rkl"])
-    def test_concentrated_teacher(self, device, loss_fn, beta):
+    def test_concentrated_teacher(self, device, loss_fn, beta, check):
         student = (
             torch.tensor(
                 [[9.0, -9.0, -9.0], [9.0, -9.0, -9.0], [20.0, -20.0, -20.0]],
@@ -236,10 +252,14 @@ class TestLossNumerics:
                 + beta * log_p.exp() * (log_p - log_m)
             ).sum()
         ref.backward()
-        torch.testing.assert_close(
-            _grad(student).double().t(), _grad(logits), atol=1e-22, rtol=1e-5
-        )
-        torch.testing.assert_close(divergence.double().sum(), ref, atol=0, rtol=1e-5)
+        if check == "loss":
+            torch.testing.assert_close(
+                divergence.double().sum(), ref, atol=0, rtol=1e-5
+            )
+        else:
+            torch.testing.assert_close(
+                _grad(student).double().t(), _grad(logits), atol=1e-22, rtol=1e-5
+            )
 
     @pytest.mark.xfail(
         strict=True,
