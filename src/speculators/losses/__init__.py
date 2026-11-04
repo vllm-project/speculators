@@ -1,9 +1,11 @@
 """Training loss implementations and shared utilities."""
 
 from speculators.losses.utils import (
+    CompoundLossOutput,
     LossConfig,
     ce_loss,
     compound_loss,
+    compound_loss_with_outputs,
     dflash_loss_decay,
     dpace_loss_decay,
     exp_loss_decay,
@@ -18,9 +20,11 @@ from speculators.losses.utils import (
 )
 
 __all__ = [
+    "CompoundLossOutput",
     "LossConfig",
     "ce_loss",
     "compound_loss",
+    "compound_loss_with_outputs",
     "dflash_loss_decay",
     "dpace_loss_decay",
     "exp_loss_decay",

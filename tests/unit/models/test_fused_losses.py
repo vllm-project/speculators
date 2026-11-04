@@ -328,6 +328,7 @@ def test_autotuner_never_picks_a_spilling_tile():
     logits = torch.randn(rows, vocab, device="cuda", dtype=torch.bfloat16)
     targets = torch.randn(rows, vocab, device="cuda", dtype=torch.bfloat16)
     loss = torch.empty(fused_losses._N_TERMS, rows, device="cuda", dtype=torch.float32)
+    argmax = torch.empty(2, rows, device="cuda", dtype=torch.int64)
     stats = torch.empty(fused_losses._N_STATS, rows, device="cuda", dtype=torch.float32)
     grad_in = torch.empty_like(logits)
     grad_out = torch.ones_like(loss)
@@ -339,6 +340,8 @@ def test_autotuner_never_picks_a_spilling_tile():
             targets,
             loss,
             loss.stride(0),
+            argmax,
+            argmax.stride(0),
             stats,
             stats.stride(0),
             vocab,
