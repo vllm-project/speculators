@@ -74,6 +74,8 @@ Nemotron and GLM also set `VLLM_MOE_ROUTING_SIMULATION_STRATEGY=uniform_random`.
 | NVFP4 GPTQ+iMatrix, Gaussian     |         2.201 (66.39%) |           2.108 (64.44%) |
 | NVFP4 GPTQ+iMatrix, PerfectBlend |         3.182 (95.96%) |           3.099 (94.74%) |
 
+![Grouped bars comparing RedHatAI and SpeedBench acceptance-length retention for eleven FP8 and NVFP4 drafter configurations, with a 98% reference line and the GPTQ damping caveat.](../assets/research/dspark-depth-quantization/dspark-phase1-acceptance-retention.png)
+
 - **Data-free FP8 preserved acceptance.** FP8 dynamic and FP8 block were the only configurations above 98% retention on both suites. Their small differences from BF16 are practical ties in these single-run measurements.
 - **Gaussian calibration was inadequate for every data-dependent arm tested.** The largest drops were static FP8 and W4A4 NVFP4, which retained only about 44–45% of BF16 acceptance length. Every PerfectBlend arm had higher acceptance than its corresponding Gaussian arm, but only the GPTQ pipelines approached BF16.
 - **The >98% threshold does not include NVFP4.** Real-data NVFP4 GPTQ+iMatrix retained 95.96% on RedHatAI and 94.74% on SpeedBench. GPTQ without iMatrix was marginally higher, so this study did not demonstrate an iMatrix acceptance benefit.
