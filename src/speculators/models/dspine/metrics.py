@@ -26,13 +26,12 @@ def _weighted_mean(
 
 def _distribution_terms(
     logits: torch.Tensor,
-    target_logits: torch.Tensor,
+    target_probs: torch.Tensor,
     target_ids: torch.Tensor,
 ) -> tuple[torch.Tensor, torch.Tensor]:
     log_q = functional.log_softmax(logits.float(), dim=-1)
-    p = functional.softmax(target_logits.float(), dim=-1)
     ce = -log_q.gather(-1, target_ids.unsqueeze(-1)).squeeze(-1)
-    l1 = (log_q.exp() - p).abs().sum(dim=-1)
+    l1 = (log_q.exp() - target_probs).abs().sum(dim=-1)
     return ce, l1
 
 
@@ -62,14 +61,14 @@ def compute_dspine_loss(
         -(positions.to(torch.float32) - 1.0).clamp_min(0.0) / gamma
     )
 
+    target_probs = functional.softmax(targets.float(), dim=-1)
     unary_ce_values, unary_l1_values = _distribution_terms(
-        unary_logits, targets, target_ids
+        unary_logits, target_probs, target_ids
     )
     unary_ce = _weighted_mean(unary_ce_values, loss_mask, position_weights)
     unary_l1 = _weighted_mean(unary_l1_values, loss_mask, position_weights)
     unary_loss = alpha * unary_ce + (1.0 - alpha) * unary_l1
 
-    target_probs = functional.softmax(targets.float(), dim=-1)
     candidate_target_probs = target_probs.gather(-1, candidate_ids)
     candidate_mass = candidate_target_probs.sum(dim=-1)
     renormalized_targets = candidate_target_probs / candidate_mass.unsqueeze(
