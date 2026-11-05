@@ -159,6 +159,51 @@ def flatten_rope_parameters(config: PretrainedConfig) -> PretrainedConfig:
     return config
 
 
+def mla_kwargs_from_verifier(verifier_config: PretrainedConfig) -> dict:
+    """Copy dense MLA ranks/head dims from a GLM-5 / DeepSeek-style verifier.
+
+    Returns ``DeepseekV3Config`` kwargs; ``qk_head_dim`` is derived by the config.
+    """
+    required = (
+        "q_lora_rank",
+        "kv_lora_rank",
+        "qk_nope_head_dim",
+        "qk_rope_head_dim",
+    )
+    missing = [
+        name for name in required if getattr(verifier_config, name, None) is None
+    ]
+    if missing:
+        raise ValueError(
+            "--draft-arch glm5 requires verifier MLA fields "
+            f"{missing}. Use a GLM-5 / DeepSeek-style verifier, "
+            "or --draft-arch qwen3."
+        )
+    qk_nope = int(verifier_config.qk_nope_head_dim)
+    qk_rope = int(verifier_config.qk_rope_head_dim)
+    qk_head_dim = getattr(verifier_config, "qk_head_dim", None)
+    if qk_head_dim is None:
+        qk_head_dim = qk_nope + qk_rope
+    else:
+        qk_head_dim = int(qk_head_dim)
+        # Some transformers versions (e.g. 5.5.x GlmMoe) clobber
+        # ``qk_rope_head_dim`` with ``head_dim`` / ``qk_nope``. Recover from
+        # the qk_head_dim invariant: qk_head = nope + rope.
+        if qk_nope + qk_rope != qk_head_dim:
+            qk_rope = qk_head_dim - qk_nope
+    v_head_dim = getattr(verifier_config, "v_head_dim", None)
+    if v_head_dim is None:
+        v_head_dim = qk_head_dim
+    return {
+        "q_lora_rank": int(verifier_config.q_lora_rank),
+        "kv_lora_rank": int(verifier_config.kv_lora_rank),
+        "qk_nope_head_dim": qk_nope,
+        "qk_rope_head_dim": qk_rope,
+        "v_head_dim": int(v_head_dim),
+        "rope_interleave": bool(getattr(verifier_config, "rope_interleave", True)),
+    }
+
+
 def resolve_draft_intermediate_size(verifier_config: PretrainedConfig) -> int:
     """Resolve a dense draft MLP ``intermediate_size`` from a verifier config.
 

@@ -3,8 +3,10 @@ from typing import Any, Literal
 from pydantic import Field
 
 from speculators import SpeculatorModelConfig
-from speculators.models.dflash.config import DFlashSpeculatorConfig
-from speculators.models.dflash.glm5 import GLM5_DSPARK_MODEL_TYPE
+from speculators.models.dflash.config import (
+    GLM5_DSPARK_MODEL_TYPE,
+    DFlashSpeculatorConfig,
+)
 
 __all__ = [
     "EXPORT_ARCHITECTURES",

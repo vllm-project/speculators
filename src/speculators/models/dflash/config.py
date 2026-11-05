@@ -1,14 +1,63 @@
 from typing import Literal
 
 from pydantic import Field
-from transformers import PretrainedConfig
+from transformers import AutoConfig, PretrainedConfig
+from transformers.models.deepseek_v3.configuration_deepseek_v3 import DeepseekV3Config
 from transformers.models.qwen3.configuration_qwen3 import Qwen3Config
 
 from speculators import SpeculatorModelConfig
 
 __all__ = [
+    "GLM5_DSPARK_MODEL_TYPE",
     "DFlashSpeculatorConfig",
+    "Glm5DSparkDecoderConfig",
 ]
+
+GLM5_DSPARK_MODEL_TYPE = "glm5_dspark"
+
+# DeepseekV3Config defaults describe a 256-expert MoE with an MTP head. The draft
+# is a dense-MLP MLA stack, so these defaults are rewritten to "no MoE, no MTP"
+# before they are serialized into ``transformer_layer_config``. Loaders that key
+# on them (``n_routed_experts``, ``first_k_dense_replace``) then build dense layers.
+_DENSE_DRAFT_DEFAULTS: dict[str, object] = {
+    "n_routed_experts": 0,
+    "n_shared_experts": 0,
+    "num_experts_per_tok": 0,
+    "moe_intermediate_size": 0,
+    "n_group": None,
+    "topk_group": None,
+    "norm_topk_prob": False,
+    "routed_scaling_factor": 1.0,
+    "num_mtp_layers": 0,
+}
+
+
+class Glm5DSparkDecoderConfig(DeepseekV3Config):
+    """DeepSeek-V3 MLA decoder config under the GLM-5 DSpark draft ``model_type``.
+
+    GLM-5.x attention is DeepSeek-style dense MLA, so the upstream config already
+    carries every field the draft needs (LoRA ranks, nope/rope/v head dims,
+    ``rope_interleave``, YaRN parameters). This subclass gives the draft its own
+    ``model_type`` (the verifier is ``glm_moe_dsa``; vLLM and vLLM-Ascend dispatch
+    the draft independently of it) and replaces the upstream MoE/MTP defaults with
+    dense-only values. Attention dimensions are copied from the verifier when the
+    draft is built (``mla_kwargs_from_verifier``), not taken from defaults.
+    """
+
+    model_type = GLM5_DSPARK_MODEL_TYPE
+
+    def __init__(self, **kwargs):
+        for key, value in _DENSE_DRAFT_DEFAULTS.items():
+            kwargs.setdefault(key, value)
+        super().__init__(**kwargs)
+        if "first_k_dense_replace" not in kwargs:
+            # Every draft layer is dense: no layer index reaches the MoE range.
+            self.first_k_dense_replace = self.num_hidden_layers
+
+
+# Lets AutoConfig.for_model("glm5_dspark") (shared transformer_layer_config
+# validator, --draft-config) construct this class.
+AutoConfig.register(GLM5_DSPARK_MODEL_TYPE, Glm5DSparkDecoderConfig, exist_ok=True)
 
 
 @SpeculatorModelConfig.register("dflash")

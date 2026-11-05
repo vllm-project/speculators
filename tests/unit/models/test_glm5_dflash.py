@@ -1,34 +1,39 @@
 """Unit tests for GLM-5 Dense MLA DFlash / DSpark draft layers."""
 
 import json
+import math
 from types import SimpleNamespace
 from unittest.mock import patch
 
 import pytest
 import torch
 from transformers import AutoConfig
+from transformers.models.deepseek_v3.configuration_deepseek_v3 import DeepseekV3Config
+from transformers.models.deepseek_v3.modeling_deepseek_v3 import (
+    DeepseekV3Attention,
+    apply_rotary_pos_emb_interleave,
+)
 from transformers.models.qwen3.configuration_qwen3 import Qwen3Config
 
 from speculators.models.dflash import DFlashSpeculatorConfig
-from speculators.models.dflash.core import DFlashDraftModel
-from speculators.models.dflash.glm5 import (
+from speculators.models.dflash.config import (
     GLM5_DSPARK_MODEL_TYPE,
-    Glm5Config,
-    Glm5DFlashDecoderLayer,
-    Glm5DFlashMLAAttention,
-    apply_interleaved_rotary_pos_emb,
-    mla_kwargs_from_verifier,
+    Glm5DSparkDecoderConfig,
 )
+from speculators.models.dflash.core import DFlashDraftModel
 from speculators.models.dflash.model_definitions import (
+    DFlashMLAAttention,
+    DFlashMLADecoderLayer,
     Qwen3DFlashAttention,
     Qwen3DFlashDecoderLayer,
-    _rotate_half,
+    _apply_mla_rope,
     apply_rotary_pos_emb,
     dflash_model_classes,
 )
 from speculators.models.dspark import DSparkSpeculatorConfig
 from speculators.models.dspark.config import EXPORT_ARCHITECTURES
 from speculators.models.dspark.core import DSparkDraftModel
+from speculators.models.utils import mla_kwargs_from_verifier
 from speculators.train.cli import (
     _apply_glm5_lora_rank_overrides,
     create_transformer_layer_config,
@@ -52,28 +57,29 @@ TINY_GLM5_KWARGS = {
     "qk_nope_head_dim": 8,
     "qk_rope_head_dim": 4,
     "v_head_dim": 8,
-    "qk_head_dim": 12,
     "rope_interleave": True,
     "layer_types": ["full_attention", "full_attention"],
     "_attn_implementation": "eager",
 }
 
 
-def _tiny_glm5_config(**overrides) -> Glm5Config:
+def _tiny_glm5_config(**overrides) -> Glm5DSparkDecoderConfig:
     kwargs = dict(TINY_GLM5_KWARGS)
     kwargs.update(overrides)
-    return Glm5Config(**kwargs)
+    return Glm5DSparkDecoderConfig(**kwargs)
 
 
 def test_autoconfig_registers_glm5():
     cfg = AutoConfig.for_model("glm5_dspark")
-    assert cfg.__class__ is Glm5Config
+    assert cfg.__class__ is Glm5DSparkDecoderConfig
+    assert isinstance(cfg, DeepseekV3Config)
     assert cfg.model_type == "glm5_dspark"
 
 
 def test_dflash_model_classes_table():
     glm5 = dflash_model_classes[GLM5_DSPARK_MODEL_TYPE]
-    assert glm5.decoder_layer_class is Glm5DFlashDecoderLayer
+    assert glm5.decoder_layer_class is DFlashMLADecoderLayer
+    assert issubclass(glm5.decoder_layer_class.attention_class, DeepseekV3Attention)
     assert glm5.rotary_head_dim_attr == "qk_rope_head_dim"
     assert (glm5.context_proj_name, glm5.context_norm_name) == (
         "context_proj",
@@ -118,13 +124,31 @@ def test_qwen3_dflash_keeps_fc_and_hidden_norm():
 
 
 def test_glm5_config_defaults_lock_576d_page_spec():
-    cfg = Glm5Config()
+    # Upstream DeepSeek-V3 defaults already give the serveable 576-d MLA page.
+    cfg = Glm5DSparkDecoderConfig()
     assert cfg.model_type == "glm5_dspark"
-    assert cfg.q_lora_rank == 2048
-    assert cfg.kv_lora_rank == 512
-    assert cfg.qk_rope_head_dim == 64
     assert cfg.kv_lora_rank + cfg.qk_rope_head_dim == 576
     assert cfg.rope_interleave is True
+    assert cfg.qk_head_dim == cfg.qk_nope_head_dim + cfg.qk_rope_head_dim
+
+
+def test_glm5_config_defaults_are_dense_only():
+    cfg = _tiny_glm5_config(num_hidden_layers=3)
+    assert cfg.n_routed_experts == 0
+    assert cfg.n_shared_experts == 0
+    assert cfg.num_experts_per_tok == 0
+    assert cfg.num_mtp_layers == 0
+    # No layer index reaches the MoE range.
+    assert cfg.first_k_dense_replace == cfg.num_hidden_layers == 3
+    exported = cfg.to_diff_dict()
+    assert exported["n_routed_experts"] == 0
+    assert exported["first_k_dense_replace"] == 3
+    # Explicit values still win over the dense defaults.
+    assert _tiny_glm5_config(first_k_dense_replace=1).first_k_dense_replace == 1
+    # Round-trip through the serialized dict keeps the dense semantics.
+    reloaded = Glm5DSparkDecoderConfig(**cfg.to_diff_dict())
+    assert reloaded.first_k_dense_replace == 3
+    assert reloaded.n_routed_experts == 0
 
 
 def test_mla_kwargs_from_verifier_copies_ranks():
@@ -142,7 +166,7 @@ def test_mla_kwargs_from_verifier_copies_ranks():
     assert kwargs["qk_nope_head_dim"] == 192
     assert kwargs["qk_rope_head_dim"] == 64
     assert kwargs["v_head_dim"] == 192
-    assert kwargs["qk_head_dim"] == 256
+    assert "qk_head_dim" not in kwargs  # derived by DeepseekV3Config
     assert kwargs["rope_interleave"] is True
 
 
@@ -157,7 +181,6 @@ def test_mla_kwargs_defaults_v_head_to_qk_head_dim():
     )
     kwargs = mla_kwargs_from_verifier(verifier)
     assert kwargs["v_head_dim"] == 256
-    assert kwargs["qk_head_dim"] == 256
 
 
 def test_mla_kwargs_recovers_qk_rope_when_autoconfig_clobbers_it():
@@ -173,10 +196,9 @@ def test_mla_kwargs_recovers_qk_rope_when_autoconfig_clobbers_it():
     kwargs = mla_kwargs_from_verifier(verifier)
     assert kwargs["qk_nope_head_dim"] == 192
     assert kwargs["qk_rope_head_dim"] == 64
-    assert kwargs["qk_head_dim"] == 256
 
 
-def test_mla_kwargs_defaults_v_and_qk_head_from_nope_plus_rope():
+def test_mla_kwargs_defaults_v_head_from_nope_plus_rope():
     verifier = SimpleNamespace(
         q_lora_rank=32,
         kv_lora_rank=16,
@@ -184,14 +206,12 @@ def test_mla_kwargs_defaults_v_and_qk_head_from_nope_plus_rope():
         qk_rope_head_dim=4,
     )
     kwargs = mla_kwargs_from_verifier(verifier)
-    assert kwargs["qk_head_dim"] == 12
     assert kwargs["v_head_dim"] == 12
 
 
-def test_glm5_config_defaults_v_head_to_qk_head_dim():
-    cfg = _tiny_glm5_config(v_head_dim=None, qk_head_dim=None)
+def test_glm5_config_derives_qk_head_dim():
+    cfg = _tiny_glm5_config()
     assert cfg.qk_head_dim == 12  # 8 + 4
-    assert cfg.v_head_dim == 12
 
 
 def test_mla_kwargs_rejects_non_mla_verifier():
@@ -229,13 +249,15 @@ def test_create_transformer_layer_config_copies_glm5_mla_fields():
             sliding_window=2048,
             full_attention_indices=[0, 1],
         )
-    assert isinstance(config, Glm5Config)
+    assert isinstance(config, Glm5DSparkDecoderConfig)
     assert config.model_type == "glm5_dspark"
     assert config.q_lora_rank == 16
     assert config.kv_lora_rank == 8
     assert config.qk_nope_head_dim == 8
     assert config.qk_rope_head_dim == 4
+    assert config.qk_head_dim == 12
     assert config.num_attention_heads == 2
+    assert config.num_key_value_heads == 2
     assert config.layer_types == ["full_attention", "full_attention"]
     assert config.rope_interleave is True
 
@@ -271,87 +293,96 @@ def test_apply_glm5_lora_rank_overrides():
         )
 
 
-def test_mla_interleaved_rope_differs_from_neox():
+def _rope_cache(kv_len: int, rope_dim: int) -> tuple[torch.Tensor, torch.Tensor]:
+    # HF rotary layout: cat(freqs, freqs) along the last dim.
+    angles = torch.randn(1, kv_len, rope_dim // 2)
+    return (
+        torch.cat([angles.cos(), angles.cos()], dim=-1),
+        torch.cat([angles.sin(), angles.sin()], dim=-1),
+    )
+
+
+def test_apply_mla_rope_rotates_q_at_trailing_positions():
     torch.manual_seed(0)
-    q = torch.randn(1, 2, 3, 4)
-    k = torch.randn(1, 1, 5, 4)
-    # HF Qwen3RotaryEmbedding layout: cat(freqs, freqs) along the last dim.
-    freqs = torch.randn(1, 5, 2)
-    cos = torch.cat([freqs, freqs], dim=-1)
-    sin = torch.cat([freqs.sin(), freqs.sin()], dim=-1)
-    interleaved_q, interleaved_k = apply_interleaved_rotary_pos_emb(q, k, cos, sin)
-    neox_q, neox_k = apply_rotary_pos_emb(q, k, cos, sin)
-    assert interleaved_q.shape == q.shape
-    assert interleaved_k.shape == k.shape
-    assert not torch.allclose(interleaved_q, neox_q)
-    assert not torch.allclose(interleaved_k, neox_k)
-    # NeoX still splits the last dim in half (control that the helper is unchanged).
-    rotated = _rotate_half(q)
-    half = q.shape[-1] // 2
-    assert torch.equal(rotated[..., :half], -q[..., half:])
-    assert torch.equal(rotated[..., half:], q[..., :half])
+    kv_len, q_len, rope_dim = 5, 3, 4
+    k = torch.randn(1, 1, kv_len, rope_dim)
+    q = k[..., -q_len:, :].clone()  # same vectors as the last q_len K positions
+    cos, sin = _rope_cache(kv_len, rope_dim)
+    for interleave in (True, False):
+        q_out, k_out = _apply_mla_rope(interleave, q, k, cos, sin)
+        assert q_out.shape == q.shape
+        assert k_out.shape == k.shape
+        # Q must be rotated with the trailing positions of the KV-length cache.
+        assert torch.allclose(q_out, k_out[..., -q_len:, :], atol=1e-6)
+    # Interleaved (pairwise) and NeoX (split-half) rotation genuinely differ,
+    # and the interleaved path is the upstream DeepSeek helper.
+    inter_q, _ = _apply_mla_rope(True, q, k, cos, sin)
+    neox_q, _ = _apply_mla_rope(False, q, k, cos, sin)
+    assert not torch.allclose(inter_q, neox_q)
+    ref_q, _ = apply_rotary_pos_emb_interleave(
+        q, q, cos[..., -q_len:, :], sin[..., -q_len:, :]
+    )
+    assert torch.allclose(inter_q, ref_q)
 
 
-def test_mla_interleaved_rope_rotates_adjacent_pairs():
-    # d=2: unique freq c,s; pair (x0, x1) -> (x0*c - x1*s, x1*c + x0*s).
-    q = torch.tensor([[[[2.0, 3.0]]]])  # [B, H, S_q=1, D=2]
-    k = torch.tensor([[[[2.0, 3.0], [4.0, 5.0]]]])  # [B, 1, S=2, D=2]
-    cos = torch.tensor([[[0.6, 0.6]]]).expand(1, 2, 2).contiguous()
-    sin = torch.tensor([[[0.8, 0.8]]]).expand(1, 2, 2).contiguous()
-    q_out, k_out = apply_interleaved_rotary_pos_emb(q, k, cos, sin)
-    c, s = 0.6, 0.8
-    expected_q = torch.tensor([[[[2.0 * c - 3.0 * s, 3.0 * c + 2.0 * s]]]])
-    expected_k0 = torch.tensor([4.0 * c - 5.0 * s, 5.0 * c + 4.0 * s])
-    # Q uses only the last q_len positions of the KV-length cache.
-    assert torch.allclose(q_out, expected_q, atol=1e-6)
-    assert torch.allclose(k_out[0, 0, 1], expected_k0, atol=1e-6)
-
-
-def test_mla_attention_calls_interleaved_rope():
-    cfg = _tiny_glm5_config()
-    attn = Glm5DFlashMLAAttention(cfg, layer_idx=0)
-    assert attn.rope_interleave is True
+def _run_tiny_mla_attention(cfg: Glm5DSparkDecoderConfig) -> torch.Tensor:
+    attn = DFlashMLAAttention(cfg, layer_idx=0)
     bsz, q_len, ctx_len = 1, 2, 4
     hidden = torch.randn(bsz, q_len, cfg.hidden_size)
     target = torch.randn(bsz, ctx_len, cfg.hidden_size)
-    kv_len = ctx_len + q_len
-    cos = torch.randn(bsz, kv_len, cfg.qk_rope_head_dim)
-    sin = torch.randn(bsz, kv_len, cfg.qk_rope_head_dim)
-    with patch(
-        "speculators.models.dflash.glm5.apply_interleaved_rotary_pos_emb",
-        wraps=apply_interleaved_rotary_pos_emb,
-    ) as mocked:
-        out, _ = attn(hidden, target, (cos, sin), attention_mask=None)
-    mocked.assert_called_once()
+    cos, sin = _rope_cache(ctx_len + q_len, cfg.qk_rope_head_dim)
+    out, _ = attn(hidden, target, (cos, sin), attention_mask=None)
     assert out.shape == (bsz, q_len, cfg.hidden_size)
     assert torch.isfinite(out).all()
+    return out
+
+
+def test_mla_attention_reuses_upstream_and_calls_interleaved_rope():
+    cfg = _tiny_glm5_config()
+    attn = DFlashMLAAttention(cfg, layer_idx=0)
+    assert isinstance(attn, DeepseekV3Attention)
+    assert attn.is_causal is False
+    assert attn.num_key_value_groups == 1
+    assert attn.scaling == pytest.approx(cfg.qk_head_dim**-0.5)
+    with patch(
+        "speculators.models.dflash.model_definitions.apply_rotary_pos_emb_interleave",
+        wraps=apply_rotary_pos_emb_interleave,
+    ) as mocked:
+        _run_tiny_mla_attention(cfg)
+    assert mocked.call_count == 2  # once for Q, once for K
 
 
 def test_mla_attention_honors_rope_interleave_false():
     cfg = _tiny_glm5_config(rope_interleave=False)
-    attn = Glm5DFlashMLAAttention(cfg, layer_idx=0)
-    assert attn.rope_interleave is False
-    bsz, q_len, ctx_len = 1, 2, 4
-    hidden = torch.randn(bsz, q_len, cfg.hidden_size)
-    target = torch.randn(bsz, ctx_len, cfg.hidden_size)
-    kv_len = ctx_len + q_len
-    cos = torch.randn(bsz, kv_len, cfg.qk_rope_head_dim)
-    sin = torch.randn(bsz, kv_len, cfg.qk_rope_head_dim)
     with (
         patch(
-            "speculators.models.dflash.glm5.apply_interleaved_rotary_pos_emb",
-            wraps=apply_interleaved_rotary_pos_emb,
+            "speculators.models.dflash.model_definitions.apply_rotary_pos_emb_interleave",
+            wraps=apply_rotary_pos_emb_interleave,
         ) as interleaved,
         patch(
-            "speculators.models.dflash.glm5.apply_rotary_pos_emb",
+            "speculators.models.dflash.model_definitions.apply_rotary_pos_emb",
             wraps=apply_rotary_pos_emb,
         ) as neox,
     ):
-        out, _ = attn(hidden, target, (cos, sin), attention_mask=None)
+        _run_tiny_mla_attention(cfg)
     interleaved.assert_not_called()
     neox.assert_called_once()
-    assert out.shape == (bsz, q_len, cfg.hidden_size)
-    assert torch.isfinite(out).all()
+
+
+def test_mla_attention_applies_yarn_mscale_from_upstream():
+    cfg = _tiny_glm5_config(
+        rope_parameters={
+            "rope_type": "yarn",
+            "rope_theta": 10000.0,
+            "factor": 32.0,
+            "mscale": 1.0,
+            "mscale_all_dim": 1.0,
+            "original_max_position_embeddings": 64,
+        }
+    )
+    attn = DFlashMLAAttention(cfg, layer_idx=0)
+    mscale = 0.1 * 1.0 * math.log(32.0) + 1.0
+    assert attn.scaling == pytest.approx(cfg.qk_head_dim**-0.5 * mscale * mscale)
 
 
 def _make_dflash_glm5() -> DFlashDraftModel:
@@ -373,11 +404,12 @@ def _make_dflash_glm5() -> DFlashDraftModel:
 def test_glm5_dflash_uses_mla_projections():
     model = _make_dflash_glm5()
     attn = model.layers[0].self_attn
-    assert isinstance(attn, Glm5DFlashMLAAttention)
-    assert hasattr(attn, "q_a_proj")
-    assert hasattr(attn, "kv_a_proj_with_mqa")
-    assert hasattr(attn, "kv_b_proj")
-    assert not hasattr(attn, "q_proj")
+    assert isinstance(attn, DFlashMLAAttention)
+    assert attn.q_a_proj is not None
+    assert attn.kv_a_proj_with_mqa is not None
+    assert attn.kv_b_proj is not None
+    # Upstream keeps a ``q_proj = None`` placeholder when Q LoRA is enabled.
+    assert getattr(attn, "q_proj", None) is None
     assert not hasattr(attn, "k_proj")
     assert hasattr(model, "context_proj")
     assert hasattr(model, "context_norm")
@@ -429,7 +461,7 @@ def test_glm5_dspark_config_roundtrip():
     )
     dumped = config.model_dump()
     reloaded = DSparkSpeculatorConfig(**dumped)
-    assert isinstance(reloaded.transformer_layer_config, Glm5Config)
+    assert isinstance(reloaded.transformer_layer_config, Glm5DSparkDecoderConfig)
     assert reloaded.transformer_layer_config.model_type == "glm5_dspark"
     assert reloaded.transformer_layer_config.q_lora_rank == 16
     assert reloaded.transformer_layer_config.kv_lora_rank == 8
@@ -447,7 +479,7 @@ def test_glm5_dspark_builds_mla_layers():
         markov_rank=8,
     )
     model = DSparkDraftModel(config)
-    assert isinstance(model.layers[0].self_attn, Glm5DFlashMLAAttention)
+    assert isinstance(model.layers[0].self_attn, DFlashMLAAttention)
     assert model.markov_head is not None
     assert hasattr(model, "context_proj")
     assert config.to_dict()["architectures"] == [GLM5_DSPARK_ARCHITECTURE]
@@ -485,7 +517,7 @@ def test_glm5_dspark_save_pretrained_export_contract(tmp_path):
     # Reload resolves the nested decoder through AutoConfig and still exports
     # the serving architecture name.
     reloaded = DSparkSpeculatorConfig.from_pretrained(out)
-    assert isinstance(reloaded.transformer_layer_config, Glm5Config)
+    assert isinstance(reloaded.transformer_layer_config, Glm5DSparkDecoderConfig)
     assert reloaded.to_dict()["architectures"] == [GLM5_DSPARK_ARCHITECTURE]
 
 

@@ -15,9 +15,6 @@ from speculators.losses import LossConfig, resolve_loss_config
 from speculators.model import DraftVocabMixin, SpeculatorModel
 from speculators.models.attention import create_float_mask
 from speculators.models.dflash import DFlashSpeculatorConfig
-from speculators.models.dflash import (
-    glm5 as _glm5,  # noqa: F401  # registers glm5_dspark in dflash_model_classes
-)
 from speculators.models.dflash.attention import create_anchor_block_mask_mod
 from speculators.models.dflash.metrics import compute_metrics
 from speculators.models.dflash.model_definitions import dflash_model_classes
@@ -42,8 +39,8 @@ _compiled_create_block_mask = torch.compile(create_block_mask)
 @SpeculatorModel.register("dflash")
 class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
     config_class: ClassVar[type[DFlashSpeculatorConfig]] = DFlashSpeculatorConfig  # type: ignore[misc]
-    supports_gradient_checkpointing = True  # noqa: D003  # Qwen3 / Glm5 DFlash layers inherit GradientCheckpointingLayer
-    _no_split_modules = ["Qwen3DFlashDecoderLayer", "Glm5DFlashDecoderLayer"]
+    supports_gradient_checkpointing = True  # noqa: D003  # DFlash decoder layers inherit GradientCheckpointingLayer
+    _no_split_modules = ["Qwen3DFlashDecoderLayer", "DFlashMLADecoderLayer"]
     _keys_to_ignore_on_load_missing: ClassVar[list[str]] = [  # type: ignore[misc]
         "embed_tokens.weight",
         "verifier_norm.weight",

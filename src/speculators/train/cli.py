@@ -19,12 +19,13 @@ from transformers.models.qwen3.configuration_qwen3 import Qwen3Config
 
 from hs_connectors import HiddenStatesBackend
 from speculators.model import SpeculatorModel
-from speculators.models.dflash.glm5 import Glm5Config, mla_kwargs_from_verifier
+from speculators.models.dflash.config import Glm5DSparkDecoderConfig
 from speculators.models.eagle3.data import shift_batch
 from speculators.models.eagle3.rotary_partial import install_partial_neox_rotary
 from speculators.models.mtp.data import shift_batch_mtp
 from speculators.models.utils import (
     get_verifier_config,
+    mla_kwargs_from_verifier,
     resolve_draft_intermediate_size,
 )
 from speculators.train.config import TrainConfig
@@ -53,7 +54,7 @@ logger = logging.getLogger(__name__)
 DRAFT_ARCH_CONFIGS: dict[str, type] = {
     "llama": LlamaConfig,
     "qwen3": Qwen3Config,
-    "glm5": Glm5Config,
+    "glm5": Glm5DSparkDecoderConfig,
 }
 MROPE_INVERSE_TOLERANCE = 1e-6
 
@@ -223,6 +224,9 @@ def create_transformer_layer_config(  # noqa: C901
         if num_attention_heads % num_key_value_heads != 0:
             num_key_value_heads = num_attention_heads
     if is_mla:
+        # kv_b_proj expands the latent to every head; the attention module
+        # assumes num_key_value_groups == 1 (as upstream DeepseekV3Attention).
+        num_key_value_heads = num_attention_heads
         qk_rope = getattr(verifier_config, "qk_rope_head_dim", None)
         resolved_head_dim = (
             qk_rope or head_dim or resolved_hidden_size // num_attention_heads
@@ -230,8 +234,7 @@ def create_transformer_layer_config(  # noqa: C901
     else:
         resolved_head_dim = head_dim or resolved_hidden_size // num_attention_heads
 
-    # Ensure global fallback values are GQA-consistent. MLA drafts do not use
-    # num_attention_heads // num_key_value_heads.
+    # Ensure global fallback values are GQA-consistent.
     if (
         not is_mla
         and num_key_value_heads
@@ -340,7 +343,7 @@ def _apply_glm5_lora_rank_overrides(
     ``q_lora_rank=0`` disables Q LoRA (full ``q_proj``). Negative ranks are
     rejected; ``kv_lora_rank`` must be strictly positive.
     """
-    if not isinstance(transformer_layer_config, Glm5Config):
+    if not isinstance(transformer_layer_config, Glm5DSparkDecoderConfig):
         if args.q_lora_rank is not None or args.kv_lora_rank is not None:
             raise ValueError(
                 "--q-lora-rank / --kv-lora-rank require --draft-arch glm5 "
@@ -350,7 +353,7 @@ def _apply_glm5_lora_rank_overrides(
     if args.q_lora_rank is not None:
         if args.q_lora_rank < 0:
             raise ValueError("--q-lora-rank must be >= 0")
-        # 0 disables Q LoRA (full q_proj), matching Glm5DFlashMLAAttention.
+        # 0 disables Q LoRA (full q_proj), matching DeepseekV3Attention.
         transformer_layer_config.q_lora_rank = (
             None if args.q_lora_rank == 0 else int(args.q_lora_rank)
         )
@@ -376,8 +379,9 @@ def load_draft_transformer_layer_config(
     ``draft_config`` may be a HF hub id, a local directory containing a
     ``config.json``, or a path to a config JSON file. It is expected to hold a
     plain decoder config (``LlamaConfig`` for eagle3/peagle, ``Qwen3Config`` or
-    ``Glm5Config`` for dflash/dspark). If a full speculator config is given instead,
-    its nested ``transformer_layer_config`` is extracted as a convenience.
+    ``Glm5DSparkDecoderConfig`` for dflash/dspark). If a full speculator config
+    is given instead, its nested ``transformer_layer_config`` is extracted as a
+    convenience.
 
     The decoder is reconciled against the verifier: ``hidden_size`` must match
     (draft/verifier hidden-size mismatch is not yet supported) and ``vocab_size``
@@ -396,7 +400,7 @@ def load_draft_transformer_layer_config(
             "eagle3/peagle, 'qwen3' or 'glm5' for dflash/dspark); none was found "
             f"in the config loaded from '{draft_config}'."
         )
-    # glm5_dspark resolves here too: speculators.models.dflash.glm5 registers it.
+    # glm5_dspark resolves here too: speculators.models.dflash.config registers it.
     config_class: type[PretrainedConfig] = type(AutoConfig.for_model(model_type))
     draft_config_obj = config_class.from_dict(config_dict)
 
