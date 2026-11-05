@@ -19,14 +19,11 @@ from benchmark import (  # type: ignore[import-not-found]
     BENCHMARK_VERSION,
     _aggregate_kernel_rows,
     _aggregate_timing,
-    _build_kernel_pie,
     _fmt_welch,
     _gather_per_rank,
-    _get_phase_means,
     _MetricCapture,
     _phase_peaks,
     _print_summary,
-    _report_paths,
     _run_training,
     _SyntheticLoader,
     _welch_test,
@@ -36,9 +33,14 @@ from benchmark import (  # type: ignore[import-not-found]
     compute_statistics,
     create_synthetic_batch,
     measured_step_window,
-    report_benchmark,
     select_measured_profiles,
     shutdown_dataloader_workers,
+)
+from benchmark_report import (  # type: ignore[import-not-found]
+    _build_kernel_pie,
+    _get_phase_means,
+    _report_paths,
+    report_benchmark,
 )
 
 # ---------------------------------------------------------------------------
