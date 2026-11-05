@@ -236,8 +236,8 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
         verifier_config._attn_implementation = kwargs.get(  # noqa: SLF001
             "draft_attn_impl", "simple_flex_attention"
         )
-        if kwargs.get("is_causal") is not None:
-            verifier_config.is_causal = kwargs["is_causal"]
+        if kwargs.get("causal_attention") is not None:
+            verifier_config.is_causal = kwargs["causal_attention"]
         block_size = kwargs.get("block_size", 8)
 
         default_sample_from_anchor = algorithm == "dspark"

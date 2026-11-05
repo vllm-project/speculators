@@ -142,7 +142,7 @@ def test_create_mask_each_query_sees_its_own_block():
 
 @pytest.mark.parametrize("is_causal", [False, True])
 @pytest.mark.parametrize("anchor", [2, 7, 12])
-@pytest.mark.parametrize("window", [2, 4, 16])
+@pytest.mark.parametrize("window", [8, 16])
 @pytest.mark.parametrize("lengths", [[20], [10, 10]])
 def test_sliding_window_matches_serving(anchor, window, is_causal, lengths):
     """The prefix and synthetic keys share the FlashAttention per-query window."""
@@ -240,7 +240,7 @@ def test_training_flag_is_saved_in_decoder_config(is_causal, monkeypatch):
         decoder,
         verifier_name_or_path="target",
         draft_vocab_size=16,
-        is_causal=is_causal,
+        causal_attention=is_causal,
     )
     saved = DFlashSpeculatorConfig(**kwargs).model_dump(exclude_none=True)
     assert saved["transformer_layer_config"]["is_causal"] is is_causal

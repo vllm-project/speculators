@@ -468,7 +468,7 @@ class LoggingArgs(_Group):
 class DFlashArgs(_Group):
     """Shared DFlash-family backbone knobs."""
 
-    is_causal: bool | None = Field(
+    causal_attention: bool | None = Field(
         default=None,
         description="Set causality for all DFlash-family draft layers when building "
         "a fresh model. Saved as transformer_layer_config.is_causal for inference. "

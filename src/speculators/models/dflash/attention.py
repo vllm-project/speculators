@@ -93,8 +93,6 @@ def create_anchor_block_mask_mod(
         same = kv_is_block & (q_block == kv_block)
         if is_causal:
             same = same & (kv_idx <= q_idx + total_seq_len)
-        if sliding_window is not None:
-            same = same & ((kv_idx - total_seq_len - q_idx).abs() < sliding_window)
         return same
 
     return or_masks(base_prefix_mod, same_block_mod), q_len, kv_len

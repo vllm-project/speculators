@@ -31,14 +31,18 @@ def test_sliding_window_must_be_positive(window):
 
 
 @pytest.mark.parametrize(
-    ("flag", "expected"), [("--is-causal", True), ("--no-is-causal", False)]
+    ("flag", "expected"),
+    [("--causal-attention", True), ("--no-causal-attention", False)],
 )
 def test_dflash_causality_flag_round_trips(flag, expected):
     config = TrainConfig.resolve(
         ["--verifier-name-or-path", "target", "--speculator-type", "dflash", flag]
     )
-    assert config.flatten()["is_causal"] is expected
-    assert TrainConfig.from_flat(config.flatten()).flatten()["is_causal"] is expected
+    assert config.flatten()["causal_attention"] is expected
+    assert (
+        TrainConfig.from_flat(config.flatten()).flatten()["causal_attention"]
+        is expected
+    )
 
 
 def test_flatten_covers_exactly_the_schema_fields():
