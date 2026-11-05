@@ -20,13 +20,14 @@ class MTPSpeculatorConfig(SpeculatorModelConfig):
     projection. ``embed_tokens`` and ``lm_head`` share the verifier's
     full vocabulary.
 
-    :param transformer_layer_config: Configuration for the underlying
-        transformer architecture (e.g., ``Qwen2Config``). All architecture
-        dimensions are derived from this config.
-    :param num_nextn_predict_layers: Number of MTP prediction heads in
-        the checkpoint. vLLM reads this field directly to instantiate the
-        correct number of MTP head instances. Currently only ``1`` is
-        supported.
+    Attributes:
+        transformer_layer_config: Configuration for the underlying
+            transformer architecture (e.g., ``Qwen2Config``). All architecture
+            dimensions are derived from this config.
+        num_nextn_predict_layers: Number of MTP prediction heads in
+            the checkpoint. vLLM reads this field directly to instantiate the
+            correct number of MTP head instances. Currently only ``1`` is
+            supported.
     """
 
     speculators_model_type: Literal["mtp"] = "mtp"
