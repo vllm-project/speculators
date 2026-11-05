@@ -4,6 +4,7 @@ import json
 from collections.abc import Callable
 
 import torch
+import torch.distributed as dist
 
 from speculators.losses import eager
 
@@ -12,6 +13,37 @@ _LOSS_REDUCTION_EPS = 1e-5
 LossConfig = dict[
     str, tuple[Callable[[torch.Tensor, torch.Tensor], torch.Tensor], float]
 ]
+
+
+def global_token_weighted_mean(
+    numerator: torch.Tensor, mask_sum: torch.Tensor
+) -> torch.Tensor | None:
+    """Masked mean normalized by the GLOBAL supervised-token count, or ``None``.
+
+    Normalizing a masked loss by the PER-RANK token count makes the effective
+    objective, once DDP/FSDP mean-averages the gradients, the rank-local mean of
+    ratios ``(1/R)·Σ_r(Σ_t loss_r / Σ_t mask_r)`` — biased whenever the per-rank
+    supervised-token counts differ. The token-weighted objective is
+    ``Σ_r Σ_t loss / Σ_r Σ_t mask``.
+
+    ``numerator`` is this rank's ``Σ`` masked loss and ``mask_sum`` its ``Σ`` mask,
+    both scalars. Returns ``numerator / Σ_r mask_sum_r * world_size``: the
+    ``× world_size`` counteracts the later mean-average, so the reconstructed
+    objective is the token-weighted one. Only the DETACHED denominator is reduced,
+    so autograd still flows through this rank's numerator alone — one scalar
+    all-reduce per loss term.
+
+    Gradient-identical when ranks are token-balanced. Returns ``None`` when there is
+    no process group or the world size is 1, so callers keep their existing
+    per-rank path unchanged.
+    """
+    if not (
+        dist.is_available() and dist.is_initialized() and dist.get_world_size() > 1
+    ):
+        return None
+    global_den = mask_sum.detach().clone()
+    dist.all_reduce(global_den, op=dist.ReduceOp.SUM)
+    return numerator / (global_den + _LOSS_REDUCTION_EPS) * dist.get_world_size()
 
 
 def dflash_loss_decay(
@@ -297,6 +329,10 @@ def loss_function(
             pos_idx.to(elementwise_loss.dtype), elementwise_loss=elementwise_loss
         )
         elementwise_loss = elementwise_loss * decay_mult
+
+    global_mean = global_token_weighted_mean(elementwise_loss.sum(), loss_mask.sum())
+    if global_mean is not None:
+        return global_mean
 
     denominator = loss_mask.sum(dim=1) + _LOSS_REDUCTION_EPS
 
