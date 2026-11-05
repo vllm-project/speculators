@@ -19,10 +19,6 @@ class DSpineSpeculatorConfig(DFlashSpeculatorConfig):
         default_factory=lambda: ["DSpineDraftModel"],
         description="Model architectures that can load these weights",
     )
-    block_causal_attention: bool = Field(
-        default=True,
-        description="Use causal attention inside every synthetic draft block.",
-    )
     known_anchor_injection: bool = Field(
         default=False,
         description=(

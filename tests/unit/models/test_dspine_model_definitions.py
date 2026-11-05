@@ -29,6 +29,7 @@ def _tiny_config(**overrides) -> DSpineSpeculatorConfig:
         vocab_size=16,
         _attn_implementation="eager",  # type: ignore[call-arg]
     )
+    transformer_config.is_causal = True
     values: dict[str, Any] = {
         "transformer_layer_config": transformer_config,
         "draft_vocab_size": 16,
@@ -195,7 +196,7 @@ def test_config_round_trip_preserves_dspine_contract(tmp_path):
     assert loaded.speculators_model_type == "dspine"
     assert loaded.speculators_config.algorithm == "dspine"
     assert loaded.architectures == ["DSpineDraftModel"]
-    assert loaded.block_causal_attention is True
+    assert loaded.transformer_layer_config.is_causal is True
     assert loaded.known_anchor_injection is True
     assert loaded.transfer_dim == 4
     assert loaded.message_dim == 3

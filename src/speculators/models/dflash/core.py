@@ -328,7 +328,7 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
         """Honor explicit causality, preserving legacy per-layer defaults otherwise."""
         is_causal = getattr(self.config.transformer_layer_config, "is_causal", None)
         if is_causal is None:
-            is_causal = self.config.block_causal_attention or (
+            is_causal = (
                 sliding_window is not None and not self.config.sliding_window_non_causal
             )
         mask_mod, q_len, kv_len = create_anchor_block_mask_mod(

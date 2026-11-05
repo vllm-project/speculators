@@ -13,6 +13,7 @@ SAVE_PATH="${SAVE_PATH:-./output/dspine-dry-run}"
 python -m speculators.train \
     --dry-run \
     --speculator-type dspine \
+    --causal-attention \
     --verifier-name-or-path "$MODEL" \
     --save-path "$SAVE_PATH" \
     --target-layer-ids 1 9 17 25 33 \
@@ -23,4 +24,4 @@ python -m speculators.train \
     --transition-top-k 16 \
     --known-anchor-injection
 
-python -c 'import json, sys; from pathlib import Path; c=json.loads((Path(sys.argv[1]) / "config.json").read_text()); assert c["known_anchor_injection"] is True; assert c["block_size"] == 16; assert c["sample_from_anchor"] is False; print("DSpine checkpoint: known anchor, 15 draft proposals")' "$SAVE_PATH"
+python -c 'import json, sys; from pathlib import Path; c=json.loads((Path(sys.argv[1]) / "config.json").read_text()); assert c["transformer_layer_config"]["is_causal"] is True; assert c["known_anchor_injection"] is True; assert c["block_size"] == 16; assert c["sample_from_anchor"] is False; print("DSpine checkpoint: known anchor, 15 draft proposals")' "$SAVE_PATH"
