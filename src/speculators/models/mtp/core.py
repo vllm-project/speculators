@@ -1,23 +1,28 @@
 """MTP speculator model implementation."""
 
 import logging
-from typing import Any, ClassVar, Literal
+from typing import Any, ClassVar
 
 import torch
 from torch import nn
+from torch.nn.attention.flex_attention import create_block_mask, create_mask
 from transformers import PretrainedConfig
-from transformers.masking_utils import create_causal_mask
 
 from speculators import SpeculatorModel
 from speculators.config import SpeculatorsConfig, VerifierConfig
 from speculators.model import DraftVocabMixin
+from speculators.models.attention import create_float_mask
+from speculators.models.eagle3.attention import (
+    create_combined_mask_mod,
+    extend_dense_mask_for_draft_tokens,
+    extend_mask_for_draft_tokens,
+)
 from speculators.models.mtp.config import MTPSpeculatorConfig
 from speculators.models.mtp.model_definitions import (
     mtp_model_classes,
     resolve_model_type,
 )
 from speculators.models.utils import (
-    conditional_torch_compile,
     flatten_rope_parameters,
     resolve_verifier_norm_class,
 )
@@ -27,7 +32,6 @@ logger = logging.getLogger(__name__)
 
 __all__ = ["MTPDraftModel", "compute_step_weights"]
 
-_IGNORE_INDEX = -100
 _QWEN3_5_MODEL_TYPES = {"qwen3_5_text", "qwen3_5_moe_text"}
 _QWEN3_5_MROPE_POSITION_ID_RANK = 3
 _QWEN3_5_MROPE_SECTIONS = 3
@@ -63,64 +67,14 @@ class _TTTCache:
         )
 
 
-# With head_dim 256 the default flex-attention tiles need more shared memory than
-# Ada-class GPUs (e.g. L40S, ~100 KB per block) provide; smaller tiles fit.
-_SMALL_SMEM_FLEX_KERNEL_OPTIONS = {
-    "BLOCK_M": 32,
-    "BLOCK_N": 32,
-    "num_stages": 1,
-    "BLOCK_M1": 16,
-    "BLOCK_N1": 32,
-    "BLOCK_M2": 32,
-    "BLOCK_N2": 16,
-}
-_SMALL_SMEM_BYTES = 128 * 1024
+# Flex block masks are extended by whole blocks per draft step
+# (`extend_mask_for_draft_tokens`), so the flex path pads rows to a multiple of it.
+_FLEX_BLOCK_SIZE = 128
 
 
-def _flex_kernel_options(device: torch.device) -> dict | None:
-    if device.type != "cuda":
-        return None
-    props = torch.cuda.get_device_properties(device)
-    smem = getattr(
-        props, "shared_memory_per_block_optin", props.shared_memory_per_block
-    )
-    return _SMALL_SMEM_FLEX_KERNEL_OPTIONS if smem < _SMALL_SMEM_BYTES else None
-
-
-def _ttt_mask_mod(doc: torch.Tensor, n: int):
-    """Mask for one TTT draft step over KV = [step 0 | 1 .. step], each ``n`` long.
-
-    Mirrors vLLM's MTP proposer: the context KV in the cache was written by the
-    first pass from verifier hidden states, and each later draft position adds
-    its own KV. So the query for anchor t sees step-0 keys at positions <= t
-    (same document) plus its own anchor's keys from later steps, and nothing
-    from other anchors' draft chains.
-    """
-
-    def mask_mod(b, h, q_idx, kv_idx):  # noqa: ARG001
-        blk = kv_idx // n
-        j = kv_idx % n
-        context = (blk == 0) & (j <= q_idx) & (doc[j] == doc[q_idx])
-        own_chain = (blk > 0) & (j == q_idx)
-        return context | own_chain
-
-    return mask_mod
-
-
-def _ttt_block_mask(doc: torch.Tensor, n: int, step: int):
-    """Flex block mask for draft step ``step`` (0-based); see `_ttt_mask_mod`."""
-    from torch.nn.attention.flex_attention import create_block_mask  # noqa: PLC0415
-
-    return create_block_mask(
-        _ttt_mask_mod(doc, n),
-        B=None,
-        H=None,
-        Q_LEN=n,
-        KV_LEN=n * (step + 1),
-        device=doc.device,
-        # blockwise; eager materializes the dense Q x KV mask (~8 GB at 12k x 98k)
-        _compile=True,
-    )
+def _shift_left(x: torch.Tensor, k: int, fill: int | bool) -> torch.Tensor:
+    """``x[..., t + k]`` at position t, ``fill`` past the end."""
+    return torch.cat([x[..., k:], x.new_full((*x.shape[:-1], k), fill)], dim=-1)
 
 
 def _prepare_mtp_position_ids(
@@ -214,9 +168,20 @@ class MTPDraftModel(DraftVocabMixin, SpeculatorModel):
     d2t: torch.Tensor | None
 
     def __init__(self, config: MTPSpeculatorConfig) -> None:
-        # SDPA, not eager — eager OOMs on long sequences (#886).
+        # Same attention backends as Eagle3: flex by default, sdpa / eager (dense
+        # masks) for hardware without flex attention.
         if config.transformer_layer_config._attn_implementation is None:  # noqa: SLF001
-            config.transformer_layer_config._attn_implementation = "sdpa"  # noqa: SLF001
+            config.transformer_layer_config._attn_implementation = (  # noqa: SLF001
+                "simple_flex_attention"
+            )
+        self._attn_impl = config.transformer_layer_config._attn_implementation  # noqa: SLF001
+        self._create_mask_fn = (
+            create_block_mask
+            if self._attn_impl == "simple_flex_attention"
+            else create_float_mask
+            if self._attn_impl == "eager"
+            else create_mask
+        )
         super().__init__(config=config)
         self._init_vocab(config)
         if self.use_draft_vocab:
@@ -239,6 +204,9 @@ class MTPDraftModel(DraftVocabMixin, SpeculatorModel):
             eps=tc.rms_norm_eps,  # type: ignore[arg-type]
         )
         self.verifier_norm.weight.requires_grad = False
+        # The layer only reads the prefix KV (see _TTTCache), so it may keep the
+        # cache under gradient checkpointing.
+        self.mtp_layers[0]._can_checkpoint_with_cache = True  # type: ignore[assignment]  # noqa: SLF001
 
         self.post_init()
 
@@ -301,182 +269,145 @@ class MTPDraftModel(DraftVocabMixin, SpeculatorModel):
             return hidden.new_zeros(0, dtype=torch.float32), targets.new_zeros(0)
         return torch.cat(losses), torch.cat(preds)
 
+    @torch.compiler.disable
+    def _extend_attn_mask(self, mask, seq_len: int):
+        """Append a diagonal KV block (each anchor's own draft-step KV)."""
+        if self._attn_impl == "simple_flex_attention":
+            return extend_mask_for_draft_tokens(mask)
+        return extend_dense_mask_for_draft_tokens(mask, seq_len)
+
     def forward(
         self,
         input_ids: torch.Tensor,
         hidden_states: torch.Tensor,
-        attention_mask: torch.Tensor | None = None,
-        position_ids: torch.Tensor | None = None,
+        document_ids: torch.Tensor | None = None,
         loss_mask: torch.Tensor | None = None,
-        step_weights: list[float] | None = None,
-        return_dict: bool = True,
-        train_forward: Literal["fastmtp", "vllm"] = "fastmtp",
-        **kwargs: Any,
-    ) -> tuple:
-        """Multi-step MTP training forward.
-
-        :param train_forward: ``"fastmtp"`` (default) is the FastMTP-style
-            sequence-wide recursion on pre-norm hidden states. ``"vllm"`` trains the
-            head the way vLLM's MTP proposer runs it: on the verifier's final-norm
-            hidden states, with each draft step attending to the context plus only
-            its own draft chain (see ``_forward_ttt``).
-        :return: ``(draft_tokens, loss, metrics)``. ``draft_tokens[k]`` holds the
-            step-k greedy predictions at the supervised positions only.
-        """
-        if train_forward not in ("fastmtp", "vllm"):
-            raise ValueError(f"Unknown MTP train_forward {train_forward!r}")
-        # The layer's attention reads its implementation at call time, including
-        # in a gradient-checkpoint recompute during backward, so set it per forward
-        # rather than restoring it afterwards. The FastMTP path builds its mask from
-        # transformer_layer_config and must run with the matching implementation.
-        attn_config: Any = self.mtp_layers[0].self_attn.config  # type: ignore[union-attr]
-        attn_config._attn_implementation = (  # noqa: SLF001
-            "flex_attention"
-            if train_forward == "vllm"
-            else self.config.transformer_layer_config._attn_implementation  # noqa: SLF001
-        )
-        if train_forward == "vllm":
-            return self._forward_ttt(
-                input_ids,
-                self.verifier_norm(hidden_states),
-                position_ids,
-                loss_mask,
-                step_weights,
-            )
-        return self._forward_recursive(
-            input_ids,
-            hidden_states,
-            attention_mask=attention_mask,
-            position_ids=position_ids,
-            loss_mask=loss_mask,
-            step_weights=step_weights,
-            return_dict=return_dict,
-            **kwargs,
-        )
-
-    # requires `dynamic=False`. See #876
-    @conditional_torch_compile(dynamic=False)
-    def _forward_recursive(
-        self,
-        input_ids: torch.Tensor,
-        hidden_states: torch.Tensor,
-        attention_mask: torch.Tensor | None = None,
         position_ids: torch.Tensor | None = None,
-        loss_mask: torch.Tensor | None = None,
         step_weights: list[float] | None = None,
-        return_dict: bool = True,  # noqa: ARG002
         **kwargs: Any,  # noqa: ARG002
     ) -> tuple:
-        """Forward pass for MTP multi-token prediction (teacher-forced).
+        """Multi-step MTP training forward, matching vLLM's MTP proposer.
 
-        At step k, uses ground-truth input_ids[t+k+1] as the embedding input and
-        the MTP output from step k-1 (or verifier hidden states for step 0) as the
-        hidden state input. Hidden states are passed recursively: each step's MTP
-        output feeds the next step.
+        - The head sees the verifier's output hidden states, i.e. after its final
+          norm (the training data holds the pre-norm last-layer states).
+        - Draft step k at anchor t runs at position t + k and attends to the step-0
+          KV (computed from verifier hidden states) at positions <= t in the same
+          document, plus only anchor t's own KV from earlier draft steps -- the
+          Eagle3 TTT mask (``create_combined_mask_mod``), extended by one diagonal
+          block per step.
 
-        Targets are derived from input_ids via per-step offset slicing -- no
-        separate label tensor is needed. Use loss_mask to exclude positions
-        (e.g. prompt tokens) from the loss.
+        Step k is teacher-forced: its token input at anchor t is ``input_ids[t+k+1]``
+        and its target ``input_ids[t+k+2]``, supervised where ``loss_mask`` is set
+        and the target is in the anchor's document.
 
-        :param input_ids: Token IDs [1, seq_len]. Serves as both the
-            embedding source and the prediction target (offset by step+2).
-        :param hidden_states: Hidden states from verifier [1, seq_len, hidden_size]
-        :param attention_mask: Optional attention mask [1, seq_len]
-        :param position_ids: Optional position IDs [batch, seq_len]. Qwen3.5
-            also accepts the explicit MRoPE layout [3, batch, seq_len].
-        :param loss_mask: Optional binary mask [1, seq_len]; 1=compute loss,
-            0=ignore.
-        :param step_weights: Per-step loss weights (None = uniform). Training only.
-        :param return_dict: Unused, kept for interface compatibility.
-        :param kwargs: Absorbs unexpected batch keys
-            (lengths, verifier_last_hidden_states)
-        :return: Tuple of (logits_list, loss, metrics)
+        :param input_ids: Token IDs [1, seq_len], packed documents.
+        :param hidden_states: Verifier last-layer hidden states [1, seq_len, hidden].
+        :param document_ids: Document index per position [1, seq_len], -1 for
+            padding (as the training collate produces). Derived from position
+            resets when omitted.
+        :param loss_mask: Optional [1, seq_len]; 1 = supervise this target token.
+        :param position_ids: Optional [1, seq_len]; Qwen3.5 also accepts the
+            MRoPE layout [3, 1, seq_len].
+        :param step_weights: Per-step loss weights (None = uniform).
+        :return: ``(draft_tokens, loss, metrics)``. ``draft_tokens[k]`` holds the
+            step-k greedy predictions at the supervised positions only.
         """
         input_ids = input_ids.long()
         device = input_ids.device
         batch_size, seq_len = input_ids.shape
+        if batch_size != 1:
+            raise ValueError("MTP forward expects packed batches of size 1")
         num_steps = self.config.num_speculative_steps
-
         if step_weights is not None and len(step_weights) != num_steps:
             raise ValueError(
                 f"step_weights has {len(step_weights)} entries but "
-                f"num_speculative_steps={num_steps}; expected exactly "
-                f"{num_steps} weights."
+                f"num_speculative_steps={num_steps}"
             )
-
         if position_ids is None:
-            position_ids = (
-                torch.arange(seq_len, device=device).unsqueeze(0).expand(batch_size, -1)
-            )
+            position_ids = torch.arange(seq_len, device=device).unsqueeze(0)
 
-        all_logits: list[torch.Tensor] = []
+        draft_tokens: list[torch.Tensor] = []
         total_loss = torch.tensor(0.0, device=device)
         metrics: dict[str, float | torch.Tensor] = {}
-
-        # Uniform valid_len keeps tensor shapes identical across loop
-        # iterations, which torch.compile requires for stable codegen.
-        # Cap steps so short sequences still produce partial results.
         effective_steps = min(num_steps, max(0, seq_len - 2))
-        valid_len = seq_len - effective_steps - 1
-        if valid_len <= 0 or effective_steps == 0:
+        if effective_steps == 0:
             metrics["loss_sum"] = total_loss.detach().clone()
             metrics["loss_total"] = torch.tensor(1.0, device=device)
-            return (all_logits, total_loss, metrics)
+            return (draft_tokens, total_loss, metrics)
 
-        step_pos_ids, rotary_step_pos_ids = _prepare_mtp_position_ids(
-            position_ids,
-            valid_len,
-            self.config.transformer_layer_config.model_type,
-        )
-        causal_mask = create_causal_mask(
-            config=self.config.transformer_layer_config,
-            inputs_embeds=hidden_states[:, :valid_len],
-            attention_mask=attention_mask,
-            past_key_values=None,
-            position_ids=step_pos_ids,
+        if document_ids is None:
+            text_pos = (
+                position_ids[0]
+                if position_ids.ndim == _QWEN3_5_MROPE_POSITION_ID_RANK
+                else position_ids
+            )
+            # packed documents restart their positions at 0
+            document_ids = torch.cumsum(text_pos == 0, dim=-1) - 1
+        doc = document_ids.reshape(-1).to(device=device, dtype=torch.long)
+        supervised = (
+            torch.ones(seq_len, dtype=torch.bool, device=device)
+            if loss_mask is None
+            else loss_mask.reshape(-1).bool()
         )
 
-        current_hidden = hidden_states
-        anchors: torch.Tensor | None = (
-            None  # positions whose step-0 target is supervised
+        # Pad to whole flex blocks; padded rows are document -1 (masked, unsupervised).
+        pad = (
+            -seq_len % _FLEX_BLOCK_SIZE
+            if self._attn_impl == "simple_flex_attention"
+            else 0
         )
-        run_correct: torch.Tensor | None = None  # steps 1..k all correct (vLLM-style)
+        total_len = seq_len + pad
+        if pad:
+            input_ids = nn.functional.pad(input_ids, (0, pad))
+            hidden_states = nn.functional.pad(hidden_states, (0, 0, 0, pad))
+            position_ids = nn.functional.pad(position_ids, (0, pad))
+            doc = nn.functional.pad(doc, (0, pad), value=-1)
+            supervised = nn.functional.pad(supervised, (0, pad), value=False)
+        text_pos, rotary_pos = _prepare_mtp_position_ids(
+            position_ids, total_len, self.config.transformer_layer_config.model_type
+        )
+
+        attn_mask = self._create_mask_fn(
+            create_combined_mask_mod(doc, total_len),
+            B=None,
+            H=None,
+            Q_LEN=total_len,
+            KV_LEN=total_len,
+            device=device,
+        )
+        layer = self.mtp_layers[0]
+        kv_k: list[torch.Tensor] = []
+        kv_v: list[torch.Tensor] = []
+        anchors: torch.Tensor | None = None
+        run_correct: torch.Tensor | None = None
+        current_hidden = self.verifier_norm(hidden_states)
         for step in range(effective_steps):
-            step_hidden = current_hidden[:, :valid_len]
-            step_embeds = self.embed_tokens(
-                input_ids[:, step + 1 : step + 1 + valid_len]
+            cache = _TTTCache(kv_k, kv_v)
+            mtp_output = layer(
+                hidden_states=current_hidden,
+                token_embeddings=self.embed_tokens(_shift_left(input_ids, step + 1, 0)),
+                attention_mask=attn_mask,
+                position_ids=text_pos + step,
+                position_embeddings=self.rotary_emb(current_hidden, rotary_pos + step),
+                past_key_values=cache,
             )
-            step_pos_emb = self.rotary_emb(step_hidden, rotary_step_pos_ids)
+            kv_k = [*kv_k, cache.new_k]
+            kv_v = [*kv_v, cache.new_v]
 
-            mtp_output = self.mtp_layers[0](
-                hidden_states=step_hidden,
-                token_embeddings=step_embeds,
-                attention_mask=causal_mask,
-                position_ids=step_pos_ids,
-                position_embeddings=step_pos_emb,
+            step_targets = _shift_left(input_ids, step + 2, 0)[0]
+            step_mask = (
+                _shift_left(supervised, step + 2, False)
+                & (_shift_left(doc, step + 2, -1) == doc)
+                & (doc != -1)
             )
-
-            step_targets = input_ids[:, step + 2 : step + 2 + valid_len]
-            if loss_mask is not None:
-                step_mask = loss_mask[:, step + 2 : step + 2 + valid_len].bool()
-            else:
-                step_mask = torch.ones_like(step_targets, dtype=torch.bool)
-
-            # Only supervised positions need logits: the full LM head output is
-            # seq_len x vocab per step (~8 GB at 16k x 248k in bf16). Even the
-            # supervised slice (~1k x 248k, plus its fp32 copy inside the loss) adds
-            # up across many steps, so LM head + CE are recomputed in backward
-            # instead of keeping logits alive. The loss is identical either way.
-            # Returns per-step greedy draft tokens [num_supervised] instead of logits.
             sel_targets = step_targets[step_mask]
             unreduced, sel_pred = self._head_ce_chunked(
-                mtp_output[step_mask], sel_targets
+                mtp_output[0][step_mask], sel_targets
             )
-            all_logits.append(sel_pred)
+            draft_tokens.append(sel_pred)
 
             weight = step_weights[step] if step_weights is not None else 1.0
-            valid_count = step_mask.sum()
-            step_loss = weight * unreduced.sum() / valid_count.clamp(min=1)
+            step_loss = weight * unreduced.sum() / step_mask.sum().clamp(min=1)
             total_loss = total_loss + step_loss
             metrics[f"loss_step_{step}"] = step_loss.detach().clone()
 
@@ -497,123 +428,11 @@ class MTPDraftModel(DraftVocabMixin, SpeculatorModel):
                 metrics[f"step_{step + 1}_acc_total"] = step_mask.sum().float()
 
             current_hidden = mtp_output
+            attn_mask = self._extend_attn_mask(attn_mask, total_len)
 
         metrics["loss_sum"] = total_loss.detach().clone()
         metrics["loss_total"] = torch.tensor(1.0, device=device)
-
-        return (all_logits, total_loss, metrics)
-
-    def _forward_ttt(
-        self,
-        input_ids: torch.Tensor,
-        hidden_states: torch.Tensor,
-        position_ids: torch.Tensor | None,
-        loss_mask: torch.Tensor | None,
-        step_weights: list[float] | None,
-    ) -> tuple:
-        """Multi-step MTP forward aligned with vLLM's MTP proposer (training-time test).
-
-        Differences from `_forward_recursive` (FastMTP style), both matching vLLM:
-        - Attention at step k >= 1 sees the step-0 KV (computed from verifier
-          hidden states) for context positions <= anchor, plus only its own
-          anchor's KV from earlier draft steps -- not a sequence-wide recursion.
-        - Draft step k runs at position anchor + k (vLLM advances positions per
-          draft step; `constant_draft_positions` is False for MTP).
-        Targets, step weights, loss and metrics are identical to the recursive path.
-        """
-        input_ids = input_ids.long()
-        device = input_ids.device
-        batch_size, seq_len = input_ids.shape
-        if batch_size != 1:
-            raise ValueError("TTT MTP forward expects packed batches of size 1")
-        num_steps = self.config.num_speculative_steps
-        if step_weights is not None and len(step_weights) != num_steps:
-            raise ValueError(
-                f"step_weights has {len(step_weights)} entries but "
-                f"num_speculative_steps={num_steps}"
-            )
-        if position_ids is None:
-            position_ids = torch.arange(seq_len, device=device).unsqueeze(0)
-
-        all_preds: list[torch.Tensor] = []
-        total_loss = torch.tensor(0.0, device=device)
-        metrics: dict[str, float | torch.Tensor] = {}
-        effective_steps = min(num_steps, max(0, seq_len - 2))
-        n = seq_len - effective_steps - 1
-        if n <= 0 or effective_steps == 0:
-            metrics["loss_sum"] = total_loss.detach().clone()
-            metrics["loss_total"] = torch.tensor(1.0, device=device)
-            return (all_preds, total_loss, metrics)
-
-        model_type = self.config.transformer_layer_config.model_type
-        text_pos, rotary_pos = _prepare_mtp_position_ids(position_ids, n, model_type)
-        doc = torch.cumsum(
-            (text_pos[0] == 0).to(torch.int32), dim=0
-        )  # packed docs restart at 0
-
-        layer = self.mtp_layers[0]  # attention set to flex_attention by forward()
-        # The cache is read-only per step (see _TTTCache), so it is safe to keep it
-        # under gradient checkpointing.
-        layer._can_checkpoint_with_cache = True  # type: ignore[assignment]  # noqa: SLF001
-
-        kernel_options = _flex_kernel_options(device)
-        kv_k: list[torch.Tensor] = []
-        kv_v: list[torch.Tensor] = []
-        anchors: torch.Tensor | None = None
-        run_correct: torch.Tensor | None = None
-        current_hidden = hidden_states[:, :n]
-        for step in range(effective_steps):
-            step_text_pos = text_pos + step
-            step_rotary_pos = rotary_pos + step
-            step_embeds = self.embed_tokens(input_ids[:, step + 1 : step + 1 + n])
-            pos_emb = self.rotary_emb(current_hidden, step_rotary_pos)
-            cache = _TTTCache(kv_k, kv_v)
-            mtp_output = layer(
-                hidden_states=current_hidden,
-                token_embeddings=step_embeds,
-                attention_mask=_ttt_block_mask(doc, n, step),
-                position_ids=step_text_pos,
-                position_embeddings=pos_emb,
-                past_key_values=cache,
-                kernel_options=kernel_options,
-            )
-            kv_k = [*kv_k, cache.new_k]
-            kv_v = [*kv_v, cache.new_v]
-
-            step_targets = input_ids[:, step + 2 : step + 2 + n]
-            if loss_mask is not None:
-                step_mask = loss_mask[:, step + 2 : step + 2 + n].bool()
-            else:
-                step_mask = torch.ones_like(step_targets, dtype=torch.bool)
-            sel_targets = step_targets[step_mask]
-            unreduced, sel_pred = self._head_ce_chunked(
-                mtp_output[step_mask], sel_targets
-            )
-            all_preds.append(sel_pred)
-
-            weight = step_weights[step] if step_weights is not None else 1.0
-            step_loss = weight * unreduced.sum() / step_mask.sum().clamp(min=1)
-            total_loss = total_loss + step_loss
-            metrics[f"loss_step_{step}"] = step_loss.detach().clone()
-
-            with torch.no_grad():
-                correct = torch.zeros_like(step_mask)
-                correct[step_mask] = sel_pred == sel_targets
-                if anchors is None:
-                    anchors = step_mask
-                run_correct = correct if run_correct is None else run_correct & correct
-                metrics[f"accept_pos_{step + 1}_sum"] = (
-                    (run_correct & anchors).sum().float()
-                )
-                metrics[f"accept_pos_{step + 1}_total"] = anchors.sum().float()
-                metrics[f"step_{step + 1}_acc_sum"] = correct.sum().float()
-                metrics[f"step_{step + 1}_acc_total"] = step_mask.sum().float()
-
-            current_hidden = mtp_output
-
-        metrics["loss_sum"] = total_loss.detach().clone()
-        metrics["loss_total"] = torch.tensor(1.0, device=device)
-        return (all_preds, total_loss, metrics)
+        return (draft_tokens, total_loss, metrics)
 
     @classmethod
     def from_training_args(  # type: ignore[override]
@@ -622,7 +441,7 @@ class MTPDraftModel(DraftVocabMixin, SpeculatorModel):
         *,
         num_speculative_steps: int = 3,
         verifier_name_or_path: str | None = None,
-        **kwargs: Any,  # noqa: ARG003
+        **kwargs: Any,
     ) -> "MTPDraftModel":
         if verifier_name_or_path is None:
             raise ValueError(
@@ -631,6 +450,9 @@ class MTPDraftModel(DraftVocabMixin, SpeculatorModel):
                 "(mtp.* keys) to extract."
             )
 
+        verifier_config._attn_implementation = kwargs.get(  # noqa: SLF001
+            "draft_attn_impl", "simple_flex_attention"
+        )
         config = MTPSpeculatorConfig(
             transformer_layer_config=verifier_config,
             speculators_config=SpeculatorsConfig(
@@ -683,10 +505,7 @@ class MTPDraftModel(DraftVocabMixin, SpeculatorModel):
                 beta=kwargs.get("step_weight_beta", 0.6),
                 num_steps=kwargs["num_speculative_steps"],
             )
-        train_kwargs: dict[str, Any] = {
-            "step_weights": step_weights,
-            "train_forward": kwargs.get("mtp_train_forward", "fastmtp"),
-        }
+        train_kwargs: dict[str, Any] = {"step_weights": step_weights}
         val_kwargs = train_kwargs.copy()
 
         return train_kwargs, val_kwargs

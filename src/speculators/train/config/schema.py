@@ -190,7 +190,7 @@ class DraftArgs(_Group):
     draft_attn_impl: Literal["simple_flex_attention", "sdpa", "eager"] = Field(
         default="simple_flex_attention",
         description="Attention implementation for draft layers. Use 'sdpa' or 'eager' "
-        "for hardware that doesn't support flex attention. Not supported for MTP.",
+        "for hardware that doesn't support flex attention.",
     )
 
 
@@ -637,14 +637,6 @@ class MTPArgs(_Group):
         default=0.6,
         description="Exponential decay factor for MTP step weights; higher weights "
         "earlier prediction steps more. Only used with MTP.",
-    )
-    mtp_train_forward: Literal["fastmtp", "vllm"] = Field(
-        default="fastmtp",
-        description="MTP training forward. 'fastmtp' is the FastMTP-style "
-        "sequence-wide recursion on pre-norm hidden states. 'vllm' matches vLLM's MTP "
-        "proposer: the head sees the verifier's final-norm hidden states, and draft "
-        "step k attends to the context plus only its own draft chain, at position "
-        "anchor + k. Only used with MTP.",
     )
 
 

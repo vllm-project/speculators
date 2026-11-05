@@ -2,12 +2,11 @@
 
 import math
 
-import pytest
 import torch
 from safetensors import safe_open
 
 import speculators.models.mtp.core as mtp_core
-from speculators.models.mtp.core import _prepare_mtp_position_ids, _ttt_mask_mod
+from speculators.models.mtp.core import _prepare_mtp_position_ids
 
 BATCH = 1
 SEQ_LEN = 10
@@ -52,8 +51,7 @@ def test_non_qwen35_position_ids_remain_2d():
 # ===== Forward output structure =====
 
 
-@pytest.mark.parametrize("train_forward", ["fastmtp", "vllm"])
-def test_forward_output_structure(mtp_model, seed, train_forward):
+def test_forward_output_structure(mtp_model, seed):
     """Verify draft-token shapes, loss, and per-step metrics in one forward pass."""
     num_steps = mtp_model.config.num_speculative_steps
     hidden_size = mtp_model.config.hidden_size
@@ -64,14 +62,13 @@ def test_forward_output_structure(mtp_model, seed, train_forward):
         draft_tokens, total_loss, metrics = mtp_model(
             input_ids=input_ids,
             hidden_states=hidden_states,
-            train_forward=train_forward,
         )
 
     assert len(draft_tokens) == num_steps
-    expected_len = SEQ_LEN - num_steps - 1
     for step in range(num_steps):
-        # greedy predictions at the supervised positions (all, without a mask)
-        assert draft_tokens[step].shape == (BATCH * expected_len,)
+        # greedy predictions at the supervised positions: every anchor whose
+        # step target (t + step + 2) is still inside the sequence
+        assert draft_tokens[step].shape == (SEQ_LEN - step - 2,)
 
     assert total_loss.dim() == 0
     assert torch.isfinite(total_loss)
@@ -157,8 +154,7 @@ class TestStepWeights:
 # ===== Short sequence truncation =====
 
 
-@pytest.mark.parametrize("train_forward", ["fastmtp", "vllm"])
-def test_short_sequence_fewer_steps(mtp_model, seed, train_forward):
+def test_short_sequence_fewer_steps(mtp_model, seed):
     num_steps = mtp_model.config.num_speculative_steps
     hidden_size = mtp_model.config.hidden_size
     vocab_size = mtp_model.config.vocab_size
@@ -169,38 +165,12 @@ def test_short_sequence_fewer_steps(mtp_model, seed, train_forward):
         draft_tokens, _, _ = mtp_model(
             input_ids=input_ids,
             hidden_states=hidden_states,
-            train_forward=train_forward,
         )
     assert len(draft_tokens) < num_steps
     assert len(draft_tokens) == 1
 
 
-def test_unknown_train_forward_raises(mtp_model):
-    with pytest.raises(ValueError, match="train_forward"):
-        mtp_model(
-            input_ids=torch.zeros(BATCH, SEQ_LEN, dtype=torch.long),
-            hidden_states=torch.zeros(BATCH, SEQ_LEN, mtp_model.config.hidden_size),
-            train_forward="eagle",
-        )
-
-
 # ===== vLLM-aligned (TTT) forward =====
-
-
-def test_ttt_mask_matches_vllm_mtp_proposer():
-    """Step k's query at anchor t sees step-0 context <= t in its own document,
-    plus anchor t's own KV from steps 1..k, and no other anchor's draft chain."""
-    doc = torch.tensor([1, 1, 1, 2, 2])  # two packed documents
-    n, step = doc.numel(), 2
-    q = torch.arange(n)[:, None]
-    kv = torch.arange(n * (step + 1))[None, :]
-    mask = _ttt_mask_mod(doc, n)(0, 0, q, kv)
-
-    same_doc = doc[:, None] == doc[None, :]
-    causal = torch.ones(n, n, dtype=torch.bool).tril()
-    assert torch.equal(mask[:, :n], causal & same_doc)
-    for blk in range(1, step + 1):
-        assert torch.equal(mask[:, blk * n : (blk + 1) * n], torch.eye(n).bool())
 
 
 def test_ttt_forward_is_document_local(mtp_model, seed):
@@ -220,7 +190,6 @@ def test_ttt_forward_is_document_local(mtp_model, seed):
                 input_ids=ids,
                 hidden_states=hs,
                 position_ids=position_ids,
-                train_forward="vllm",
             )
         return tokens
 
@@ -229,39 +198,32 @@ def test_ttt_forward_is_document_local(mtp_model, seed):
     ids2[0, first + 2 :] = (ids2[0, first + 2 :] + 1) % mtp_model.config.vocab_size
     hs2[0, first:] = torch.randn_like(hs2[0, first:])
     changed = run(ids2, hs2)
-    # anchors whose inputs and targets stay inside the first document
     for step in range(num_steps):
-        keep = first - step - 1
+        # anchors whose step target (t + step + 2) is in the first document come
+        # first; no anchor's target may cross into the second document
+        keep = first - step - 2
         assert torch.equal(base[step][:keep], changed[step][:keep])
+        assert base[step].shape[0] == keep + (second - step - 2)
 
 
-def test_ttt_forward_applies_frozen_verifier_norm(mtp_model, seed):
-    """The vLLM path normalizes hidden states with the verifier's final norm."""
+def test_forward_applies_frozen_verifier_norm(mtp_model, seed):
+    """Hidden states go through the verifier's final norm, as vLLM feeds them."""
     assert not mtp_model.verifier_norm.weight.requires_grad
     input_ids = torch.randint(0, mtp_model.config.vocab_size, (BATCH, SEQ_LEN))
     hidden_states = torch.randn(BATCH, SEQ_LEN, mtp_model.config.hidden_size)
 
-    def losses():
+    def loss():
         with torch.no_grad():
-            return [
-                mtp_model(
-                    input_ids=input_ids,
-                    hidden_states=hidden_states,
-                    train_forward=mode,
-                )[1]
-                for mode in ("fastmtp", "vllm")
-            ]
+            return mtp_model(input_ids=input_ids, hidden_states=hidden_states)[1]
 
-    fastmtp_before, vllm_before = losses()
+    before = loss()
     # non-uniform: the MTP layer re-normalizes its hidden input, which would
     # cancel a uniform gain
     with torch.no_grad():
         mtp_model.verifier_norm.weight.copy_(
             torch.randn_like(mtp_model.verifier_norm.weight)
         )
-    fastmtp_after, vllm_after = losses()
-    assert fastmtp_after == fastmtp_before
-    assert vllm_after != vllm_before
+    assert loss() != before
 
 
 def test_verifier_norm_is_not_saved(mtp_model, tmp_path):

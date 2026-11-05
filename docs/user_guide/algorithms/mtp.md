@@ -11,7 +11,7 @@ The MTP head consists of a single prediction layer that takes two inputs at each
 ### Training Process
 
 1. **Convert:** Extract the native MTP head from the model checkpoint and convert it to speculators format using `MTPConverter`
-2. **Train:** Finetune the MTP layers on domain-specific data. At each step k, the model predicts token t+k+1 given verifier hidden states at position t and ground-truth token embeddings at position t+k. Per-step losses are weighted with exponential decay (default beta=0.6) following FastMTP Equation 2
+2. **Train:** Finetune the MTP layers on domain-specific data. Training runs the head the way vLLM's MTP proposer runs it: the head sees the verifier's final-norm hidden states, and draft step k at anchor t (position t+k, teacher-forced with ground-truth token embeddings) attends to the context at positions <= t in its own document plus only its own earlier draft steps -- the same test-time-training mask as Eagle-3, available with `--draft-attn-impl` set to `simple_flex_attention` (default), `sdpa` or `eager`. Per-step losses are weighted with exponential decay (default beta=0.6) following FastMTP Equation 2
 3. **Stitch:** Merge the finetuned MTP weights back into the original verifier checkpoint for deployment
 
 Only the MTP layers are trainable -- `embed_tokens` and `lm_head` are frozen and shared with the verifier.

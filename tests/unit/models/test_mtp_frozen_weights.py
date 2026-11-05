@@ -24,7 +24,10 @@ def test_mtp_verifier_weights_frozen_after_from_pretrained(tmp_path: Path):
         validate=False,
     )
 
-    model = MTPDraftModel.from_pretrained(str(out))
+    # flex attention has no CPU backward; sdpa, as --draft-attn-impl selects it
+    config = MTPDraftModel.config_class.from_pretrained(str(out))
+    config.transformer_layer_config._attn_implementation = "sdpa"
+    model = MTPDraftModel.from_pretrained(str(out), config=config)
     assert isinstance(model, MTPDraftModel)
     model.train()
 
