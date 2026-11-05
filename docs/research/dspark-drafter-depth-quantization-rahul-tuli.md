@@ -18,7 +18,7 @@ tags:
 
 ## Abstract
 
-We studied drafter quantization in two stages. First, a Qwen3-8B DFlash acceptance study compared BF16 with ten FP8 and NVFP4 checkpoints on RedHatAI/speculator_benchmarks and SpeedBench. Data-free FP8 dynamic and FP8 block quantization retained more than 98% of BF16 acceptance length on both suites. Gaussian calibration sharply reduced acceptance for every data-dependent configuration tested. Real PerfectBlend calibration recovered most acceptance for NVFP4 GPTQ, but the GPTQ+iMatrix arm retained 95.96% and 94.74% on the two suites—not the >98% sometimes used as a summary of this study.
+We studied drafter quantization in two stages. First, a Qwen3-8B DFlash acceptance study compared BF16 with ten FP8 and NVFP4 checkpoints on RedHatAI/speculator_benchmarks and SpeedBench. Data-free FP8 dynamic and FP8 block quantization retained more than 98% of BF16 acceptance length on both suites. Every data-dependent Gaussian-calibrated configuration had much lower acceptance. PerfectBlend/damping-0.10 GPTQ arms had higher acceptance than their Gaussian/damping-0.01 counterparts, but the GPTQ+iMatrix arm retained 95.96% and 94.74% on the two suites—not the >98% sometimes used as a summary of this study.
 
 Second, a DSpark serving sweep varied drafter depth and precision while pinning synthetic acceptance to model-card vectors. FP8 was close to BF16 at one stream and faster in selected loaded configurations, but not universally faster. Depth and baseline crossovers were target-specific: 15L was the low/mid-concurrency sweet spot on Nemotron and GLM, while Qwen favored 5L. At 128 streams, KV-cache exhaustion and queueing dominated the drafter arms; GLM's ranking inverted toward 5L. These are synthetic-acceptance throughput results, not measurements of trained-depth quality or real acceptance.
 
@@ -36,7 +36,7 @@ The first question uses real acceptance measurements on DFlash. The second delib
 ### Phase 1: measured acceptance after quantization
 
 - Target and drafter: `Qwen/Qwen3-8B` with `RedHatAI/Qwen3-8B-speculator.dflash`, BF16 baseline plus ten quantized checkpoints. This phase used **DFlash**, not DSpark.
-- Algorithm and serving: DFlash with seven speculative tokens, TP1 on NVIDIA H100 80GB GPUs; run-specific vLLM commands, revisions, and patches are preserved in the evidence bundle.
+- Algorithm and serving: DFlash with seven speculative tokens, TP1 on NVIDIA H100 80GB GPUs. A representative GPTQ+iMatrix PerfectBlend command, patch, and checksums are included below.
 - Calibration: Gaussian controls or 2,027 real PerfectBlend samples at sequence length 2,048, depending on the arm. FP8 dynamic and FP8 block were data-free.
 - Evaluation: all nine `RedHatAI/speculator_benchmarks` subsets and all 11 SpeedBench qualitative categories; temperature 0, seed 0, up to 200 requests per subset, maximum concurrency 128, and a 4,096-token output cap. Prompt files were pinned within each suite.
 - Analysis: one evaluation per arm. Pooled acceptance length is `1 + sum(accepted draft tokens) / sum(draft rounds)` within each suite, including the verifier/bonus token. Maximum acceptance length is therefore 8. Retention is the arm's pooled acceptance length divided by the BF16 value for the same suite.
@@ -45,7 +45,7 @@ The first question uses real acceptance measurements on DFlash. The second delib
 
 Only the 5L drafters were trained. The 10L/15L/30L repositories were structural dummies: layer `i` copied base layer `i mod 5`, with the layer-count configuration changed accordingly. Qwen and Nemotron tested 5L/15L/30L; GLM also tested 10L. Every depth was run in BF16, FP8 block, and FP8 dynamic where applicable.
 
-All drafter arms—including trained 5L BF16—used `rejection_sample_method=synthetic` with eight speculative tokens and the target's model-card acceptance vector. The resulting acceptance lengths stayed approximately flat (Qwen 4.31–4.38, Nemotron 4.70–4.76, GLM 3.78–3.83), so throughput differences were not driven by measured acceptance differences.
+All drafter arms—including trained 5L BF16—used `rejection_sample_method=synthetic` with eight speculative tokens and the target's model-card acceptance vector: Qwen `[0.815, 0.646, 0.511, 0.404, 0.322, 0.259, 0.208, 0.170]`, Nemotron `[0.863, 0.726, 0.594, 0.471, 0.370, 0.295, 0.229, 0.176]`, and GLM `[0.801, 0.615, 0.463, 0.335, 0.237, 0.164, 0.112, 0.074]`. The resulting acceptance lengths stayed approximately flat (Qwen 4.31–4.38, Nemotron 4.70–4.76, GLM 3.78–3.83), so throughput differences were not driven by measured acceptance differences.
 
 | Target                                               | Serving hardware          | Benchmark subsets       | Drafter depths | Target-only arm   |
 | ---------------------------------------------------- | ------------------------- | ----------------------- | -------------- | ----------------- |
@@ -53,11 +53,17 @@ All drafter arms—including trained 5L BF16—used `rejection_sample_method=syn
 | `nvidia/NVIDIA-Nemotron-3.5-Super-VL-120B-A12B-BF16` | 4×H100 80GB, TP4          | `rag`                   | 5L/15L/30L     | `target_only`     |
 | GLM-5.3-Flash, revision `46a050be`                   | 8×H100, TP8, FP8 KV cache | `rag`                   | 5L/10L/15L/30L | `no_speculator`   |
 
-The common protocol used `scripts/evaluate/throughput_interactivity.py` on pinned `RedHatAI/speculator_benchmarks` data, streams 1/2/4/8/16/32/64/128, and three repeats per point. Streams 1–16 used 30 s warmup and 90 s measurement; streams 32–128 used 60 s and 120 s. Output was capped at 1,024 tokens and prefix caching was disabled. The 328 aggregated points below are means of three repeats, comprising 984 raw runs. Tables report aggregate output tokens/s, not per-user interactivity.
+The common protocol used pinned `RedHatAI/speculator_benchmarks` data, streams 1/2/4/8/16/32/64/128, and three repeats per point. Streams 1–16 used 30 s warmup and 90 s measurement; streams 32–128 used 60 s and 120 s. Output was capped at 1,024 tokens and prefix caching was disabled. Nemotron and GLM used `scripts/evaluate/throughput_interactivity.py`; Qwen used `throughput_interactivity_timeout.py`, a modified copy adding request/subprocess timeouts and failure cleanup. The 328 aggregated points below are means of three repeats, comprising 984 raw runs. Tables report aggregate output tokens/s, not per-user interactivity.
+
+Recorded software details are target-specific:
+
+- Qwen: vLLM 0.31.0+empty at `6d2791f8` and Speculators commit `486926231b5cbb87d1d0db9ffa9753dadab6895d`; PyTorch/CUDA versions were not recorded in the normalized bundle.
+- Nemotron: vLLM 0.31.0+empty at `db9527a4` with branch changes at `6d2791f8`, PyTorch 2.13.0+cu130, Transformers 5.17.0, Speculators 0.10.0a17, GuideLLM 0.8.1, and Python 3.12.3.
+- GLM: vLLM 0.31.0 at `5139335b42`; PyTorch/CUDA/Speculators versions were not recorded in the normalized bundle.
 
 Nemotron and GLM also set `VLLM_MOE_ROUTING_SIMULATION_STRATEGY=uniform_random`. This is a performance-only routing simulation and makes model outputs invalid.
 
-## Phase 1 findings: calibration determines whether acceptance survives
+## Phase 1 findings: real-data calibration is associated with higher acceptance
 
 | Drafter configuration            | RedHatAI AL (retained) | SpeedBench AL (retained) |
 | -------------------------------- | ---------------------: | -----------------------: |
@@ -74,9 +80,9 @@ Nemotron and GLM also set `VLLM_MOE_ROUTING_SIMULATION_STRATEGY=uniform_random`.
 | NVFP4 GPTQ+iMatrix, PerfectBlend |         3.182 (95.96%) |           3.099 (94.74%) |
 
 - **Data-free FP8 preserved acceptance.** FP8 dynamic and FP8 block were the only configurations above 98% retention on both suites. Their small differences from BF16 are practical ties in these single-run measurements.
-- **Gaussian calibration was inadequate for every data-dependent arm tested.** The largest drops were static FP8 and W4A4 NVFP4, which retained only about 44–45% of BF16 acceptance length. Real PerfectBlend data improved every corresponding Gaussian arm, but only the GPTQ pipelines approached BF16.
+- **Gaussian calibration was inadequate for every data-dependent arm tested.** The largest drops were static FP8 and W4A4 NVFP4, which retained only about 44–45% of BF16 acceptance length. Every PerfectBlend arm had higher acceptance than its corresponding Gaussian arm, but only the GPTQ pipelines approached BF16.
 - **The >98% threshold does not include NVFP4.** Real-data NVFP4 GPTQ+iMatrix retained 95.96% on RedHatAI and 94.74% on SpeedBench. GPTQ without iMatrix was marginally higher, so this study did not demonstrate an iMatrix acceptance benefit.
-- **Calibration necessity is not causally isolated for GPTQ.** Gaussian GPTQ runs used damping 0.01, whereas PerfectBlend runs used 0.10. Calibration data and damping changed together. The results show that the tested Gaussian configurations failed and that the real-data/damping-0.10 configurations recovered most acceptance; a damping-matched rerun is needed to attribute the recovery to real data alone.
+- **Calibration necessity is not causally isolated for GPTQ.** Gaussian GPTQ runs used damping 0.01, whereas PerfectBlend runs used 0.10. Calibration data and damping changed together. The results show that the tested Gaussian configurations had low acceptance and that the real-data/damping-0.10 configurations approached BF16; a damping-matched rerun is needed to attribute the difference to real data alone.
 
 ## Phase 2 findings: serving behavior depends on target and load
 
@@ -193,17 +199,13 @@ Across all 128-stream drafter points, KV usage was 95.6–98.8%. Mean waiting wa
 - **Phase 1 uncertainty and confounding.** Acceptance arms were single runs without confidence intervals. GPTQ calibration and damping changed together, so a damping-matched comparison remains necessary.
 - **Phase 3 NVFP4 is an open follow-up, not a result.** It is pending Eldar Kurtic's verification of the Phase 1 acceptance findings. If verified, the proposed comparison is 15L/30L NVFP4 against FP8 at 32–64 streams on memory-tight targets, with real acceptance checked before using synthetic acceptance for serving measurements.
 
-## Reproduction pointers
+## Evidence and rerun pointers
 
-The normalized measurements, canonical report, and saved commands are included with this entry. Paths in the archived commands reflect the original run hosts and need to be adapted to a new environment.
+The normalized measurements and one representative Phase 1 provenance set are included with this entry. These are evidence and rerun starting points, not complete standalone reproduction recipes: the original host-specific automation and Qwen's modified evaluator are not included.
 
 - Phase 1 acceptance data:
   - [All 11 checkpoints, pooled by suite](../assets/research/dspark-depth-quantization/phase1-overall-acceptance-length.csv)
   - [Per-subset acceptance measurements](../assets/research/dspark-depth-quantization/phase1-acceptance-by-subset.csv)
-  - [NVFP4 pooled counters](../assets/research/dspark-depth-quantization/phase1-nvfp4-overall-summary.csv) and [source hashes and metric metadata](../assets/research/dspark-depth-quantization/phase1-plot-manifest.json)
   - Representative GPTQ+iMatrix PerfectBlend provenance: [evaluation commands](../assets/research/dspark-depth-quantization/provenance/phase1/redhatai-speculator-benchmarks-nvfp4-gptq-imatrix-perfectblend/eval_command.txt), [vLLM command](../assets/research/dspark-depth-quantization/provenance/phase1/redhatai-speculator-benchmarks-nvfp4-gptq-imatrix-perfectblend/vllm_command.txt), [vLLM patch](../assets/research/dspark-depth-quantization/provenance/phase1/redhatai-speculator-benchmarks-nvfp4-gptq-imatrix-perfectblend/vllm.patch), [target checksum](../assets/research/dspark-depth-quantization/provenance/phase1/redhatai-speculator-benchmarks-nvfp4-gptq-imatrix-perfectblend/checkpoint_sha256.txt), and [drafter checksum](../assets/research/dspark-depth-quantization/provenance/phase1/redhatai-speculator-benchmarks-nvfp4-gptq-imatrix-perfectblend/drafter_checkpoint_sha256.txt).
-- Phase 2 serving data:
-  - [Self-contained interactive report](../assets/research/dspark-depth-quantization/report.html)
-  - [328 three-repeat aggregates as CSV](../assets/research/dspark-depth-quantization/combined-summary.csv), including repeat min/max, throughput, interactivity, ITL, acceptance length, KV usage, waiting requests, and TTFT
-  - Full serving and evaluation commands: [Qwen runner](../assets/research/dspark-depth-quantization/provenance/qwen/run_sweep.sh), [Nemotron runner](../assets/research/dspark-depth-quantization/provenance/nemotron/run_synthetic_sweep_after_target_only.sh), and [GLM runner](../assets/research/dspark-depth-quantization/provenance/glm/run_matrix.sh).
-- Evaluation implementation: [`scripts/evaluate/throughput_interactivity.py`](https://github.com/vllm-project/speculators/blob/main/scripts/evaluate/throughput_interactivity.py). Use the saved run commands and pinned model/dataset revisions for reproduction, and preserve provenance with `--provenance-dir` when launching through `scripts/launch_vllm.py`.
+- Phase 2 serving data: [328 three-repeat aggregates as CSV](../assets/research/dspark-depth-quantization/combined-summary.csv), including repeat min/max, throughput, interactivity, ITL, acceptance length, KV usage, waiting requests, and TTFT.
+- Rerun starting point: `scripts/evaluate/throughput_interactivity.py` covers the stock Nemotron/GLM evaluator; reproducing Qwen also requires its disclosed timeout/cleanup modifications. When launching through `scripts/launch_vllm.py`, preserve new run artifacts with `--provenance-dir`.

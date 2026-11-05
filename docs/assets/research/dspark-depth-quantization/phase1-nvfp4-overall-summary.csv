@@ -1,9 +1,0 @@
-suite,arm,method,calibration,draft_events,proposed_draft_tokens,accepted_draft_tokens,acceptance_length,accepted_token_fraction,macro_acceptance_length,macro_accepted_token_fraction
-redhatai-speculator-benchmarks,nvfp4-gptq-gaussian,NVFP4 GPTQ,Gaussian,628671.00000000,4400697.00000000,746917.00000000,2.18808884,0.16972698,2.09257901,0.15608272
-redhatai-speculator-benchmarks,nvfp4-gptq-perfectblend,NVFP4 GPTQ,PerfectBlend,433084.00000000,3031588.00000000,946285.00000000,3.18499183,0.31214169,3.02604832,0.28943547
-redhatai-speculator-benchmarks,nvfp4-gptq-imatrix-gaussian,NVFP4 GPTQ + activation imatrix,Gaussian,625086.00000000,4375602.00000000,750946.00000000,2.20134829,0.17162118,2.10549521,0.15792789
-redhatai-speculator-benchmarks,nvfp4-gptq-imatrix-perfectblend,NVFP4 GPTQ + activation imatrix,PerfectBlend,433767.00000000,3036369.00000000,946379.00000000,3.18176809,0.31168116,3.02499226,0.28928461
-speedbench-qualitative,nvfp4-gptq-gaussian,NVFP4 GPTQ,Gaussian,898498.00000000,6289486.00000000,984665.00000000,2.09590116,0.15655731,2.04587834,0.14941119
-speedbench-qualitative,nvfp4-gptq-perfectblend,NVFP4 GPTQ,PerfectBlend,608331.00000000,4258317.00000000,1278124.00000000,3.10103381,0.30014769,3.00482200,0.28640314
-speedbench-qualitative,nvfp4-gptq-imatrix-gaussian,NVFP4 GPTQ + activation imatrix,Gaussian,894836.00000000,6263852.00000000,991120.00000000,2.10759960,0.15822851,2.05789483,0.15112783
-speedbench-qualitative,nvfp4-gptq-imatrix-perfectblend,NVFP4 GPTQ + activation imatrix,PerfectBlend,609721.00000000,4268047.00000000,1279529.00000000,3.09854835,0.29979262,3.00251001,0.28607286
