@@ -95,6 +95,41 @@ def test_parse_vocab_mappings_refuses_requested_size_without_token_freq(
     assert not (tmp_path / f"d2t-{DRAFT_VOCAB_SIZE}.npy").exists()
 
 
+def test_parse_vocab_mappings_rank_zero_broadcasts_error_before_raising(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    # Raising before the broadcast would leave the other ranks waiting in it.
+    monkeypatch.setattr(train_cli, "get_rank", lambda: 0)
+    monkeypatch.setattr(train_cli, "is_distributed", lambda: True)
+    broadcast = Mock()
+    monkeypatch.setattr(train_cli.dist, "broadcast_object_list", broadcast)
+
+    with pytest.raises(ValueError, match=r"--no-skip-token-freq"):
+        train_cli.parse_vocab_mappings(_args(tmp_path, DRAFT_VOCAB_SIZE))
+
+    broadcast.assert_called_once()
+    result, error = broadcast.call_args.args[0]
+    assert result is None
+    assert "--no-skip-token-freq" in error
+
+
+def test_parse_vocab_mappings_nonzero_rank_raises_broadcast_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    monkeypatch.setattr(train_cli, "get_rank", lambda: 1)
+    monkeypatch.setattr(train_cli, "is_distributed", lambda: True)
+
+    def broadcast(payload, src):
+        payload[:] = [None, "error from rank 0"]
+
+    monkeypatch.setattr(
+        train_cli.dist, "broadcast_object_list", Mock(side_effect=broadcast)
+    )
+
+    with pytest.raises(ValueError, match=r"error from rank 0"):
+        train_cli.parse_vocab_mappings(_args(tmp_path, DRAFT_VOCAB_SIZE))
+
+
 def test_parse_vocab_mappings_uses_full_vocab_without_draft_vocab_size(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ):
