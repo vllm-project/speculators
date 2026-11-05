@@ -24,6 +24,8 @@ class DSpineDraftModel(DFlashDraftModel):
     """DFlash backbone with causal conditioning propagated through depth."""
 
     config_class: ClassVar[type[DSpineSpeculatorConfig]] = DSpineSpeculatorConfig  # type: ignore[misc,assignment]
+    injection: AdjacentCausalInjection
+    transfer_embeddings: torch.Tensor
     requires_global_step: ClassVar[bool] = True
     disable_ddp_buffer_broadcast: ClassVar[bool] = True
 
@@ -64,7 +66,7 @@ class DSpineDraftModel(DFlashDraftModel):
         )
 
     def load_verifier_weights(self) -> None:
-        """Load frozen verifier weights and derive the unified transfer space. (C(V * r))"""
+        """Load verifier weights and derive the unified transfer space C."""
         super().load_verifier_weights()
         if self.transfer_embeddings.isnan().any():
             # Initialize the transfer embeddings and per layer readouts.
@@ -80,8 +82,8 @@ class DSpineDraftModel(DFlashDraftModel):
     def from_training_args(
         cls,
         verifier_config: PretrainedConfig,
-        t2d: torch.Tensor | None = None,
-        d2t: torch.Tensor | None = None,
+        t2d: torch.Tensor | None = None,  # noqa: ARG003
+        d2t: torch.Tensor | None = None,  # noqa: ARG003
         **kwargs,
     ) -> "DSpineDraftModel":
         """Create DSpine from the shared DFlash-family training arguments."""
@@ -117,7 +119,7 @@ class DSpineDraftModel(DFlashDraftModel):
     def _curriculum_probability(
         self, global_step: int, total_training_steps: int
     ) -> float:
-        """Compute the probability of using curriculum blocks based on training progress."""
+        """Compute the curriculum probability from training progress."""
         if not self.training or total_training_steps <= 0:
             return 0.0
 
@@ -200,7 +202,7 @@ class DSpineDraftModel(DFlashDraftModel):
                     :, anchored_block_indices
                 ]
 
-        # Compute the correct predecessor and probability for curriculum learning and injection.
+        # Prepare correct predecessors and the curriculum substitution probability.
         block_tokens = input_ids[0, anchored_block_indices].view(
             max_anchors, self.block_size
         )
@@ -236,7 +238,8 @@ class DSpineDraftModel(DFlashDraftModel):
             use_curriculum = (
                 curriculum_blocks if layer_idx < self.config.curriculum_layers else None
             )
-            # [1, max_anchors * block_size, hidden_size], [1, max_anchors * block_size, transfer_dim]
+            # States: [1, max_anchors * block_size, hidden_size].
+            # Features: [1, max_anchors * block_size, transfer_dim].
             draft_hidden, post_features = self.injection.inject_layer(
                 layer_idx,
                 pre_injection,

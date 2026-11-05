@@ -1,6 +1,7 @@
 """Core modules for DSpine adjacent causal injection."""
 
 import math
+from typing import cast
 
 import torch
 from torch import nn
@@ -46,7 +47,7 @@ def build_output_embedding_transfer_space(
         # only the chunked PCA work to the assigned accelerator so a 4096x4096
         # eigendecomposition does not dominate startup time.
         compute_device = torch.device("cuda", torch.cuda.current_device())
-    
+
     # Prepare the unified transfer space C
     mean = torch.zeros(hidden_size, dtype=torch.float32, device=compute_device)
     gram = torch.zeros(
@@ -131,7 +132,7 @@ class AdjacentCausalInjection(nn.Module):
     def reset_identity_parameters(self) -> None:
         """Make every injection an identity map at initialization."""
         for write in self.writes:
-            nn.init.zeros_(write.weight)
+            nn.init.zeros_(cast("nn.Linear", write).weight)
         nn.init.zeros_(self.predecessor_gate.weight)
         nn.init.zeros_(self.gate_bias)
 
@@ -143,7 +144,8 @@ class AdjacentCausalInjection(nn.Module):
                 f"readout must have shape {expected}, got {tuple(readout.shape)}."
             )
         for layer_readout in self.readouts:
-            layer_readout.weight.copy_(readout.to(layer_readout.weight))
+            weight = cast("nn.Linear", layer_readout).weight
+            weight.copy_(readout.to(weight))
 
     def project(self, layer_idx: int, hidden_states: torch.Tensor) -> torch.Tensor:
         projected = self.readouts[layer_idx](hidden_states)

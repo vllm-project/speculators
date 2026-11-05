@@ -1,7 +1,7 @@
 """Unit tests for DSpine transfer, injection, and transition scoring."""
 
 from copy import deepcopy
-from typing import Any
+from typing import Any, cast
 
 import pytest
 import torch
@@ -92,12 +92,12 @@ def test_injection_never_crosses_block_boundaries():
         block_size=2,
     )
     with torch.no_grad():
-        injection.readouts[0].weight.copy_(torch.eye(2))
+        cast("torch.nn.Linear", injection.readouts[0]).weight.copy_(torch.eye(2))
         injection.message.weight.copy_(torch.eye(2))
         injection.receiver_gate.weight.zero_()
         injection.predecessor_gate.weight.zero_()
         injection.gate_bias.fill_(20)
-        injection.writes[0].weight.copy_(torch.eye(2))
+        cast("torch.nn.Linear", injection.writes[0]).weight.copy_(torch.eye(2))
     hidden = torch.tensor([[[1.0, 0.0], [0.0, 1.0], [0.0, 2.0], [1.0, 0.0]]])
 
     output, _ = injection.inject_layer(0, hidden)
@@ -139,13 +139,15 @@ def test_known_anchor_uses_token_feature_independently_of_curriculum(curriculum)
         hidden_size=4, transfer_dim=2, message_dim=3, num_layers=1, block_size=3
     )
     with torch.no_grad():
-        injection.writes[0].weight.normal_()
+        cast("torch.nn.Linear", injection.writes[0]).weight.normal_()
         injection.predecessor_gate.weight.normal_()
     hidden = torch.randn(2, 3, 4)
     transfer_embeddings = torch.nn.functional.normalize(torch.randn(7, 2), dim=-1)
     predecessor_ids = torch.tensor([[1, 2], [3, 4]])
     features = (
-        torch.nn.functional.normalize(hidden @ injection.readouts[0].weight.T, dim=-1)
+        torch.nn.functional.normalize(
+            hidden @ cast("torch.nn.Linear", injection.readouts[0]).weight.T, dim=-1
+        )
         * 2**0.5
     )
     predecessor = features[:, :-1].clone()
@@ -158,7 +160,7 @@ def test_known_anchor_uses_token_feature_independently_of_curriculum(curriculum)
         + injection.gate_bias
     )
     update = gate * (predecessor @ injection.message.weight.T)
-    update = update @ injection.writes[0].weight.T
+    update = update @ cast("torch.nn.Linear", injection.writes[0]).weight.T
     rms = (hidden[:, 1:].square().mean(-1, keepdim=True) + injection.eps).sqrt()
     expected = torch.cat((hidden[:, :1], hidden[:, 1:] + rms * update), dim=1)
 
@@ -227,15 +229,20 @@ def test_checkpoint_round_trip_preserves_transfer_and_injection(tmp_path):
                 torch.randn_like(model.transfer_embeddings), dim=-1
             )
         )
-        model.injection.writes[0].weight.normal_(std=0.1)
+        cast("torch.nn.Linear", model.injection.writes[0]).weight.normal_(std=0.1)
     expected_transfer_embeddings = model.transfer_embeddings.clone()
-    expected_write = model.injection.writes[0].weight.clone()
+    expected_write = cast("torch.nn.Linear", model.injection.writes[0]).weight.clone()
 
     model.save_pretrained(tmp_path)
-    loaded = DSpineDraftModel.from_pretrained(tmp_path, local_files_only=True)
+    loaded = cast(
+        "DSpineDraftModel",
+        DSpineDraftModel.from_pretrained(tmp_path, local_files_only=True),
+    )
 
     torch.testing.assert_close(loaded.transfer_embeddings, expected_transfer_embeddings)
-    torch.testing.assert_close(loaded.injection.writes[0].weight, expected_write)
+    torch.testing.assert_close(
+        cast("torch.nn.Linear", loaded.injection.writes[0]).weight, expected_write
+    )
 
 
 def test_model_rejects_pruned_draft_vocabulary():
@@ -281,7 +288,7 @@ def test_candidate_refinement_preserves_forward_loss_and_gradients(monkeypatch):
             )
         )
         for write in model.injection.writes:
-            write.weight.normal_(std=0.1)
+            cast("torch.nn.Linear", write).weight.normal_(std=0.1)
     reference = deepcopy(model)
     monkeypatch.setattr(
         reference,
@@ -365,7 +372,7 @@ def test_tiny_forward_and_backward_is_finite(monkeypatch):
 
     assert torch.isfinite(loss)
     assert torch.isfinite(metrics["eal_sum"])
-    assert model.injection.writes[0].weight.grad is not None
+    assert cast("torch.nn.Linear", model.injection.writes[0]).weight.grad is not None
     assert seen_layers == list(range(len(model.layers)))
     # Only unary candidate selection needs a full-vocabulary projection.
     assert full_projection_shapes == [torch.Size([1, 4, 16])]
