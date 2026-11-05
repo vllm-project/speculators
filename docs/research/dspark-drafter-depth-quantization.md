@@ -9,11 +9,6 @@ tags:
   - vLLM
 ---
 
-<div class="entry-byline" markdown>
-[![rahul-tuli](https://github.com/rahul-tuli.png?size=64){ .entry-avatar }](https://github.com/rahul-tuli)
-**[@rahul-tuli](https://github.com/rahul-tuli)** posted on **2026-11-03**
-</div>
-
 # Drafter quantization and DSpark depth: calibration acceptance, FP8 serving, and KV-cache limits
 
 ## Abstract
@@ -36,7 +31,7 @@ The first question uses real acceptance measurements on DFlash. The second delib
 ### Phase 1: measured acceptance after quantization
 
 - Target and drafter: `Qwen/Qwen3-8B` with `RedHatAI/Qwen3-8B-speculator.dflash`, BF16 baseline plus ten quantized checkpoints. This phase used **DFlash**, not DSpark.
-- Algorithm and serving: DFlash with seven speculative tokens, TP1 on NVIDIA H100 80GB GPUs. A representative GPTQ+iMatrix PerfectBlend command, patch, and checksums are included below.
+- Algorithm and serving: DFlash with seven speculative tokens, TP1 on NVIDIA H100 80GB GPUs. Representative GPTQ+iMatrix PerfectBlend commands and the vLLM support branch are linked below.
 - Calibration: Gaussian controls or 2,027 real PerfectBlend samples at sequence length 2,048, depending on the arm. FP8 dynamic and FP8 block were data-free.
 - Evaluation: all nine `RedHatAI/speculator_benchmarks` subsets and all 11 SpeedBench qualitative categories; temperature 0, seed 0, up to 200 requests per subset, maximum concurrency 128, and a 4,096-token output cap. Prompt files were pinned within each suite.
 - Analysis: one evaluation per arm. Pooled acceptance length is `1 + sum(accepted draft tokens) / sum(draft rounds)` within each suite, including the verifier/bonus token. Maximum acceptance length is therefore 8. Retention is the arm's pooled acceptance length divided by the BF16 value for the same suite.
@@ -53,7 +48,7 @@ All drafter arms—including trained 5L BF16—used `rejection_sample_method=syn
 | `nvidia/NVIDIA-Nemotron-3.5-Super-VL-120B-A12B-BF16` | 4×H100 80GB, TP4          | `rag`                   | 5L/15L/30L     | `target_only`     |
 | GLM-5.3-Flash, revision `46a050be`                   | 8×H100, TP8, FP8 KV cache | `rag`                   | 5L/10L/15L/30L | `no_speculator`   |
 
-The common protocol used pinned `RedHatAI/speculator_benchmarks` data, streams 1/2/4/8/16/32/64/128, and three repeats per point. Streams 1–16 used 30 s warmup and 90 s measurement; streams 32–128 used 60 s and 120 s. Output was capped at 1,024 tokens and prefix caching was disabled. Nemotron and GLM used `scripts/evaluate/throughput_interactivity.py`; Qwen used `throughput_interactivity_timeout.py`, a modified copy adding request/subprocess timeouts and failure cleanup. The 328 aggregated points below are means of three repeats, comprising 984 raw runs. Tables report aggregate output tokens/s, not per-user interactivity.
+The common protocol used pinned `RedHatAI/speculator_benchmarks` data, streams 1/2/4/8/16/32/64/128, and three repeats per point. Streams 1–16 used 30 s warmup and 90 s measurement; streams 32–128 used 60 s and 120 s. Output was capped at 1,024 tokens and prefix caching was disabled. Nemotron and GLM used [`scripts/evaluate/throughput_interactivity.py`](https://github.com/vllm-project/speculators/blob/486926231b5cbb87d1d0db9ffa9753dadab6895d/scripts/evaluate/throughput_interactivity.py); Qwen used `throughput_interactivity_timeout.py`, a modified copy adding request/subprocess timeouts and failure cleanup. The 328 aggregated points below are means of three repeats, comprising 984 raw runs. Tables report aggregate output tokens/s, not per-user interactivity.
 
 Recorded software details are target-specific:
 
@@ -206,6 +201,6 @@ The normalized measurements and one representative Phase 1 provenance set are in
 - Phase 1 acceptance data:
   - [All 11 checkpoints, pooled by suite](../assets/research/dspark-depth-quantization/phase1-overall-acceptance-length.csv)
   - [Per-subset acceptance measurements](../assets/research/dspark-depth-quantization/phase1-acceptance-by-subset.csv)
-  - Representative GPTQ+iMatrix PerfectBlend provenance: [evaluation commands](../assets/research/dspark-depth-quantization/provenance/phase1/redhatai-speculator-benchmarks-nvfp4-gptq-imatrix-perfectblend/eval_command.txt), [vLLM command](../assets/research/dspark-depth-quantization/provenance/phase1/redhatai-speculator-benchmarks-nvfp4-gptq-imatrix-perfectblend/vllm_command.txt), [vLLM patch](../assets/research/dspark-depth-quantization/provenance/phase1/redhatai-speculator-benchmarks-nvfp4-gptq-imatrix-perfectblend/vllm.patch), [target checksum](../assets/research/dspark-depth-quantization/provenance/phase1/redhatai-speculator-benchmarks-nvfp4-gptq-imatrix-perfectblend/checkpoint_sha256.txt), and [drafter checksum](../assets/research/dspark-depth-quantization/provenance/phase1/redhatai-speculator-benchmarks-nvfp4-gptq-imatrix-perfectblend/drafter_checkpoint_sha256.txt).
+  - Representative GPTQ+iMatrix PerfectBlend provenance: [evaluation commands](../assets/research/dspark-depth-quantization/provenance/phase1/redhatai-speculator-benchmarks-nvfp4-gptq-imatrix-perfectblend/eval_command.txt), [vLLM command](../assets/research/dspark-depth-quantization/provenance/phase1/redhatai-speculator-benchmarks-nvfp4-gptq-imatrix-perfectblend/vllm_command.txt), and the [`neuralmagic/vllm` `codex/quantized-dflash-deploy` branch](https://github.com/neuralmagic/vllm/tree/codex/quantized-dflash-deploy) with DFlash support at `afd9c4c6`.
 - Phase 2 serving data: [328 three-repeat aggregates as CSV](../assets/research/dspark-depth-quantization/combined-summary.csv), including repeat min/max, throughput, interactivity, ITL, acceptance length, KV usage, waiting requests, and TTFT.
-- Rerun starting point: `scripts/evaluate/throughput_interactivity.py` covers the stock Nemotron/GLM evaluator; reproducing Qwen also requires its disclosed timeout/cleanup modifications. When launching through `scripts/launch_vllm.py`, preserve new run artifacts with `--provenance-dir`.
+- Rerun starting point: the archived [`scripts/evaluate/throughput_interactivity.py`](https://github.com/vllm-project/speculators/blob/486926231b5cbb87d1d0db9ffa9753dadab6895d/scripts/evaluate/throughput_interactivity.py) covers the stock Nemotron/GLM evaluator; reproducing Qwen also requires its disclosed timeout/cleanup modifications. When launching through `scripts/launch_vllm.py`, preserve new run artifacts with `--provenance-dir`.
