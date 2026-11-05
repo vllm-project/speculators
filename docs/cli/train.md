@@ -85,7 +85,7 @@ torchrun --standalone --nproc_per_node=4 -m speculators.train \
 
 ### Vocabulary Mapping Arguments
 
-- **`--draft-vocab-size`** (int, default: `None`) Vocabulary size for the draft model. If not specified and no vocab mapping files are provided, uses full verifier vocabulary.
+- **`--draft-vocab-size`** (int, default: `None`) Vocabulary size for the draft model. If not specified and no vocab mapping files are provided, uses full verifier vocabulary. If specified, the mapping is loaded from `{data-path}/d2t-{size}.npy`/`t2d-{size}.npy` or built from `--token-freq-path`; training stops with an error if neither exists, so run `prepare-data` with `--no-skip-token-freq`.
 
 - **`--token-freq-path`** (str, default: `{data-path}/token_freq.pt`) Path to token frequency distribution file. This is used to determine which tokens to include in the reduced draft vocab.
 
@@ -176,6 +176,8 @@ torchrun --standalone --nproc_per_node=4 -m speculators.train \
 - **`--draft-attn-impl`** (str, default: `"simple_flex_attention"`) Attention implementation for draft layers. Options: `simple_flex_attention`, `sdpa`, `eager`. Use `sdpa` or `eager` on hardware where flex attention is unavailable (e.g. Ascend NPU). Applies to Eagle3, P-EAGLE, and DFlash-family models. Not supported for MTP.
 
 ### DFlash-Specific Arguments
+
+- **`--causal-attention` / `--no-causal-attention`** (bool, default: unset) Override causality for every draft layer when building a fresh DFlash-family model. The choice is saved as `transformer_layer_config.is_causal`, which vLLM reads before its legacy causality settings. Without an explicit setting in the decoder config or this flag, full-attention layers remain bidirectional and sliding-window layers follow `--sliding-window-non-causal`. Loading with `--from-pretrained` retains the checkpoint's attention configuration.
 
 - **`--block-size`** (int, default: `16` for dflash, `8` otherwise) Block size for DFlash-family models.
 
