@@ -6,6 +6,7 @@ from typing import Any, Literal
 
 import torch
 from datasets import load_from_disk
+from hs_connectors.fp8_utils import SCALES_KEY
 from torch.utils.data import Dataset
 
 from speculators.train.data_types import DatasetRecord
@@ -137,6 +138,20 @@ class SpeculatorsDataset(Dataset):
 
         if isinstance(loaded_hs, SampleUnavailable):
             return loaded_hs
+
+        # Files from the FP8 backend hold float8 values plus per-token scales.
+        # Only its transfer applies the scales (and drops them), so with a
+        # different backend the scales are still here and the values would be
+        # trained on unscaled, without any error.
+        hidden_states = loaded_hs["hidden_states"]
+        if SCALES_KEY in loaded_hs or (
+            hidden_states.dtype.is_floating_point and hidden_states.dtype.itemsize == 1
+        ):
+            raise ValueError(
+                f"Hidden states for sample {index} are {hidden_states.dtype} and "
+                "were not dequantized. Files written by the FP8 hidden-states "
+                "backend must be read with `--hidden-states-backend fp8`."
+            )
 
         # loaded_hs structure: {
         #   "hidden_states": [seq_len, num_layers, hidden_size]
