@@ -22,8 +22,8 @@ Describe acceptance length as accepted tokens per verification step including th
 
 Present one pooled request-level table per sampling condition when more than one was actually measured. Build it from `acceptance.csv`. Recommended columns:
 
-| Dataset or category | Successful requests | Acceptance length | Acceptance rate | Pos 0 | Pos 1 | … |
-| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| Dataset or category | Successful requests | Acceptance length | Acceptance rate | Pos 0 | Pos 1 |   … |
+| ------------------- | ------------------: | ----------------: | --------------: | ----: | ----: | --: |
 
 The adapter's internal position 1 is the first proposed draft token. If the report uses model-card-style zero-based labels, relabel internal position 1 as `Pos 0`, position 2 as `Pos 1`, and so on, and disclose that presentation mapping once.
 
@@ -41,7 +41,7 @@ For other datasets, show one pooled row per native run. Report errors and missin
 When MRCR was measured, include:
 
 | Prompt-length bin | Successful requests | Mean acceptance length | Acceptance rate |
-| --- | ---: | ---: | ---: |
+| ----------------- | ------------------: | ---------------------: | --------------: |
 
 Also state the needle setting, source-row and request budgets, maximum successful prompt length, context-limit failures, and overall pooled values. Keep `unknown` and overflow bins visible when present. Do not describe MRCR acceptance as task accuracy.
 

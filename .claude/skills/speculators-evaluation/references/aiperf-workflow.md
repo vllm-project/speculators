@@ -31,10 +31,10 @@ Without an AIPerf config file, both modes use chat endpoints, sequential samplin
 
 `--extra-inputs` replaces the complete object, so include every desired field when overriding it.
 
-| Mode | Wrapper defaults |
-| --- | --- |
-| Acceptance | Nonstreaming, concurrency 64, request timeout 900 seconds. |
-| Speedup | Streaming; concurrency 1, 4, 8, 16, 32, 64, 128; three profile runs; 30 seconds warmup per point; 100 seconds measurement; zero grace period; automatic native plots. |
+| Mode       | Wrapper defaults                                                                                                                                                      |
+| ---------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Acceptance | Nonstreaming, concurrency 64, request timeout 900 seconds.                                                                                                            |
+| Speedup    | Streaming; concurrency 1, 4, 8, 16, 32, 64, 128; three profile runs; 30 seconds warmup per point; 100 seconds measurement; zero grace period; automatic native plots. |
 
 When `--dataset` is omitted, the evaluator defaults acceptance to SPEED-Bench qualitative and speedup to HumanEval. The skill's resolved evaluation matrix may deliberately supply a broader dataset list.
 
