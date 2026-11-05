@@ -78,8 +78,8 @@ class DraftArgs(_Group):
         "directory containing only a config.json, in which case a fresh draft is "
         "initialized from that full speculator config. Takes precedence over and is "
         "mutually exclusive with --draft-config and the decoder-shaping flags "
-        "(--num-layers, --draft-arch, --draft-hidden-act, --sliding-window, "
-        "--full-attention-indices).",
+        "(--num-layers, --draft-arch, --draft-hidden-act, "
+        "--draft-num-key-value-heads, --sliding-window, --full-attention-indices).",
     )
     draft_config: str = Field(
         default="",
@@ -87,8 +87,8 @@ class DraftArgs(_Group):
         "for eagle3/peagle, Qwen3Config for DFlash-family models) to use as the draft "
         "transformer_layer_config; the rest of the speculator is built from the other "
         "CLI args. Mutually exclusive with --from-pretrained and the decoder-shaping "
-        "flags (--num-layers, --draft-arch, --draft-hidden-act, --sliding-window, "
-        "--full-attention-indices).",
+        "flags (--num-layers, --draft-arch, --draft-hidden-act, "
+        "--draft-num-key-value-heads, --sliding-window, --full-attention-indices).",
     )
     num_layers: int | None = Field(
         default=None,
@@ -105,6 +105,16 @@ class DraftArgs(_Group):
         description="Activation function for draft decoder layers. Defaults to 'silu'. "
         "Qwen3 layers of DFlash-family models expect 'silu' for vLLM deployment. "
         "Leave as None to fall back to the verifier's activation function.",
+    )
+    draft_num_key_value_heads: int | None = Field(
+        default=None,
+        description="Number of key/value heads for the synthesized draft decoder "
+        "(grouped-query attention); must divide the draft num_attention_heads. "
+        "Defaults to the verifier's num_key_value_heads. For verifiers using "
+        "Multi-head Latent Attention (e.g. DeepSeek-V3, GLM-5) that value is nominal "
+        "and equals num_attention_heads, so by default the draft uses full "
+        "multi-head attention; a smaller value shrinks the draft's KV cache "
+        "proportionally.",
     )
     draft_mrope_full_head_hack: bool = Field(
         default=True,
