@@ -5,6 +5,7 @@ from typing import Any
 import torch
 from torch.nn import functional
 
+from speculators.losses import dflash_loss_decay
 from speculators.models.metrics import (
     compute_accepted_length_counts,
     compute_accuracy_multi_step,
@@ -57,8 +58,8 @@ def compute_dspine_loss(
     seq_len = unary_logits.shape[1]
     positions = torch.arange(seq_len, device=unary_logits.device) % block_size
     positions = positions.unsqueeze(0)
-    position_weights = torch.exp(
-        -(positions.to(torch.float32) - 1.0).clamp_min(0.0) / gamma
+    position_weights = dflash_loss_decay(
+        positions.to(torch.float32), gamma=gamma, sample_from_anchor=False
     )
 
     target_probs = functional.softmax(targets.float(), dim=-1)
