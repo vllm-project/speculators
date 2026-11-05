@@ -266,6 +266,26 @@ def test_max_steps_rejects_non_positive(monkeypatch):
         _parse(monkeypatch, ["--max-steps", "0"])
 
 
+# ---------------------------------------------------------------------------
+# Gradient accumulation
+# ---------------------------------------------------------------------------
+
+
+def test_gradient_accumulation_steps_default(monkeypatch):
+    args = _parse(monkeypatch, [])
+    assert args.gradient_accumulation_steps == 1
+
+
+def test_gradient_accumulation_steps_explicit(monkeypatch):
+    args = _parse(monkeypatch, ["--gradient-accumulation-steps", "8"])
+    assert args.gradient_accumulation_steps == 8
+
+
+def test_gradient_accumulation_steps_rejects_zero(monkeypatch):
+    with pytest.raises(SystemExit):
+        _parse(monkeypatch, ["--gradient-accumulation-steps", "0"])
+
+
 def test_flex_attention_block_size_matches_torch():
     # The schema keeps its own copy to avoid importing torch, so check it here.
     from torch.nn.attention.flex_attention import (  # noqa: PLC0415
