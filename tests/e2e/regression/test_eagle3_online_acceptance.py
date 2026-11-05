@@ -2,9 +2,9 @@
 
 Exercises the full pipeline documented in
 docs/user_guide/tutorials/train.md:
-  1. Prepare data (scripts/prepare_data.py)
+  1. Prepare data (speculators prepare-data)
   2. Launch a vLLM server for hidden-state extraction (scripts/launch_vllm.py)
-  3. Train a draft model against the live server (scripts/train.py)
+  3. Train a draft model against the live server (speculators train)
   4. Validate the trained checkpoint via vLLM inference (run_vllm_engine)
 """
 

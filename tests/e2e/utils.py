@@ -349,7 +349,7 @@ def run_prepare_data(
     render_endpoint: str | None = None,
     skip_token_freq: bool = True,
 ):
-    """Tokenize data using prepare_data.py."""
+    """Tokenize data using the speculators prepare-data command."""
     if data == "sharegpt4v_coco":
         # Preserve the existing off-policy multimodal test fixture as an explicit
         # conversation file. Production preparation no longer resolves presets.
@@ -362,7 +362,9 @@ def run_prepare_data(
 
     cmd = [
         sys.executable,
-        str(SCRIPTS_DIR / "prepare_data.py"),
+        "-m",
+        "speculators",
+        "prepare-data",
         "--model",
         model,
         "--data",
@@ -382,7 +384,7 @@ def run_prepare_data(
     result = subprocess.run(  # noqa: S603
         cmd, check=False, timeout=timeout
     )
-    assert result.returncode == 0, "prepare_data.py failed"
+    assert result.returncode == 0, "speculators prepare-data failed"
 
 
 def run_data_generation_offline(
@@ -397,7 +399,9 @@ def run_data_generation_offline(
 ):
     datagen_cmd = [
         sys.executable,
-        str(SCRIPTS_DIR / "data_generation_offline.py"),
+        "-m",
+        "speculators",
+        "generate-offline-data",
         "--preprocessed-data",
         str(data_path),
         "--endpoint",
@@ -420,7 +424,7 @@ def run_data_generation_offline(
         datagen_cmd, stderr=subprocess.PIPE, text=True, check=False, timeout=timeout
     )
     assert result.returncode == 0, (
-        f"data_generation_offline.py failed:\n{result.stderr}"
+        f"speculators generate-offline-data failed:\n{result.stderr}"
     )
 
 
@@ -448,7 +452,9 @@ def run_training(
 ):
     train_cmd = [
         sys.executable,
-        str(SCRIPTS_DIR / "train.py"),
+        "-m",
+        "speculators",
+        "train",
         "--verifier-name-or-path",
         model,
         "--data-path",
@@ -498,7 +504,7 @@ def run_training(
     result = subprocess.run(  # noqa: S603
         train_cmd, stderr=subprocess.PIPE, text=True, check=False, timeout=timeout
     )
-    assert result.returncode == 0, f"train.py failed:\n{result.stderr}"
+    assert result.returncode == 0, f"speculators train failed:\n{result.stderr}"
 
 
 def run_stitch_mtp(
@@ -509,7 +515,9 @@ def run_stitch_mtp(
 ):
     cmd = [
         sys.executable,
-        str(SCRIPTS_DIR / "stitch_mtp.py"),
+        "-m",
+        "speculators",
+        "stitch-mtp",
         str(finetuned_checkpoint),
         verifier_path,
         "--output-path",
@@ -519,7 +527,7 @@ def run_stitch_mtp(
     result = subprocess.run(  # noqa: S603
         cmd, capture_output=True, text=True, check=False, timeout=timeout
     )
-    assert result.returncode == 0, f"stitch_mtp.py failed:\n{result.stderr}"
+    assert result.returncode == 0, f"speculators stitch-mtp failed:\n{result.stderr}"
 
 
 def run_vllm_engine(

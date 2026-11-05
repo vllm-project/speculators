@@ -173,7 +173,7 @@ echo "Step 3: Running response regeneration..."
 PYTHON_ARGS+=("--endpoint" "http://127.0.0.1:$PORT/v1/chat/completions")
 echo "Arguments: ${PYTHON_ARGS[*]}"
 echo ""
-python "$SCRIPT_DIR/script.py" "${PYTHON_ARGS[@]}"
+python -m speculators regenerate-responses "${PYTHON_ARGS[@]}"
 PYTHON_EXIT_CODE=$?
 echo ""
 

@@ -2,7 +2,6 @@
 requires = [
     "setuptools >= 84.0.0",
     "setuptools-git-versioning>=2.0,<3",
-    "tomli>=2.0; python_version < '3.11'",
 ]
 build-backend = "setuptools.build_meta"
 
@@ -25,7 +24,7 @@ dynamic = ["version", "dependencies"]
 name = "speculators"
 description = "A unified library for creating, representing, and storing speculative decoding algorithms for LLM serving such as in vLLM."
 readme = { file = "README.md", content-type = "text/markdown" }
-requires-python = ">=3.10"
+requires-python = ">=3.11"
 license = "Apache-2.0"
 license-files = ["LICENSE"]
 authors = [ { name = "Red Hat"} ]
@@ -57,11 +56,11 @@ keywords = [
 base = [
     "aiohttp",
     "click",
-    "datasets>=4.0.0,<=5.0.1",
+    "datasets>=4.0.0,<=5.1.0",
     "httpx",
     "huggingface-hub",
     "loguru>=0.7.2,<=0.7.3",
-    "numpy>=2.0.0,<=2.4.6",
+    "numpy>=2.0.0,<=2.5.4",
     "openai>=2.0.0",
     "protobuf",
     "psutil",
@@ -69,11 +68,11 @@ base = [
     "pydantic-settings>=2.0.0",
     "rich",
     "safetensors",
-    "torch>=2.9.0,<=2.13.0",
+    "torch>=2.9.0,<=2.14.1",
     "torchaudio",
     "torchvision",
-    "tqdm>=4.66.3,<=4.70.0",
-    "transformers>=5.0.0,<5.17.0",
+    "tqdm>=4.66.3,<=4.70.1",
+    "transformers>=5.0.0,<=5.19.0",
     "typer>=0.12.0",
 ]
 
@@ -116,8 +115,9 @@ dev = [
     "pytest-mock~=3.16.0",
     "pytest-rerunfailures~=16.7",
 
-    # benchmarking (scripts/benchmark.py statistics)
+    # benchmarking (scripts/benchmark.py statistics and report charts)
     "scipy",
+    "plotly",
 
     # code quality
     "mypy~=2.1.0",
@@ -157,7 +157,6 @@ issues = "https://github.com/vllm-project/speculators/issues"
 
 [tool.mypy]
 files = ["src/speculators", "tests"]
-python_version = "3.10"
 warn_redundant_casts = true
 warn_unused_ignores = false
 show_error_codes = true

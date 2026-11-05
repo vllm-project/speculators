@@ -4,6 +4,12 @@ Welcome to the Speculators community! We're building the future of efficient LLM
 
 <div class="grid cards" markdown>
 
+- :material-flask: **Open Research Hub**
+
+  Share experimental results and learn from community findings.
+
+  [:octicons-arrow-right-24: Open Research Hub](../research/index.md)
+
 - :material-chat: **Contact Us**
 
   Find us on Slack, GitHub, and more.

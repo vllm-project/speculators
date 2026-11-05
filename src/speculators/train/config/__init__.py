@@ -1,4 +1,4 @@
-"""Config-file-first configuration for ``scripts/train.py``.
+"""Config-file-first configuration for the ``speculators train`` command.
 
 One public type, :class:`~.schema.TrainConfig`, split across ``schema`` (fields),
 ``resolution`` (CLI + precedence), and ``artifacts`` (reproducibility I/O).
