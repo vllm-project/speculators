@@ -16,7 +16,10 @@ The output of this command is:
 1. Processed dataset ready for online training or offline datagen in output_dir
 2. Token frequency statistics file at token_freq_path
 
-Preprocessing will be skipped if the dataset already exists at the output directory.
+Preprocessing is skipped when the output directory already holds a complete
+dataset. An incomplete save (arrow shards without dataset metadata) is an
+error; pass ``--overwrite`` to replace it.
+
 Token frequencies are saved in the output directory by default.
 
 Usage::
@@ -32,7 +35,7 @@ Usage::
 import logging
 import shutil
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, Literal
 
 import typer
 
@@ -50,6 +53,22 @@ PREPARE_DATA_OVERWRITE_ALLOWED_FILES = {
     "state.json",
     "token_freq.pt",
 }
+
+
+def dataset_dir_status(path: Path) -> Literal["complete", "partial", "empty"]:
+    """Classify a prepare-data output directory.
+
+    A killed ``Dataset.save_to_disk`` can leave ``*.arrow`` shards without
+    ``dataset_info.json`` and ``state.json``. Only shards plus both metadata
+    files are ``complete``. Shards missing either file are ``partial``. No
+    shards is ``empty``.
+    """
+    if not path.is_dir() or not any(path.glob("*.arrow")):
+        return "empty"
+    metadata_present = all(
+        (path / name).is_file() for name in ("dataset_info.json", "state.json")
+    )
+    return "complete" if metadata_present else "partial"
 
 
 def assert_safe_to_overwrite(output: Path, token_freq_path: Path) -> None:
@@ -205,12 +224,21 @@ def prepare_data(
     )
 
     if output_path.exists():
-        if not overwrite and list(output_path.glob("*.arrow")):
-            log.warning(
-                "Dataset files already exist in output directory, skipping "
-                "preprocessing. To overwrite existing files use --overwrite."
-            )
-            raise typer.Exit
+        if not overwrite:
+            status = dataset_dir_status(output_path)
+            if status == "complete":
+                log.warning(
+                    "Dataset files already exist in output directory, skipping "
+                    "preprocessing. To overwrite existing files use --overwrite."
+                )
+                raise typer.Exit
+            if status == "partial":
+                log.error(
+                    "Output directory looks like an incomplete dataset save: "
+                    "arrow shards are present but dataset_info.json or "
+                    "state.json is missing. Pass --overwrite to replace it."
+                )
+                raise typer.Exit(1)
         if overwrite:
             assert_safe_to_overwrite(output_path, resolved_token_freq_path)
             log.warning(f"Removing existing output directory: {output_path}")
