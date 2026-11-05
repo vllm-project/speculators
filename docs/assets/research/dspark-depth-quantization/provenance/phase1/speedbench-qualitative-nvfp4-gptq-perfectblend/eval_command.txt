@@ -1,0 +1,109 @@
+# speedbench/qualitative/coding
+# Timestamp: 2026-09-28T09:01:48.033746+00:00
+# Git SHA: fd69f5326d695e98434196b3860956494f4c0004
+# speculators: 0.9.0.dev23
+# vllm: 0.29.1.dev0+g98dff2a81.d20260917.precompiled
+# transformers: 5.16.1
+# torch: 2.13.0
+# compressed-tensors: 0.18.1.dev28+ga2a210e
+/workspace/speculators/scripts/evaluate/evaluate.py throughput --target http://127.0.0.1:8110/v1 --subsets coding --output-dir /data/fast/drafter-quant/results/add-evals-20260928-verified/speedbench-qualitative/nvfp4-gptq-perfectblend/subsets/coding/attempt-1 --max-concurrency 128 --max-requests 80 --max-tokens 4096 --eval-seed 0 --gen-kwargs '{"temperature":0,"seed":0}' --dataset speedbench/qualitative/coding --speedbench-data-dir /data/fast/drafter-quant/data/speedbench-frozen
+
+# speedbench/qualitative/humanities
+# Timestamp: 2026-09-28T09:02:44.635855+00:00
+# Git SHA: fd69f5326d695e98434196b3860956494f4c0004
+# speculators: 0.9.0.dev23
+# vllm: 0.29.1.dev0+g98dff2a81.d20260917.precompiled
+# transformers: 5.16.1
+# torch: 2.13.0
+# compressed-tensors: 0.18.1.dev28+ga2a210e
+/workspace/speculators/scripts/evaluate/evaluate.py throughput --target http://127.0.0.1:8110/v1 --subsets humanities --output-dir /data/fast/drafter-quant/results/add-evals-20260928-verified/speedbench-qualitative/nvfp4-gptq-perfectblend/subsets/humanities/attempt-1 --max-concurrency 128 --max-requests 80 --max-tokens 4096 --eval-seed 0 --gen-kwargs '{"temperature":0,"seed":0}' --dataset speedbench/qualitative/humanities --speedbench-data-dir /data/fast/drafter-quant/data/speedbench-frozen
+
+# speedbench/qualitative/math
+# Timestamp: 2026-09-28T09:03:37.332495+00:00
+# Git SHA: fd69f5326d695e98434196b3860956494f4c0004
+# speculators: 0.9.0.dev23
+# vllm: 0.29.1.dev0+g98dff2a81.d20260917.precompiled
+# transformers: 5.16.1
+# torch: 2.13.0
+# compressed-tensors: 0.18.1.dev28+ga2a210e
+/workspace/speculators/scripts/evaluate/evaluate.py throughput --target http://127.0.0.1:8110/v1 --subsets math --output-dir /data/fast/drafter-quant/results/add-evals-20260928-verified/speedbench-qualitative/nvfp4-gptq-perfectblend/subsets/math/attempt-1 --max-concurrency 128 --max-requests 80 --max-tokens 4096 --eval-seed 0 --gen-kwargs '{"temperature":0,"seed":0}' --dataset speedbench/qualitative/math --speedbench-data-dir /data/fast/drafter-quant/data/speedbench-frozen
+
+# speedbench/qualitative/multilingual
+# Timestamp: 2026-09-28T09:04:32.403706+00:00
+# Git SHA: fd69f5326d695e98434196b3860956494f4c0004
+# speculators: 0.9.0.dev23
+# vllm: 0.29.1.dev0+g98dff2a81.d20260917.precompiled
+# transformers: 5.16.1
+# torch: 2.13.0
+# compressed-tensors: 0.18.1.dev28+ga2a210e
+/workspace/speculators/scripts/evaluate/evaluate.py throughput --target http://127.0.0.1:8110/v1 --subsets multilingual --output-dir /data/fast/drafter-quant/results/add-evals-20260928-verified/speedbench-qualitative/nvfp4-gptq-perfectblend/subsets/multilingual/attempt-1 --max-concurrency 128 --max-requests 80 --max-tokens 4096 --eval-seed 0 --gen-kwargs '{"temperature":0,"seed":0}' --dataset speedbench/qualitative/multilingual --speedbench-data-dir /data/fast/drafter-quant/data/speedbench-frozen
+
+# speedbench/qualitative/qa
+# Timestamp: 2026-09-28T09:05:18.993080+00:00
+# Git SHA: fd69f5326d695e98434196b3860956494f4c0004
+# speculators: 0.9.0.dev23
+# vllm: 0.29.1.dev0+g98dff2a81.d20260917.precompiled
+# transformers: 5.16.1
+# torch: 2.13.0
+# compressed-tensors: 0.18.1.dev28+ga2a210e
+/workspace/speculators/scripts/evaluate/evaluate.py throughput --target http://127.0.0.1:8110/v1 --subsets qa --output-dir /data/fast/drafter-quant/results/add-evals-20260928-verified/speedbench-qualitative/nvfp4-gptq-perfectblend/subsets/qa/attempt-1 --max-concurrency 128 --max-requests 80 --max-tokens 4096 --eval-seed 0 --gen-kwargs '{"temperature":0,"seed":0}' --dataset speedbench/qualitative/qa --speedbench-data-dir /data/fast/drafter-quant/data/speedbench-frozen
+
+# speedbench/qualitative/rag
+# Timestamp: 2026-09-28T09:06:00.629198+00:00
+# Git SHA: fd69f5326d695e98434196b3860956494f4c0004
+# speculators: 0.9.0.dev23
+# vllm: 0.29.1.dev0+g98dff2a81.d20260917.precompiled
+# transformers: 5.16.1
+# torch: 2.13.0
+# compressed-tensors: 0.18.1.dev28+ga2a210e
+/workspace/speculators/scripts/evaluate/evaluate.py throughput --target http://127.0.0.1:8110/v1 --subsets rag --output-dir /data/fast/drafter-quant/results/add-evals-20260928-verified/speedbench-qualitative/nvfp4-gptq-perfectblend/subsets/rag/attempt-1 --max-concurrency 128 --max-requests 80 --max-tokens 4096 --eval-seed 0 --gen-kwargs '{"temperature":0,"seed":0}' --dataset speedbench/qualitative/rag --speedbench-data-dir /data/fast/drafter-quant/data/speedbench-frozen
+
+# speedbench/qualitative/reasoning
+# Timestamp: 2026-09-28T09:06:42.888785+00:00
+# Git SHA: fd69f5326d695e98434196b3860956494f4c0004
+# speculators: 0.9.0.dev23
+# vllm: 0.29.1.dev0+g98dff2a81.d20260917.precompiled
+# transformers: 5.16.1
+# torch: 2.13.0
+# compressed-tensors: 0.18.1.dev28+ga2a210e
+/workspace/speculators/scripts/evaluate/evaluate.py throughput --target http://127.0.0.1:8110/v1 --subsets reasoning --output-dir /data/fast/drafter-quant/results/add-evals-20260928-verified/speedbench-qualitative/nvfp4-gptq-perfectblend/subsets/reasoning/attempt-1 --max-concurrency 128 --max-requests 80 --max-tokens 4096 --eval-seed 0 --gen-kwargs '{"temperature":0,"seed":0}' --dataset speedbench/qualitative/reasoning --speedbench-data-dir /data/fast/drafter-quant/data/speedbench-frozen
+
+# speedbench/qualitative/roleplay
+# Timestamp: 2026-09-28T09:07:29.334299+00:00
+# Git SHA: fd69f5326d695e98434196b3860956494f4c0004
+# speculators: 0.9.0.dev23
+# vllm: 0.29.1.dev0+g98dff2a81.d20260917.precompiled
+# transformers: 5.16.1
+# torch: 2.13.0
+# compressed-tensors: 0.18.1.dev28+ga2a210e
+/workspace/speculators/scripts/evaluate/evaluate.py throughput --target http://127.0.0.1:8110/v1 --subsets roleplay --output-dir /data/fast/drafter-quant/results/add-evals-20260928-verified/speedbench-qualitative/nvfp4-gptq-perfectblend/subsets/roleplay/attempt-1 --max-concurrency 128 --max-requests 80 --max-tokens 4096 --eval-seed 0 --gen-kwargs '{"temperature":0,"seed":0}' --dataset speedbench/qualitative/roleplay --speedbench-data-dir /data/fast/drafter-quant/data/speedbench-frozen
+
+# speedbench/qualitative/stem
+# Timestamp: 2026-09-28T09:08:04.433114+00:00
+# Git SHA: fd69f5326d695e98434196b3860956494f4c0004
+# speculators: 0.9.0.dev23
+# vllm: 0.29.1.dev0+g98dff2a81.d20260917.precompiled
+# transformers: 5.16.1
+# torch: 2.13.0
+# compressed-tensors: 0.18.1.dev28+ga2a210e
+/workspace/speculators/scripts/evaluate/evaluate.py throughput --target http://127.0.0.1:8110/v1 --subsets stem --output-dir /data/fast/drafter-quant/results/add-evals-20260928-verified/speedbench-qualitative/nvfp4-gptq-perfectblend/subsets/stem/attempt-1 --max-concurrency 128 --max-requests 80 --max-tokens 4096 --eval-seed 0 --gen-kwargs '{"temperature":0,"seed":0}' --dataset speedbench/qualitative/stem --speedbench-data-dir /data/fast/drafter-quant/data/speedbench-frozen
+
+# speedbench/qualitative/summarization
+# Timestamp: 2026-09-28T09:09:02.709163+00:00
+# Git SHA: fd69f5326d695e98434196b3860956494f4c0004
+# speculators: 0.9.0.dev23
+# vllm: 0.29.1.dev0+g98dff2a81.d20260917.precompiled
+# transformers: 5.16.1
+# torch: 2.13.0
+# compressed-tensors: 0.18.1.dev28+ga2a210e
+/workspace/speculators/scripts/evaluate/evaluate.py throughput --target http://127.0.0.1:8110/v1 --subsets summarization --output-dir /data/fast/drafter-quant/results/add-evals-20260928-verified/speedbench-qualitative/nvfp4-gptq-perfectblend/subsets/summarization/attempt-1 --max-concurrency 128 --max-requests 80 --max-tokens 4096 --eval-seed 0 --gen-kwargs '{"temperature":0,"seed":0}' --dataset speedbench/qualitative/summarization --speedbench-data-dir /data/fast/drafter-quant/data/speedbench-frozen
+
+# speedbench/qualitative/writing
+# Timestamp: 2026-09-28T09:09:30.463771+00:00
+# Git SHA: fd69f5326d695e98434196b3860956494f4c0004
+# speculators: 0.9.0.dev23
+# vllm: 0.29.1.dev0+g98dff2a81.d20260917.precompiled
+# transformers: 5.16.1
+# torch: 2.13.0
+# compressed-tensors: 0.18.1.dev28+ga2a210e
+/workspace/speculators/scripts/evaluate/evaluate.py throughput --target http://127.0.0.1:8110/v1 --subsets writing --output-dir /data/fast/drafter-quant/results/add-evals-20260928-verified/speedbench-qualitative/nvfp4-gptq-perfectblend/subsets/writing/attempt-1 --max-concurrency 128 --max-requests 80 --max-tokens 4096 --eval-seed 0 --gen-kwargs '{"temperature":0,"seed":0}' --dataset speedbench/qualitative/writing --speedbench-data-dir /data/fast/drafter-quant/data/speedbench-frozen

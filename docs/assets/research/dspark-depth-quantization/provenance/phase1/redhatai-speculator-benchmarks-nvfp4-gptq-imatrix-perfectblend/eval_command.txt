@@ -1,0 +1,89 @@
+# HumanEval
+# Timestamp: 2026-09-28T09:12:13.703787+00:00
+# Git SHA: fd69f5326d695e98434196b3860956494f4c0004
+# speculators: 0.9.0.dev23
+# vllm: 0.29.1.dev0+g98dff2a81.d20260917.precompiled
+# transformers: 5.16.1
+# torch: 2.13.0
+# compressed-tensors: 0.18.1.dev28+ga2a210e
+/workspace/speculators/scripts/evaluate/evaluate.py throughput --target http://127.0.0.1:8111/v1 --subsets HumanEval --output-dir /data/fast/drafter-quant/results/add-evals-20260928-verified/redhatai-speculator-benchmarks/nvfp4-gptq-imatrix-perfectblend/subsets/HumanEval/attempt-1 --max-concurrency 128 --max-requests 200 --max-tokens 4096 --eval-seed 0 --gen-kwargs '{"temperature":0,"seed":0}' --dataset /data/fast/drafter-quant/pilot/redhatai-speculator_benchmarks-2ae86af/raw/HumanEval.jsonl --data-column-mapper kind=generative_column_mapper,column_mappings.text_column=prompt
+
+# math_reasoning
+# Timestamp: 2026-09-28T09:13:32.652445+00:00
+# Git SHA: fd69f5326d695e98434196b3860956494f4c0004
+# speculators: 0.9.0.dev23
+# vllm: 0.29.1.dev0+g98dff2a81.d20260917.precompiled
+# transformers: 5.16.1
+# torch: 2.13.0
+# compressed-tensors: 0.18.1.dev28+ga2a210e
+/workspace/speculators/scripts/evaluate/evaluate.py throughput --target http://127.0.0.1:8111/v1 --subsets math_reasoning --output-dir /data/fast/drafter-quant/results/add-evals-20260928-verified/redhatai-speculator-benchmarks/nvfp4-gptq-imatrix-perfectblend/subsets/math_reasoning/attempt-1 --max-concurrency 128 --max-requests 200 --max-tokens 4096 --eval-seed 0 --gen-kwargs '{"temperature":0,"seed":0}' --dataset /data/fast/drafter-quant/pilot/redhatai-speculator_benchmarks-2ae86af/raw/math_reasoning.jsonl --data-column-mapper kind=generative_column_mapper,column_mappings.text_column=prompt
+
+# qa
+# Timestamp: 2026-09-28T09:14:13.367403+00:00
+# Git SHA: fd69f5326d695e98434196b3860956494f4c0004
+# speculators: 0.9.0.dev23
+# vllm: 0.29.1.dev0+g98dff2a81.d20260917.precompiled
+# transformers: 5.16.1
+# torch: 2.13.0
+# compressed-tensors: 0.18.1.dev28+ga2a210e
+/workspace/speculators/scripts/evaluate/evaluate.py throughput --target http://127.0.0.1:8111/v1 --subsets qa --output-dir /data/fast/drafter-quant/results/add-evals-20260928-verified/redhatai-speculator-benchmarks/nvfp4-gptq-imatrix-perfectblend/subsets/qa/attempt-1 --max-concurrency 128 --max-requests 200 --max-tokens 4096 --eval-seed 0 --gen-kwargs '{"temperature":0,"seed":0}' --dataset /data/fast/drafter-quant/pilot/redhatai-speculator_benchmarks-2ae86af/raw/qa.jsonl --data-column-mapper kind=generative_column_mapper,column_mappings.text_column=prompt
+
+# question
+# Timestamp: 2026-09-28T09:14:54.407087+00:00
+# Git SHA: fd69f5326d695e98434196b3860956494f4c0004
+# speculators: 0.9.0.dev23
+# vllm: 0.29.1.dev0+g98dff2a81.d20260917.precompiled
+# transformers: 5.16.1
+# torch: 2.13.0
+# compressed-tensors: 0.18.1.dev28+ga2a210e
+/workspace/speculators/scripts/evaluate/evaluate.py throughput --target http://127.0.0.1:8111/v1 --subsets question --output-dir /data/fast/drafter-quant/results/add-evals-20260928-verified/redhatai-speculator-benchmarks/nvfp4-gptq-imatrix-perfectblend/subsets/question/attempt-1 --max-concurrency 128 --max-requests 200 --max-tokens 4096 --eval-seed 0 --gen-kwargs '{"temperature":0,"seed":0}' --dataset /data/fast/drafter-quant/pilot/redhatai-speculator_benchmarks-2ae86af/raw/question.jsonl --data-column-mapper kind=generative_column_mapper,column_mappings.text_column=prompt
+
+# rag
+# Timestamp: 2026-09-28T09:15:47.602196+00:00
+# Git SHA: fd69f5326d695e98434196b3860956494f4c0004
+# speculators: 0.9.0.dev23
+# vllm: 0.29.1.dev0+g98dff2a81.d20260917.precompiled
+# transformers: 5.16.1
+# torch: 2.13.0
+# compressed-tensors: 0.18.1.dev28+ga2a210e
+/workspace/speculators/scripts/evaluate/evaluate.py throughput --target http://127.0.0.1:8111/v1 --subsets rag --output-dir /data/fast/drafter-quant/results/add-evals-20260928-verified/redhatai-speculator-benchmarks/nvfp4-gptq-imatrix-perfectblend/subsets/rag/attempt-1 --max-concurrency 128 --max-requests 200 --max-tokens 4096 --eval-seed 0 --gen-kwargs '{"temperature":0,"seed":0}' --dataset /data/fast/drafter-quant/pilot/redhatai-speculator_benchmarks-2ae86af/raw/rag.jsonl --data-column-mapper kind=generative_column_mapper,column_mappings.text_column=prompt
+
+# summarization
+# Timestamp: 2026-09-28T09:16:32.308132+00:00
+# Git SHA: fd69f5326d695e98434196b3860956494f4c0004
+# speculators: 0.9.0.dev23
+# vllm: 0.29.1.dev0+g98dff2a81.d20260917.precompiled
+# transformers: 5.16.1
+# torch: 2.13.0
+# compressed-tensors: 0.18.1.dev28+ga2a210e
+/workspace/speculators/scripts/evaluate/evaluate.py throughput --target http://127.0.0.1:8111/v1 --subsets summarization --output-dir /data/fast/drafter-quant/results/add-evals-20260928-verified/redhatai-speculator-benchmarks/nvfp4-gptq-imatrix-perfectblend/subsets/summarization/attempt-1 --max-concurrency 128 --max-requests 200 --max-tokens 4096 --eval-seed 0 --gen-kwargs '{"temperature":0,"seed":0}' --dataset /data/fast/drafter-quant/pilot/redhatai-speculator_benchmarks-2ae86af/raw/summarization.jsonl --data-column-mapper kind=generative_column_mapper,column_mappings.text_column=prompt
+
+# tool_call
+# Timestamp: 2026-09-28T09:16:59.015669+00:00
+# Git SHA: fd69f5326d695e98434196b3860956494f4c0004
+# speculators: 0.9.0.dev23
+# vllm: 0.29.1.dev0+g98dff2a81.d20260917.precompiled
+# transformers: 5.16.1
+# torch: 2.13.0
+# compressed-tensors: 0.18.1.dev28+ga2a210e
+/workspace/speculators/scripts/evaluate/evaluate.py throughput --target http://127.0.0.1:8111/v1 --subsets tool_call --output-dir /data/fast/drafter-quant/results/add-evals-20260928-verified/redhatai-speculator-benchmarks/nvfp4-gptq-imatrix-perfectblend/subsets/tool_call/attempt-1 --max-concurrency 128 --max-requests 200 --max-tokens 4096 --eval-seed 0 --gen-kwargs '{"temperature":0,"seed":0}' --dataset /data/fast/drafter-quant/pilot/redhatai-speculator_benchmarks-2ae86af/raw/tool_call.jsonl --data-column-mapper kind=generative_column_mapper,column_mappings.text_column=prompt
+
+# translation
+# Timestamp: 2026-09-28T09:17:48.538423+00:00
+# Git SHA: fd69f5326d695e98434196b3860956494f4c0004
+# speculators: 0.9.0.dev23
+# vllm: 0.29.1.dev0+g98dff2a81.d20260917.precompiled
+# transformers: 5.16.1
+# torch: 2.13.0
+# compressed-tensors: 0.18.1.dev28+ga2a210e
+/workspace/speculators/scripts/evaluate/evaluate.py throughput --target http://127.0.0.1:8111/v1 --subsets translation --output-dir /data/fast/drafter-quant/results/add-evals-20260928-verified/redhatai-speculator-benchmarks/nvfp4-gptq-imatrix-perfectblend/subsets/translation/attempt-1 --max-concurrency 128 --max-requests 200 --max-tokens 4096 --eval-seed 0 --gen-kwargs '{"temperature":0,"seed":0}' --dataset /data/fast/drafter-quant/pilot/redhatai-speculator_benchmarks-2ae86af/raw/translation.jsonl --data-column-mapper kind=generative_column_mapper,column_mappings.text_column=prompt
+
+# writing
+# Timestamp: 2026-09-28T09:18:15.470781+00:00
+# Git SHA: fd69f5326d695e98434196b3860956494f4c0004
+# speculators: 0.9.0.dev23
+# vllm: 0.29.1.dev0+g98dff2a81.d20260917.precompiled
+# transformers: 5.16.1
+# torch: 2.13.0
+# compressed-tensors: 0.18.1.dev28+ga2a210e
+/workspace/speculators/scripts/evaluate/evaluate.py throughput --target http://127.0.0.1:8111/v1 --subsets writing --output-dir /data/fast/drafter-quant/results/add-evals-20260928-verified/redhatai-speculator-benchmarks/nvfp4-gptq-imatrix-perfectblend/subsets/writing/attempt-1 --max-concurrency 128 --max-requests 200 --max-tokens 4096 --eval-seed 0 --gen-kwargs '{"temperature":0,"seed":0}' --dataset /data/fast/drafter-quant/pilot/redhatai-speculator_benchmarks-2ae86af/raw/writing.jsonl --data-column-mapper kind=generative_column_mapper,column_mappings.text_column=prompt

@@ -1,0 +1,6 @@
+timestamp_utc=2026-10-22T02:10:59Z
+drafter=RelaxingSnorlax/Qwen3.8-27B-DSpark-FP8-DYNAMIC-15L
+cwd=/workspace/speculators
+command=/workspace/vllm/.venv/bin/vllm serve Qwen/Qwen3.8-27B --port 8110 --spec-model RelaxingSnorlax/Qwen3.8-27B-DSpark-FP8-DYNAMIC-15L --spec-tokens 8 --spec-method dspark --tensor-parallel-size 2 --max-model-len 16384 --max-num-seqs 256 --max-num-batched-tokens 16384 --seed 1234 --no-enable-prefix-caching --speculative-config \{\"rejection_sample_method\":\"synthetic\"\,\"synthetic_acceptance_rates\":\[0.815\,0.646\,0.511\,0.404\,0.322\,0.259\,0.208\,0.17\]\}
+vllm_version=0.31.0+empty
+vllm_git_sha=6d2791f876cb92a2c0050f03ceafd9a1de679152

@@ -1,0 +1,23 @@
+model,label,condition,suite,pooled_acceptance_length,macro_subset_mean,draft_rounds,accepted_draft_tokens,proposed_draft_tokens
+bf16-drafter,BF16 baseline,baseline,redhatai-speculator-benchmarks,3.31555647,3.14891146,415859,962945,2911013
+fp8-static-gaussian,FP8 static W8A8 · Gaussian,gaussian,redhatai-speculator-benchmarks,1.49038024,1.44752435,923516,452874,6464612
+fp8-static-perfectblend,FP8 static W8A8 · PerfectBlend,perfectblend,redhatai-speculator-benchmarks,2.30931009,2.20434790,598920,784172,4192440
+fp8-dynamic-datafree,FP8 Dynamic · data-free,datafree,redhatai-speculator-benchmarks,3.31712207,3.15182661,416007,963939,2912049
+fp8-block-datafree,FP8 Block · data-free,datafree,redhatai-speculator-benchmarks,3.30975674,3.14103410,417660,964693,2923620
+nvfp4-gaussian,NVFP4 W4A4 · Gaussian,gaussian,redhatai-speculator-benchmarks,1.48048223,1.43900362,929589,446651,6507123
+nvfp4-perfectblend,NVFP4 W4A4 · PerfectBlend,perfectblend,redhatai-speculator-benchmarks,2.28840750,2.18463225,603209,777179,4222463
+nvfp4-gptq-gaussian,NVFP4 GPTQ · Gaussian,gaussian,redhatai-speculator-benchmarks,2.18808884,2.09257901,628671,746917,4400697
+nvfp4-gptq-perfectblend,NVFP4 GPTQ · PerfectBlend,perfectblend,redhatai-speculator-benchmarks,3.18499183,3.02604832,433084,946285,3031588
+nvfp4-gptq-imatrix-gaussian,NVFP4 GPTQ + imatrix · Gaussian,gaussian,redhatai-speculator-benchmarks,2.20134829,2.10549521,625086,750946,4375602
+nvfp4-gptq-imatrix-perfectblend,NVFP4 GPTQ + imatrix · PerfectBlend,perfectblend,redhatai-speculator-benchmarks,3.18176809,3.02499226,433767,946379,3036369
+bf16-drafter,BF16 baseline,baseline,speedbench-qualitative,3.27069495,3.15787929,577351,1310988,4041457
+fp8-static-gaussian,FP8 static W8A8 · Gaussian,gaussian,speedbench-qualitative,1.43532970,1.41275475,1313903,571981,9197321
+fp8-static-perfectblend,FP8 static W8A8 · PerfectBlend,perfectblend,speedbench-qualitative,2.21760528,2.15660971,850370,1035415,5952590
+fp8-dynamic-datafree,FP8 Dynamic · data-free,datafree,speedbench-qualitative,3.26943586,3.15699613,577425,1310429,4041975
+fp8-block-datafree,FP8 Block · data-free,datafree,speedbench-qualitative,3.26803876,3.15348461,577562,1309933,4042934
+nvfp4-gaussian,NVFP4 W4A4 · Gaussian,gaussian,speedbench-qualitative,1.42393907,1.40267351,1324563,561534,9271941
+nvfp4-perfectblend,NVFP4 W4A4 · PerfectBlend,perfectblend,speedbench-qualitative,2.19342477,2.13340174,859347,1025566,6015429
+nvfp4-gptq-gaussian,NVFP4 GPTQ · Gaussian,gaussian,speedbench-qualitative,2.09590116,2.04587834,898498,984665,6289486
+nvfp4-gptq-perfectblend,NVFP4 GPTQ · PerfectBlend,perfectblend,speedbench-qualitative,3.10103381,3.00482200,608331,1278124,4258317
+nvfp4-gptq-imatrix-gaussian,NVFP4 GPTQ + imatrix · Gaussian,gaussian,speedbench-qualitative,2.10759960,2.05789483,894836,991120,6263852
+nvfp4-gptq-imatrix-perfectblend,NVFP4 GPTQ + imatrix · PerfectBlend,perfectblend,speedbench-qualitative,3.09854835,3.00251001,609721,1279529,4268047

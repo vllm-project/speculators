@@ -1,0 +1,5 @@
+# Timestamp: 2026-09-28T08:38:23.077822+00:00
+# Python: /workspace/speculators/.venv/bin/python
+# Git SHA: 98dff2a81d747d1dba01a47f939f48c3526d4206 (dirty)
+# vllm: 0.29.1.dev0+g98dff2a81.d20260917.precompiled
+/workspace/speculators/.venv/bin/python -m vllm.entrypoints.cli.main serve /data/fast/hf_cache/hub/models--Qwen--Qwen3-8B/snapshots/b968826d9c46dd6066d109eabc6255188de91218 --spec-model /data/fast/drafter-quant/out/add-evals-20260928/nvfp4_gptq-random --spec-tokens 7 --spec-method dflash --host 127.0.0.1 --port 8110 --dtype bfloat16 --seed 0 --max-model-len 16384 --max-num-seqs 128 --gpu-memory-utilization 0.8 --no-enable-prefix-caching --enforce-eager --kernel-config '{"linear_backend":"emulation"}'
