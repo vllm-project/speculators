@@ -428,11 +428,13 @@ async def regenerate_conversation(
     are not executed: the target's i-th regenerated call is paired with the i-th
     cached result from the source row.
 
-    Returns whether the conversation was truncated -- which happens when a call
-    cannot be paired 1:1 with a cached result (results exhausted, a parallel
-    call, or a different tool than the result answers). Completed rows are
-    appended to ``samples`` as they go, so the caller keeps partial progress if
-    this raises.
+    Returns whether the conversation was truncated. A completion is cut off
+    when ``finish_reason`` is ``"length"`` or it has at least ``max_tokens``
+    ids; prompt length is not part of that cap. Truncation also happens when
+    a call cannot be paired 1:1 with a cached result (results exhausted, a
+    parallel call, or a different tool than the result answers). Completed
+    rows are appended to ``samples`` as they go, so the caller keeps partial
+    progress if this raises.
     """
     turns = item["turns"]
     tools = item.get("tools")
@@ -487,10 +489,13 @@ async def regenerate_conversation(
             samples.append(sample)
             prefix.append(assistant_msg)
 
-            prompt_token_ids = data.get("prompt_token_ids")
-            completion_token_ids = data["choices"][0].get("token_ids")
-            total_tokens = len(prompt_token_ids or []) + len(completion_token_ids or [])
-            if total_tokens > max_tokens:
+            choice = data["choices"][0]
+            completion_token_ids = choice.get("token_ids")
+            # max_tokens caps the completion, not prompt + completion.
+            if choice.get("finish_reason") == "length" or (
+                completion_token_ids is not None
+                and len(completion_token_ids) >= max_tokens
+            ):
                 truncated = True
                 break
 
