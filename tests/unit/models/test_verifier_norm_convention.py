@@ -3,7 +3,7 @@
 Some verifier families store the final RMSNorm weight in the Gemma
 convention — the applied gain is ``1 + w`` — while a plain ``Qwen3RMSNorm``
 applies gain ``w``. This family includes Gemma itself, the Qwen3.5/Qwen3.8
-models, Qwen3-Next and Step3.5, whose final norms vLLM builds from
+models, Qwen3-Next, Step3.5 and MiniMax-M3, whose final norms vLLM builds from
 ``GemmaRMSNorm``.
 The frozen ``verifier_norm`` must therefore be constructed from the class
 matching the verifier's convention, or the reconstructed verifier targets
@@ -62,6 +62,8 @@ def _point_at_fake_verifier(
         ("step3p7", "step3p5", True),
         ("gemma3_text", "", True),
         ("gemma2", "", True),
+        ("minimax_m3_vl", "", True),
+        ("minimax_m3_vl", "minimax_m3_vl_text", True),
         ("gemma3n", "", False),  # dropped the (1 + w) convention
         ("gemma4", "gemma4_text", False),  # dropped the (1 + w) convention
         ("qwen3", "", False),
@@ -76,6 +78,8 @@ def _point_at_fake_verifier(
         "step3p5_text_nested",
         "gemma3_text",
         "gemma2",
+        "minimax_m3_vl",
+        "minimax_m3_vl_text_nested",
         "gemma3n_negative",
         "gemma4_negative",
         "qwen3_negative",
