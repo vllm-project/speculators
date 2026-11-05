@@ -217,3 +217,83 @@ def test_step_checkpoint_cadence_uses_optimizer_steps() -> None:
         )
 
     assert saved == [48]
+
+
+@pytest.mark.parametrize("accum", [1, 2, 4])
+@pytest.mark.parametrize("max_steps", [None, 3])
+@pytest.mark.parametrize("profile", [False, True])
+def test_train_epoch_syncs_only_at_optimizer_boundaries(
+    single_process_group, monkeypatch, accum, max_steps, profile
+):
+    """The real training loop synchronizes once per complete accumulation window."""
+
+    class Model(nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.weight = nn.Parameter(torch.tensor(0.25))
+            self.forwards = 0
+
+        def forward(self, x, error_records, document_ids):
+            self.forwards += 1
+            return None, (self.weight * x).square().mean(), {}
+
+    monkeypatch.setattr(torch.accelerator, "synchronize", lambda: None)
+    model = Model()
+    ddp = DistributedDataParallel(model)
+    syncs = []
+
+    def count_sync(state, bucket):
+        syncs.append(1)
+        future: torch.futures.Future[torch.Tensor] = torch.futures.Future()
+        future.set_result(bucket.buffer())
+        return future
+
+    ddp.register_comm_hook(None, count_sync)
+    trainer = Trainer.__new__(Trainer)
+    trainer.model = cast("SpeculatorModel", ddp)
+    trainer.config = TrainerConfig(
+        lr=0.01,
+        num_epochs=1,
+        save_path="unused",
+        gradient_accumulation_steps=accum,
+        log_freq=1 if profile else 999,
+        max_steps=max_steps,
+        hidden_states_dtype=torch.bfloat16,
+    )
+
+    class Loader:
+        batch_sampler = None
+
+        def __len__(self):
+            return 9
+
+        def __iter__(self):
+            for _ in range(9):
+                yield {
+                    "x": torch.ones(2),
+                    "document_ids": torch.zeros(2, dtype=torch.long),
+                    "error_records": 0,
+                }
+
+    trainer.train_loader = cast("DataLoader", Loader())
+    trainer.rank = 1  # Avoid progress display.
+    trainer.local_rank = "cpu"  # type: ignore[assignment]  # Exercise the loop on CPU.
+    trainer.device_type = "cpu"
+    trainer.is_distributed = False
+    trainer.global_step = 1  # Disable profiling throughout this short run.
+    trainer.optimizers = [torch.optim.SGD(model.parameters(), lr=0.01)]
+    trainer.schedulers = []
+    callbacks = []
+    trainer.train_epoch(0, step_callback=lambda: callbacks.append(trainer.global_step))
+    updates = 9 // accum if max_steps is None else min(9 // accum, max_steps - 1)
+    assert model.forwards == updates * accum
+    assert len(syncs) == updates
+    assert trainer.global_step == 1 + updates
+    assert callbacks == list(range(2, 2 + updates))
+
+
+def test_trainer_config_preserves_positional_resume():
+    """Adding accumulation must preserve existing positional resume callers."""
+    config = TrainerConfig(0.01, 1, "unused", True)
+    assert config.resume_from_checkpoint is True
+    assert config.gradient_accumulation_steps == 1

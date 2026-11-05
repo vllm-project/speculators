@@ -4,6 +4,7 @@ import logging
 import time
 import warnings
 from collections.abc import Callable
+from itertools import islice
 from pathlib import Path
 from typing import Literal, NamedTuple
 
@@ -176,7 +177,6 @@ class TrainerConfig(NamedTuple):
     lr: float
     num_epochs: int
     save_path: str
-    gradient_accumulation_steps: int = 1
     resume_from_checkpoint: bool = False
     train_call_kwargs: dict | None = None
     val_call_kwargs: dict | None = None
@@ -201,6 +201,7 @@ class TrainerConfig(NamedTuple):
     fsdp_replicate_frozen: bool = False
     gradient_checkpointing: bool = False
     max_steps: int | None = None
+    gradient_accumulation_steps: int = 1
 
 
 def _optimizer_steps_per_epoch(num_batches: int, accum: int) -> int:
@@ -574,38 +575,6 @@ class Trainer:
             return self.model.no_sync()
         return contextlib.nullcontext()
 
-    def _accumulate_and_step(
-        self,
-        loss: torch.Tensor,
-        accum: int,
-        is_window_start: bool,
-        is_boundary: bool,
-        timer: "_StepTimer",
-    ) -> dict[str, float]:
-        """Run one accumulation micro-step; step the optimizer only at a boundary.
-
-        Gradients are zeroed at the start of each accumulation window and the loss is
-        scaled by ``accum`` so the accumulated gradient equals the mean over the
-        effective (window) batch. On a boundary micro-step the gradient is clipped,
-        the optimizer and schedulers step. LRs are captured before the scheduler step
-        to match the pre-step logging semantics. Returns those LRs by optimizer name.
-        """
-        if is_window_start:
-            self._optimizers_zero_grad()
-        with self._maybe_no_sync(is_boundary):
-            (loss / accum).backward()
-
-        current_lrs = {
-            type(opt).__name__: opt.param_groups[0]["lr"] for opt in self.optimizers
-        }
-        if is_boundary:
-            torch.nn.utils.clip_grad_norm_(self.model.parameters(), 1.0)
-            timer.mark("bwd")
-            self._optimizers_step()
-            self._schedulers_step()
-        timer.mark("opt")
-        return current_lrs
-
     def _maybe_save_step_checkpoint(
         self,
         epoch: int,
@@ -714,11 +683,11 @@ class Trainer:
         timer = _StepTimer()
         recovery = BatchRecoveryCoordinator("training")
         remaining_steps = max(0, last_boundary - skip_steps)
-        for local_step_rel, batch in enumerate(train_loader, 1):
+        for local_step_rel, batch in enumerate(
+            islice(train_loader, remaining_steps), 1
+        ):
             # local_step is 1-based index into the *full* epoch (not the slice).
             local_step = local_step_rel + skip_steps
-            if local_step > last_boundary:
-                break
             is_window_start = (local_step - 1) % accum == 0
             is_boundary = local_step % accum == 0
             timer.reset(is_boundary and self.global_step % self.config.log_freq == 0)
@@ -746,18 +715,34 @@ class Trainer:
                 for k, v in batch.items()
             }
 
-            with torch.autocast(
-                self.device_type, dtype=self.config.hidden_states_dtype
-            ):
-                timer.mark("fetch")
-                _draft_tokens, loss, metrics = self.model(
-                    **gpu_batch, **(self.config.train_call_kwargs or {})
-                )
+            if is_window_start:
+                self._optimizers_zero_grad()
+            # DDP requires both forward and backward inside no_sync.
+            with self._maybe_no_sync(is_boundary):
+                with torch.autocast(
+                    self.device_type, dtype=self.config.hidden_states_dtype
+                ):
+                    timer.mark("fetch")
+                    _draft_tokens, loss, metrics = self.model(
+                        **gpu_batch, **(self.config.train_call_kwargs or {})
+                    )
+                timer.mark("fwd")
+                (loss / accum).backward()
 
-            timer.mark("fwd")
-            current_lrs = self._accumulate_and_step(
-                loss, accum, is_window_start, is_boundary, timer
-            )
+            if not is_boundary:
+                t_before_fetch = time.perf_counter()
+                continue
+
+            timer.mark("pre_clip")
+            torch.nn.utils.clip_grad_norm_(self.model.parameters(), 1.0)
+            timer.mark("bwd")
+            self._optimizers_step()
+            current_lrs = {
+                type(opt).__name__: opt.param_groups[0]["lr"] for opt in self.optimizers
+            }
+            self._schedulers_step()
+            timer.mark("opt")
+
             metrics["error_records_sum"] = torch.full(
                 (), batch["error_records"], dtype=torch.float32, device=loss.device
             )
@@ -794,10 +779,9 @@ class Trainer:
                     },
                     extra={"step": self.global_step},
                 )
-            if is_boundary:
-                self.global_step += 1
-                if step_callback is not None:
-                    step_callback()
+            self.global_step += 1
+            if step_callback is not None:
+                step_callback()
 
             if (
                 self.config.max_steps is not None
