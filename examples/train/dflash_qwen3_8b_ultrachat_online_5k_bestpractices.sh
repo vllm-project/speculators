@@ -49,7 +49,7 @@ LR=3e-4
 # DFlash-specific parameters (best-practices recipe from RFC #979)
 SPECULATOR_TYPE="dflash"
 BLOCK_SIZE=16
-MAX_ANCHORS=3072
+MAX_ANCHORS=512
 NUM_LAYERS=5
 PER_POSITION_LOSS_WEIGHT="dpace"  # requires --loss-fn ce
 LOSS_FN="ce"
