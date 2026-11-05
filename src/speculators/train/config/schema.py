@@ -93,7 +93,7 @@ class DraftArgs(_Group):
     num_layers: int | None = Field(
         default=None,
         description="Number of draft decoder layers to synthesize. "
-        "(default: 5 for dflash/dspark/dflash2, 1 otherwise).",
+        "(default: 5 for dflash/dflash2/dspark/dspine, 1 otherwise).",
     )
     draft_arch: Literal["llama", "qwen3"] | None = Field(
         default=None,
@@ -490,10 +490,12 @@ class DFlashArgs(_Group):
     sample_from_anchor: bool | None = Field(
         default=None,
         description="Sample from the anchor position (all positions predict). "
-        "Default: False for dflash/dflash2, True for dspark.",
+        "Default: False for dflash/dflash2/dspine, True for dspark.",
     )
-    dflash_decay_gamma: float = Field(
-        default=4.0, description="Decay gamma for DFlash-family loss weighting."
+    dflash_decay_gamma: float | None = Field(
+        default=None,
+        description="Decay gamma for DFlash-family loss weighting "
+        "(default: 7 for dspine, 4 otherwise).",
     )
     per_position_loss_weight: Literal["fixed-exp-decay", "dpace"] | None = Field(
         default=None,
@@ -616,6 +618,75 @@ class XPressArgs(_Group):
     )
 
 
+class DSpineArgs(_Group):
+    """DSpine-exclusive injection, refinement, and supervision knobs."""
+
+    known_anchor_injection: bool = Field(
+        default=True,
+        description="DSpine: inject the known anchor token's transfer embedding.",
+    )
+
+    transfer_dim: int = Field(
+        default=1024, ge=1, description="DSpine: transfer-space dimension."
+    )
+    message_dim: int = Field(
+        default=512, ge=1, description="DSpine: gated message dimension."
+    )
+    transition_top_k: int = Field(
+        default=16, ge=1, description="DSpine: transition-cache candidate count."
+    )
+    distribution_loss_alpha: float = Field(
+        default=0.1,
+        ge=0.0,
+        le=1.0,
+        description="DSpine: CE weight in the CE/L1 distribution objective.",
+    )
+    embedding_loss_beta: float = Field(
+        default=0.5,
+        ge=0.0,
+        description="DSpine: maximum embedding-supervision multiplier.",
+    )
+    embedding_loss_warmup_steps: int = Field(
+        default=146,
+        ge=0,
+        description="DSpine: embedding-supervision linear warmup steps.",
+    )
+    curriculum_probability: float = Field(
+        default=0.5,
+        ge=0.0,
+        le=1.0,
+        description="DSpine: initial correct-predecessor substitution probability.",
+    )
+    curriculum_hold_ratio: float = Field(
+        default=1.0 / 6.0,
+        ge=0.0,
+        le=1.0,
+        description="DSpine: fraction of training holding curriculum probability.",
+    )
+    curriculum_end_ratio: float = Field(
+        default=1.0 / 3.0,
+        ge=0.0,
+        le=1.0,
+        description="DSpine: fraction of training where curriculum reaches zero.",
+    )
+    curriculum_layers: int = Field(
+        default=3,
+        ge=0,
+        description="DSpine: number of shallow curriculum layers.",
+    )
+    transition_min_target_mass: float = Field(
+        default=1e-4,
+        ge=0.0,
+        le=1.0,
+        description="DSpine: minimum top-k target mass for refinement L1.",
+    )
+    transfer_space_eps: float = Field(
+        default=1e-6,
+        gt=0.0,
+        description="DSpine: PCA-whitening numerical epsilon.",
+    )
+
+
 class PEagleArgs(_Group):
     num_depths: int = Field(
         default=8,
@@ -655,6 +726,7 @@ _GROUPS: dict[str, type[_Group]] = {
     "dflash": DFlashArgs,
     "dflash2": DFlash2Args,
     "dspark": DSparkArgs,
+    "dspine": DSpineArgs,
     "xpress": XPressArgs,
     "peagle": PEagleArgs,
     "mtp": MTPArgs,
@@ -668,7 +740,7 @@ _DEFAULT_LOSS_FN: dict[str, str] = {
     "dflash": "ce",
     "xpress": '{"ce": 0.1, "tv": 0.9}',
 }
-_DEFAULT_BLOCK_SIZE: dict[str, int] = {"dflash": 16, "xpress": 16}
+_DEFAULT_BLOCK_SIZE: dict[str, int] = {"dflash": 16, "dspine": 16, "xpress": 16}
 
 # Default block size of torch flex attention block masks. Kept here rather than
 # imported, so this module does not import torch.
@@ -753,7 +825,7 @@ class TrainConfig(BaseSettings):
     speculator_type: str = Field(
         default="eagle3",
         description="Type of speculator model to train "
-        "(eagle3, dflash, dflash2, dspark, xpress, peagle, mtp).",
+        "(eagle3, dflash, dflash2, dspark, dspine, xpress, peagle, mtp).",
     )
     dry_run: bool = Field(
         default=False,
@@ -780,21 +852,22 @@ class TrainConfig(BaseSettings):
     dflash: DFlashArgs = Field(default_factory=DFlashArgs)
     dflash2: DFlash2Args = Field(default_factory=DFlash2Args)
     dspark: DSparkArgs = Field(default_factory=DSparkArgs)
+    dspine: DSpineArgs = Field(default_factory=DSpineArgs)
     xpress: XPressArgs = Field(default_factory=XPressArgs)
     peagle: PEagleArgs = Field(default_factory=PEagleArgs)
     mtp: MTPArgs = Field(default_factory=MTPArgs)
 
     @model_validator(mode="after")
-    def _resolve_derived_defaults(self) -> "TrainConfig":
+    def _resolve_derived_defaults(self) -> "TrainConfig":  # noqa: C901
         """Fill defaults that derive from other fields, mirroring the tail of the
         pre-refactor ``parse_args``: unset ``draft_arch`` -> ``llama`` for eagle3 else
         ``qwen3``; unset ``norm_before_fc`` / ``norm_output`` -> ``True`` for eagle3
         else ``False``; unset ``muon_lr`` -> ``lr``; unset ``num_layers`` -> ``5``
-        for dflash/dspark/dflash2/xpress else ``1``; unset
+        for dflash/dspark/dflash2/dspine/xpress else ``1``; unset
         ``per_position_loss_weight`` -> ``dpace`` for dflash else
         ``fixed-exp-decay``; unset ``loss_fn`` -> ``ce`` for dflash,
         ``{"ce": 0.1, "tv": 0.9}`` for xpress, else ``kl_div``; unset
-        ``block_size`` -> ``16`` for dflash and xpress else ``8``.
+        ``block_size`` -> ``16`` for dflash, dspine, and xpress else ``8``.
 
         The dflash-conditional defaults reflect the recipe from
         https://github.com/vllm-project/speculators/issues/979: this combination
@@ -817,11 +890,13 @@ class TrainConfig(BaseSettings):
         """
         is_eagle3 = self.speculator_type == "eagle3"
         is_dflash = self.speculator_type == "dflash"
+        is_dspine = self.speculator_type == "dspine"
         is_dflash_family = self.speculator_type in {
             "dflash",
             "dspark",
             "dflash2",
             "xpress",
+            "dspine",
         }
         if self.draft.draft_arch is None:
             self.draft.draft_arch = "llama" if is_eagle3 else "qwen3"
@@ -843,6 +918,10 @@ class TrainConfig(BaseSettings):
             self.loss.loss_fn = _DEFAULT_LOSS_FN.get(self.speculator_type, "kl_div")
         if self.dflash.block_size is None:
             self.dflash.block_size = _DEFAULT_BLOCK_SIZE.get(self.speculator_type, 8)
+        if self.dflash.sample_from_anchor is None:
+            self.dflash.sample_from_anchor = self.speculator_type == "dspark"
+        if self.dflash.dflash_decay_gamma is None:
+            self.dflash.dflash_decay_gamma = 7.0 if is_dspine else 4.0
         return self
 
     @model_validator(mode="after")
