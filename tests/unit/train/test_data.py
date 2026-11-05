@@ -9,8 +9,11 @@ from typing import cast
 import pytest
 import torch
 from datasets import Dataset
+from hs_connectors.fp8_utils import SCALES_KEY, quantize_tensor_to_fp8
+from safetensors.torch import save_file
 
 import speculators.train.hidden_states_source as source_module
+from hs_connectors import FileTransfer, FP8Transfer
 from speculators.models.eagle3.data import shift_batch
 from speculators.train.data import (
     ArrowDataset,
@@ -662,3 +665,59 @@ def test_getitems_keeps_valid_samples_when_one_generation_fails(tmp_path):
     client = source.client
     assert isinstance(client, _QueuedAsyncOpenAI)
     assert client.requests == [[1, 2, 3], [1, 2, 3]]
+
+
+def _fp8_test_hidden_states() -> torch.Tensor:
+    """[seq_len 3, 2 layers, hidden 4], a different magnitude per token, so a
+    single global scale would not dequantize it correctly."""
+    per_token = torch.tensor([10.0, 40.0, 160.0]).view(3, 1, 1)
+    return (per_token * torch.ones(3, 2, 4)).to(torch.bfloat16)
+
+
+def _fp8_connector_dataset(tmp_path: Path, transfer_cls) -> SpeculatorsDataset:
+    """An offline dataset over one file saved the way the FP8 connector saves it."""
+    Dataset.from_dict(
+        {"input_ids": [[1, 2, 3]], "loss_mask": [[1, 1, 1]], "seq_len": [3]}
+    ).save_to_disk(str(tmp_path / "data"))
+    hidden_states_dir = tmp_path / "data" / "hidden_states"
+    hidden_states_dir.mkdir()
+    fp8_hidden_states, scales = quantize_tensor_to_fp8(_fp8_test_hidden_states())
+    save_file(
+        {
+            "token_ids": torch.tensor([1, 2, 3]),
+            "hidden_states": fp8_hidden_states,
+            SCALES_KEY: scales,
+        },
+        hidden_states_dir / "hs_0.safetensors",
+    )
+    records = ArrowDataset(datapath=str(tmp_path / "data"))
+    records.data.set_format(type="torch")
+    return SpeculatorsDataset(
+        records=records,
+        max_len=8,
+        hidden_states=source_module.OfflineHiddenStatesSource(
+            transfer=transfer_cls(hidden_states_dir), on_missing="raise"
+        ),
+        hidden_size=4,
+        num_target_layers=1,
+    )
+
+
+def test_fp8_connector_file_without_fp8_backend_raises(tmp_path):
+    # The default file backend does not apply the scales, so the batch would
+    # hold the unscaled float8 values.
+    dataset = _fp8_connector_dataset(tmp_path, FileTransfer)
+
+    with pytest.raises(ValueError, match="--hidden-states-backend fp8"):
+        dataset.__getitems__([0])
+
+
+def test_fp8_connector_file_with_fp8_backend_is_dequantized(tmp_path):
+    dataset = _fp8_connector_dataset(tmp_path, FP8Transfer)
+
+    batch = dataset.__getitems__([0])
+
+    torch.testing.assert_close(
+        batch["verifier_last_hidden_states"][0, :3],
+        _fp8_test_hidden_states()[:, -1],
+    )
