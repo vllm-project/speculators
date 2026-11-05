@@ -270,39 +270,6 @@ class DSpineDraftModel(DFlashDraftModel):
             final_pre_injection,
         )
 
-    def build_transition_cache(
-        self,
-        final_pre_injection: torch.Tensor,
-        candidate_ids: torch.Tensor,
-    ) -> torch.Tensor:
-        """Precompute all adjacent top-k transition scores in parallel.
-
-        Returns ``[num_blocks, block_size-1, K, K]`` where the last two axes
-        index predecessor and successor candidates respectively.
-        """
-        num_blocks = candidate_ids.shape[0]
-        top_k = candidate_ids.shape[-1]
-        blocks = final_pre_injection.reshape(
-            num_blocks, self.block_size, self.hidden_size
-        )
-        receiver_states = blocks[:, 1:, None, :].expand(-1, -1, top_k, -1)
-        receiver_features = self.injection.project(
-            len(self.layers) - 1, receiver_states
-        )
-        predecessor_features = self.injection.token_features(
-            self.transfer_embeddings, candidate_ids[:, :-1]
-        )
-        refined = self.injection._write(  # noqa: SLF001
-            len(self.layers) - 1,
-            receiver_states,
-            receiver_features,
-            predecessor_features,
-        )
-        normalized = self.norm(refined)
-        successor_ids = candidate_ids[:, 1:]
-        successor_weights = self.lm_head.weight[successor_ids.long()]
-        return torch.einsum("btkh,btsh->btks", normalized, successor_weights)
-
     def _compute_candidate_logits(
         self, hidden_states: torch.Tensor, candidate_ids: torch.Tensor
     ) -> torch.Tensor:

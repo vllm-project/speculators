@@ -248,41 +248,6 @@ def test_model_rejects_sampling_from_anchor():
         DSpineDraftModel(_tiny_config(sample_from_anchor=True))
 
 
-def test_transition_cache_matches_serial_last_write():
-    torch.manual_seed(3)
-    model = DSpineDraftModel(_tiny_config())
-    model.transfer_embeddings.copy_(
-        torch.nn.functional.normalize(
-            torch.randn_like(model.transfer_embeddings), dim=-1
-        )
-    )
-    with torch.no_grad():
-        model.lm_head.weight.normal_(std=0.1)
-        model.injection.writes[-1].weight.normal_(std=0.1)
-    pre_injection = torch.randn(1, 8, 8)
-    candidate_ids = torch.randint(0, 16, (2, 4, 2))
-
-    cache = model.build_transition_cache(pre_injection, candidate_ids)
-
-    expected = torch.empty_like(cache)
-    blocks = pre_injection.view(2, 4, 8)
-    for block in range(2):
-        for position in range(1, 4):
-            for predecessor_rank in range(2):
-                predecessor_id = candidate_ids[block, position - 1, predecessor_rank]
-                predecessor = model.injection.token_features(
-                    model.transfer_embeddings, predecessor_id.view(1, 1)
-                )
-                repeated_block = blocks[block : block + 1]
-                refined = model.injection.last_write(repeated_block, predecessor)
-                logits = model.lm_head(model.norm(refined[:, position - 1]))
-                expected[block, position - 1, predecessor_rank] = logits[0].gather(
-                    0, candidate_ids[block, position]
-                )
-
-    torch.testing.assert_close(cache, expected, atol=1e-5, rtol=1e-5)
-
-
 def test_candidate_logits_preserve_bfloat16_autocast():
     torch.manual_seed(25)
     model = DSpineDraftModel(_tiny_config()).float()
