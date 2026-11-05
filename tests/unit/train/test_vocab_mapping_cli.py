@@ -75,19 +75,71 @@ def test_parse_vocab_mappings_uses_size_keyed_default_files(tmp_path: Path):
     assert draft_vocab_size == DRAFT_VOCAB_SIZE
 
 
-def test_parse_vocab_mappings_ignores_legacy_default_files(
+def test_parse_vocab_mappings_ignores_legacy_default_files(tmp_path: Path):
+    # Unsized d2t.npy/t2d.npy are not loaded, so with no token frequencies there
+    # is nothing to build the requested mapping from.
+    _write_mappings(tmp_path, "", DRAFT_VOCAB_SIZE)
+
+    with pytest.raises(ValueError, match=r"--draft-vocab-size 32000 needs"):
+        train_cli.parse_vocab_mappings(_args(tmp_path, DRAFT_VOCAB_SIZE))
+
+
+def test_parse_vocab_mappings_refuses_requested_size_without_token_freq(
+    tmp_path: Path,
+):
+    # prepare-data skips token_freq.pt by default; training must not then fall
+    # back to the full verifier vocab while --draft-vocab-size says otherwise.
+    with pytest.raises(ValueError, match=r"--no-skip-token-freq"):
+        train_cli.parse_vocab_mappings(_args(tmp_path, DRAFT_VOCAB_SIZE))
+
+    assert not (tmp_path / f"d2t-{DRAFT_VOCAB_SIZE}.npy").exists()
+
+
+def test_parse_vocab_mappings_rank_zero_broadcasts_error_before_raising(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ):
-    _write_mappings(tmp_path, "", DRAFT_VOCAB_SIZE)
+    # Raising before the broadcast would leave the other ranks waiting in it.
+    monkeypatch.setattr(train_cli, "get_rank", lambda: 0)
+    monkeypatch.setattr(train_cli, "is_distributed", lambda: True)
+    broadcast = Mock()
+    monkeypatch.setattr(train_cli.dist, "broadcast_object_list", broadcast)
+
+    with pytest.raises(ValueError, match=r"--no-skip-token-freq"):
+        train_cli.parse_vocab_mappings(_args(tmp_path, DRAFT_VOCAB_SIZE))
+
+    broadcast.assert_called_once()
+    result, error = broadcast.call_args.args[0]
+    assert result is None
+    assert "--no-skip-token-freq" in error
+
+
+def test_parse_vocab_mappings_nonzero_rank_raises_broadcast_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    monkeypatch.setattr(train_cli, "get_rank", lambda: 1)
+    monkeypatch.setattr(train_cli, "is_distributed", lambda: True)
+
+    def broadcast(payload, src):
+        payload[:] = [None, "error from rank 0"]
+
+    monkeypatch.setattr(
+        train_cli.dist, "broadcast_object_list", Mock(side_effect=broadcast)
+    )
+
+    with pytest.raises(ValueError, match=r"error from rank 0"):
+        train_cli.parse_vocab_mappings(_args(tmp_path, DRAFT_VOCAB_SIZE))
+
+
+def test_parse_vocab_mappings_uses_full_vocab_without_draft_vocab_size(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
     monkeypatch.setattr(
         train_cli.AutoConfig,
         "from_pretrained",
         lambda *_args, **_kwargs: SimpleNamespace(vocab_size=151936),
     )
 
-    d2t, t2d, draft_vocab_size = train_cli.parse_vocab_mappings(
-        _args(tmp_path, DRAFT_VOCAB_SIZE)
-    )
+    d2t, t2d, draft_vocab_size = train_cli.parse_vocab_mappings(_args(tmp_path, None))
 
     assert d2t is None
     assert t2d is None

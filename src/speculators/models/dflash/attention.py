@@ -9,8 +9,8 @@ def create_anchor_block_mask_mod(
     total_seq_len: int,
     anchor_positions: torch.Tensor,
     block_size: int,
+    is_causal: bool,
     sliding_window: int | None = None,
-    sliding_window_non_causal: bool = False,
 ):
     """
     Build a flex-attention mask mod where each query block corresponds to one anchor.
@@ -25,7 +25,8 @@ def create_anchor_block_mask_mod(
     For queries in block j:
         - may attend to base tokens in the same document with
           position < anchor_positions[j]
-        - may attend to all tokens in their own synthetic block j
+        - may attend to tokens in their own synthetic block j, subject to
+          causal and sliding-window constraints
         - may not attend to other synthetic blocks or later base tokens
 
     Args:
@@ -33,15 +34,12 @@ def create_anchor_block_mask_mod(
         total_seq_len: padded packed sequence width
         anchor_positions: [n_anchors] absolute positions into the packed base sequence
         block_size: number of query tokens per anchor block
+        is_causal: Whether queries may attend only to current and prior positions
         sliding_window: integer size of sliding window or None for full attn
-        sliding_window_non_causal: Use non causal mask for sliding window attn
 
     Returns:
         mask_mod, q_len, kv_len
     """
-    # Always use non_causal for full attn
-    non_causal = sliding_window is None or sliding_window_non_causal
-
     device = document_ids.device
     anchor_positions = anchor_positions.to(device=device, dtype=torch.long).contiguous()
 
@@ -74,8 +72,10 @@ def create_anchor_block_mask_mod(
         same_doc = (q_doc == kv_doc) & (q_doc != -1)
         before_anchor = kv_base_pos < q_anchor
 
+        # The window is relative to each query and includes the current token.
+        query_position = q_anchor + q_idx % block_size
         in_window = (
-            (kv_base_pos >= q_anchor - sliding_window)
+            (kv_base_pos > query_position - sliding_window)
             if sliding_window is not None
             else True
         )
@@ -84,16 +84,14 @@ def create_anchor_block_mask_mod(
 
     def same_block_mod(_b, _h, q_idx, kv_idx):
         """
-        Queries may attend to tokens in their own synthetic block.
-        Non-causal unless non_causal=False,
-        in which case only prior positions are attended.
+        Queries may attend within their own block, subject to causality and window.
         """
         q_block = q_idx // block_size
         kv_is_block = kv_idx >= total_seq_len
         kv_block = (kv_idx - total_seq_len) // block_size
 
         same = kv_is_block & (q_block == kv_block)
-        if not non_causal:
+        if is_causal:
             same = same & (kv_idx <= q_idx + total_seq_len)
         return same
 

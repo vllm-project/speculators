@@ -25,6 +25,27 @@ def test_constructs_from_defaults():
     TrainConfig()
 
 
+@pytest.mark.parametrize("window", [0, -1])
+def test_sliding_window_must_be_positive(window):
+    with pytest.raises(ValueError, match="sliding_window"):
+        DraftArgs(sliding_window=window)
+
+
+@pytest.mark.parametrize(
+    ("flag", "expected"),
+    [("--causal-attention", True), ("--no-causal-attention", False)],
+)
+def test_dflash_causality_flag_round_trips(flag, expected):
+    config = TrainConfig.resolve(
+        ["--verifier-name-or-path", "target", "--speculator-type", "dflash", flag]
+    )
+    assert config.flatten()["causal_attention"] is expected
+    assert (
+        TrainConfig.from_flat(config.flatten()).flatten()["causal_attention"]
+        is expected
+    )
+
+
 def test_flatten_covers_exactly_the_schema_fields():
     # flatten() emits every schema dest and nothing else; consumers bind the flat
     # dict by name (**kwargs / args.<field>), so the key set is the contract.

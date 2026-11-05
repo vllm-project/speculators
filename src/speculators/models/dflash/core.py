@@ -117,7 +117,6 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
         ]
         self.uses_sliding_window_attn = bool(self.sliding_window_indices)
         self.uses_full_attn = bool(num_draft_layers - len(self.sliding_window_indices))
-        self.sliding_window_non_causal = config.sliding_window_non_causal
 
         self.norm = Qwen3RMSNorm(
             config.transformer_layer_config.hidden_size,
@@ -255,6 +254,8 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
         verifier_config._attn_implementation = kwargs.get(  # noqa: SLF001
             "draft_attn_impl", "simple_flex_attention"
         )
+        if kwargs.get("causal_attention") is not None:
+            verifier_config.is_causal = kwargs["causal_attention"]
         block_size = kwargs.get("block_size", 8)
 
         default_sample_from_anchor = algorithm == "dspark"
@@ -341,15 +342,20 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
         anchor_positions: torch.Tensor,
         device: torch.device,
         sliding_window: int | None = None,
-        sliding_window_non_causal: bool = False,
     ):
+        """Honor explicit causality, preserving legacy per-layer defaults otherwise."""
+        is_causal = getattr(self.config.transformer_layer_config, "is_causal", None)
+        if is_causal is None:
+            is_causal = (
+                sliding_window is not None and not self.config.sliding_window_non_causal
+            )
         mask_mod, q_len, kv_len = create_anchor_block_mask_mod(
             document_ids=document_ids.squeeze(0).to(device),
             total_seq_len=total_seq_len,
             anchor_positions=anchor_positions,
             block_size=self.block_size,
+            is_causal=is_causal,
             sliding_window=sliding_window,
-            sliding_window_non_causal=sliding_window_non_causal,
         )
         return self._create_mask_fn(
             mask_mod,
@@ -386,7 +392,6 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
                 anchor_positions=anchor_positions,
                 device=device,
                 sliding_window=self.sliding_window,
-                sliding_window_non_causal=self.sliding_window_non_causal,
             )
 
         return full_attn_mask, sliding_window_attn_mask, anchor_positions, anchor_valid
