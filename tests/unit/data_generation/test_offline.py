@@ -24,6 +24,31 @@ def test_check_hidden_states_reports_non_finite_values():
         )
 
 
+@pytest.mark.parametrize("dtype", [torch.float8_e4m3fn, torch.float8_e5m2])
+def test_check_hidden_states_accepts_float8(dtype):
+    hidden_states = torch.randn(3, 4, 2).to(dtype)
+
+    check_hidden_states(
+        {"token_ids": torch.tensor([1, 2, 3]), "hidden_states": hidden_states},
+        [1, 2, 3],
+    )
+
+
+@pytest.mark.parametrize("dtype", [torch.float8_e4m3fn, torch.float8_e5m2])
+def test_check_hidden_states_reports_non_finite_float8_values(dtype):
+    hidden_states = torch.zeros(3, 4, 2, dtype=torch.float32)
+    hidden_states[1, 2, 0] = torch.nan
+
+    with pytest.raises(ValueError, match=r"min=nan, max=nan"):
+        check_hidden_states(
+            {
+                "token_ids": torch.tensor([1, 2, 3]),
+                "hidden_states": hidden_states.to(dtype),
+            },
+            [1, 2, 3],
+        )
+
+
 # ===== get_indices_to_process Tests =====
 
 

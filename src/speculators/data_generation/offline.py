@@ -26,6 +26,9 @@ def check_hidden_states(data: dict, tokens: list[int]):
             f" doesn't match num tokens {len(tokens)}"
         )
 
+    if hs.dtype in (torch.float8_e4m3fn, torch.float8_e5m2):
+        # aminmax has no float8 kernel, and the FP8 connector saves float8 files
+        hs = hs.float()
     lo, hi = torch.aminmax(hs)
     if bool(torch.isfinite(torch.stack((lo, hi))).all()):
         return
