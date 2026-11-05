@@ -486,6 +486,47 @@ def test_selector_loss_alpha_zero_preserves_unary_objective():
     )
 
 
+def test_candidate_target_mass_matches_dense_reference():
+    """Chunk boundaries and a partial final chunk preserve FP32 target mass."""
+    num_rows = 2052
+    generator = torch.Generator().manual_seed(7)
+    targets = torch.randn(1, num_rows, 17, generator=generator, dtype=torch.bfloat16)
+    unary_logits = torch.randn(targets.shape, generator=generator, dtype=torch.bfloat16)
+    candidate_ids, target_positions, contains_target = selector_training_candidates(
+        unary_logits.topk(2, dim=-1).indices, targets.argmax(dim=-1)
+    )
+    loss_mask = torch.ones(1, num_rows)
+    loss_mask[:, ::3] = 0
+    _, metrics = compute_dflash2_metrics(
+        unary_logits=unary_logits,
+        targets=targets,
+        training_candidate_ids=candidate_ids,
+        candidate_logits=unary_logits.gather(-1, candidate_ids),
+        target_positions=target_positions,
+        contains_target=contains_target,
+        loss_mask=loss_mask,
+        block_size=4,
+        top_k=2,
+        loss_config=resolve_loss_config("ce", "eager"),
+        tv_loss_fn=resolve_loss_config("tv", "eager")["tv"][0],
+    )
+    expected_mass = torch.exp(
+        torch.logsumexp(targets.gather(-1, candidate_ids).float(), dim=-1)
+        - torch.logsumexp(targets.float(), dim=-1)
+    )
+    actual = metrics["unary_candidate_target_mass_at_2_sum"]
+    assert actual.dtype == torch.float32
+    assert actual.device == targets.device
+    assert not actual.requires_grad
+    torch.testing.assert_close(
+        actual, (expected_mass * loss_mask).sum(), rtol=0, atol=0
+    )
+    torch.testing.assert_close(
+        metrics["unary_candidate_target_mass_at_2_total"],
+        loss_mask.to(unary_logits.dtype).sum(),
+    )
+
+
 def test_selector_loss_reaches_every_selector_parameter():
     (
         selector,

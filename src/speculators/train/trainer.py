@@ -151,6 +151,11 @@ _RECOVERY_SYNC_INTERVAL = 50
 # Bound rank skew before the validation metrics reduction.
 _VAL_SYNC_INTERVAL = 50
 
+# Training state is fp32 whatever the frozen weights are stored in. The default
+# is `model.dtype`, which just takes the first floating parameter it finds, so
+# precasting a frozen head could silently make the whole load bf16.
+_CHECKPOINT_FLOAT_DTYPE = torch.float32
+
 
 def _should_sync_recovery(
     step: int,
@@ -351,9 +356,42 @@ class Trainer:
                     f"Restored best_val_loss={self.best_val_loss:.6f} from checkpoint"
                 )
 
+    def _precast_frozen_linear_weights(self):
+        """Store frozen linear weights in the autocast dtype.
+
+        Trainable weights keep their fp32 master copy.
+        """
+        if self.is_distributed and self.config.fsdp_shard:
+            # FSDP2 all-gathers in the autocast dtype, and one parameter
+            # group must share a single original dtype.
+            return
+
+        dtype = self.config.hidden_states_dtype
+        converted = 0
+        for module in self.model.modules():
+            if not isinstance(module, torch.nn.Linear):
+                continue
+            for name in ("weight", "bias"):
+                param = getattr(module, name, None)
+                if (
+                    param is None
+                    or param.requires_grad
+                    or not param.is_floating_point()
+                    or param.dtype == dtype
+                ):
+                    continue
+                param.data = param.data.to(dtype)
+                converted += param.numel()
+        if converted:
+            root_logger.info(f"Cast {converted:,} frozen linear parameters to {dtype}")
+
     def setup_model(self):
         # Verify model is compatible with training infrastructure
         SpeculatorModel.verify_training_compatible(self.model)
+
+        # Must run before wrapping or checkpoint load; both read the dtype
+        # the parameters already have.
+        self._precast_frozen_linear_weights()
 
         # Enable gradient checkpointing BEFORE FSDP/DDP wrapping to save
         # activation memory at the cost of recomputation during backward.
@@ -376,7 +414,9 @@ class Trainer:
         if not self.is_distributed:
             self.model.to(self.local_rank)  # type: ignore[arg-type]
             if load_checkpoint:
-                self.checkpointer.load_model_state_dict(self.model)
+                self.checkpointer.load_model_state_dict(
+                    self.model, float_dtype=_CHECKPOINT_FLOAT_DTYPE
+                )
             return
 
         if self.config.fsdp_shard:
@@ -398,7 +438,9 @@ class Trainer:
         )
 
         if load_checkpoint:
-            self.checkpointer.load_model_state_dict(self.model)
+            self.checkpointer.load_model_state_dict(
+                self.model, float_dtype=_CHECKPOINT_FLOAT_DTYPE
+            )
         else:
             # Broadcast full state dict from rank 0 to all ranks
             set_model_state_dict(
@@ -418,7 +460,9 @@ class Trainer:
 
         if load_checkpoint:
             if dist.get_rank() == 0:
-                self.checkpointer.load_model_state_dict(self.model)
+                self.checkpointer.load_model_state_dict(
+                    self.model, float_dtype=_CHECKPOINT_FLOAT_DTYPE
+                )
         else:
             # Fresh init: broadcast rank 0's random initialization to all ranks
             for param in self.model.parameters():
@@ -434,7 +478,9 @@ class Trainer:
         self.optimizers = build_optimizers(self.model, self.config)
         last_epoch = -1
         if self.resume_from_checkpoint and self.checkpointer.previous_epoch != -1:
-            self.checkpointer.load_optimizer_state_dict(self.model, self.optimizers)
+            self.checkpointer.load_optimizer_state_dict(
+                self.model, self.optimizers, float_dtype=_CHECKPOINT_FLOAT_DTYPE
+            )
             last_epoch = self.checkpointer.previous_epoch
 
         # Setup scheduler(s) — one per optimizer so each optimizer's base LR (e.g.
