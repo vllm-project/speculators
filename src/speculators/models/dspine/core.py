@@ -266,7 +266,7 @@ class DSpineDraftModel(DFlashDraftModel):
             unary_logits,
             targets,
             aligned_loss_mask,
-            anchored_block_indices,
+            block_tokens,
             layer_features,
             final_pre_injection,
         )
@@ -297,7 +297,7 @@ class DSpineDraftModel(DFlashDraftModel):
             unary_logits,
             targets,
             aligned_loss_mask,
-            anchored_block_indices,
+            block_tokens,
             layer_features,
             final_pre_injection,
         ) = self._dspine_backbone_forward(
@@ -314,9 +314,6 @@ class DSpineDraftModel(DFlashDraftModel):
         )
 
         candidate_ids = unary_logits.topk(self.config.transition_top_k, dim=-1).indices
-        block_tokens = input_ids[0, anchored_block_indices].view(
-            max_anchors, self.block_size
-        )
 
         correct_predecessor_features = self.injection.token_features(
             self.transfer_embeddings, block_tokens[:, :-1]
@@ -340,7 +337,7 @@ class DSpineDraftModel(DFlashDraftModel):
             max_anchors, self.block_size, self.config.transition_top_k
         )[:, 1:] = refined_logits
 
-        target_ids = input_ids[:, anchored_block_indices]
+        target_ids = block_tokens.reshape(1, -1)
         target_features = self.injection.token_features(
             self.transfer_embeddings, target_ids
         )
