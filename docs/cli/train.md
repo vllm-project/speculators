@@ -46,7 +46,7 @@ torchrun --standalone --nproc_per_node=4 -m speculators.train \
 
 - **`--trust-remote-code`** (flag) Allow executing code from HF Hub when loading the verifier's tokenizer.
 
-- **`--speculator-type`** (str, default: `"eagle3"`) Type of speculator model to train. Options: `eagle3`, `dflash`, `dflash2`, `dspark`, `peagle`, `mtp`
+- **`--speculator-type`** (str, default: `"eagle3"`) Type of speculator model to train. Options: `eagle3`, `dflash`, `dflash2`, `dspark`, `peagle`, `mtp`. `peagle` is deprecated and scheduled for removal in Speculators 0.11.
 
 - **`--from-pretrained`** (str, default: `""`) Path or HF id of an existing draft checkpoint to load weights from and train — either a previously trained draft or the initialized-but-untrained checkpoint produced by `--dry-run`. May also point to a local directory containing only a `config.json`, in which case a fresh draft is initialized from that full speculator config. Takes precedence over all other model-definition options: it is mutually exclusive with `--draft-config` and the decoder-shaping flags (`--num-layers`, `--draft-arch`, `--draft-hidden-act`, `--sliding-window`, `--full-attention-indices`).
 
@@ -64,17 +64,14 @@ torchrun --standalone --nproc_per_node=4 -m speculators.train \
 
 - **`--data-path`** (str, default: `"./data"`) Path to the processed training data directory.
 
-- **`--on-missing`** (choice: `generate`|`skip`|`warn`|`raise`, default: `generate`) Behavior when cached hidden states are missing:
+- **`--on-missing`** (choice: `generate`|`skip`|`warn`|`raise`, default: `generate`) Behavior when cached hidden states are missing. Online training uses `generate`:
 
   - `generate`: Generate hidden states on-demand using vLLM endpoint
   - `skip`: Skip the sample silently, pads to fill batch.
   - `warn`: Skip the sample with a warning, pads to fill batch.
   - `raise`: Raise an error
 
-- **`--on-generate`** (choice: `cache`|`delete`, default: `"delete"`) Behavior after generating new hidden states (only applies if `--on-missing=generate`):
-
-  - `delete`: Delete hidden states after loading (pure online training)
-  - `cache`: Store hidden states for reuse in future epochs (hybrid training)
+- **`--on-generate`** (choice: `delete`, default: `"delete"`) Deprecated compatibility option with no effect. Generated hidden states are always discarded once loaded. Remove it from existing commands and configuration files.
 
 - **`--hidden-states-path`** (str, default: `{data-path}/hidden_states`) Path where cached hidden states files are stored (or will be stored if generating).
 
@@ -88,7 +85,7 @@ torchrun --standalone --nproc_per_node=4 -m speculators.train \
 
 ### Vocabulary Mapping Arguments
 
-- **`--draft-vocab-size`** (int, default: `None`) Vocabulary size for the draft model. If not specified and no vocab mapping files are provided, uses full verifier vocabulary.
+- **`--draft-vocab-size`** (int, default: `None`) Vocabulary size for the draft model. If not specified and no vocab mapping files are provided, uses full verifier vocabulary. If specified, the mapping is loaded from `{data-path}/d2t-{size}.npy`/`t2d-{size}.npy` or built from `--token-freq-path`; training stops with an error if neither exists, so run `prepare-data` with `--no-skip-token-freq`.
 
 - **`--token-freq-path`** (str, default: `{data-path}/token_freq.pt`) Path to token frequency distribution file. This is used to determine which tokens to include in the reduced draft vocab.
 
@@ -98,7 +95,7 @@ torchrun --standalone --nproc_per_node=4 -m speculators.train \
 
 - **`--mask-token-id`** (int, default: auto-detect) Token ID to use as mask token (for DFlash). Auto-detected if not provided.
 
-- **`--target-layer-ids`** (int list, default: auto-select) Space-separated list of layer IDs for the auxiliary hidden states. Default: `[2, num_layers//2, num_layers-3]` **If custom layers were specified when launching vLLM, pass the same ids here, excluding the final layer `launch_vllm.py` appends** — that one reaches training separately as the verifier's last hidden states.
+- **`--target-layer-ids`** (int list, default: auto-select) Space-separated list of layer IDs for the auxiliary hidden states. Default: `[2, num_layers//2, num_layers-3]` **If custom layers were specified when launching vLLM, pass the same ids here.**
 
 ### Distributed Training Arguments
 
@@ -137,6 +134,8 @@ torchrun --standalone --nproc_per_node=4 -m speculators.train \
 ### Optimizer Arguments
 
 - **`--optimizer`** (str, default: `"muon"`) Optimizer to use. Options: `adamw`, `muon`. The `muon` option applies the Muon optimizer to 2D weight matrices and AdamW to the remaining parameters (norms, biases, embeddings, lm_head).
+
+- **`--optimizer-implementation`** (str, default: `"fused"`) AdamW implementation to use. Options: `fused`, `eager`. The `fused` option runs the update in a single kernel; `eager` falls back to PyTorch's default (foreach) path for accelerators or dtypes where the fused kernel is unsupported.
 
 - **`--weight-decay`** (float, default: `0.01`) Weight decay for the AdamW optimizer (and the AdamW group in muon mode).
 
@@ -180,6 +179,8 @@ torchrun --standalone --nproc_per_node=4 -m speculators.train \
 
 ### DFlash-Specific Arguments
 
+- **`--causal-attention` / `--no-causal-attention`** (bool, default: unset) Override causality for every draft layer when building a fresh DFlash-family model. The choice is saved as `transformer_layer_config.is_causal`, which vLLM reads before its legacy causality settings. Without an explicit setting in the decoder config or this flag, full-attention layers remain bidirectional and sliding-window layers follow `--sliding-window-non-causal`. Loading with `--from-pretrained` retains the checkpoint's attention configuration.
+
 - **`--block-size`** (int, default: `16` for dflash, `8` otherwise) Block size for DFlash-family models.
 
 - **`--sample-from-anchor`** / **`--no-sample-from-anchor`** (bool, default: algorithm-specific) Whether to sample from the anchor position. `True`: sample from anchor and all mask positions (default for dspark, produces block_size tokens). `False`: anchor is bonus token (default for dflash/dflash2, produces block_size-1 tokens).
@@ -205,6 +206,8 @@ DFlash2 builds on DFlash, so all DFlash-specific arguments apply as well. It def
 - **`--selector-top-k`** (int, default: `16`) Number of candidates retained per position.
 
 - **`--selector-loss-alpha`** (float, default: `1.0`) Weight of the candidate-selector K-way cross-entropy term.
+
+- **`--selector-miss-policy`** (str, default: `"replace"`) DFlash2 selector target-miss policy. `replace` inserts the gold token into the training candidates when it's missing from the unary top-K; `strict` leaves top-K unchanged and excludes that position from the selector cross-entropy. The unary loss remains active either way. Options: `replace`, `strict`.
 
 ### DSpark-Specific Arguments
 
@@ -235,8 +238,6 @@ All speculator types (except `mtp`) use sliding window attention on all draft la
 - **`--num-workers`** (int, default: `12`) Number of dataloader worker processes.
 
 - **`--prefetch-factor`** (int, default: `4`) Number of batches to prefetch per worker.
-
-- **`--noise-std`** (float, default: `0.05`) Standard deviation for noise augmentation on hidden states.
 
 ### Checkpoint Arguments
 
@@ -272,7 +273,6 @@ speculators train \
   --data-path ./training_data \
   --vllm-endpoint http://localhost:8000/v1 \
   --on-missing generate \
-  --on-generate delete \
   --save-path ./checkpoints \
   --draft-vocab-size 32000 \
   --epochs 10 \
@@ -288,22 +288,6 @@ speculators train \
   --data-path ./training_data \
   --hidden-states-path ./hidden_states \
   --on-missing raise \
-  --save-path ./checkpoints \
-  --draft-vocab-size 32000 \
-  --epochs 10 \
-  --lr 3e-5
-```
-
-### Hybrid Training (Cache on First Epoch)
-
-```bash
-speculators train \
-  --verifier-name-or-path meta-llama/Llama-3.1-8B-Instruct \
-  --data-path ./training_data \
-  --hidden-states-path ./hidden_states \
-  --vllm-endpoint http://localhost:8000/v1 \
-  --on-missing generate \
-  --on-generate cache \
   --save-path ./checkpoints \
   --draft-vocab-size 32000 \
   --epochs 10 \

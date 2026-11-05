@@ -8,7 +8,7 @@ This tutorial walks you through regenerating assistant responses in an existing 
 
 **Prerequisites:**
 
-- Python 3.10+
+- Python 3.11+
 - CUDA-capable GPU(s)
 - `vllm` installed (`uv pip install "vllm>=0.19.1"`)
 

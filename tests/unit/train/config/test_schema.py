@@ -24,6 +24,27 @@ def test_constructs_from_defaults():
     TrainConfig()
 
 
+@pytest.mark.parametrize("window", [0, -1])
+def test_sliding_window_must_be_positive(window):
+    with pytest.raises(ValueError, match="sliding_window"):
+        DraftArgs(sliding_window=window)
+
+
+@pytest.mark.parametrize(
+    ("flag", "expected"),
+    [("--causal-attention", True), ("--no-causal-attention", False)],
+)
+def test_dflash_causality_flag_round_trips(flag, expected):
+    config = TrainConfig.resolve(
+        ["--verifier-name-or-path", "target", "--speculator-type", "dflash", flag]
+    )
+    assert config.flatten()["causal_attention"] is expected
+    assert (
+        TrainConfig.from_flat(config.flatten()).flatten()["causal_attention"]
+        is expected
+    )
+
+
 def test_flatten_covers_exactly_the_schema_fields():
     # flatten() emits every schema dest and nothing else; consumers bind the flat
     # dict by name (**kwargs / args.<field>), so the key set is the contract.
@@ -73,6 +94,7 @@ def test_flatten_resolves_dflash2_derived_defaults():
     assert flat["selector_rank"] == 256
     assert flat["selector_top_k"] == 16
     assert flat["selector_loss_alpha"] == pytest.approx(1.0)
+    assert flat["selector_miss_policy"] == "replace"
     assert flat["sliding_window_non_causal"] is True
 
 
@@ -113,6 +135,7 @@ def test_dflash2_explicit_values_override_defaults():
             selector_rank=128,
             selector_top_k=32,
             selector_loss_alpha=0.25,
+            selector_miss_policy="strict",
         ),
     )
     flat = cfg.flatten()
@@ -125,6 +148,7 @@ def test_dflash2_explicit_values_override_defaults():
     assert flat["selector_rank"] == 128
     assert flat["selector_top_k"] == 32
     assert flat["selector_loss_alpha"] == pytest.approx(0.25)
+    assert flat["selector_miss_policy"] == "strict"
 
 
 def test_from_flat_inverts_flatten():

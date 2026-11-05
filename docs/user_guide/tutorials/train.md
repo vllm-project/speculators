@@ -1,6 +1,10 @@
 # Train a Speculator
 
-This tutorial walks you through training a speculator model end to end, from raw data to a checkpoint served in vLLM. It covers **Eagle-3**, **P-EAGLE**, **DFlash**, **DFlash2**, **DSpark**, and **MTP** in all three training modes.
+This tutorial walks you through training a speculator model end to end, from raw data to a checkpoint served in vLLM. It covers **Eagle-3**, **P-EAGLE**, **DFlash**, **DFlash2**, **DSpark**, and **MTP**, in both online and offline training modes.
+
+> ⚠️ **Warning: P-EAGLE is deprecated**
+>
+> P-EAGLE training is scheduled for removal in Speculators 0.11. Selecting it emits a `FutureWarning`.
 
 Pick an algorithm and a training mode below; the rest of the walkthrough is the same for every combination. The examples use `Qwen/Qwen3-8B` as the target model -- except for MTP, which needs a verifier with native MTP layers and so uses `Qwen/Qwen3.5-9B`. The process is the same for other models.
 
@@ -62,12 +66,6 @@ Hidden states are pre-generated to disk, then read back. Use when GPU resources 
 
 ///
 
-/// tab | Hybrid
-
-Hidden states are generated on demand during epoch 0, cached, then reused. Use when you want to pay the generation cost once and reuse it across epochs.
-
-///
-
 ## Step 0: Setup Your Environment
 
 This tutorial drives the pipeline through CLI commands (`speculators prepare-data`, `speculators train`, and so on). Start by cloning the repo -- every command below is run from its root:
@@ -97,9 +95,9 @@ Note: if you are using an experiment tracker (e.g. trackio, wandb, tensorboard, 
 
 **Prerequisites:**
 
-- Python 3.10+
+- Python 3.11+
 - One or more accelerators (NVIDIA GPU, AMD GPU, or Ascend NPU)
-- For offline and hybrid modes, disk space for the cached hidden states -- see [Estimating Disk Space](#estimating-disk-space-requirements)
+- For offline mode, disk space for the cached hidden states -- see [Estimating Disk Space](#estimating-disk-space-requirements)
 - For MTP, a verifier with native MTP layers (e.g. `Qwen/Qwen3.5-9B`, `Qwen/Qwen3.5-0.8B`)
 
 ## Step 1: Prepare Your Data
@@ -115,10 +113,13 @@ speculators prepare-data \
   --data ./target_responses.jsonl \
   --output ./output \
   --max-samples 5000 \
-  --seq-length 8192
+  --seq-length 8192 \
+  --no-skip-token-freq
 ```
 
 If your generation pipeline saves natural-language conversations instead, start the target model's vLLM server as described in Step 2, then use its render endpoint to convert those responses into speculator format:
+
+Set the rendering server's `--max-model-len` above `--seq-length` (for example, at least `8193` for the `8192`-token preparation below) so vLLM has room for an output token. If this is too large for the model or available memory, lower `--seq-length` instead.
 
 ```bash
 speculators prepare-data \
@@ -127,7 +128,8 @@ speculators prepare-data \
   --render-endpoint http://localhost:8000 \
   --output ./output \
   --max-samples 5000 \
-  --seq-length 8192
+  --seq-length 8192 \
+  --no-skip-token-freq
 ```
 
 The render endpoint applies the serving chat template, tokenizes each turn, and derives its loss mask. It does not generate responses or make a dataset on-policy, so the assistant responses must already come from the same target model and generation configuration used for training.
@@ -140,6 +142,7 @@ The render endpoint applies the serving chat template, tokenizes each turn, and 
 - `--output` - Where to save preprocessed data
 - `--max-samples` - Limit samples (optional, good for testing/getting started)
 - `--seq-length` - Maximum sequence length
+- `--no-skip-token-freq` - Write `token_freq.pt`, which `speculators train --draft-vocab-size` needs to build the reduced draft vocab. Omit it if you train with the full verifier vocabulary.
 
 **Expected output:**
 
@@ -286,12 +289,6 @@ speculators generate-offline-data \
 
 ///
 
-/// tab | Hybrid
-
-Nothing to do up front. The first epoch generates hidden states from the live vLLM server and caches them to `--hidden-states-path`; subsequent epochs read from that cache. Leave vLLM running and continue to Step 4.
-
-///
-
 ## Step 4: Train
 
 //// tab | Online
@@ -313,8 +310,7 @@ CUDA_VISIBLE_DEVICES=2,3 torchrun --standalone --nproc_per_node 2 \
   --epochs 5 \
   --total-seq-len 8192 \
   --vllm-endpoint http://localhost:8000/v1 \
-  --on-missing generate \
-  --on-generate delete
+  --on-missing generate
 ```
 
 ///
@@ -338,8 +334,7 @@ CUDA_VISIBLE_DEVICES=2,3 torchrun --standalone --nproc_per_node 2 \
   --scheduler-type cosine \
   --lr 6e-4 \
   --vllm-endpoint http://localhost:8000/v1 \
-  --on-missing generate \
-  --on-generate delete
+  --on-missing generate
 ```
 
 ///
@@ -360,8 +355,7 @@ CUDA_VISIBLE_DEVICES=2,3 torchrun --standalone --nproc_per_node 2 \
   --num-layers 5 \
   --lr 3e-4 \
   --vllm-endpoint http://localhost:8000/v1 \
-  --on-missing generate \
-  --on-generate delete
+  --on-missing generate
 ```
 
 ///
@@ -381,8 +375,7 @@ CUDA_VISIBLE_DEVICES=2,3 torchrun --standalone --nproc_per_node 2 \
   --num-layers 5 \
   --lr 3e-4 \
   --vllm-endpoint http://localhost:8000/v1 \
-  --on-missing generate \
-  --on-generate delete
+  --on-missing generate
 ```
 
 ///
@@ -404,8 +397,7 @@ CUDA_VISIBLE_DEVICES=2,3 torchrun --standalone --nproc_per_node 2 \
   --lr 3e-4 \
   --loss-fn '{"ce": 0.1, "tv": 0.9}' \
   --vllm-endpoint http://localhost:8000/v1 \
-  --on-missing generate \
-  --on-generate delete
+  --on-missing generate
 ```
 
 ///
@@ -424,8 +416,7 @@ CUDA_VISIBLE_DEVICES=2,3 torchrun --standalone --nproc_per_node 2 \
   --speculator-type mtp \
   --target-layer-ids 32 \
   --vllm-endpoint http://localhost:8000/v1 \
-  --on-missing generate \
-  --on-generate delete
+  --on-missing generate
 ```
 
 Then stitch the finetuned MTP weights back into the verifier checkpoint. This produces a self-contained checkpoint deployable on vLLM with native MTP speculative decoding:
@@ -443,7 +434,6 @@ speculators stitch-mtp \
 
 - `--vllm-endpoint` - vLLM server URL (localhost endpoint where vLLM is served)
 - `--on-missing generate` - Generate hidden states on-the-fly
-- `--on-generate delete` - Delete generated hidden states after use (saves disk space)
 
 ////
 
@@ -593,165 +583,6 @@ speculators stitch-mtp \
 
 ////
 
-//// tab | Hybrid
-
-Wait for vLLM to finish launching. In a **separate terminal** on the same node, start training. The first epoch generates hidden states from the live vLLM server and caches them; later epochs read the cache. vLLM can be stopped after the first epoch.
-
-The commands below assume a four-GPU node: vLLM holds GPUs 0-1 from Step 2, so training takes 2-3. Adjust `CUDA_VISIBLE_DEVICES` and `--nproc_per_node` to your machine
-
-/// tab | Eagle-3
-
-```bash
-# in speculators venv
-CUDA_VISIBLE_DEVICES=2,3 torchrun --standalone --nproc_per_node 2 \
-  -m speculators.train \
-  --verifier-name-or-path Qwen/Qwen3-8B \
-  --data-path ./output \
-  --save-path ./output/checkpoints \
-  --draft-vocab-size 32000 \
-  --epochs 5 \
-  --total-seq-len 8192 \
-  --hidden-states-path ./output/hidden_states \
-  --vllm-endpoint http://localhost:8000/v1 \
-  --on-missing generate \
-  --on-generate cache
-```
-
-///
-
-/// tab | P-EAGLE
-
-```bash
-# in speculators venv
-CUDA_VISIBLE_DEVICES=2,3 torchrun --standalone --nproc_per_node 2 \
-  -m speculators.train \
-  --verifier-name-or-path Qwen/Qwen3-8B \
-  --data-path ./output \
-  --save-path ./output/checkpoints \
-  --draft-vocab-size 32000 \
-  --epochs 5 \
-  --total-seq-len 8192 \
-  --speculator-type peagle \
-  --num-layers 4 \
-  --num-depths 4 \
-  --no-norm-before-residual \
-  --scheduler-type cosine \
-  --lr 6e-4 \
-  --hidden-states-path ./output/hidden_states \
-  --vllm-endpoint http://localhost:8000/v1 \
-  --on-missing generate \
-  --on-generate cache
-```
-
-///
-
-/// tab | DFlash
-
-```bash
-# in speculators venv
-CUDA_VISIBLE_DEVICES=2,3 torchrun --standalone --nproc_per_node 2 \
-  -m speculators.train \
-  --verifier-name-or-path Qwen/Qwen3-8B \
-  --data-path ./output \
-  --save-path ./output/checkpoints \
-  --draft-vocab-size 32000 \
-  --epochs 5 \
-  --total-seq-len 8192 \
-  --speculator-type dflash \
-  --num-layers 5 \
-  --lr 3e-4 \
-  --hidden-states-path ./output/hidden_states \
-  --vllm-endpoint http://localhost:8000/v1 \
-  --on-missing generate \
-  --on-generate cache
-```
-
-///
-
-/// tab | DFlash2
-
-```bash
-# in speculators venv
-CUDA_VISIBLE_DEVICES=2,3 torchrun --standalone --nproc_per_node 2 \
-  -m speculators.train \
-  --verifier-name-or-path Qwen/Qwen3-8B \
-  --data-path ./output \
-  --save-path ./output/checkpoints \
-  --epochs 5 \
-  --total-seq-len 8192 \
-  --speculator-type dflash2 \
-  --num-layers 5 \
-  --lr 3e-4 \
-  --hidden-states-path ./output/hidden_states \
-  --vllm-endpoint http://localhost:8000/v1 \
-  --on-missing generate \
-  --on-generate cache
-```
-
-///
-
-/// tab | DSpark
-
-```bash
-# in speculators venv
-CUDA_VISIBLE_DEVICES=2,3 torchrun --standalone --nproc_per_node 2 \
-  -m speculators.train \
-  --verifier-name-or-path Qwen/Qwen3-8B \
-  --data-path ./output \
-  --save-path ./output/checkpoints \
-  --draft-vocab-size 32000 \
-  --epochs 5 \
-  --total-seq-len 8192 \
-  --speculator-type dspark \
-  --num-layers 5 \
-  --lr 3e-4 \
-  --loss-fn '{"ce": 0.1, "tv": 0.9}' \
-  --hidden-states-path ./output/hidden_states \
-  --vllm-endpoint http://localhost:8000/v1 \
-  --on-missing generate \
-  --on-generate cache
-```
-
-///
-
-/// tab | MTP
-
-```bash
-# in speculators venv
-CUDA_VISIBLE_DEVICES=2,3 torchrun --standalone --nproc_per_node 2 \
-  -m speculators.train \
-  --verifier-name-or-path Qwen/Qwen3.5-9B \
-  --data-path ./output \
-  --save-path ./output/checkpoints \
-  --epochs 3 \
-  --total-seq-len 8192 \
-  --speculator-type mtp \
-  --target-layer-ids 32 \
-  --hidden-states-path ./output/hidden_states \
-  --vllm-endpoint http://localhost:8000/v1 \
-  --on-missing generate \
-  --on-generate cache
-```
-
-Then stitch the finetuned MTP weights back into the verifier checkpoint. This produces a self-contained checkpoint deployable on vLLM with native MTP speculative decoding:
-
-```bash
-speculators stitch-mtp \
-  ./output/checkpoints/checkpoint_best \
-  Qwen/Qwen3.5-9B \
-  --output-path ./output/stitched
-```
-
-///
-
-**Flags specific to hybrid mode:**
-
-- `--hidden-states-path` - Where the first epoch writes its cache
-- `--on-missing generate` - Generate hidden states on-the-fly when not already cached
-- `--on-generate cache` - Keep generated hidden states for reuse in later epochs
-
-////
-
 **Shared parameters:**
 
 - `--draft-vocab-size 32000` - Reduced vocabulary size. MTP omits it and uses the full verifier vocabulary.
@@ -853,7 +684,7 @@ Per-position acceptance:
 
 ## Estimating Disk Space Requirements
 
-Only relevant for offline and hybrid modes.
+Only relevant for offline mode.
 
 ```python
 # For Llama-3.1-8B:
@@ -935,7 +766,7 @@ python scripts/launch_vllm.py model -- --tensor-parallel-size 2
 
 ### Issue: Inconsistent training utilization
 
-**Symptoms:** Training logs are bursty, GPU utilization/power draw is inconsistent for the training process. Applies to online and hybrid modes.
+**Symptoms:** Training logs are bursty, and GPU utilization/power draw is inconsistent for the training process. Applies to online mode.
 
 **Solutions:**
 

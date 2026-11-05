@@ -111,8 +111,7 @@ torchrun --standalone --nproc_per_node 4 \
   --mooncake-master <master-ip>:50051 \
   --mooncake-protocol tcp \
   --vllm-endpoint http://<extractor-ip>:8000/v1 \
-  --on-missing generate \
-  --on-generate delete
+  --on-missing generate
 ```
 
 This is the same as single-node online training, but with `--hidden-states-backend mooncake` and `--mooncake-*` flags replacing the default filesystem backend.

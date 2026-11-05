@@ -90,12 +90,13 @@ REQUIRED_FLAGS: dict[str, str] = _required_flags()
 
 # Algorithm group -> the speculator types that consume it. A group set to a
 # non-default value under a speculator_type absent from its set is ignored, and
-# warns. DFlash2 and DSpark share the DFlash backbone group; their exclusive
+# warns. DFlash2, DSpark and XPress share the DFlash backbone group; their exclusive
 # architecture knobs remain in their own groups. eagle3 uses no group.
 _ALGORITHM_GROUP_USERS: dict[str, frozenset[str]] = {
-    "dflash": frozenset({"dflash", "dflash2", "dspark"}),
+    "dflash": frozenset({"dflash", "dflash2", "dspark", "xpress"}),
     "dflash2": frozenset({"dflash2"}),
     "dspark": frozenset({"dspark"}),
+    "xpress": frozenset({"xpress"}),
     "peagle": frozenset({"peagle"}),
     "mtp": frozenset({"mtp"}),
 }
@@ -288,7 +289,7 @@ def add_config_cli_arguments(parser: argparse.ArgumentParser) -> None:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    """The ``train.py`` parser: ``--config`` plus the schema-generated flags."""
+    """The ``speculators train`` parser: ``--config`` plus schema-generated flags."""
     parser = argparse.ArgumentParser()
     parser.add_argument(
         "--config",
@@ -381,17 +382,20 @@ def _warn_mismatched_algorithm_blocks(cfg: TrainConfig, provided: set[str]) -> N
             )
 
 
-def _warn_deprecated(provided: set[str]) -> None:
-    """Warn when a deprecated option is set explicitly (by flag or yaml).
-
-    ``--on-generate`` only accepts its default ``delete`` since hybrid training was
-    removed, so it is a no-op kept so existing command lines still parse.
-    """
+def _warn_deprecated(cfg: TrainConfig, provided: set[str]) -> None:
+    """Warn when deprecated training config options are selected."""
     if "on_generate" in provided:
         warnings.warn(
             "--on-generate is deprecated and has no effect: generated hidden states "
             "are always deleted after loading. Remove it from your command line or "
             "config; it will be removed in a future release.",
+            FutureWarning,
+            stacklevel=2,
+        )
+    if cfg.speculator_type == "peagle":
+        warnings.warn(
+            "P-EAGLE is deprecated and will be removed in Speculators 0.11. "
+            "Migrate to another supported speculator before upgrading.",
             FutureWarning,
             stacklevel=2,
         )
@@ -455,7 +459,7 @@ def build_from_sources(
 
     provided = {dest for dest, layer in cfg._provenance.items() if layer != "default"}
     _warn_mismatched_algorithm_blocks(cfg, provided)
-    _warn_deprecated(provided)
+    _warn_deprecated(cfg, provided)
     _validate_draft_init(cfg, provided)
     _validate_required(cfg)
     return cfg

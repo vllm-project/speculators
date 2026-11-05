@@ -41,11 +41,10 @@ If a pre-trained speculator isn't available for your target model, you can train
 
 - **Online training** -- Hidden states are generated on-the-fly during training. Easier to get started, lower disk usage.
 - **Offline training** -- Hidden states are pre-generated and cached.
-- **Hybrid training** -- Hidden states are generated on-the-fly during the first epoch, cached, and reused after.
 
 ### Tutorials
 
-- [Train a Speculator](tutorials/train.md) -- Recommended starting point. Covers Eagle-3, P-EAGLE, DFlash, DSpark, and MTP in all three modes
+- [Train a Speculator](tutorials/train.md) -- Recommended starting point. Covers Eagle-3, P-EAGLE, DFlash, DFlash2, DSpark, and MTP in online and offline modes
 - [Evaluating Model Performance](tutorials/evaluating_performance.md) -- Benchmark your trained speculator
 - [Response Regeneration](tutorials/response_regeneration.md) -- Improve training data quality
 

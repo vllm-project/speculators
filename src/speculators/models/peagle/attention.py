@@ -17,6 +17,8 @@ def create_peagle_mask_mod(
 
     This function creates a mask where each element can attend to only to previous
     elements in the same sampling chain/rollout and previous context in the base sample.
+    Padding elements attend only to themselves, so that no row is fully masked: eager
+    attention turns a fully masked row into NaN, which reaches the loss.
 
 
     Args:
@@ -62,7 +64,7 @@ def create_peagle_mask_mod(
             else True
         )
 
-        return (
+        return (q_idx == kv_idx) | (
             is_not_padding
             & same_document
             & (

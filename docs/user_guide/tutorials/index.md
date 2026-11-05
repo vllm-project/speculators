@@ -4,7 +4,7 @@ Step-by-step tutorials to guide you through complete workflows, from data prepar
 
 ## [Train a Speculator](train.md)
 
-The main end-to-end walkthrough: prepare data, generate hidden states, train, and serve. Covers Eagle-3, P-EAGLE, DFlash, DSpark, and MTP, in online, offline, or hybrid mode -- pick your algorithm and mode at the top of the page.
+The main end-to-end walkthrough: prepare data, generate hidden states, train, and serve. Covers Eagle-3, P-EAGLE, DFlash, DFlash2, DSpark, and MTP in online or offline mode -- pick your algorithm and mode at the top of the page.
 
 ## [Multi-Node Training](multi_node_training.md)
 
@@ -14,9 +14,17 @@ Stream hidden states between separate extraction and training nodes with the Moo
 
 Regenerate dataset responses using your target model for improved drafter alignment. Recommended before training.
 
+## [RAG Training Data](rag.md)
+
+Prepare retrieved context and target-model answers for training, budget sequence lengths, and inspect the resulting loss masks.
+
 ## [Evaluating Model Performance](evaluating_performance.md)
 
 Benchmark and evaluate your trained speculator models.
+
+## [Throughput vs. Interactivity](throughput_interactivity.md)
+
+Run concurrency sweeps with AIPerf and view historical throughput-versus-interactivity comparisons.
 
 ## [Serve in vLLM](serve_vllm.md)
 

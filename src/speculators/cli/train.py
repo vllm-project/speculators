@@ -1,4 +1,4 @@
-"""Train command — thin typer wrapper around TrainConfig argument resolution."""
+"""Unified CLI training command backed by TrainConfig argument resolution."""
 
 import typer
 

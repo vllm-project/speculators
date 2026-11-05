@@ -22,10 +22,10 @@ class TestSaveTrainCommand:
         assert (save_path / "train_command.txt").exists()
 
     def test_contains_sys_argv(self, tmp_path: Path):
-        with patch.object(sys, "argv", ["scripts/train.py", "--lr", "1e-4"]):
+        with patch.object(sys, "argv", ["speculators", "train", "--lr", "1e-4"]):
             save_train_command(str(tmp_path))
         content = (tmp_path / "train_command.txt").read_text()
-        assert "scripts/train.py --lr 1e-4" in content
+        assert "speculators train --lr 1e-4" in content
 
     def test_header_has_timestamp(self, tmp_path: Path):
         save_train_command(str(tmp_path))
@@ -125,6 +125,25 @@ class TestSpeculatorsPatch:
             save_train_command(str(tmp_path))
         assert (tmp_path / "train_command.txt").exists()
         assert not (tmp_path / "speculators.patch").exists()
+
+    def test_failed_diff_is_not_recorded_as_clean(self, tmp_path: Path):
+        with (
+            patch("speculators.train.utils.find_repo_root", return_value=tmp_path),
+            patch("speculators.train.utils.git_sha", return_value="abc123"),
+            patch("speculators.train.utils.git_diff", return_value=None),
+        ):
+            save_train_command(str(tmp_path))
+        content = (tmp_path / "speculators.patch").read_text()
+        assert content.startswith(f"# repo: {tmp_path} (abc123)\n")
+        assert "# git diff failed" in content.splitlines()
+
+    def test_clean_diff_has_no_failure_note(self, tmp_path: Path):
+        with patch("speculators.train.utils.git_diff", return_value=""):
+            save_train_command(str(tmp_path))
+        content = (tmp_path / "speculators.patch").read_text()
+        assert content.startswith("# repo: ")
+        assert "# git diff failed" not in content
+        assert "(dirty)" not in content
 
 
 # ---------------------------------------------------------------------------

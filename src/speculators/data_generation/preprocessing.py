@@ -1,13 +1,12 @@
 import json
 import os
-from collections.abc import Callable
 from contextlib import nullcontext
 from pathlib import Path
 from typing import Literal, TypedDict
 
 import torch
 from datasets import Dataset as HFDataset
-from datasets import concatenate_datasets, load_dataset
+from datasets import List, Value, concatenate_datasets, load_dataset
 from huggingface_hub import hf_hub_download
 from transformers import (
     AutoProcessor,
@@ -15,10 +14,13 @@ from transformers import (
     ProcessorMixin,
 )
 
-from speculators.data_generation.configs import DATASET_CONFIGS
 from speculators.data_generation.logging_utils import PipelineLogger
-from speculators.data_generation.render_client import render_conversation
+from speculators.data_generation.render_client import (
+    RenderRouteError,
+    render_conversation,
+)
 from speculators.data_generation.torch_utils import set_default_torch_num_threads
+from speculators.data_generation.vllm_client import has_multimodal_content
 from speculators.train.vocab_mapping import save_token_frequency_distribution
 
 __all__ = [
@@ -369,6 +371,8 @@ def _render_conversation_rows(
             max_length,
             tools=parsed_tools,
         )
+    except RenderRouteError:
+        raise
     # One row the render endpoint or boundary derivation can't handle must
     # not kill the run. The failure modes can't be enumerated -- templates
     # are swappable and raise arbitrary types -- so catch broadly and skip.
@@ -397,7 +401,7 @@ def _append_row(
     if minimum_valid_tokens is not None and num_valid_tokens < minimum_valid_tokens:
         return "filtered"
     results["input_ids"].append(torch.tensor(input_ids, dtype=torch.long))
-    results["loss_mask"].append(torch.tensor(loss_mask, dtype=torch.long))
+    results["loss_mask"].append(torch.tensor(loss_mask, dtype=torch.bool))
     results["seq_len"].append(len(input_ids))
     return "kept"
 
@@ -432,7 +436,9 @@ def _append_boundary_rows(
         if status == "kept":
             num_kept += 1
             if "messages" in results:
-                results["messages"].append(_adapt_conv_for_vllm(row["conv"]))
+                messages = _adapt_conv_for_vllm(row["conv"])
+                results["messages"].append(messages)
+                results["is_multimodal"].append(has_multimodal_content(messages))
 
     return num_kept, num_unsupervised, num_maybe_truncated
 
@@ -512,6 +518,7 @@ def _preprocess_batch(
     # original messages -- token ids alone cannot carry the images.
     if is_multimodal:
         results["messages"] = []
+        results["is_multimodal"] = []
 
     if not conversations:
         log.warning(f"No conversations key found. Keys: {list(examples.keys())}")
@@ -610,6 +617,8 @@ def build_speculator_training_dataset(
 
     if pretokenized:
         log.info("Speculator-format rows: using their loss mask, skipping render")
+        # Dataset.map otherwise preserves an existing integer mask schema.
+        dataset = dataset.cast_column("loss_mask", List(Value("bool")))
     elif render_endpoint is None:
         raise ValueError(
             "render_endpoint is required to convert natural-language "
@@ -637,8 +646,26 @@ def build_speculator_training_dataset(
             keep_in_memory=True,  # skip caching
         )
 
+    dataset = _drop_unused_messages(dataset)
     dataset.set_format(type="torch")
     return dataset
+
+
+def _drop_unused_messages(dataset: HFDataset) -> HFDataset:
+    """Drop the ``messages`` column when no row is multimodal.
+
+    Processor-based models write ``messages`` for every row, but the trainer
+    only forwards it for multimodal rows, so a text-only dataset would store
+    the full conversation text unused. Decided after ``map`` rather than per
+    batch so every map shard keeps the same schema.
+    """
+    if "is_multimodal" not in dataset.column_names:
+        return dataset
+    drop = ["is_multimodal"]
+    if not any(dataset["is_multimodal"]):
+        log.info("No multimodal rows: not storing the messages column")
+        drop.append("messages")
+    return dataset.remove_columns(drop)
 
 
 def _load_hf_dataset(spec: str) -> tuple[HFDataset, None]:
@@ -687,8 +714,7 @@ def _load_hf_dataset(spec: str) -> tuple[HFDataset, None]:
             "a supported format: expected a conversations format with a "
             "'conversations' column or a pre-tokenized format with both "
             f"'input_ids' and 'loss_mask', but found {raw_dataset.column_names}. "
-            "Pass a dataset in one of those formats, or add a preset to "
-            "DATASET_CONFIGS with a normalize_fn."
+            "Pass a dataset in one of those formats."
         )
 
     return raw_dataset, None
@@ -698,8 +724,8 @@ def _load_hf_jsonl_file(spec: str) -> tuple[HFDataset, None]:
     """Download and load one JSON/JSONL file from a Hugging Face dataset repo.
 
     The URI form is ``hf://datasets/<org>/<repo>/<path>``. Keeping the
-    download here means the normal prepare-data path still handles source
-    normalization, pretokenized pass-through, and output caching uniformly.
+    download here means the normal prepare-data path still handles rendering,
+    pretokenized pass-through, and output caching uniformly.
     """
     match spec.removeprefix("hf://datasets/").split("/", 2):
         case [organization, dataset, filename] if all(
@@ -727,7 +753,7 @@ def _load_hf_jsonl_file(spec: str) -> tuple[HFDataset, None]:
 
 def load_raw_dataset(
     train_data_path: str,
-) -> tuple[HFDataset, Callable[[dict], dict] | None]:
+) -> tuple[HFDataset, None]:
     """Load a raw dataset from one of several source types.
 
     Resolution order:
@@ -735,15 +761,13 @@ def load_raw_dataset(
         2. Local ``.json``/``.jsonl`` file.
         3. Local directory: recursively load all ``*.json``/``*.jsonl`` files
            as a single dataset.
-        4. Named preset from ``DATASET_CONFIGS``.
-        5. ``hf:<id>[:<subset>:<split>]`` for an arbitrary HuggingFace dataset.
+        4. ``hf:<id>[:<subset>:<split>]`` for an arbitrary HuggingFace dataset.
 
     Args:
-        train_data_path: File path, directory path, preset name, or ``hf:`` spec.
+        train_data_path: File path, directory path, or ``hf:`` spec.
 
     Returns:
-        Tuple of (raw_dataset, normalize_fn). normalize_fn is None for sources
-        already in conversations format.
+        Tuple of (raw_dataset, None).
 
     Raises:
         ValueError: If the source cannot be resolved or a local directory
@@ -769,25 +793,16 @@ def load_raw_dataset(
             )
         return load_dataset("json", data_files=data_files, split="train"), None
 
-    # 4. Named preset
-    if train_data_path in DATASET_CONFIGS:
-        config = DATASET_CONFIGS[train_data_path]
-        raw_dataset = load_dataset(
-            config.hf_path, name=config.subset, split=config.split
-        )
-        if config.filter_fn is not None:
-            raw_dataset = raw_dataset.filter(config.filter_fn)
-        return raw_dataset, config.normalize_fn
-
-    # 5. Arbitrary HuggingFace dataset
+    # 4. Arbitrary HuggingFace dataset
     if train_data_path.startswith("hf:"):
         return _load_hf_dataset(train_data_path)
 
     raise ValueError(
         f"Unsupported dataset: {train_data_path}. Supported: local .json/.jsonl "
         "file, hf://datasets/<org>/<repo>/<file>.jsonl, local directory of "
-        f".json/.jsonl files, hf:<id>[:<subset>:<split>], or a preset "
-        f"{list(DATASET_CONFIGS.keys())}."
+        ".json/.jsonl files, or hf:<id>[:<subset>:<split>]. "
+        "Use `speculators regenerate-responses` for raw presets, "
+        "then pass its generated JSONL to prepare-data."
     )
 
 
@@ -879,7 +894,7 @@ def load_and_preprocess_dataset(
     processed_datasets = []
     for train_data_path in train_data_paths:
         log.subsection(f"Processing {train_data_path}")
-        raw_dataset, normalize_fn = load_raw_dataset(train_data_path)
+        raw_dataset, _ = load_raw_dataset(train_data_path)
         raw_dataset = raw_dataset.shuffle(seed=seed)
 
         if max_samples is not None and len(raw_dataset) > 3 * max_samples:
@@ -887,13 +902,6 @@ def load_and_preprocess_dataset(
             # This will then be reduced further to max_samples
             # after combining datasets and shuffling
             raw_dataset = raw_dataset.select(range(3 * max_samples))
-
-        if normalize_fn is not None:
-            raw_dataset = raw_dataset.map(
-                normalize_fn,
-                num_proc=build_dataset_num_proc,
-                keep_in_memory=True,  # skip caching
-            )
 
         pretokenized = {"input_ids", "loss_mask"} <= set(raw_dataset.column_names)
         # With a render endpoint the chat template is applied server-side, so a
