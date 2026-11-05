@@ -1,34 +1,40 @@
 """Unit tests for GLM-5 Dense MLA DFlash / DSpark draft layers."""
 
 import json
-from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
 import pytest
 import torch
 from transformers import AutoConfig
+from transformers.models.qwen3.configuration_qwen3 import Qwen3Config
 
 from speculators.models.dflash import DFlashSpeculatorConfig
 from speculators.models.dflash.core import DFlashDraftModel
 from speculators.models.dflash.glm5 import (
-    GLM5_DSPARK_ARCHITECTURE,
+    GLM5_DSPARK_MODEL_TYPE,
     Glm5Config,
+    Glm5DFlashDecoderLayer,
     Glm5DFlashMLAAttention,
     apply_interleaved_rotary_pos_emb,
     mla_kwargs_from_verifier,
 )
 from speculators.models.dflash.model_definitions import (
+    Qwen3DFlashAttention,
+    Qwen3DFlashDecoderLayer,
     _rotate_half,
     apply_rotary_pos_emb,
+    dflash_model_classes,
 )
 from speculators.models.dspark import DSparkSpeculatorConfig
+from speculators.models.dspark.config import EXPORT_ARCHITECTURES
 from speculators.models.dspark.core import DSparkDraftModel
 from speculators.train.cli import (
     _apply_glm5_lora_rank_overrides,
     create_transformer_layer_config,
 )
 
+GLM5_DSPARK_ARCHITECTURE = EXPORT_ARCHITECTURES[GLM5_DSPARK_MODEL_TYPE]
 
 TINY_GLM5_KWARGS = {
     "vocab_size": 64,
@@ -63,6 +69,52 @@ def test_autoconfig_registers_glm5():
     cfg = AutoConfig.for_model("glm5_dspark")
     assert cfg.__class__ is Glm5Config
     assert cfg.model_type == "glm5_dspark"
+
+
+def test_dflash_model_classes_table():
+    glm5 = dflash_model_classes[GLM5_DSPARK_MODEL_TYPE]
+    assert glm5.decoder_layer_class is Glm5DFlashDecoderLayer
+    assert glm5.rotary_head_dim_attr == "qk_rope_head_dim"
+    assert (glm5.context_proj_name, glm5.context_norm_name) == (
+        "context_proj",
+        "context_norm",
+    )
+    qwen3 = dflash_model_classes["qwen3"]
+    assert qwen3.decoder_layer_class is Qwen3DFlashDecoderLayer
+    assert qwen3.rotary_head_dim_attr is None
+    assert (qwen3.context_proj_name, qwen3.context_norm_name) == ("fc", "hidden_norm")
+
+
+def test_qwen3_dflash_keeps_fc_and_hidden_norm():
+    tl_config = Qwen3Config(
+        vocab_size=64,
+        hidden_size=32,
+        intermediate_size=64,
+        num_hidden_layers=1,
+        num_attention_heads=2,
+        num_key_value_heads=2,
+        head_dim=16,
+        max_position_embeddings=64,
+        tie_word_embeddings=False,
+        _attn_implementation="eager",
+    )
+    model = DFlashDraftModel(
+        DFlashSpeculatorConfig(
+            transformer_layer_config=tl_config,
+            draft_vocab_size=64,
+            block_size=4,
+            aux_hidden_state_layer_ids=[0, 1],
+            mask_token_id=0,
+        )
+    )
+    assert isinstance(model.layers[0].self_attn, Qwen3DFlashAttention)
+    assert hasattr(model, "fc")
+    assert hasattr(model, "hidden_norm")
+    assert not hasattr(model, "context_proj")
+    assert model.rotary_emb.config.head_dim == 16
+    keys = model.state_dict()
+    assert "fc.weight" in keys
+    assert "hidden_norm.weight" in keys
 
 
 def test_glm5_config_defaults_lock_576d_page_spec():
@@ -377,10 +429,11 @@ def test_glm5_dspark_config_roundtrip():
     )
     dumped = config.model_dump()
     reloaded = DSparkSpeculatorConfig(**dumped)
+    assert isinstance(reloaded.transformer_layer_config, Glm5Config)
     assert reloaded.transformer_layer_config.model_type == "glm5_dspark"
     assert reloaded.transformer_layer_config.q_lora_rank == 16
     assert reloaded.transformer_layer_config.kv_lora_rank == 8
-    assert reloaded.architectures == [GLM5_DSPARK_ARCHITECTURE]
+    assert reloaded.to_dict()["architectures"] == [GLM5_DSPARK_ARCHITECTURE]
 
 
 def test_glm5_dspark_builds_mla_layers():
@@ -397,7 +450,7 @@ def test_glm5_dspark_builds_mla_layers():
     assert isinstance(model.layers[0].self_attn, Glm5DFlashMLAAttention)
     assert model.markov_head is not None
     assert hasattr(model, "context_proj")
-    assert config.architectures == [GLM5_DSPARK_ARCHITECTURE]
+    assert config.to_dict()["architectures"] == [GLM5_DSPARK_ARCHITECTURE]
 
 
 def test_glm5_dspark_save_pretrained_export_contract(tmp_path):
@@ -419,24 +472,36 @@ def test_glm5_dspark_save_pretrained_export_contract(tmp_path):
     assert saved["transformer_layer_config"]["model_type"] == "glm5_dspark"
     assert saved["transformer_layer_config"]["kv_lora_rank"] == 8
     assert saved["transformer_layer_config"]["q_lora_rank"] == 16
-    # Reloading a nested dict that still says legacy "glm5" upgrades the type.
-    nested = dict(saved["transformer_layer_config"])
-    nested["model_type"] = "glm5"
-    upgraded = DSparkSpeculatorConfig(
-        transformer_layer_config=nested,
-        draft_vocab_size=64,
-        block_size=4,
-        aux_hidden_state_layer_ids=[0, 1],
-        mask_token_id=0,
-        markov_rank=8,
-        enable_confidence_head=False,
+    # Weight names follow the architecture table (vLLM-Ascend contract).
+    weights = out / "model.safetensors"
+    assert weights.exists()
+    from safetensors import safe_open  # noqa: PLC0415
+
+    with safe_open(str(weights), framework="pt") as f:
+        keys = set(f.keys())
+    assert "context_proj.weight" in keys
+    assert "context_norm.weight" in keys
+    assert "fc.weight" not in keys
+    # Reload resolves the nested decoder through AutoConfig and still exports
+    # the serving architecture name.
+    reloaded = DSparkSpeculatorConfig.from_pretrained(out)
+    assert isinstance(reloaded.transformer_layer_config, Glm5Config)
+    assert reloaded.to_dict()["architectures"] == [GLM5_DSPARK_ARCHITECTURE]
+
+
+def test_qwen3_dspark_keeps_python_architecture_name(tmp_path):
+    tl_config = Qwen3Config(
+        vocab_size=64,
+        hidden_size=32,
+        intermediate_size=64,
+        num_hidden_layers=1,
+        num_attention_heads=2,
+        num_key_value_heads=2,
+        head_dim=16,
+        max_position_embeddings=64,
+        tie_word_embeddings=False,
+        _attn_implementation="eager",
     )
-    assert upgraded.transformer_layer_config.model_type == "glm5_dspark"
-    assert upgraded.architectures == [GLM5_DSPARK_ARCHITECTURE]
-
-
-def test_glm5_dspark_push_to_hub_uploads_after_architecture_rewrite(tmp_path):
-    tl_config = _tiny_glm5_config()
     config = DSparkSpeculatorConfig(
         transformer_layer_config=tl_config,
         draft_vocab_size=64,
@@ -446,28 +511,7 @@ def test_glm5_dspark_push_to_hub_uploads_after_architecture_rewrite(tmp_path):
         markov_rank=8,
         enable_confidence_head=False,
     )
-    model = DSparkDraftModel(config)
-    out = tmp_path / "glm5_dspark"
-    uploaded: dict[str, object] = {}
-
-    def _upload(save_directory, repo_id, _files_timestamps, **_kwargs):
-        uploaded["architectures"] = json.loads(
-            (Path(save_directory) / "config.json").read_text()
-        )["architectures"]
-        uploaded["repo_id"] = repo_id
-        return "ok"
-
-    with (
-        patch(
-            "huggingface_hub.create_repo",
-            return_value=SimpleNamespace(repo_id="user/glm5-dspark"),
-        ),
-        patch.object(DSparkDraftModel, "_get_files_timestamps", return_value={}),
-        patch.object(DSparkDraftModel, "_upload_modified_files", side_effect=_upload),
-    ):
-        model.save_pretrained(out, push_to_hub=True, repo_id="user/glm5-dspark")
-
-    assert uploaded["architectures"] == [GLM5_DSPARK_ARCHITECTURE]
-    assert uploaded["repo_id"] == "user/glm5-dspark"
+    out = tmp_path / "qwen3_dspark"
+    DSparkDraftModel(config).save_pretrained(out)
     saved = json.loads((out / "config.json").read_text())
-    assert saved["architectures"] == [GLM5_DSPARK_ARCHITECTURE]
+    assert saved["architectures"] == ["DSparkDraftModel"]

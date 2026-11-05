@@ -1,4 +1,4 @@
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, NamedTuple
 
 import torch
 from torch import nn
@@ -207,3 +207,34 @@ class Qwen3DFlashDecoderLayer(GradientCheckpointingLayer):
         hidden_states = self.post_attention_layernorm(hidden_states)
         hidden_states = self.mlp(hidden_states)
         return residual + hidden_states  # type: ignore[operator]
+
+
+class DFlashModelComponents(NamedTuple):
+    """Per-``model_type`` building blocks for the DFlash backbone.
+
+    Attributes:
+        decoder_layer_class: Draft decoder layer class.
+        rotary_head_dim_attr: Config attribute holding the RoPE width, or
+            ``None`` to use ``config.head_dim`` (full-head GQA RoPE). MLA
+            drafts rotate only ``qk_rope_head_dim``.
+        context_proj_name: Module name of the aux-hidden-state projection.
+        context_norm_name: Module name of the norm applied after it.
+
+    The module names become state-dict keys, so they must match what the
+    serving runtime expects for that architecture.
+    """
+
+    decoder_layer_class: type
+    rotary_head_dim_attr: str | None
+    context_proj_name: str
+    context_norm_name: str
+
+
+dflash_model_classes: dict[str, DFlashModelComponents] = {
+    "qwen3": DFlashModelComponents(
+        decoder_layer_class=Qwen3DFlashDecoderLayer,
+        rotary_head_dim_attr=None,
+        context_proj_name="fc",
+        context_norm_name="hidden_norm",
+    ),
+}

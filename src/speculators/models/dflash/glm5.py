@@ -28,25 +28,24 @@ from transformers.models.qwen3.modeling_qwen3 import (
 from typing_extensions import Unpack
 
 from speculators.models.dflash.model_definitions import (
+    DFlashModelComponents,
     Qwen3DFlashDecoderLayer,
     apply_rotary_pos_emb,
+    dflash_model_classes,
 )
 
 __all__ = [
-    "GLM5_DSPARK_ARCHITECTURE",
-    "GLM5_MLA_MODEL_TYPES",
+    "GLM5_DSPARK_MODEL_TYPE",
     "Glm5Config",
     "Glm5DFlashDecoderLayer",
     "Glm5DFlashMLAAttention",
     "apply_interleaved_rotary_pos_emb",
-    "is_glm5_mla_config",
     "mla_kwargs_from_verifier",
 ]
 
-# Serve-side vLLM-Ascend registration name .
-GLM5_DSPARK_ARCHITECTURE = "Glm5DSparkForCausalLM"
-# Current export name plus the legacy training ``model_type``.
-GLM5_MLA_MODEL_TYPES = frozenset({"glm5_dspark", "glm5"})
+# Draft decoder ``model_type``; distinct from the GLM-5.2 verifier's
+# ``glm_moe_dsa`` so vLLM-Ascend can dispatch the draft independently.
+GLM5_DSPARK_MODEL_TYPE = "glm5_dspark"
 
 
 class Glm5Config(Qwen3Config):
@@ -54,13 +53,11 @@ class Glm5Config(Qwen3Config):
 
     MLP / RMSNorm / RoPE machinery stay Qwen3-compatible so DFlash can reuse
     those modules. Attention is swapped for :class:`Glm5DFlashMLAAttention`.
-
-    ``model_type`` is ``glm5_dspark`` so vLLM-Ascend can dispatch the draft
-    independently of the GLM-5.2 verifier (``glm_moe_dsa``). Defaults lock the
-    serveable 576-d MLA page spec: ``kv_lora_rank=512`` + ``qk_rope_head_dim=64``.
+    Defaults lock the serveable 576-d MLA page spec: ``kv_lora_rank=512`` +
+    ``qk_rope_head_dim=64``.
     """
 
-    model_type = "glm5_dspark"
+    model_type = GLM5_DSPARK_MODEL_TYPE
 
     def __init__(
         self,
@@ -73,11 +70,7 @@ class Glm5Config(Qwen3Config):
         rope_interleave: bool = True,
         **kwargs,
     ):
-        # Drop a stale nested ``model_type`` so loading a legacy ``glm5``
-        # checkpoint still constructs this class as ``glm5_dspark``.
-        kwargs.pop("model_type", None)
         super().__init__(**kwargs)
-        self.model_type = "glm5_dspark"
         self.q_lora_rank = q_lora_rank
         self.kv_lora_rank = kv_lora_rank
         self.qk_nope_head_dim = qk_nope_head_dim
@@ -92,26 +85,9 @@ class Glm5Config(Qwen3Config):
         self.rope_interleave = rope_interleave
 
 
-def _register_glm5_config(model_type: str) -> None:
-    try:
-        AutoConfig.register(model_type, Glm5Config, exist_ok=True)
-    except (TypeError, ValueError):
-        # transformers without exist_ok, or model_type != Glm5Config.model_type
-        try:
-            AutoConfig.register(model_type, Glm5Config)
-        except ValueError:
-            pass
-
-
-_register_glm5_config("glm5_dspark")
-# Do not AutoConfig.register("glm5"): transformers requires the registered
-# name to equal Glm5Config.model_type (now glm5_dspark). Legacy "glm5"
-# checkpoints are still accepted by is_glm5_mla_config and the DFlash
-# transformer_layer_config validator.
-
-
-def is_glm5_mla_config(config: Any) -> bool:
-    return getattr(config, "model_type", None) in GLM5_MLA_MODEL_TYPES
+# Lets ``AutoConfig.for_model("glm5_dspark")`` (used by the shared
+# ``transformer_layer_config`` validator and ``--draft-config``) build this class.
+AutoConfig.register(GLM5_DSPARK_MODEL_TYPE, Glm5Config, exist_ok=True)
 
 
 def mla_kwargs_from_verifier(verifier_config: PretrainedConfig) -> dict[str, Any]:
@@ -369,3 +345,13 @@ class Glm5DFlashMLAAttention(nn.Module):
 
 class Glm5DFlashDecoderLayer(Qwen3DFlashDecoderLayer):
     attention_class = Glm5DFlashMLAAttention
+
+
+# MLA RoPE spans only qk_rope_head_dim; ``context_proj`` / ``context_norm``
+# are the weight names vLLM-Ascend expects for this draft.
+dflash_model_classes[GLM5_DSPARK_MODEL_TYPE] = DFlashModelComponents(
+    decoder_layer_class=Glm5DFlashDecoderLayer,
+    rotary_head_dim_attr="qk_rope_head_dim",
+    context_proj_name="context_proj",
+    context_norm_name="context_norm",
+)

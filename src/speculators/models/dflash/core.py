@@ -15,13 +15,12 @@ from speculators.losses import LossConfig, resolve_loss_config
 from speculators.model import DraftVocabMixin, SpeculatorModel
 from speculators.models.attention import create_float_mask
 from speculators.models.dflash import DFlashSpeculatorConfig
-from speculators.models.dflash.attention import create_anchor_block_mask_mod
-from speculators.models.dflash.glm5 import (
-    Glm5DFlashDecoderLayer,
-    is_glm5_mla_config,
+from speculators.models.dflash import (
+    glm5 as _glm5,  # noqa: F401  # registers glm5_dspark in dflash_model_classes
 )
+from speculators.models.dflash.attention import create_anchor_block_mask_mod
 from speculators.models.dflash.metrics import compute_metrics
-from speculators.models.dflash.model_definitions import Qwen3DFlashDecoderLayer
+from speculators.models.dflash.model_definitions import dflash_model_classes
 from speculators.models.dflash.utils import (
     get_base_indices_for_anchored_blocks,
     select_anchors,
@@ -72,12 +71,9 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
         DFlash-family variants override this factory when they wrap the shared
         attention and MLP with additional modules.
         """
-        decoder_layer_class = (
-            Glm5DFlashDecoderLayer
-            if is_glm5_mla_config(config.transformer_layer_config)
-            else Qwen3DFlashDecoderLayer
+        return self._model_definitions.decoder_layer_class(
+            config.transformer_layer_config, layer_idx
         )
-        return decoder_layer_class(config.transformer_layer_config, layer_idx)  # type: ignore[arg-type]
 
     def __init__(
         self,
@@ -100,6 +96,10 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
         self._init_vocab(config)
 
         tl_config = config.transformer_layer_config
+        # Unknown decoder types keep the historical Qwen3 GQA backbone.
+        self._model_definitions = dflash_model_classes.get(
+            tl_config.model_type, dflash_model_classes["qwen3"]
+        )
 
         # Number of draft layers is encoded in transformer_layer_config
         num_draft_layers = tl_config.num_hidden_layers
@@ -126,27 +126,28 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
             config.transformer_layer_config.hidden_size,
             eps=config.transformer_layer_config.rms_norm_eps,  # type: ignore[arg-type]
         )
-        # GLM-5 MLA RoPE only covers qk_rope_head_dim (interleaved pairs); Qwen3
-        # GQA RoPE covers the full head_dim. Build the cache at the active width
-        # without mutating transformer_layer_config.head_dim.
-        rotary_config = flatten_rope_parameters(config.transformer_layer_config)
-        if is_glm5_mla_config(tl_config):
+        # Build the RoPE cache at the architecture's rotary width without
+        # mutating transformer_layer_config.head_dim.
+        rotary_config = flatten_rope_parameters(tl_config)
+        if rotary_attr := self._model_definitions.rotary_head_dim_attr:
             rotary_config = deepcopy(rotary_config)
-            rotary_config.head_dim = tl_config.qk_rope_head_dim
+            rotary_config.head_dim = getattr(tl_config, rotary_attr)
         self.rotary_emb = Qwen3RotaryEmbedding(rotary_config)  # type: ignore[arg-type]
 
-        context_in = (
-            len(self.target_layer_ids) * config.transformer_layer_config.hidden_size
+        # Module names come from the architecture table so state-dict keys
+        # match the serving runtime (e.g. fc/hidden_norm vs context_proj/context_norm).
+        self.add_module(
+            self._model_definitions.context_proj_name,
+            nn.Linear(
+                len(self.target_layer_ids) * tl_config.hidden_size,
+                tl_config.hidden_size,
+                bias=False,
+            ),
         )
-        context_out = config.transformer_layer_config.hidden_size
-        context_eps = config.transformer_layer_config.rms_norm_eps
-        if is_glm5_mla_config(tl_config):
-            # vLLM contract: context_proj + context_norm.
-            self.context_proj = nn.Linear(context_in, context_out, bias=False)
-            self.context_norm = Qwen3RMSNorm(context_out, eps=context_eps)  # type: ignore[arg-type]
-        else:
-            self.fc = nn.Linear(context_in, context_out, bias=False)
-            self.hidden_norm = Qwen3RMSNorm(context_out, eps=context_eps)  # type: ignore[arg-type]
+        self.add_module(
+            self._model_definitions.context_norm_name,
+            Qwen3RMSNorm(tl_config.hidden_size, eps=tl_config.rms_norm_eps),  # type: ignore[arg-type]
+        )
         self.verifier_norm = resolve_verifier_norm_class(config)(
             config.transformer_layer_config.hidden_size,
             eps=config.transformer_layer_config.rms_norm_eps,  # type: ignore[arg-type]
@@ -394,14 +395,10 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
         return full_attn_mask, sliding_window_attn_mask, anchor_positions, anchor_valid
 
     def _project_context(self, hidden_states: torch.Tensor) -> torch.Tensor:
-        """Project concatenated target aux hiddens into draft width.
-
-        GLM-5 MLA drafts names (``context_proj`` / ``context_norm``);
-        Qwen3 GQA drafts keep ``fc`` / ``hidden_norm``.
-        """
-        if is_glm5_mla_config(self.config.transformer_layer_config):
-            return self.context_norm(self.context_proj(hidden_states))
-        return self.hidden_norm(self.fc(hidden_states))
+        """Project concatenated target aux hiddens into draft width."""
+        proj = getattr(self, self._model_definitions.context_proj_name)
+        norm = getattr(self, self._model_definitions.context_norm_name)
+        return norm(proj(hidden_states))
 
     def _backbone_forward(
         self,

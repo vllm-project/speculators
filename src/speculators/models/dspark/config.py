@@ -1,17 +1,23 @@
-from typing import Literal
+from typing import Any, Literal
 
-from pydantic import Field, model_validator
+from pydantic import Field
 
 from speculators import SpeculatorModelConfig
 from speculators.models.dflash.config import DFlashSpeculatorConfig
-from speculators.models.dflash.glm5 import (
-    GLM5_DSPARK_ARCHITECTURE,
-    is_glm5_mla_config,
-)
+from speculators.models.dflash.glm5 import GLM5_DSPARK_MODEL_TYPE
 
 __all__ = [
+    "EXPORT_ARCHITECTURES",
     "DSparkSpeculatorConfig",
 ]
+
+# Serving-side class names keyed by draft decoder ``model_type``. HF
+# ``save_pretrained`` stamps ``architectures`` with the Python class name; these
+# entries replace it in the written ``config.json`` so the runtime can dispatch
+# the draft (vLLM-Ascend registers ``Glm5DSparkForCausalLM``).
+EXPORT_ARCHITECTURES: dict[str, str] = {
+    GLM5_DSPARK_MODEL_TYPE: "Glm5DSparkForCausalLM",
+}
 
 
 @SpeculatorModelConfig.register("dspark")
@@ -70,9 +76,17 @@ class DSparkSpeculatorConfig(DFlashSpeculatorConfig):
         ),
     )
 
-    @model_validator(mode="after")
-    def _align_glm5_dspark_export_contract(self) -> "DSparkSpeculatorConfig":
-        """vLLM-Ascend loads GLM-5 MLA drafts as ``Glm5DSparkForCausalLM``."""
-        if is_glm5_mla_config(self.transformer_layer_config):
-            self.architectures = [GLM5_DSPARK_ARCHITECTURE]
-        return self
+    def to_dict(self) -> dict[str, Any]:
+        """Serialize with the serving architecture name when one is registered.
+
+        Applied here (rather than on the ``architectures`` field) because HF
+        ``save_pretrained`` overwrites that field right before writing the
+        config; ``to_dict`` runs after the overwrite and feeds ``config.json``.
+        """
+        config_dict = super().to_dict()
+        export_arch = EXPORT_ARCHITECTURES.get(
+            self.transformer_layer_config.model_type
+        )
+        if export_arch is not None:
+            config_dict["architectures"] = [export_arch]
+        return config_dict
