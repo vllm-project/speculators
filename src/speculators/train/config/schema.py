@@ -116,8 +116,7 @@ class DraftArgs(_Group):
         default=None,
         description="(Optional) space-separated list of integer layer ids for the "
         "auxiliary hidden states. Defaults to [2, n//2, n-3]. If custom values were "
-        "used to launch vllm, pass the same ids here, excluding the final layer "
-        "launch_vllm.py appends.",
+        "used to launch vllm, pass the same ids here.",
     )
     token_freq_path: str | None = Field(
         default=None,
@@ -171,6 +170,7 @@ class DraftArgs(_Group):
     )
     sliding_window: int = Field(
         default=2048,
+        gt=0,
         description="Sliding window size for sliding window attention layers "
         "(default: 2048). All draft layers use sliding window by default (except mtp).",
     )
@@ -223,6 +223,11 @@ class DataArgs(_Group):
     )
     num_workers: int = Field(default=12, description="Number of dataloader workers.")
     prefetch_factor: int = Field(default=4, description="Dataloader prefetch factor.")
+    max_transfer_workers: int = Field(
+        default=1,
+        gt=0,
+        description="Maximum concurrent hidden-state transfers per dataloader worker.",
+    )
     max_anchors: int = Field(
         default=512,
         description="Maximum anchor positions for DFlash-family and P-EAGLE training "
@@ -257,15 +262,15 @@ class GenerationArgs(_Group):
 
     vllm_endpoint: str = Field(
         default="http://localhost:8000/v1",
-        description="vLLM endpoint used to generate hidden states on demand. Only "
-        "needed if --on-missing=generate and samples are missing. The vLLM instance "
+        description="vLLM endpoint used to generate hidden states on demand when "
+        "--on-missing=generate. The vLLM instance "
         "must cache hidden states to a location reachable from the training instance.",
     )
     on_missing: Literal["generate", "skip", "warn", "raise"] = Field(
         default="generate",
-        description="Dataloader behaviour when a sample has no cached hidden states. "
-        "Default 'generate' generates them on demand via the vLLM endpoint; the others "
-        "skip the sample, skip with a warning, or raise.",
+        description="Hidden-state source and offline cache-miss policy. 'generate' "
+        "selects vLLM generation; 'skip', 'warn', and 'raise' select the offline "
+        "source and control what happens when a cached sample is missing.",
     )
     on_generate: Literal["delete"] = Field(
         default="delete",
@@ -463,6 +468,13 @@ class LoggingArgs(_Group):
 class DFlashArgs(_Group):
     """Shared DFlash-family backbone knobs."""
 
+    causal_attention: bool | None = Field(
+        default=None,
+        description="Set causality for all DFlash-family draft layers when building "
+        "a fresh model. Saved as transformer_layer_config.is_causal for inference. "
+        "When unset, full-attention layers stay bidirectional and sliding-window "
+        "layers follow sliding_window_non_causal.",
+    )
     block_size: int | None = Field(
         default=None,
         description="Block size for DFlash model (default: 16 for dflash, 8 "
@@ -508,6 +520,14 @@ class DFlash2Args(_Group):
         default=1.0,
         ge=0.0,
         description="DFlash2: weight of the candidate-selector K-way CE term.",
+    )
+    selector_miss_policy: Literal["replace", "strict"] = Field(
+        default="replace",
+        description=(
+            "DFlash2 selector target-miss policy. 'replace' inserts the gold token "
+            "into the training candidates; 'strict' leaves top-K unchanged and "
+            "excludes that position from selector CE. Unary loss remains active."
+        ),
     )
 
 
@@ -642,6 +662,10 @@ _DEFAULT_LOSS_FN: dict[str, str] = {
     "xpress": '{"ce": 0.1, "tv": 0.9}',
 }
 _DEFAULT_BLOCK_SIZE: dict[str, int] = {"dflash": 16, "xpress": 16}
+
+# Default block size of torch flex attention block masks. Kept here rather than
+# imported, so this module does not import torch.
+FLEX_ATTENTION_BLOCK_SIZE = 128
 
 
 class TrainConfig(BaseSettings):
@@ -828,6 +852,25 @@ class TrainConfig(BaseSettings):
                 raise ValueError(
                     f"--dpace-alpha must be in (0, 1], got {self.dflash.dpace_alpha}"
                 )
+        return self
+
+    @model_validator(mode="after")
+    def _validate_eagle3_flex_seq_len(self) -> "TrainConfig":
+        """Eagle3 with flex attention extends its block mask by whole blocks at each
+        TTT step, which matches the KV cache only when ``total_seq_len`` is a multiple
+        of the flex attention block size. Batches are padded to ``total_seq_len``, so
+        checking it here covers every batch."""
+        if (
+            self.speculator_type == "eagle3"
+            and self.draft.draft_attn_impl == "simple_flex_attention"
+            and self.data.total_seq_len % FLEX_ATTENTION_BLOCK_SIZE != 0
+        ):
+            raise ValueError(
+                "--total-seq-len must be a multiple of "
+                f"{FLEX_ATTENTION_BLOCK_SIZE} for eagle3 with "
+                f"--draft-attn-impl=simple_flex_attention, got "
+                f"{self.data.total_seq_len}"
+            )
         return self
 
     def flatten(self) -> dict[str, Any]:

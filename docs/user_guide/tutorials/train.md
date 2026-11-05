@@ -2,6 +2,10 @@
 
 This tutorial walks you through training a speculator model end to end, from raw data to a checkpoint served in vLLM. It covers **Eagle-3**, **P-EAGLE**, **DFlash**, **DFlash2**, **DSpark**, and **MTP**, in both online and offline training modes.
 
+> ⚠️ **Warning: P-EAGLE is deprecated**
+>
+> P-EAGLE training is scheduled for removal in Speculators 0.11. Selecting it emits a `FutureWarning`.
+
 Pick an algorithm and a training mode below; the rest of the walkthrough is the same for every combination. The examples use `Qwen/Qwen3-8B` as the target model -- except for MTP, which needs a verifier with native MTP layers and so uses `Qwen/Qwen3.5-9B`. The process is the same for other models.
 
 ## Choose Your Setup
@@ -109,10 +113,13 @@ speculators prepare-data \
   --data ./target_responses.jsonl \
   --output ./output \
   --max-samples 5000 \
-  --seq-length 8192
+  --seq-length 8192 \
+  --no-skip-token-freq
 ```
 
 If your generation pipeline saves natural-language conversations instead, start the target model's vLLM server as described in Step 2, then use its render endpoint to convert those responses into speculator format:
+
+Set the rendering server's `--max-model-len` above `--seq-length` (for example, at least `8193` for the `8192`-token preparation below) so vLLM has room for an output token. If this is too large for the model or available memory, lower `--seq-length` instead.
 
 ```bash
 speculators prepare-data \
@@ -121,7 +128,8 @@ speculators prepare-data \
   --render-endpoint http://localhost:8000 \
   --output ./output \
   --max-samples 5000 \
-  --seq-length 8192
+  --seq-length 8192 \
+  --no-skip-token-freq
 ```
 
 The render endpoint applies the serving chat template, tokenizes each turn, and derives its loss mask. It does not generate responses or make a dataset on-policy, so the assistant responses must already come from the same target model and generation configuration used for training.
@@ -134,6 +142,7 @@ The render endpoint applies the serving chat template, tokenizes each turn, and 
 - `--output` - Where to save preprocessed data
 - `--max-samples` - Limit samples (optional, good for testing/getting started)
 - `--seq-length` - Maximum sequence length
+- `--no-skip-token-freq` - Write `token_freq.pt`, which `speculators train --draft-vocab-size` needs to build the reduced draft vocab. Omit it if you train with the full verifier vocabulary.
 
 **Expected output:**
 

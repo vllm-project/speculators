@@ -14,7 +14,7 @@ Otherwise, start the target in the vLLM environment, using the vLLM version from
 
 ```bash
 vllm serve meta-llama/Llama-3.1-8B-Instruct \
-  --max-model-len 8192 \
+  --max-model-len 8193 \
   --port 8000
 ```
 
@@ -63,6 +63,8 @@ The file contains the retrieved context, question, and generated answer together
 ## 2. Prepare the conversation
 
 Leave the target server running and use its rendering endpoint to apply the same chat template:
+
+The server's `--max-model-len` must be greater than the `--seq-length` below: vLLM reserves at least one output token for rendering. If the server reports `max_tokens must be at least 1`, relaunch it with a larger `--max-model-len` and rerun preparation.
 
 ```bash
 speculators prepare-data \
