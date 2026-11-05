@@ -49,6 +49,21 @@ def test_check_hidden_states_reports_non_finite_float8_values(dtype):
         )
 
 
+def test_check_hidden_states_reports_inf_float8_e5m2():
+    # Unlike float8_e4m3fn, float8_e5m2 can hold infinities.
+    hidden_states = torch.zeros(3, 4, 2, dtype=torch.float32)
+    hidden_states[0, 1, 1] = torch.inf
+
+    with pytest.raises(ValueError, match=r"max=inf"):
+        check_hidden_states(
+            {
+                "token_ids": torch.tensor([1, 2, 3]),
+                "hidden_states": hidden_states.to(torch.float8_e5m2),
+            },
+            [1, 2, 3],
+        )
+
+
 # ===== get_indices_to_process Tests =====
 
 
