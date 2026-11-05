@@ -1,6 +1,6 @@
 # generate-agentic-traces
 
-Generates agentic execution traces with [Pi](https://github.com/badlogic/pi-mono) and converts them into speculator-format training rows.
+Generates agentic execution traces with [Pi](https://github.com/earendil-works/pi) and converts them into speculator-format training rows.
 
 For each task in a SWE-smith-style dataset, a Pi agent runs inside the task container against a vLLM-served target model and records its tool calls and observations as a raw trace. The command then renders and tokenizes each trace into rows with `input_ids` and `loss_mask` for `speculators train`.
 
