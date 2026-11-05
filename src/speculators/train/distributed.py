@@ -217,29 +217,29 @@ def apply_fully_sharded(
         reduce_dtype=torch.float32,
     )
 
-    ignored_params = _frozen_params(model) if replicate_frozen else set()
+    ignored_params = None
     if replicate_frozen:
+        ignored_params = _frozen_params(model)
         logger.info(
             "FSDP: replicating %d frozen params (excluded from sharding)",
             len(ignored_params),
         )
 
     for layer in model.layers:  # type: ignore[union-attr]
-        if ignored_params:
-            fully_shard(layer, mp_policy=mp_policy, ignored_params=ignored_params)
-        else:
-            fully_shard(layer, mp_policy=mp_policy)
+        fully_shard(layer, mp_policy=mp_policy, ignored_params=ignored_params)
+
+    fully_shard(model, mp_policy=mp_policy, ignored_params=ignored_params)
 
     if ignored_params:
-        fully_shard(model, mp_policy=mp_policy, ignored_params=ignored_params)
         # FSDP does not move ignored parameters. Keep the model on one device
         # for distributed checkpoint loading, and match the compute dtype.
         acc = torch.accelerator.current_accelerator()
         if acc is not None:
             device = torch.device(acc.type, get_local_rank())
             for param in ignored_params:
-                param.data = param.data.to(device=device, dtype=param_dtype)
-    else:
-        fully_shard(model, mp_policy=mp_policy)
+                if param.is_floating_point():
+                    param.data = param.data.to(device=device, dtype=param_dtype)
+                else:
+                    param.data = param.data.to(device=device)
 
     return model

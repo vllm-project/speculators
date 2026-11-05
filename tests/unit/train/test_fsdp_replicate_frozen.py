@@ -52,7 +52,7 @@ def test_apply_fully_sharded_ignored_params(monkeypatch, replicate):
         assert calls[0][1]["ignored_params"] == frozen
         assert calls[-1][1]["ignored_params"] == frozen
     else:
-        assert all("ignored_params" not in kwargs for _, kwargs in calls)
+        assert all(kwargs["ignored_params"] is None for _, kwargs in calls)
 
 
 def test_apply_fully_sharded_without_frozen_params(monkeypatch):
@@ -63,7 +63,7 @@ def test_apply_fully_sharded_without_frozen_params(monkeypatch):
         dist_mod, "fully_shard", lambda module, **kwargs: calls.append(kwargs)
     )
     apply_fully_sharded(model, replicate_frozen=True)
-    assert all("ignored_params" not in kwargs for kwargs in calls)
+    assert all(kwargs["ignored_params"] == set() for kwargs in calls)
 
 
 def test_ignored_params_moved_and_cast_after_wrapping(monkeypatch):
@@ -91,3 +91,24 @@ def test_ignored_params_moved_and_cast_after_wrapping(monkeypatch):
         assert not param.requires_grad
         torch.testing.assert_close(param, original[param].to(torch.bfloat16))
     assert all(param.dtype == torch.float32 for param in trainable)
+
+
+@pytest.mark.parametrize("dtype", [torch.int64, torch.bool])
+def test_ignored_non_floating_params_preserve_dtype(monkeypatch, dtype):
+    """Move frozen non-floating weights without casting or changing values."""
+    model = MixedModel()
+    param = nn.Parameter(torch.tensor([0, 1, 257], dtype=dtype), requires_grad=False)
+    model.register_parameter("frozen_metadata", param)
+    original = param.detach().clone()
+    monkeypatch.setattr(dist_mod, "fully_shard", lambda module, **kwargs: module)
+    monkeypatch.setattr(
+        torch.accelerator, "current_accelerator", lambda: torch.device("cpu")
+    )
+
+    apply_fully_sharded(model, replicate_frozen=True, param_dtype=torch.bfloat16)
+
+    assert model.frozen_metadata is param
+    assert param.device.type == "cpu"
+    assert param.dtype == dtype
+    assert not param.requires_grad
+    torch.testing.assert_close(param, original)
