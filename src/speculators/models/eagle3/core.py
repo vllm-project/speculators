@@ -3,7 +3,7 @@ from typing import ClassVar
 
 import torch
 from torch.nn.attention.flex_attention import create_block_mask, create_mask
-from transformers import AutoConfig, DynamicCache, PretrainedConfig
+from transformers import DynamicCache, PretrainedConfig
 
 from speculators.config import SpeculatorsConfig, VerifierConfig
 from speculators.losses import LossConfig, resolve_loss_config
@@ -21,6 +21,7 @@ from speculators.models.utils import (
     conditional_torch_compile,
     flatten_rope_parameters,
     resolve_target_layer_ids,
+    resolve_verifier_norm_class,
 )
 from speculators.proposals.greedy import GreedyTokenProposalConfig
 
@@ -116,7 +117,9 @@ class Eagle3DraftModel(DraftVocabMixin, SpeculatorModel):
         self.norm = norm_class(
             self.hidden_size, eps=config.transformer_layer_config.rms_norm_eps
         )
-        self.verifier_norm = norm_class(self.hidden_size, eps=tl_config.rms_norm_eps)
+        self.verifier_norm = resolve_verifier_norm_class(config)(
+            self.hidden_size, eps=tl_config.rms_norm_eps
+        )
         self.verifier_norm.weight.requires_grad = False
 
         if config.norm_before_fc:
@@ -175,19 +178,6 @@ class Eagle3DraftModel(DraftVocabMixin, SpeculatorModel):
         super().load_verifier_weights()
 
         self.embed_tokens.weight.requires_grad_(self.config.embed_requires_grad)
-
-        verifier_config = self.config.speculators_config.verifier
-        verifier_model_config = AutoConfig.from_pretrained(verifier_config.name_or_path)  # type: ignore[arg-type]
-
-        # For multimodal models (Qwen3VL, etc.), extract text_config
-        if hasattr(verifier_model_config, "text_config"):
-            verifier_model_config = verifier_model_config.text_config
-
-        if verifier_model_config.hidden_size != self.hidden_size:
-            raise ValueError(
-                f"Verifier hidden size {verifier_model_config.hidden_size} does not"
-                f" match draft hidden size {self.hidden_size}."
-            )
 
     @conditional_torch_compile
     def forward(  # noqa: C901

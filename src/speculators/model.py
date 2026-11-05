@@ -165,6 +165,14 @@ class DraftVocabMixin(nn.Module):
         embed_tokens_weight = verifier_weights["embed_tokens.weight"]
         lm_head_weight = verifier_weights.get("lm_head.weight", embed_tokens_weight)
 
+        verifier_hidden_size = embed_tokens_weight.shape[-1]
+        draft_hidden_size = self.embed_tokens.embedding_dim
+        if verifier_hidden_size != draft_hidden_size:
+            raise ValueError(
+                f"Verifier hidden size {verifier_hidden_size} does not match"
+                f" draft hidden size {draft_hidden_size}."
+            )
+
         # Load embed_tokens if not already loaded (NaN means uninitialized)
         if overwrite_embed_tokens or self.embed_tokens.weight.isnan().any():
             self.embed_tokens.load_state_dict({"weight": embed_tokens_weight})

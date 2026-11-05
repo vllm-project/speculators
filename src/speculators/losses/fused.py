@@ -123,8 +123,8 @@ def _prune_oversized_tiles(configs, nargs, **_):
     return [config for config in configs if config.kwargs["BLOCK_SIZE"] == floor]
 
 
-# Keyed on OP as well as the vocab: CE streams the row once where the
-# distribution losses stream it three times, so they do not share an optimum.
+# Keyed on OP as well as the vocab: CE, KL and RKL stream the row once where
+# JSD and TV stream it three times, so they do not share an optimum.
 _autotune_tile = triton.autotune(
     configs=_tile_configs(),
     key=["n_cols", "OP"],
@@ -176,6 +176,77 @@ def loss_forward_kernel(  # noqa: C901 -- constexpr OP branches, pruned per inst
     logits_ptr += pid * n_cols
     targets_ptr += pid * n_cols
 
+    # Lint exemptions: `in`/merged compares aren't constexpr-foldable here.
+    if OP == _OP_KL or OP == _OP_RKL:  # noqa: PLR1714, SIM109
+        # Single pass. Expanding the log-softmaxes turns either divergence
+        # into one cross term plus two log-sum-exps, and that cross term is an
+        # exponential the online loop can normalize as it goes -- so neither
+        # direction needs a finished log-sum-exp before it starts summing.
+        #
+        # Write x for the draft logits and y for the target's, so that
+        # dp = softmax(x), tp = softmax(y), and per row lse = m + log z with
+        # m the max and z = sum e^(v - m). Then
+        #
+        #   KL(tp || dp) = sum tp (log tp - log dp)              [definition]
+        #                = sum tp ((y - lse_t) - (x - lse_d))
+        #                = sum tp (y - x) + lse_d - lse_t        [sum tp = 1]
+        #                = s / z_t + lse_d - lse_t,              [tp = e^(y-m_t)/z_t]
+        #                  s = sum e^(y - m_t) (y - x)
+        #
+        # The three-pass version evaluated the third line as written, which
+        # needs lse_t -- a finished pass over y -- before its first term.
+        # Taking the constant 1/z_t out of the sum defers that division to the
+        # end and leaves s as the only quantity the loop carries. RKL, which
+        # is KL(dp || tp), is the same derivation with the roles swapped:
+        #
+        #   RKL = s / z_d + lse_t - lse_d,  s = sum e^(x - m_d) (x - y)
+        #
+        # s is then safe against a running max for the same reason z is: when
+        # m_t grows to m_t', the partial sum holds stale e^(y - m_t) factors,
+        # and the weight (y - x) does not depend on m_t, so the whole of s
+        # rescales by exp(m_t - m_t') just as z_t does. One read of the row
+        # replaces three (draft stats, target stats, divergence); the stats
+        # rows stored below are the same ones, so the backward is unchanged.
+        m_d = float("-inf")
+        z_d = 0.0
+        m_t = float("-inf")
+        z_t = 0.0
+        acc = 0.0
+        for i in range(0, n_cols, BLOCK_SIZE):
+            offsets = i + tl.arange(0, BLOCK_SIZE)
+            mask = offsets < n_cols
+            x = tl.load(logits_ptr + offsets, mask=mask, other=float("-inf")).cast(
+                tl.float32
+            )
+            y = tl.load(targets_ptr + offsets, mask=mask, other=float("-inf")).cast(
+                tl.float32
+            )
+            m_d_new = tl.maximum(m_d, tl.max(x))
+            scale_d = tl.exp(m_d - m_d_new)
+            ex = tl.where(mask, tl.exp(x - m_d_new), 0.0)
+            z_d = z_d * scale_d + tl.sum(ex)
+            m_t_new = tl.maximum(m_t, tl.max(y))
+            scale_t = tl.exp(m_t - m_t_new)
+            ey = tl.where(mask, tl.exp(y - m_t_new), 0.0)
+            z_t = z_t * scale_t + tl.sum(ey)
+            if OP == _OP_KL:
+                acc = acc * scale_t + tl.sum(tl.where(mask, ey * (y - x), 0.0))
+            else:
+                acc = acc * scale_d + tl.sum(tl.where(mask, ex * (x - y), 0.0))
+            m_d = m_d_new
+            m_t = m_t_new
+        lse_d = m_d + tl.log(z_d)
+        lse_t = m_t + tl.log(z_t)
+        loss = acc / z_t + lse_d - lse_t if OP == _OP_KL else acc / z_d + lse_t - lse_d
+        tl.store(stats_ptr + 0 * stats_row + pid, m_d)
+        tl.store(stats_ptr + 1 * stats_row + pid, z_d)
+        tl.store(stats_ptr + 2 * stats_row + pid, m_t)
+        tl.store(stats_ptr + 3 * stats_row + pid, z_t)
+        tl.store(loss_ptr + pid, loss)
+        # The RKL backward reads row 4 as the loss value itself.
+        tl.store(stats_ptr + 4 * stats_row + pid, loss)
+        return
+
     m_d, z_d = _online_stats(logits_ptr, n_cols, BLOCK_SIZE)
     lse_d = m_d + tl.log(z_d)
     tl.store(stats_ptr + 0 * stats_row + pid, m_d)
@@ -218,11 +289,7 @@ def loss_forward_kernel(  # noqa: C901 -- constexpr OP branches, pruned per inst
             ltp = y - lse_t
             dp = tl.exp(ldp)
             tp = tl.exp(ltp)
-            if OP == _OP_KL:
-                acc += tl.sum(tl.where(mask, tp * (ltp - ldp), 0.0))
-            elif OP == _OP_RKL:
-                acc += tl.sum(tl.where(mask, dp * (ldp - ltp), 0.0))
-            elif OP == _OP_JSD:
+            if OP == _OP_JSD:
                 lmp = _log_mix(ldp, ltp)
                 acc += tl.sum(tl.where(mask, dp * (ldp - lmp), 0.0))
                 extra += tl.sum(tl.where(mask, tp * (ltp - lmp), 0.0))
@@ -230,11 +297,7 @@ def loss_forward_kernel(  # noqa: C901 -- constexpr OP branches, pruned per inst
                 acc += tl.sum(tl.where(mask, tl.minimum(dp, tp), 0.0))
                 extra += tl.sum(tl.where(mask & (dp <= tp), dp, 0.0))
 
-        # Lint exemptions: `in`/merged compares aren't constexpr-foldable here.
-        if OP == _OP_KL or OP == _OP_RKL:  # noqa: PLR1714, SIM109
-            tl.store(loss_ptr + pid, acc)
-            tl.store(stats_ptr + 4 * stats_row + pid, acc)
-        elif OP == _OP_JSD:
+        if OP == _OP_JSD:
             tl.store(loss_ptr + pid, 0.5 * (acc + extra))
             tl.store(stats_ptr + 4 * stats_row + pid, acc)
         elif OP == _OP_TV:
