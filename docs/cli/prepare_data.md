@@ -54,6 +54,8 @@ speculators prepare-data \
 
 - **`--token-freq-path`** (str, default: `{output}/token_freq.pt`) Path to save token frequency distribution. Defaults to `token_freq.pt` in the output directory.
 
+- **`--skip-token-freq` / `--no-skip-token-freq`** (default: skip) Whether to skip computing the token frequency distribution. Pass `--no-skip-token-freq` if you will train with a reduced draft vocab (`speculators train --draft-vocab-size`), which builds its vocab mapping from this file.
+
 - **`--render-endpoint`** (str, default: `None`) Base URL of the target model's running vLLM server (e.g. `http://localhost:8000`). The instance launched for hidden-state extraction ([launch_vllm.py](launch_vllm.md)) serves this too, so no second server is needed. Pass the base URL only: `/v1/chat/completions/render` is appended to it, so the `/v1`-suffixed form that [data_generation_offline.py](data_generation_offline.md) `--endpoint` takes will 404. Required for natural-language conversations; omit it when every input already contains `input_ids` and `loss_mask`.
 
 - **`--minimum-valid-tokens`** (int, default: `None`) Drop samples whose loss mask contains fewer than this many trainable tokens.
