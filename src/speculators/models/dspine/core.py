@@ -152,7 +152,6 @@ class DSpineDraftModel(DFlashDraftModel):
         torch.Tensor,
         torch.Tensor,
         torch.Tensor,
-        torch.Tensor,
         list[torch.Tensor],
         torch.Tensor,
     ]:
@@ -256,7 +255,7 @@ class DSpineDraftModel(DFlashDraftModel):
         hidden = self.norm(draft_hidden)
         # shape: [1, max_anchors * block_size, vocab_size]
         unary_logits = self.lm_head(hidden)
-        aligned_loss_mask = loss_mask.clone()[:, anchored_block_indices]
+        aligned_loss_mask = loss_mask[:, anchored_block_indices]
         aligned_loss_mask = aligned_loss_mask * (
             anchor_valid.repeat_interleave(self.block_size)
             .unsqueeze(0)
@@ -264,7 +263,6 @@ class DSpineDraftModel(DFlashDraftModel):
         )
         aligned_loss_mask[:, :: self.block_size] = 0
         return (
-            hidden,
             unary_logits,
             targets,
             aligned_loss_mask,
@@ -296,7 +294,6 @@ class DSpineDraftModel(DFlashDraftModel):
         **kwargs,
     ) -> tuple[None, torch.Tensor, dict[str, Any]]:
         (
-            _hidden,
             unary_logits,
             targets,
             aligned_loss_mask,

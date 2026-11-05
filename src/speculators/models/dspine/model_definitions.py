@@ -12,8 +12,6 @@ __all__ = [
     "build_output_embedding_transfer_space",
 ]
 
-_MATRIX_NDIM = 2
-
 
 def _scaled_normalize(x: torch.Tensor, dimension: int, eps: float) -> torch.Tensor:
     normalized = functional.normalize(x.float(), dim=-1, eps=eps)
