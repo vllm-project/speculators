@@ -81,6 +81,30 @@ def test_load_trace_tasks_skips_duplicate_instance_ids(tmp_path):
     assert tasks == [VALID]
 
 
+@pytest.mark.parametrize(
+    "instance_id",
+    ["/etc/passwd", "../escape", "a/b", "a\\b", ".", "..", "", "trailing/"],
+)
+def test_load_trace_tasks_skips_unsafe_instance_ids(tmp_path, instance_id):
+    path = tmp_path / "tasks.json"
+    path.write_text(json.dumps([{**VALID, "instance_id": instance_id}, VALID]))
+
+    tasks = load_trace_tasks([str(path)])
+
+    assert tasks == [VALID]
+
+
+def test_load_trace_tasks_keeps_swe_smith_instance_id(tmp_path):
+    task = {
+        **VALID,
+        "instance_id": "pytest-dev__iniconfig.16793ead.combine_file__abc123",
+    }
+    path = tmp_path / "tasks.json"
+    path.write_text(json.dumps([task]))
+
+    assert load_trace_tasks([str(path)]) == [task]
+
+
 def test_build_pi_prompt_includes_problem_and_workdir():
     prompt = build_pi_prompt(VALID)
 
@@ -183,6 +207,23 @@ def test_run_pi_trace_requires_docker_cli(tmp_path, monkeypatch):
 
     with pytest.raises(RuntimeError, match="docker.*not on PATH"):
         run_pi_trace(VALID, **_run_kwargs(tmp_path))
+
+
+@pytest.mark.parametrize(
+    "instance_id", ["/etc/passwd", "../escape", "a/b", "a\\b", ".", "..", ""]
+)
+def test_run_pi_trace_rejects_unsafe_instance_id(tmp_path, monkeypatch, instance_id):
+    container, containers = _fake_docker(monkeypatch)
+    monkeypatch.setattr(agentic_runner, "_docker_exec", _fake_exec)
+    task = {**VALID, "instance_id": instance_id}
+    out_dir = tmp_path / "out"
+
+    with pytest.raises(ValueError, match="instance_id"):
+        run_pi_trace(task, **_run_kwargs(tmp_path))
+
+    assert containers.create_kwargs is None
+    assert not container.started
+    assert not out_dir.exists()
 
 
 def test_run_pi_trace_quotes_shell_arguments(tmp_path, monkeypatch):

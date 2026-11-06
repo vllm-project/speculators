@@ -80,6 +80,31 @@ def _settings_config(tools: str) -> dict:
     }
 
 
+def _unsafe_instance_id(instance_id: Any) -> str | None:
+    """Return a reason when ``instance_id`` is not a single path component."""
+    if not isinstance(instance_id, str) or not instance_id:
+        return "instance_id must be a non-empty string"
+    path = Path(instance_id)
+    if (
+        instance_id in (".", "..")
+        or "/" in instance_id
+        or "\\" in instance_id
+        or path.is_absolute()
+        or path.name != instance_id
+    ):
+        return f"unsafe instance_id '{instance_id}': must be a single path component"
+    return None
+
+
+def _child_path(out_dir: str | Path, *parts: str) -> Path:
+    root = Path(out_dir).resolve()
+    path = Path(out_dir).joinpath(*parts)
+    resolved = path.resolve()
+    if not resolved.is_relative_to(root) or resolved == root:
+        raise ValueError(f"Refusing to write outside output directory: {resolved}")
+    return path
+
+
 def _normalize_row(row: Any, *, source: str, index: int) -> dict | None:
     if not isinstance(row, dict):
         logger.warning("Skipping %s row %d: not a JSON object", source, index)
@@ -93,6 +118,10 @@ def _normalize_row(row: Any, *, source: str, index: int) -> dict | None:
             )
             return None
         normalized[field] = value.strip()
+    unsafe = _unsafe_instance_id(normalized["instance_id"])
+    if unsafe:
+        logger.warning("Skipping %s row %d: %s", source, index, unsafe)
+        return None
     for field in _OPTIONAL_FIELDS:
         if field in row:
             normalized[field] = row[field]
@@ -241,7 +270,10 @@ def run_pi_trace(
         )
 
     instance_id = task["instance_id"]
-    run_dir = Path(out_dir) / instance_id
+    unsafe = _unsafe_instance_id(instance_id)
+    if unsafe:
+        raise ValueError(unsafe)
+    run_dir = _child_path(out_dir, instance_id)
     run_dir.mkdir(parents=True, exist_ok=True)
     pi_home = run_dir / "pi-home"
     pi_home.mkdir(exist_ok=True)
@@ -383,10 +415,11 @@ def generate_traces(
         instance_id = result.get("instance_id")
         if instance_id:
             try:
-                run_dir = Path(out_dir) / instance_id
+                run_dir = _child_path(out_dir, instance_id)
+                _child_path(run_dir, "result.json")
                 run_dir.mkdir(parents=True, exist_ok=True)
                 (run_dir / "result.json").write_text(json.dumps(result, indent=2))
-            except OSError as exc:
+            except (OSError, ValueError) as exc:
                 logger.warning(
                     "Failed to write result.json for %s: %s", instance_id, exc
                 )
