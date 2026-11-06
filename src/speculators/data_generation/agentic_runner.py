@@ -12,6 +12,8 @@ importable and testable without either dependency.
 
 import json
 import logging
+import shlex
+import shutil
 import subprocess
 import time
 import uuid
@@ -163,16 +165,28 @@ def load_trace_tasks(specs: list[str]) -> list[dict]:
     Returns:
         Rows with ``instance_id``, ``image_name`` and ``problem_statement``
         (plus any of ``repo``/``FAIL_TO_PASS``/``PASS_TO_PASS``). Malformed
-        rows are skipped with a warning.
+        rows and repeated ``instance_id`` values are skipped with a warning.
     """
     tasks: list[dict] = []
+    seen_ids: set[str] = set()
     for spec in specs:
         path = Path(spec)
         rows = _rows_from_local_path(path) if path.exists() else _rows_from_hf(spec)
         for index, row in enumerate(rows):
             normalized = _normalize_row(row, source=spec, index=index)
-            if normalized is not None:
-                tasks.append(normalized)
+            if normalized is None:
+                continue
+            instance_id = normalized["instance_id"]
+            if instance_id in seen_ids:
+                logger.warning(
+                    "Skipping %s row %d: duplicate instance_id '%s'",
+                    spec,
+                    index,
+                    instance_id,
+                )
+                continue
+            seen_ids.add(instance_id)
+            tasks.append(normalized)
     return tasks
 
 
@@ -189,8 +203,10 @@ def _docker_exec(
     )
 
 
-def _collect_file(container_name: str, remote: str, dest: Path) -> None:
-    proc = _docker_exec(container_name, ["cat", remote])
+def _collect_file(
+    container_name: str, remote: str, dest: Path, *, timeout: float | None = None
+) -> None:
+    proc = _docker_exec(container_name, ["cat", remote], timeout=timeout)
     if proc.returncode == 0:
         dest.write_bytes(proc.stdout)
 
@@ -217,6 +233,12 @@ def run_pi_trace(
         and ``error`` (``None`` on success).
     """
     import docker  # noqa: PLC0415
+
+    if shutil.which("docker") is None:
+        raise RuntimeError(
+            "The 'docker' CLI is not on PATH. Install Docker and make the "
+            "command available before generating traces."
+        )
 
     instance_id = task["instance_id"]
     run_dir = Path(out_dir) / instance_id
@@ -277,16 +299,26 @@ def run_pi_trace(
         container = client.containers.create(**create_kwargs)
 
     started = time.time()
+    deadline = started + timeout
+
+    def remaining() -> float:
+        return max(deadline - time.time(), 1.0)
+
     try:
         container.start()
-        checkout = _docker_exec(name, ["git", "checkout", instance_id], timeout=timeout)
+        checkout = _docker_exec(
+            name, ["git", "-C", _WORKDIR, "checkout", instance_id], timeout=timeout
+        )
         if checkout.returncode != 0:
             stderr = checkout.stderr.decode(errors="replace")
             raise RuntimeError(f"git checkout {instance_id} failed: {stderr}")
 
         pi_cmd = (
-            f"cd {_WORKDIR} && pi --provider {pi_provider} --model {pi_model} "
-            f"--mode json --no-session --tools {tools} @{_PROMPT_PATH} "
+            f"cd {shlex.quote(_WORKDIR)} && pi "
+            f"--provider {shlex.quote(pi_provider)} "
+            f"--model {shlex.quote(pi_model)} --mode json --no-session "
+            f"--tools {shlex.quote(tools)} "
+            f"{shlex.quote('@' + _PROMPT_PATH)} "
             "> /tmp/pi.jsonl 2>/tmp/pi.err; echo $? > /tmp/pi.rc"
         )
         try:
@@ -294,14 +326,23 @@ def run_pi_trace(
         except subprocess.TimeoutExpired:
             result["error"] = f"TimeoutExpired: Pi exceeded {timeout}s"
 
-        _collect_file(name, "/tmp/pi.jsonl", trace_path)  # noqa: S108
-        _collect_file(name, "/tmp/pi.err", run_dir / "pi.err")  # noqa: S108
-        _collect_file(name, "/tmp/pi.rc", run_dir / "pi.rc")  # noqa: S108
+        _collect_file(name, "/tmp/pi.jsonl", trace_path, timeout=remaining())  # noqa: S108
+        _collect_file(name, "/tmp/pi.err", run_dir / "pi.err", timeout=remaining())  # noqa: S108
+        rc_path = run_dir / "pi.rc"
+        _collect_file(name, "/tmp/pi.rc", rc_path, timeout=remaining())  # noqa: S108
+        if result["error"] is None and rc_path.exists():
+            try:
+                pi_rc = int(rc_path.read_text(encoding="utf-8").strip())
+            except ValueError:
+                pi_rc = 0
+            if pi_rc != 0:
+                result["error"] = f"Pi exited with code {pi_rc}"
 
-        diff = _docker_exec(name, ["/bin/sh", "-lc", f"cd {_WORKDIR} && git diff"])
+        diff = _docker_exec(name, ["git", "-C", _WORKDIR, "diff"], timeout=remaining())
         patch_path.write_bytes(diff.stdout)
     except Exception as exc:
-        result["error"] = f"{type(exc).__name__}: {exc}"
+        if result["error"] is None:
+            result["error"] = f"{type(exc).__name__}: {exc}"
     finally:
         result["seconds"] = time.time() - started
         try:
@@ -341,9 +382,18 @@ def generate_traces(
         )
         instance_id = result.get("instance_id")
         if instance_id:
-            run_dir = Path(out_dir) / instance_id
-            run_dir.mkdir(parents=True, exist_ok=True)
-            (run_dir / "result.json").write_text(json.dumps(result, indent=2))
+            try:
+                run_dir = Path(out_dir) / instance_id
+                run_dir.mkdir(parents=True, exist_ok=True)
+                (run_dir / "result.json").write_text(json.dumps(result, indent=2))
+            except OSError as exc:
+                logger.warning(
+                    "Failed to write result.json for %s: %s", instance_id, exc
+                )
+                message = f"Failed to write result.json: {exc}"
+                if result.get("error"):
+                    message = f"{result['error']}; {message}"
+                result["error"] = message
         return result
 
     if workers <= 1:
