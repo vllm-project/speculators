@@ -211,7 +211,11 @@ def test_rows_from_pi_trace_accumulates_runs(tmp_path, monkeypatch):
     ]
 
 
-def test_rows_from_pi_trace_skips_failed_retry_attempt(tmp_path, monkeypatch):
+def test_rows_from_pi_trace_keeps_prompt_from_failed_retry_attempt(
+    tmp_path, monkeypatch
+):
+    # A retry continues the previous run, so its agent_end only carries the new
+    # assistant message. The prompt from the failed attempt must survive.
     events = [
         {
             "type": "agent_end",
@@ -225,13 +229,11 @@ def test_rows_from_pi_trace_skips_failed_retry_attempt(tmp_path, monkeypatch):
         {
             "type": "agent_end",
             "messages": [
-                {"role": "system", "content": "sys"},
-                {"role": "user", "content": "task"},
                 {
                     "role": "assistant",
                     "content": [{"type": "text", "text": "answer"}],
                     "stopReason": "stop",
-                },
+                }
             ],
             "willRetry": False,
         },
@@ -284,6 +286,23 @@ def test_rows_from_pi_trace_requires_a_completed_run(tmp_path, monkeypatch):
     ]
 
     with pytest.raises(ValueError, match="No completed agent_end run"):
+        _capture_conversations(tmp_path, monkeypatch, events)
+
+
+def test_rows_from_pi_trace_rejects_prompt_without_assistant(tmp_path, monkeypatch):
+    # The retry never finished, so the trace holds only the failed attempt's prompt.
+    events = [
+        {
+            "type": "agent_end",
+            "messages": [
+                {"role": "user", "content": "task"},
+                {"role": "assistant", "content": "", "stopReason": "error"},
+            ],
+            "willRetry": True,
+        }
+    ]
+
+    with pytest.raises(ValueError, match="No assistant response"):
         _capture_conversations(tmp_path, monkeypatch, events)
 
 
@@ -394,6 +413,7 @@ def test_rows_from_pi_trace_preserves_heterogeneous_tools(tmp_path, monkeypatch)
     messages = [
         {"role": "system", "content": "sys", "toolsAdded": tools},
         {"role": "user", "content": [{"type": "text", "text": "hi"}]},
+        {"role": "assistant", "content": [{"type": "text", "text": "ok"}]},
     ]
     trace_path = tmp_path / "pi.jsonl"
     trace_path.write_text(

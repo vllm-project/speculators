@@ -139,12 +139,13 @@ def pi_messages_to_conversation(
 
 
 def _completed_run_messages(trace_path: Path) -> list[dict]:
-    """Concatenate messages from every completed ``agent_end`` run.
+    """Concatenate messages from every ``agent_end`` run.
 
-    Pi emits one ``agent_end`` per low-level run, and compaction or retry starts
-    a new run. A run with ``willRetry`` failed and only its retry carries the
-    usable messages. Repeated system and user messages are dropped so a
-    re-emitted prompt does not appear twice.
+    Each ``agent_end`` carries only the messages produced by that low-level run,
+    so retries, compaction, and follow-up work append to the earlier runs. A run
+    with ``willRetry`` ends in the failed assistant turn that the retry replaces,
+    so that turn is dropped and the rest of the run is kept. Repeated system and
+    user messages are dropped so a re-emitted prompt does not appear twice.
     """
     messages: list[dict] = []
     seen_context: set[tuple[str, str]] = set()
@@ -162,9 +163,14 @@ def _completed_run_messages(trace_path: Path) -> list[dict]:
             if not isinstance(event, dict) or event.get("type") != "agent_end":
                 continue
             found_run = True
-            if event.get("willRetry"):
-                continue
-            for message in event.get("messages") or []:
+            run_messages = event.get("messages") or []
+            if (
+                event.get("willRetry")
+                and run_messages
+                and run_messages[-1].get("role") == "assistant"
+            ):
+                run_messages = run_messages[:-1]
+            for message in run_messages:
                 role = message.get("role")
                 if role in ("system", "user"):
                     key = (role, json.dumps(message, sort_keys=True))
@@ -181,10 +187,10 @@ def _completed_run_messages(trace_path: Path) -> list[dict]:
 
 
 def _reject_failed_response(messages: list[dict], trace_path: Path) -> None:
-    """Raise when the final assistant response failed or was aborted."""
+    """Raise when the trace has no final assistant response, or a failed one."""
     final = next((m for m in reversed(messages) if m.get("role") == "assistant"), None)
     if final is None:
-        return
+        raise ValueError(f"No assistant response in Pi trace: {trace_path}")
     stop_reason = final.get("stopReason")
     if stop_reason in ("error", "aborted"):
         raise ValueError(

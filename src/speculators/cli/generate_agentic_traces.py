@@ -216,21 +216,6 @@ def setup_pi(
     _install_pi(target, node_version, force, skip_rg)
 
 
-def _remove_created_trace_dirs(
-    trace_path: Path,
-    existing_names: set[str],
-    created_ids: set[str],
-    output_path: Path,
-) -> None:
-    for name in created_ids - existing_names:
-        entry = trace_path / name
-        if not entry.is_dir():
-            continue
-        if output_path.resolve().is_relative_to(entry.resolve()):
-            continue
-        shutil.rmtree(entry, ignore_errors=True)
-
-
 def _cleanup_traces(
     trace_path: Path,
     existing_names: set[str],
@@ -241,7 +226,13 @@ def _cleanup_traces(
     created_ids = {
         result["instance_id"] for result in results if result.get("instance_id")
     }
-    _remove_created_trace_dirs(trace_path, existing_names, created_ids, output_path)
+    for name in created_ids - existing_names:
+        entry = trace_path / name
+        if not entry.is_dir():
+            continue
+        if output_path.resolve().is_relative_to(entry.resolve()):
+            continue
+        shutil.rmtree(entry, ignore_errors=True)
     if not trace_path_existed and trace_path.is_dir() and not any(trace_path.iterdir()):
         trace_path.rmdir()
 
