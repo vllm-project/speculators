@@ -534,7 +534,12 @@ def run_stitch_mtp(
 
 
 def _emit_ci_metric(metrics_dict: dict) -> None:
-    """Write a metrics record when ``SPECULATORS_METRICS_DIR`` is set."""
+    """Write one ``(metric, value, labels)`` record per numeric metric.
+
+    Activated by the ``SPECULATORS_METRICS_DIR`` env-var.  Labels are
+    auto-populated from the CI environment (Buildkite / GitHub Actions)
+    and the current pytest context.
+    """
     metrics_dir = os.environ.get("SPECULATORS_METRICS_DIR")
     if not metrics_dir:
         return
@@ -546,18 +551,34 @@ def _emit_ci_metric(metrics_dict: dict) -> None:
         test_id = parts[-1] if len(parts) > 1 else test_name
         test_file = parts[0] if len(parts) > 1 else ""
 
-        record = {
+        labels = {
             "timestamp": datetime.now(UTC).isoformat(),
-            "git_sha": git_sha(find_repo_root(Path(__file__))),
+            "git_sha": (
+                os.environ.get("BUILDKITE_COMMIT")
+                or git_sha(find_repo_root(Path(__file__)))
+            ),
+            "branch": os.environ.get(
+                "BUILDKITE_BRANCH",
+                os.environ.get("GITHUB_REF_NAME", ""),
+            ),
+            "build_url": os.environ.get(
+                "BUILDKITE_BUILD_URL",
+                os.environ.get("GITHUB_RUN_URL", ""),
+            ),
             "test_id": test_id,
             "test_file": test_file,
-            **metrics_dict,
         }
+
+        records = [
+            {"metric": key, "value": value, **labels}
+            for key, value in metrics_dict.items()
+            if isinstance(value, (int, float))
+        ]
 
         out_dir = Path(metrics_dir)
         out_dir.mkdir(parents=True, exist_ok=True)
         out_file = out_dir / f"{uuid.uuid4().hex}.json"
-        out_file.write_text(json.dumps(record))
+        out_file.write_text(json.dumps(records))
     except (OSError, ImportError, KeyError):
         logger.opt(exception=True).debug("Failed to emit CI metric")
 
