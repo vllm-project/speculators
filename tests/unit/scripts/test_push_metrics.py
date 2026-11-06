@@ -53,11 +53,6 @@ def fake_repo(tmp_path: Path):
     return bare, work
 
 
-def _read_jsonl(path: Path) -> list[dict]:
-    content = path.read_text()
-    return [json.loads(line) for line in content.strip().split("\n") if line]
-
-
 def test_push_single_record(fake_repo, tmp_path: Path):
     bare, work = fake_repo
 
@@ -67,20 +62,36 @@ def test_push_single_record(fake_repo, tmp_path: Path):
     original = mod._repo_root
     mod._repo_root = lambda: work
     try:
-        mod._push_lines(
-            [json.dumps(record, separators=(",", ":"))],
-            "test.jsonl",
-            "metrics-data",
-        )
+        mod._push_records([record], "test.json", "metrics-data")
     finally:
         mod._repo_root = original
 
     verify = tmp_path / "verify"
     _run_git(["clone", "--branch", "metrics-data", str(bare), str(verify)])
 
-    records = _read_jsonl(verify / "test.jsonl")
+    records = json.loads((verify / "test.json").read_text())
     assert len(records) == 1
     assert records[0]["value"] == 42
+
+
+def test_push_appends_to_existing(fake_repo, tmp_path: Path):
+    bare, work = fake_repo
+    mod = _load_module()
+
+    original = mod._repo_root
+    mod._repo_root = lambda: work
+    try:
+        mod._push_records([{"idx": 0}], "data.json", "metrics-data")
+        mod._push_records([{"idx": 1}, {"idx": 2}], "data.json", "metrics-data")
+    finally:
+        mod._repo_root = original
+
+    verify = tmp_path / "verify"
+    _run_git(["clone", "--branch", "metrics-data", str(bare), str(verify)])
+
+    records = json.loads((verify / "data.json").read_text())
+    assert len(records) == 3
+    assert [r["idx"] for r in records] == [0, 1, 2]
 
 
 def test_push_dir(fake_repo, tmp_path: Path):
@@ -92,22 +103,20 @@ def test_push_dir(fake_repo, tmp_path: Path):
         (metrics_dir / f"r{i}.json").write_text(json.dumps({"idx": i}))
 
     mod = _load_module()
-
-    lines: list[str] = []
+    records: list[dict] = []
     for p in sorted(metrics_dir.glob("*.json")):
-        record = json.loads(p.read_text())
-        lines.append(json.dumps(record, separators=(",", ":")))
+        records.append(json.loads(p.read_text()))
 
     original = mod._repo_root
     mod._repo_root = lambda: work
     try:
-        mod._push_lines(lines, "batch.jsonl", "metrics-data")
+        mod._push_records(records, "batch.json", "metrics-data")
     finally:
         mod._repo_root = original
 
     verify = tmp_path / "verify"
     _run_git(["clone", "--branch", "metrics-data", str(bare), str(verify)])
 
-    records = _read_jsonl(verify / "batch.jsonl")
-    assert len(records) == 3
-    assert [r["idx"] for r in records] == [0, 1, 2]
+    result = json.loads((verify / "batch.json").read_text())
+    assert len(result) == 3
+    assert [r["idx"] for r in result] == [0, 1, 2]
