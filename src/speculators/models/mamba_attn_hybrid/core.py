@@ -31,6 +31,8 @@ from speculators.models.mamba_attn_hybrid.model_definitions import (
     MLPSubLayer,
 )
 from speculators.models.utils import (
+    GEMMA_STYLE_FINAL_NORM_MODEL_TYPES,
+    _verifier_model_type,
     conditional_torch_compile,
     flatten_rope_parameters,
     resolve_target_layer_ids,
@@ -50,6 +52,9 @@ _UNTRAINED_ROW_NORM = 1e-4
 @SpeculatorModel.register("mamba_attn_hybrid")
 class MambaAttnHybridDraftModel(DraftVocabMixin, SpeculatorModel):
     config_class = MambaAttnHybridSpeculatorConfig  # type: ignore[misc]
+    # Sublayers inherit GradientCheckpointingLayer, so activations can be
+    # recomputed instead of stored (--gradient-checkpointing).
+    supports_gradient_checkpointing = True  # noqa: D003
     _no_split_modules = ["MambaSubLayer", "AttentionSubLayer", "MLPSubLayer"]
     _keys_to_ignore_on_load_missing = [  # type: ignore[misc]
         "embed_tokens.weight",
@@ -218,7 +223,15 @@ class MambaAttnHybridDraftModel(DraftVocabMixin, SpeculatorModel):
         return model
 
     def init_from_verifier(self, verifier: str) -> None:
-        names = ("q_proj", "k_proj", "v_proj", "q_norm", "k_norm")
+        # q_proj is skipped: Qwen3.5 verifiers gate the q_proj output (2x q_size),
+        # which does not fit the drafter's plain Qwen3-style projection, so the
+        # drafter q_proj stays randomly initialized. q_norm/k_norm apply gain
+        # (1 + w) in Qwen3.5 but plain w in the drafter's Qwen3RMSNorm, so they
+        # are copied as (1 + w) to preserve the verifier's scaling.
+        names = ("k_proj", "v_proj", "o_proj", "q_norm", "k_norm")
+        gemma_style_norms = _verifier_model_type(verifier) in (
+            GEMMA_STYLE_FINAL_NORM_MODEL_TYPES
+        )
         weights = load_model_layers(
             [
                 f"model.layers.{layer_id}.self_attn.{name}.weight"
@@ -234,6 +247,8 @@ class MambaAttnHybridDraftModel(DraftVocabMixin, SpeculatorModel):
                 weight = weights.get(f"model.layers.{layer_id}.self_attn.{name}.weight")
                 param = getattr(layer.self_attn, name).weight
                 if weight is not None:
+                    if gemma_style_norms and name in ("q_norm", "k_norm"):
+                        weight = 1.0 + weight.float()
                     param.data.copy_(weight)
                 param.requires_grad = name.endswith("proj") or weight is None
 

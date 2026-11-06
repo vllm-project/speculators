@@ -59,6 +59,15 @@ class KVCacheHiddenStatesConnector(base.ExampleHiddenStatesConnector):
         if len(group_ids) != 1:
             raise ValueError("kv_cache_layer_ids must share one KV cache group")
         self._kv_group_id = group_ids.pop()
+        # Tokens per scheduler block for the KV group. Physical kernel pages
+        # (kv tensor dim 2) can be smaller: each scheduler block owns
+        # tokens_per_block // page_size consecutive kernel pages (see
+        # BlockTables.append_block_ids), so token t of a request lives at
+        # physical slot block_ids[t // tokens_per_block] * tokens_per_block
+        # + t % tokens_per_block.
+        self._kv_tokens_per_block = kv_cache_config.kv_cache_groups[
+            self._kv_group_id
+        ].kv_cache_spec.block_size
         self._kv_caches: list[torch.Tensor] = []
         self._pending_kv: dict[str, torch.Tensor] = {}
 
@@ -81,12 +90,19 @@ class KVCacheHiddenStatesConnector(base.ExampleHiddenStatesConnector):
 
     def _submit_async_write(self, pending: base.PendingSave) -> None:
         if self._is_tp_rank_zero and isinstance(pending, KVCachePendingSave):
-            block_size = self._kv_caches[0].shape[2]
             block_ids = torch.tensor(pending.kv_block_ids, dtype=torch.long)
-            slot_mapping = (
-                block_ids[:, None] * block_size + torch.arange(block_size)
-            ).flatten()
             num_tokens = pending.token_ids.shape[0]
+            tokens_per_block = self._kv_tokens_per_block
+            # Token t lives in scheduler block block_ids[t // tokens_per_block]
+            # at offset t % tokens_per_block. Each scheduler block maps to
+            # consecutive kernel pages, so the physical slot (in kernel-page
+            # units, as expected by extract_from_kv_cache) is linear:
+            # block * tokens_per_block + t % tokens_per_block.
+            positions = torch.arange(num_tokens, dtype=torch.long)
+            slot_mapping = (
+                block_ids[positions // tokens_per_block] * tokens_per_block
+                + positions % tokens_per_block
+            )
 
             copy_stream = self._get_copy_stream()
             ready_event = torch.cuda.Event()

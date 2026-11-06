@@ -345,7 +345,9 @@ class Trainer:
         )
 
         if not self.is_distributed:
-            self.model.to(self.local_rank)  # type: ignore[arg-type]
+            self.model.to(  # type: ignore[arg-type]
+                self.local_rank % torch.accelerator.device_count()
+            )
             if load_checkpoint:
                 self.checkpointer.load_model_state_dict(self.model)
             return
@@ -380,7 +382,11 @@ class Trainer:
             dist.barrier()
 
     def _setup_model_ddp(self, load_checkpoint: bool):
-        self.model.to(self.local_rank)  # type: ignore[arg-type]
+        # A rank may be pinned to a single visible GPU (per-rank
+        # CUDA_VISIBLE_DEVICES), so map the local rank onto the visible set.
+        self.model.to(  # type: ignore[arg-type]
+            self.local_rank % torch.accelerator.device_count()
+        )
 
         if load_checkpoint:
             if dist.get_rank() == 0:
@@ -530,7 +536,10 @@ class Trainer:
             )
             timer.mark("pre_h2d")
             gpu_batch = {
-                k: v.to(self.local_rank, non_blocking=True)
+                k: v.to(
+                    self.local_rank % torch.accelerator.device_count(),
+                    non_blocking=True,
+                )
                 if isinstance(v, torch.Tensor)
                 else v
                 for k, v in batch.items()
@@ -640,7 +649,10 @@ class Trainer:
                 synchronize=_should_sync_recovery(i, num_batches - 1),
             )
             gpu_batch = {
-                k: v.to(self.local_rank, non_blocking=True)
+                k: v.to(
+                    self.local_rank % torch.accelerator.device_count(),
+                    non_blocking=True,
+                )
                 if isinstance(v, torch.Tensor)
                 else v
                 for k, v in batch.items()

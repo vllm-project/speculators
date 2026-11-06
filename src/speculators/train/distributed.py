@@ -148,12 +148,17 @@ def maybe_setup_distributed(sp_size: int = 1) -> None:
     if not distributed:
         return
 
-    torch.accelerator.set_device_index(local_rank)
+    # A rank may be pinned to a single visible GPU (per-rank
+    # CUDA_VISIBLE_DEVICES) to avoid sibling ranks holding CUDA contexts on
+    # each other's devices, so the device index is taken modulo the number
+    # of visible devices.
+    device_index = local_rank % torch.accelerator.device_count()
+    torch.accelerator.set_device_index(device_index)
     acc = torch.accelerator.current_accelerator()
     if acc is None:
         raise ValueError("No accelerator found")
     backend = torch.distributed.get_default_backend_for_device(acc)
-    dist.init_process_group(backend, device_id=local_rank)
+    dist.init_process_group(backend, device_id=device_index)
 
     _rank = dist.get_rank()
     _world_size = dist.get_world_size()

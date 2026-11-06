@@ -1,6 +1,7 @@
 import torch
 from torch import nn
 from torch.nn.functional import silu, softplus
+from transformers.modeling_layers import GradientCheckpointingLayer
 from transformers.models.qwen3.modeling_qwen3 import Qwen3MLP, Qwen3RMSNorm
 
 from speculators.models.attention import flex_attention_forward
@@ -177,7 +178,7 @@ class VerifierKVAttention(nn.Module):
         return self.o_proj(attn_output.reshape(bsz, q_len, -1))
 
 
-class MambaSubLayer(nn.Module):
+class MambaSubLayer(GradientCheckpointingLayer):
     def __init__(self, config, mamba_config) -> None:
         super().__init__()
         self.ssm = MambaMixer(
@@ -200,7 +201,7 @@ class MambaSubLayer(nn.Module):
         return blocks.view_as(hidden_states)
 
 
-class AttentionSubLayer(nn.Module):
+class AttentionSubLayer(GradientCheckpointingLayer):
     def __init__(self, config, layer_idx: int) -> None:
         super().__init__()
         self.self_attn = VerifierKVAttention(config, layer_idx)
@@ -221,7 +222,7 @@ class AttentionSubLayer(nn.Module):
         )
 
 
-class MLPSubLayer(nn.Module):
+class MLPSubLayer(GradientCheckpointingLayer):
     def __init__(self, config) -> None:
         super().__init__()
         self.mlp_norm = Qwen3RMSNorm(config.hidden_size, eps=config.rms_norm_eps)

@@ -49,7 +49,9 @@ def _worker_init_fn(worker_id: int) -> None:  # noqa: ARG001
 
     local_rank = int(os.environ.get("LOCAL_RANK", "0"))
     if torch.accelerator.is_available():
-        torch.accelerator.set_device_index(local_rank)
+        torch.accelerator.set_device_index(
+            local_rank % torch.accelerator.device_count()
+        )
 
 
 def _setup_dataloader(

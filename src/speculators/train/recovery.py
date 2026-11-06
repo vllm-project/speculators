@@ -225,4 +225,9 @@ class BatchRecoveryCoordinator:
         accelerator = torch.accelerator.current_accelerator()
         if accelerator is None:
             return torch.device("cpu")
-        return torch.device(accelerator.type, get_local_rank())
+        # A rank may be pinned to a single visible GPU (per-rank
+        # CUDA_VISIBLE_DEVICES), so the device index is taken modulo the
+        # number of visible devices.
+        return torch.device(
+            accelerator.type, get_local_rank() % torch.accelerator.device_count()
+        )
