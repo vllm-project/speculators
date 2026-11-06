@@ -15,8 +15,36 @@ flowchart LR
 
 - The optional Docker dependency: `pip install 'speculators[agentic]'`. The command imports the Docker SDK only when a task runs, so `--help` and argument parsing work without the extra.
 - A running vLLM server serving the target model, reachable from the host (used for rendering and tokenization) and from inside the task container (used by the agent). Start the server with `--enable-scale-out`, because the render step calls `/v1/chat/completions/render`, which otherwise returns `403` with `"Scale-out endpoints are disabled. Restart vllm serve with --enable-scale-out to enable them."`.
-- A prepared Pi runtime directory (`--pi-runtime`).
+- A prepared Pi runtime directory (`--pi-runtime`). The next section shows how to build it.
 - A container runtime able to start the SWE-smith task images. Missing task images are pulled on first use.
+
+## Prepare the Pi runtime
+
+The command does not build the runtime. It mounts the directory read-only at `/opt/pi-runtime` and expects `bin/pi` and its Node dependencies to exist. Create the directory on the host, install Node 24 and the Pi package, and point `--pi-runtime` at it.
+
+```bash
+export PI_RUNTIME="$PWD/pi-runtime"
+mkdir -p "$PI_RUNTIME"
+
+NODE_VERSION=v24.22.2
+curl -fsSL "https://nodejs.org/dist/${NODE_VERSION}/node-${NODE_VERSION}-linux-x64.tar.xz" \
+  | tar -xJ --strip-components=1 -C "$PI_RUNTIME"
+
+PATH="$PI_RUNTIME/bin:$PATH" npm install --prefix "$PI_RUNTIME" \
+  @earendil-works/pi-coding-agent
+ln -sfn ../node_modules/.bin/pi "$PI_RUNTIME/bin/pi"
+
+# Optional: copy ripgrep if the container does not provide it.
+if command -v rg >/dev/null 2>&1; then
+  cp "$(command -v rg)" "$PI_RUNTIME/bin/rg"
+fi
+```
+
+Check that the launcher starts:
+
+```bash
+"$PI_RUNTIME/bin/pi" --version
+```
 
 ## Basic usage
 
@@ -43,7 +71,7 @@ speculators generate-agentic-traces \
 
 ### Agent arguments
 
-- **`--pi-runtime`** (str, required) Path to the prepared Pi runtime.
+- **`--pi-runtime`** (str, required) Path to the prepared Pi runtime. The directory must contain `bin/pi` and the Pi Node dependencies.
 
 - **`--pi-endpoint`** (str, default: `http://host.docker.internal:8000/v1`) OpenAI-compatible endpoint as seen from inside the task container.
 
