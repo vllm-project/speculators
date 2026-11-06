@@ -7,8 +7,10 @@ import sys
 import time
 import urllib.error
 import urllib.request
+import uuid
 from collections.abc import Callable, Iterable
 from contextlib import contextmanager, suppress
+from datetime import UTC, datetime
 from functools import wraps
 from pathlib import Path
 from textwrap import indent
@@ -23,6 +25,7 @@ from speculators.data_generation.configs import (
     DATASET_CONFIGS,
     _normalize_sharegpt4v_coco,
 )
+from speculators.provenance import find_repo_root, git_sha
 
 __all__ = [
     "SCRIPTS_DIR",
@@ -32,6 +35,7 @@ __all__ = [
     "launch_vllm_server",
     "launch_vllm_server_context",
     "purge_newfiles",
+    "run_benchmark",
     "run_data_generation_offline",
     "run_prepare_data",
     "run_stitch_mtp",
@@ -530,6 +534,129 @@ def run_stitch_mtp(
     assert result.returncode == 0, f"speculators stitch-mtp failed:\n{result.stderr}"
 
 
+def _emit_ci_metric(metrics_dict: dict) -> None:
+    """Write one ``(metric, value, labels)`` record per numeric metric.
+
+    Activated by the ``SPECULATORS_METRICS_DIR`` env-var.  Labels are
+    auto-populated from the CI environment (Buildkite / GitHub Actions)
+    and the current pytest context.
+    """
+    metrics_dir = os.environ.get("SPECULATORS_METRICS_DIR")
+    if not metrics_dir:
+        return
+    try:
+        test_name = os.environ.get("PYTEST_CURRENT_TEST", "unknown")
+        if " " in test_name:
+            test_name = test_name.rsplit(" ", 1)[0]
+        parts = test_name.split("::")
+        test_id = parts[-1] if len(parts) > 1 else test_name
+        test_file = parts[0] if len(parts) > 1 else ""
+
+        labels = {
+            "timestamp": datetime.now(UTC).isoformat(),
+            "git_sha": (
+                os.environ.get("BUILDKITE_COMMIT")
+                or git_sha(find_repo_root(Path(__file__)))
+            ),
+            "branch": os.environ.get(
+                "BUILDKITE_BRANCH",
+                os.environ.get("GITHUB_REF_NAME", ""),
+            ),
+            "build_url": os.environ.get(
+                "BUILDKITE_BUILD_URL",
+                os.environ.get("GITHUB_RUN_URL", ""),
+            ),
+            "pr_number": os.environ.get("BUILDKITE_PULL_REQUEST", ""),
+            "test_id": test_id,
+            "test_file": test_file,
+        }
+
+        records = [
+            {"metric": key, "value": value, **labels}
+            for key, value in metrics_dict.items()
+            if isinstance(value, (int, float))
+        ]
+
+        out_dir = Path(metrics_dir)
+        out_dir.mkdir(parents=True, exist_ok=True)
+        out_file = out_dir / f"{uuid.uuid4().hex}.json"
+        out_file.write_text(json.dumps(records))
+    except (OSError, ImportError, KeyError):
+        logger.opt(exception=True).debug("Failed to emit CI metric")
+
+
+def run_benchmark(
+    tmp_path: Path,
+    speculator_type: str,
+    verifier: str = "Qwen/Qwen3-8B",
+    total_seq_len: int = 4096,
+    warmup_steps: int = 5,
+    measured_steps: int = 20,
+    extra_train_args: list[str] | None = None,
+    timeout: float = 20 * 60,
+) -> dict[str, float]:
+    """Run ``scripts/benchmark.py`` and emit timing metrics.
+
+    Returns the flat dict of ``{metric_name: mean_value}`` for assertions.
+    """
+    benchmark_script = str(SCRIPTS_DIR / "benchmark.py")
+    output_file = str(tmp_path / "benchmark_results.json")
+
+    cmd = [
+        sys.executable,
+        benchmark_script,
+        "run",
+        "--synthetic",
+        "--warmup-steps",
+        str(warmup_steps),
+        "--measured-steps",
+        str(measured_steps),
+        "--output",
+        output_file,
+        "--",
+        "--speculator-type",
+        speculator_type,
+        "--verifier-name-or-path",
+        verifier,
+        "--total-seq-len",
+        str(total_seq_len),
+    ]
+    if extra_train_args:
+        cmd.extend(extra_train_args)
+
+    logger.info("benchmark command:\n    {}", " ".join(cmd))
+
+    result = subprocess.run(  # noqa: S603
+        cmd,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        check=False,
+        timeout=timeout,
+    )
+    logger.info("benchmark output:\n{}", indent(result.stdout, "    "))
+    assert result.returncode == 0, (
+        f"benchmark.py exited with non-zero return code: {result.returncode}"
+    )
+
+    with Path(output_file).open(encoding="utf-8") as f:
+        results = json.load(f)
+
+    metrics_dict: dict[str, float] = {}
+    for key, stats in results["timing"].items():
+        metrics_dict[f"bench_{key}"] = stats["mean"]
+    agg = results["aggregate"]
+    metrics_dict["bench_tokens_per_s"] = agg["effective_rank0_tokens_per_s"]
+    if results["memory"]["per_rank"]:
+        metrics_dict["bench_peak_allocated_mb"] = results["memory"]["per_rank"][0][
+            "peak_allocated_mb"
+        ]
+
+    _emit_ci_metric(metrics_dict)
+
+    return metrics_dict
+
+
 def run_vllm_engine(
     model_path: str,
     tmp_path: Path,
@@ -613,6 +740,8 @@ def run_vllm_engine(
     logger.info("outputs_token_ids: {}", outputs_token_ids)
     logger.info("metrics_dict: {}", metrics_dict)
 
+    _emit_ci_metric(metrics_dict)
+
     for output_token_ids in outputs_token_ids:
         # If max_tokens is 100 or less, make sure the output length is max_tokens
         assert max_tokens > 100 or len(output_token_ids) == max_tokens
@@ -627,3 +756,5 @@ def run_vllm_engine(
             assert acci >= thresholdi, (
                 f"Acceptance {acci} at token {i} is less than threshold {thresholdi}"
             )
+
+    return metrics_dict
