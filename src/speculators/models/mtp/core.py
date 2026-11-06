@@ -5,28 +5,76 @@ from typing import Any, ClassVar
 
 import torch
 from torch import nn
+from torch.nn.attention.flex_attention import create_block_mask, create_mask
 from transformers import PretrainedConfig
-from transformers.masking_utils import create_causal_mask
 
 from speculators import SpeculatorModel
 from speculators.config import SpeculatorsConfig, VerifierConfig
 from speculators.model import DraftVocabMixin
+from speculators.models.attention import create_float_mask
+from speculators.models.eagle3.attention import (
+    create_combined_mask_mod,
+    extend_dense_mask_for_draft_tokens,
+    extend_mask_for_draft_tokens,
+)
 from speculators.models.mtp.config import MTPSpeculatorConfig
 from speculators.models.mtp.model_definitions import (
     mtp_model_classes,
     resolve_model_type,
 )
-from speculators.models.utils import conditional_torch_compile, flatten_rope_parameters
+from speculators.models.utils import (
+    flatten_rope_parameters,
+    resolve_verifier_norm_class,
+)
 from speculators.proposals.greedy import GreedyTokenProposalConfig
 
 logger = logging.getLogger(__name__)
 
 __all__ = ["MTPDraftModel", "compute_step_weights"]
 
-_IGNORE_INDEX = -100
 _QWEN3_5_MODEL_TYPES = {"qwen3_5_text", "qwen3_5_moe_text"}
 _QWEN3_5_MROPE_POSITION_ID_RANK = 3
 _QWEN3_5_MROPE_SECTIONS = 3
+
+
+# Supervised positions per LM-head + CE chunk (bounds the fp32 logits buffer to
+# ~2 GB at a 248k vocabulary).
+_HEAD_CE_CHUNK = 2048
+
+
+class _TTTCache:
+    """Minimal cache for the HF attention's `past_key_values.update` call.
+
+    Returns the frozen prefix (step-0 "context" KV plus earlier draft steps' KV)
+    concatenated with this step's KV, and keeps this step's KV so the caller can
+    append it for later steps. Stateless across calls, so a gradient-checkpoint
+    recompute of the same step returns identical tensors.
+    """
+
+    def __init__(self, keys: list[torch.Tensor], values: list[torch.Tensor]) -> None:
+        self.prefix_k, self.prefix_v = keys, values
+        # set by update(), which the attention layer calls once per forward
+        self.new_k: torch.Tensor
+        self.new_v: torch.Tensor
+
+    def update(self, key_states, value_states, layer_idx, cache_kwargs=None):  # noqa: ARG002
+        self.new_k, self.new_v = key_states, value_states
+        if not self.prefix_k:
+            return key_states, value_states
+        return (
+            torch.cat([*self.prefix_k, key_states], dim=-2),
+            torch.cat([*self.prefix_v, value_states], dim=-2),
+        )
+
+
+# Flex block masks are extended by whole blocks per draft step
+# (`extend_mask_for_draft_tokens`), so the flex path pads rows to a multiple of it.
+_FLEX_BLOCK_SIZE = 128
+
+
+def _shift_left(x: torch.Tensor, k: int, fill: int | bool) -> torch.Tensor:
+    """``x[..., t + k]`` at position t, ``fill`` past the end."""
+    return torch.cat([x[..., k:], x.new_full((*x.shape[:-1], k), fill)], dim=-1)
 
 
 def _prepare_mtp_position_ids(
@@ -96,14 +144,22 @@ class MTPDraftModel(DraftVocabMixin, SpeculatorModel):
     """
 
     config_class: ClassVar[type[MTPSpeculatorConfig]] = MTPSpeculatorConfig  # type: ignore[misc]
+    # The MTP layer mixes into the HF decoder layer, which is a
+    # GradientCheckpointingLayer; HF defaults to use_reentrant=False, so the
+    # keyword-only call in forward() still propagates gradients. Needed for
+    # many speculative steps x long sequences, where each step's activations
+    # are otherwise all kept for backward.
+    supports_gradient_checkpointing = True
     _keys_to_ignore_on_save: ClassVar[list[str]] = [  # type: ignore[misc,assignment]
         "embed_tokens.weight",
         "lm_head.weight",
+        "verifier_norm.weight",
     ]
     _keys_to_ignore_on_load_missing: ClassVar[list[str]] = [  # type: ignore[misc]
         "embed_tokens.weight",
         "lm_head.weight",
         "verifier_lm_head.weight",
+        "verifier_norm.weight",
         "t2d",
         "d2t",
     ]
@@ -112,9 +168,20 @@ class MTPDraftModel(DraftVocabMixin, SpeculatorModel):
     d2t: torch.Tensor | None
 
     def __init__(self, config: MTPSpeculatorConfig) -> None:
-        # SDPA, not eager — eager OOMs on long sequences (#886).
+        # Same attention backends as Eagle3: flex by default, sdpa / eager (dense
+        # masks) for hardware without flex attention.
         if config.transformer_layer_config._attn_implementation is None:  # noqa: SLF001
-            config.transformer_layer_config._attn_implementation = "sdpa"  # noqa: SLF001
+            config.transformer_layer_config._attn_implementation = (  # noqa: SLF001
+                "simple_flex_attention"
+            )
+        self._attn_impl = config.transformer_layer_config._attn_implementation  # noqa: SLF001
+        self._create_mask_fn = (
+            create_block_mask
+            if self._attn_impl == "simple_flex_attention"
+            else create_float_mask
+            if self._attn_impl == "eager"
+            else create_mask
+        )
         super().__init__(config=config)
         self._init_vocab(config)
         if self.use_draft_vocab:
@@ -130,6 +197,16 @@ class MTPDraftModel(DraftVocabMixin, SpeculatorModel):
         self.rotary_emb = self._model_definitions.rotary_emb_class(
             flatten_rope_parameters(tc)
         )
+        # vLLM feeds the MTP head the verifier's output hidden states (after its
+        # final norm); training data holds the pre-norm last-layer hidden states.
+        self.verifier_norm = resolve_verifier_norm_class(config)(
+            tc.hidden_size,
+            eps=tc.rms_norm_eps,  # type: ignore[arg-type]
+        )
+        self.verifier_norm.weight.requires_grad = False
+        # The layer only reads the prefix KV (see _TTTCache), so it may keep the
+        # cache under gradient checkpointing.
+        self.mtp_layers[0]._can_checkpoint_with_cache = True  # type: ignore[assignment]  # noqa: SLF001
 
         self.post_init()
 
@@ -153,130 +230,211 @@ class MTPDraftModel(DraftVocabMixin, SpeculatorModel):
         super().load_verifier_weights()
         del self.verifier_lm_head
 
-    # requires `dynamic=False`. See #876
-    @conditional_torch_compile(dynamic=False)
+    def _head_ce(
+        self, hidden: torch.Tensor, targets: torch.Tensor
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """LM head + unreduced cross entropy; also returns the greedy prediction.
+
+        Not compiled: the number of supervised positions changes every batch,
+        and a `dynamic=False` compile would recompile on each new size.
+        """
+        logits = self.lm_head(hidden)
+        loss = nn.functional.cross_entropy(logits.float(), targets, reduction="none")
+        return loss, logits.argmax(dim=-1)
+
+    @torch.compiler.disable
+    def _head_ce_chunked(
+        self, hidden: torch.Tensor, targets: torch.Tensor
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """`_head_ce` over chunks of supervised positions, each checkpointed.
+
+        A single checkpoint over all positions still materializes the full fp32
+        logits in forward and again in backward (~10 GB at 10k positions x 248k
+        vocab), which happens when almost every token is supervised (e.g.
+        self-distilled chat data). Per-chunk checkpoints keep one chunk alive.
+        """
+        losses, preds = [], []
+        for start in range(0, hidden.shape[0], _HEAD_CE_CHUNK):
+            h = hidden[start : start + _HEAD_CE_CHUNK]
+            t = targets[start : start + _HEAD_CE_CHUNK]
+            if torch.is_grad_enabled():
+                loss, pred = torch.utils.checkpoint.checkpoint(
+                    self._head_ce, h, t, use_reentrant=False
+                )
+            else:
+                loss, pred = self._head_ce(h, t)
+            losses.append(loss)
+            preds.append(pred)
+        if not losses:
+            # nothing supervised: an empty loss that is still part of the graph, so
+            # backward() works (and DDP sees every parameter) on such batches
+            return hidden.float().sum(dim=-1), targets.new_zeros(0)
+        return torch.cat(losses), torch.cat(preds)
+
+    @torch.compiler.disable
+    def _extend_attn_mask(self, mask, seq_len: int):
+        """Append a diagonal KV block (each anchor's own draft-step KV)."""
+        if self._attn_impl == "simple_flex_attention":
+            return extend_mask_for_draft_tokens(mask)
+        return extend_dense_mask_for_draft_tokens(mask, seq_len)
+
     def forward(
         self,
         input_ids: torch.Tensor,
         hidden_states: torch.Tensor,
-        attention_mask: torch.Tensor | None = None,
-        position_ids: torch.Tensor | None = None,
+        document_ids: torch.Tensor | None = None,
         loss_mask: torch.Tensor | None = None,
+        position_ids: torch.Tensor | None = None,
         step_weights: list[float] | None = None,
-        return_dict: bool = True,  # noqa: ARG002
         **kwargs: Any,  # noqa: ARG002
     ) -> tuple:
-        """Forward pass for MTP multi-token prediction (teacher-forced).
+        """Multi-step MTP training forward, matching vLLM's MTP proposer.
 
-        At step k, uses ground-truth input_ids[t+k+1] as the embedding input and
-        the MTP output from step k-1 (or verifier hidden states for step 0) as the
-        hidden state input. Hidden states are passed recursively: each step's MTP
-        output feeds the next step.
+        - The head sees the verifier's output hidden states, i.e. after its final
+          norm (the training data holds the pre-norm last-layer states).
+        - Draft step k at anchor t runs at position t + k and attends to the step-0
+          KV (computed from verifier hidden states) at positions <= t in the same
+          document, plus only anchor t's own KV from earlier draft steps -- the
+          Eagle3 TTT mask (``create_combined_mask_mod``), extended by one diagonal
+          block per step.
 
-        Targets are derived from input_ids via per-step offset slicing -- no
-        separate label tensor is needed. Use loss_mask to exclude positions
-        (e.g. prompt tokens) from the loss.
+        Step k is teacher-forced: its token input at anchor t is ``input_ids[t+k+1]``
+        and its target ``input_ids[t+k+2]``, supervised where ``loss_mask`` is set
+        and the target is in the anchor's document.
 
-        :param input_ids: Token IDs [1, seq_len]. Serves as both the
-            embedding source and the prediction target (offset by step+2).
-        :param hidden_states: Hidden states from verifier [1, seq_len, hidden_size]
-        :param attention_mask: Optional attention mask [1, seq_len]
-        :param position_ids: Optional position IDs [batch, seq_len]. Qwen3.5
-            also accepts the explicit MRoPE layout [3, batch, seq_len].
-        :param loss_mask: Optional binary mask [1, seq_len]; 1=compute loss,
-            0=ignore.
-        :param step_weights: Per-step loss weights (None = uniform). Training only.
-        :param return_dict: Unused, kept for interface compatibility.
-        :param kwargs: Absorbs unexpected batch keys
-            (lengths, verifier_last_hidden_states)
-        :return: Tuple of (logits_list, loss, metrics)
+        :param input_ids: Token IDs [1, seq_len], packed documents.
+        :param hidden_states: Verifier last-layer hidden states [1, seq_len, hidden].
+        :param document_ids: Document index per position [1, seq_len], -1 for
+            padding (as the training collate produces). Derived from position
+            resets when omitted.
+        :param loss_mask: Optional [1, seq_len]; 1 = supervise this target token.
+        :param position_ids: Optional [1, seq_len]; Qwen3.5 also accepts the
+            MRoPE layout [3, 1, seq_len].
+        :param step_weights: Per-step loss weights (None = uniform).
+        :return: ``(draft_tokens, loss, metrics)``. ``draft_tokens[k]`` holds the
+            step-k greedy predictions at the supervised positions only.
         """
         input_ids = input_ids.long()
         device = input_ids.device
         batch_size, seq_len = input_ids.shape
+        if batch_size != 1:
+            raise ValueError("MTP forward expects packed batches of size 1")
         num_steps = self.config.num_speculative_steps
-
         if step_weights is not None and len(step_weights) != num_steps:
             raise ValueError(
                 f"step_weights has {len(step_weights)} entries but "
-                f"num_speculative_steps={num_steps}; expected exactly "
-                f"{num_steps} weights."
+                f"num_speculative_steps={num_steps}"
             )
-
         if position_ids is None:
-            position_ids = (
-                torch.arange(seq_len, device=device).unsqueeze(0).expand(batch_size, -1)
-            )
+            position_ids = torch.arange(seq_len, device=device).unsqueeze(0)
 
-        all_logits: list[torch.Tensor] = []
+        draft_tokens: list[torch.Tensor] = []
         total_loss = torch.tensor(0.0, device=device)
         metrics: dict[str, float | torch.Tensor] = {}
-
-        # Uniform valid_len keeps tensor shapes identical across loop
-        # iterations, which torch.compile requires for stable codegen.
-        # Cap steps so short sequences still produce partial results.
         effective_steps = min(num_steps, max(0, seq_len - 2))
-        valid_len = seq_len - effective_steps - 1
-        if valid_len <= 0 or effective_steps == 0:
+        if effective_steps == 0:
             metrics["loss_sum"] = total_loss.detach().clone()
             metrics["loss_total"] = torch.tensor(1.0, device=device)
-            return (all_logits, total_loss, metrics)
+            return (draft_tokens, total_loss, metrics)
 
-        step_pos_ids, rotary_step_pos_ids = _prepare_mtp_position_ids(
-            position_ids,
-            valid_len,
-            self.config.transformer_layer_config.model_type,
-        )
-        causal_mask = create_causal_mask(
-            config=self.config.transformer_layer_config,
-            inputs_embeds=hidden_states[:, :valid_len],
-            attention_mask=attention_mask,
-            past_key_values=None,
-            position_ids=step_pos_ids,
+        if document_ids is None:
+            text_pos = (
+                position_ids[0]
+                if position_ids.ndim == _QWEN3_5_MROPE_POSITION_ID_RANK
+                else position_ids
+            )
+            # packed documents restart their positions at 0
+            document_ids = torch.cumsum(text_pos == 0, dim=-1) - 1
+        doc = document_ids.reshape(-1).to(device=device, dtype=torch.long)
+        supervised = (
+            torch.ones(seq_len, dtype=torch.bool, device=device)
+            if loss_mask is None
+            else loss_mask.reshape(-1).bool()
         )
 
-        current_hidden = hidden_states
+        # Pad to whole flex blocks; padded rows are document -1 (masked, unsupervised).
+        pad = (
+            -seq_len % _FLEX_BLOCK_SIZE
+            if self._attn_impl == "simple_flex_attention"
+            else 0
+        )
+        total_len = seq_len + pad
+        if pad:
+            input_ids = nn.functional.pad(input_ids, (0, pad))
+            hidden_states = nn.functional.pad(hidden_states, (0, 0, 0, pad))
+            position_ids = nn.functional.pad(position_ids, (0, pad))
+            doc = nn.functional.pad(doc, (0, pad), value=-1)
+            supervised = nn.functional.pad(supervised, (0, pad), value=False)
+        text_pos, rotary_pos = _prepare_mtp_position_ids(
+            position_ids, total_len, self.config.transformer_layer_config.model_type
+        )
+
+        attn_mask = self._create_mask_fn(
+            create_combined_mask_mod(doc, total_len),
+            B=None,
+            H=None,
+            Q_LEN=total_len,
+            KV_LEN=total_len,
+            device=device,
+        )
+        layer = self.mtp_layers[0]
+        kv_k: list[torch.Tensor] = []
+        kv_v: list[torch.Tensor] = []
+        anchors: torch.Tensor | None = None
+        run_correct: torch.Tensor | None = None
+        current_hidden = self.verifier_norm(hidden_states)
         for step in range(effective_steps):
-            step_hidden = current_hidden[:, :valid_len]
-            step_embeds = self.embed_tokens(
-                input_ids[:, step + 1 : step + 1 + valid_len]
+            cache = _TTTCache(kv_k, kv_v)
+            mtp_output = layer(
+                hidden_states=current_hidden,
+                token_embeddings=self.embed_tokens(_shift_left(input_ids, step + 1, 0)),
+                attention_mask=attn_mask,
+                position_ids=text_pos + step,
+                position_embeddings=self.rotary_emb(current_hidden, rotary_pos + step),
+                past_key_values=cache,
             )
-            step_pos_emb = self.rotary_emb(step_hidden, rotary_step_pos_ids)
+            kv_k = [*kv_k, cache.new_k]
+            kv_v = [*kv_v, cache.new_v]
 
-            mtp_output = self.mtp_layers[0](
-                hidden_states=step_hidden,
-                token_embeddings=step_embeds,
-                attention_mask=causal_mask,
-                position_ids=step_pos_ids,
-                position_embeddings=step_pos_emb,
+            step_targets = _shift_left(input_ids, step + 2, 0)[0]
+            step_mask = (
+                _shift_left(supervised, step + 2, False)
+                & (_shift_left(doc, step + 2, -1) == doc)
+                & (doc != -1)
             )
+            sel_targets = step_targets[step_mask]
+            unreduced, sel_pred = self._head_ce_chunked(
+                mtp_output[0][step_mask], sel_targets
+            )
+            draft_tokens.append(sel_pred)
 
-            logits = self.lm_head(mtp_output)
-            all_logits.append(logits)
-
-            step_targets = input_ids[:, step + 2 : step + 2 + valid_len]
-            if loss_mask is not None:
-                step_mask = loss_mask[:, step + 2 : step + 2 + valid_len]
-                step_targets = step_targets.clone()
-                step_targets[step_mask == 0] = _IGNORE_INDEX
             weight = step_weights[step] if step_weights is not None else 1.0
-            unreduced = nn.functional.cross_entropy(
-                logits.permute(0, 2, 1),
-                step_targets,
-                ignore_index=_IGNORE_INDEX,
-                reduction="none",
-            )
-            valid_count = (step_targets != _IGNORE_INDEX).sum()
-            step_loss = weight * unreduced.sum() / valid_count.clamp(min=1)
+            step_loss = weight * unreduced.sum() / step_mask.sum().clamp(min=1)
             total_loss = total_loss + step_loss
             metrics[f"loss_step_{step}"] = step_loss.detach().clone()
 
+            with torch.no_grad():
+                correct = torch.zeros_like(step_mask)
+                correct[step_mask] = sel_pred == sel_targets
+                if anchors is None:
+                    anchors = step_mask
+                run_correct = correct if run_correct is None else run_correct & correct
+                # Teacher-forced step inputs equal the drafted tokens whenever all
+                # earlier steps are correct, so this cumulative rate matches vLLM's
+                # spec_decode_num_accepted_tokens_per_pos / num_drafts.
+                metrics[f"accept_pos_{step + 1}_sum"] = (
+                    (run_correct & anchors).sum().float()
+                )
+                metrics[f"accept_pos_{step + 1}_total"] = anchors.sum().float()
+                metrics[f"step_{step + 1}_acc_sum"] = correct.sum().float()
+                metrics[f"step_{step + 1}_acc_total"] = step_mask.sum().float()
+
             current_hidden = mtp_output
+            attn_mask = self._extend_attn_mask(attn_mask, total_len)
 
         metrics["loss_sum"] = total_loss.detach().clone()
         metrics["loss_total"] = torch.tensor(1.0, device=device)
-
-        return (all_logits, total_loss, metrics)
+        return (draft_tokens, total_loss, metrics)
 
     @classmethod
     def from_training_args(  # type: ignore[override]
@@ -285,7 +443,7 @@ class MTPDraftModel(DraftVocabMixin, SpeculatorModel):
         *,
         num_speculative_steps: int = 3,
         verifier_name_or_path: str | None = None,
-        **kwargs: Any,  # noqa: ARG003
+        **kwargs: Any,
     ) -> "MTPDraftModel":
         if verifier_name_or_path is None:
             raise ValueError(
@@ -294,6 +452,9 @@ class MTPDraftModel(DraftVocabMixin, SpeculatorModel):
                 "(mtp.* keys) to extract."
             )
 
+        verifier_config._attn_implementation = kwargs.get(  # noqa: SLF001
+            "draft_attn_impl", "simple_flex_attention"
+        )
         config = MTPSpeculatorConfig(
             transformer_layer_config=verifier_config,
             speculators_config=SpeculatorsConfig(
