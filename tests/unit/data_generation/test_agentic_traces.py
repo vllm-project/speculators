@@ -2,6 +2,7 @@
 
 import json
 
+import pytest
 from datasets import Dataset as HFDataset
 
 from speculators.data_generation import agentic_traces
@@ -149,6 +150,164 @@ class _FakeProcessor:
         return f"<{len(input_ids)} tokens>"
 
 
+def _capture_conversations(tmp_path, monkeypatch, events):
+    """Run a synthetic trace through the builder and return its conversation."""
+    trace_path = tmp_path / "pi.jsonl"
+    trace_path.write_text("\n".join(json.dumps(e) for e in events) + "\n")
+
+    captured = {}
+
+    def fake_build(dataset, processor, max_length, num_proc, **kwargs):
+        captured["dataset"] = dataset
+        return HFDataset.from_list([])
+
+    monkeypatch.setattr(agentic_traces, "build_speculator_training_dataset", fake_build)
+    rows_from_pi_trace(
+        trace_path,
+        processor=_FakeProcessor(),
+        render_endpoint="http://localhost:8000",
+        seq_length=64,
+        primary_id="inst.abc",
+    )
+    return captured["dataset"][0]["conversations"]
+
+
+def test_rows_from_pi_trace_accumulates_runs(tmp_path, monkeypatch):
+    first_run = [
+        {"role": "system", "content": "sys"},
+        {"role": "user", "content": "task"},
+        {
+            "role": "assistant",
+            "content": [{"type": "text", "text": "step one"}],
+            "stopReason": "toolUse",
+        },
+        {"role": "toolResult", "toolCallId": "call_1", "content": "ok"},
+    ]
+    # Compaction re-emits the system prompt and starts a new run.
+    second_run = [
+        {"role": "system", "content": "sys"},
+        {"role": "user", "content": "task"},
+        {
+            "role": "assistant",
+            "content": [{"type": "text", "text": "step two"}],
+            "stopReason": "stop",
+        },
+    ]
+    events = [
+        {"type": "agent_start"},
+        {"type": "agent_end", "messages": first_run, "willRetry": False},
+        {"type": "agent_start"},
+        {"type": "agent_end", "messages": second_run, "willRetry": False},
+    ]
+
+    conversation = _capture_conversations(tmp_path, monkeypatch, events)
+
+    assert [(turn["role"], turn["content"]) for turn in conversation] == [
+        ("system", "sys"),
+        ("user", "task"),
+        ("assistant", "step one"),
+        ("tool", "ok"),
+        ("assistant", "step two"),
+    ]
+
+
+def test_rows_from_pi_trace_skips_failed_retry_attempt(tmp_path, monkeypatch):
+    events = [
+        {
+            "type": "agent_end",
+            "messages": [
+                {"role": "system", "content": "sys"},
+                {"role": "user", "content": "task"},
+                {"role": "assistant", "content": "", "stopReason": "error"},
+            ],
+            "willRetry": True,
+        },
+        {
+            "type": "agent_end",
+            "messages": [
+                {"role": "system", "content": "sys"},
+                {"role": "user", "content": "task"},
+                {
+                    "role": "assistant",
+                    "content": [{"type": "text", "text": "answer"}],
+                    "stopReason": "stop",
+                },
+            ],
+            "willRetry": False,
+        },
+    ]
+
+    conversation = _capture_conversations(tmp_path, monkeypatch, events)
+
+    assert [turn["content"] for turn in conversation] == ["sys", "task", "answer"]
+
+
+def test_rows_from_pi_trace_rejects_failed_final_response(tmp_path, monkeypatch):
+    events = [
+        {
+            "type": "agent_end",
+            "messages": [
+                {"role": "user", "content": "task"},
+                {"role": "assistant", "content": "", "stopReason": "error"},
+            ],
+            "willRetry": False,
+        }
+    ]
+
+    with pytest.raises(ValueError, match="stopReason='error'"):
+        _capture_conversations(tmp_path, monkeypatch, events)
+
+
+def test_rows_from_pi_trace_rejects_aborted_final_response(tmp_path, monkeypatch):
+    events = [
+        {
+            "type": "agent_end",
+            "messages": [
+                {"role": "user", "content": "task"},
+                {"role": "assistant", "content": "", "stopReason": "aborted"},
+            ],
+            "willRetry": False,
+        }
+    ]
+
+    with pytest.raises(ValueError, match="stopReason='aborted'"):
+        _capture_conversations(tmp_path, monkeypatch, events)
+
+
+def test_rows_from_pi_trace_requires_a_completed_run(tmp_path, monkeypatch):
+    events = [
+        {
+            "type": "agent_end",
+            "messages": [{"role": "assistant", "content": "", "stopReason": "error"}],
+            "willRetry": True,
+        }
+    ]
+
+    with pytest.raises(ValueError, match="No completed agent_end run"):
+        _capture_conversations(tmp_path, monkeypatch, events)
+
+
+def test_rows_from_pi_trace_keeps_other_stop_reasons(tmp_path, monkeypatch):
+    events = [
+        {
+            "type": "agent_end",
+            "messages": [
+                {"role": "user", "content": "task"},
+                {
+                    "role": "assistant",
+                    "content": [{"type": "text", "text": "partial"}],
+                    "stopReason": "length",
+                },
+            ],
+            "willRetry": False,
+        }
+    ]
+
+    conversation = _capture_conversations(tmp_path, monkeypatch, events)
+
+    assert conversation[-1]["content"] == "partial"
+
+
 def test_rows_from_pi_trace_uses_builder(tmp_path, monkeypatch):
     trace_path = tmp_path / "pi.jsonl"
     events = [
@@ -186,7 +345,7 @@ def test_rows_from_pi_trace_uses_builder(tmp_path, monkeypatch):
     assert captured["num_proc"] == 1
     assert captured["render_endpoint"] == "http://localhost:8000"
     assert captured["minimum_valid_tokens"] == 1
-    # The last agent_end event wins, so the converter used the full conversation.
+    # Both agent_end events describe the same conversation, so dedup leaves it.
     assert captured["dataset"][0]["conversations"][-1]["role"] == "tool"
     assert isinstance(captured["dataset"][0]["tools"], str)
     parsed_tools = json.loads(captured["dataset"][0]["tools"])

@@ -1,9 +1,10 @@
 """Convert agentic (Pi) event traces into speculator training rows.
 
-Pi records a session as a JSONL event stream. The last ``agent_end`` event
-holds the full ordered message list. This module flattens that list into an
-OpenAI-style conversation and runs it through the regular speculator
-preprocessing pipeline, which applies render-boundary loss masks.
+Pi records a session as a JSONL event stream. Each ``agent_end`` event closes
+one low-level run; retries, compaction, and follow-up work can start more runs.
+This module concatenates the messages from completed runs into one ordered
+conversation and runs it through the regular speculator preprocessing pipeline,
+which applies render-boundary loss masks.
 """
 
 from __future__ import annotations
@@ -137,9 +138,18 @@ def pi_messages_to_conversation(
     return conversation, tools
 
 
-def _last_agent_end_messages(trace_path: Path) -> list[dict]:
-    """Return the message list from the last ``agent_end`` event in the trace."""
-    messages: list[dict] | None = None
+def _completed_run_messages(trace_path: Path) -> list[dict]:
+    """Concatenate messages from every completed ``agent_end`` run.
+
+    Pi emits one ``agent_end`` per low-level run, and compaction or retry starts
+    a new run. A run with ``willRetry`` failed and only its retry carries the
+    usable messages. Repeated system and user messages are dropped so a
+    re-emitted prompt does not appear twice.
+    """
+    messages: list[dict] = []
+    seen_context: set[tuple[str, str]] = set()
+    found_run = False
+
     with trace_path.open(encoding="utf-8") as handle:
         for raw_line in handle:
             line = raw_line.strip()
@@ -149,11 +159,38 @@ def _last_agent_end_messages(trace_path: Path) -> list[dict]:
                 event = json.loads(line)
             except json.JSONDecodeError:
                 continue
-            if isinstance(event, dict) and event.get("type") == "agent_end":
-                messages = event.get("messages") or []
-    if messages is None:
+            if not isinstance(event, dict) or event.get("type") != "agent_end":
+                continue
+            found_run = True
+            if event.get("willRetry"):
+                continue
+            for message in event.get("messages") or []:
+                role = message.get("role")
+                if role in ("system", "user"):
+                    key = (role, json.dumps(message, sort_keys=True))
+                    if key in seen_context:
+                        continue
+                    seen_context.add(key)
+                messages.append(message)
+
+    if not found_run:
         raise ValueError(f"No agent_end event found in Pi trace: {trace_path}")
+    if not messages:
+        raise ValueError(f"No completed agent_end run in Pi trace: {trace_path}")
     return messages
+
+
+def _reject_failed_response(messages: list[dict], trace_path: Path) -> None:
+    """Raise when the final assistant response failed or was aborted."""
+    final = next((m for m in reversed(messages) if m.get("role") == "assistant"), None)
+    if final is None:
+        return
+    stop_reason = final.get("stopReason")
+    if stop_reason in ("error", "aborted"):
+        raise ValueError(
+            f"Pi trace ended with assistant stopReason={stop_reason!r}, "
+            f"skipping: {trace_path}"
+        )
 
 
 def _to_list(values: Any) -> list[int]:
@@ -172,9 +209,10 @@ def rows_from_pi_trace(
     primary_id: str,
 ) -> list[dict]:
     """Convert one Pi JSONL trace into speculator-format training rows."""
-    conversation, tools = pi_messages_to_conversation(
-        _last_agent_end_messages(Path(trace_path))
-    )
+    path = Path(trace_path)
+    messages = _completed_run_messages(path)
+    _reject_failed_response(messages, path)
+    conversation, tools = pi_messages_to_conversation(messages)
 
     sample: dict[str, Any] = {"conversations": conversation}
     if tools is not None:
