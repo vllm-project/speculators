@@ -7,8 +7,10 @@ import sys
 import time
 import urllib.error
 import urllib.request
+import uuid
 from collections.abc import Callable, Iterable
 from contextlib import contextmanager, suppress
+from datetime import UTC, datetime
 from functools import wraps
 from pathlib import Path
 from textwrap import indent
@@ -23,6 +25,7 @@ from speculators.data_generation.configs import (
     DATASET_CONFIGS,
     _normalize_sharegpt4v_coco,
 )
+from speculators.provenance import find_repo_root, git_sha
 
 __all__ = [
     "SCRIPTS_DIR",
@@ -530,6 +533,35 @@ def run_stitch_mtp(
     assert result.returncode == 0, f"speculators stitch-mtp failed:\n{result.stderr}"
 
 
+def _emit_ci_metric(metrics_dict: dict) -> None:
+    """Write a metrics record when ``SPECULATORS_METRICS_DIR`` is set."""
+    metrics_dir = os.environ.get("SPECULATORS_METRICS_DIR")
+    if not metrics_dir:
+        return
+    try:
+        test_name = os.environ.get("PYTEST_CURRENT_TEST", "unknown")
+        if " " in test_name:
+            test_name = test_name.rsplit(" ", 1)[0]
+        parts = test_name.split("::")
+        test_id = parts[-1] if len(parts) > 1 else test_name
+        test_file = parts[0] if len(parts) > 1 else ""
+
+        record = {
+            "timestamp": datetime.now(UTC).isoformat(),
+            "git_sha": git_sha(find_repo_root(Path(__file__))),
+            "test_id": test_id,
+            "test_file": test_file,
+            **metrics_dict,
+        }
+
+        out_dir = Path(metrics_dir)
+        out_dir.mkdir(parents=True, exist_ok=True)
+        out_file = out_dir / f"{uuid.uuid4().hex}.json"
+        out_file.write_text(json.dumps(record))
+    except (OSError, ImportError, KeyError):
+        logger.opt(exception=True).debug("Failed to emit CI metric")
+
+
 def run_vllm_engine(
     model_path: str,
     tmp_path: Path,
@@ -613,6 +645,8 @@ def run_vllm_engine(
     logger.info("outputs_token_ids: {}", outputs_token_ids)
     logger.info("metrics_dict: {}", metrics_dict)
 
+    _emit_ci_metric(metrics_dict)
+
     for output_token_ids in outputs_token_ids:
         # If max_tokens is 100 or less, make sure the output length is max_tokens
         assert max_tokens > 100 or len(output_token_ids) == max_tokens
@@ -627,3 +661,5 @@ def run_vllm_engine(
             assert acci >= thresholdi, (
                 f"Acceptance {acci} at token {i} is less than threshold {thresholdi}"
             )
+
+    return metrics_dict
