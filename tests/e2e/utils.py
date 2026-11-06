@@ -35,6 +35,7 @@ __all__ = [
     "launch_vllm_server",
     "launch_vllm_server_context",
     "purge_newfiles",
+    "run_benchmark",
     "run_data_generation_offline",
     "run_prepare_data",
     "run_stitch_mtp",
@@ -582,6 +583,78 @@ def _emit_ci_metric(metrics_dict: dict) -> None:
         out_file.write_text(json.dumps(records))
     except (OSError, ImportError, KeyError):
         logger.opt(exception=True).debug("Failed to emit CI metric")
+
+
+def run_benchmark(
+    tmp_path: Path,
+    speculator_type: str,
+    verifier: str = "Qwen/Qwen3-8B",
+    total_seq_len: int = 4096,
+    warmup_steps: int = 5,
+    measured_steps: int = 20,
+    extra_train_args: list[str] | None = None,
+    timeout: float = 20 * 60,
+) -> dict[str, float]:
+    """Run ``scripts/benchmark.py`` and emit timing metrics.
+
+    Returns the flat dict of ``{metric_name: mean_value}`` for assertions.
+    """
+    benchmark_script = str(SCRIPTS_DIR / "benchmark.py")
+    output_file = str(tmp_path / "benchmark_results.json")
+
+    cmd = [
+        sys.executable,
+        benchmark_script,
+        "run",
+        "--synthetic",
+        "--warmup-steps",
+        str(warmup_steps),
+        "--measured-steps",
+        str(measured_steps),
+        "--output",
+        output_file,
+        "--",
+        "--speculator-type",
+        speculator_type,
+        "--verifier-name-or-path",
+        verifier,
+        "--total-seq-len",
+        str(total_seq_len),
+    ]
+    if extra_train_args:
+        cmd.extend(extra_train_args)
+
+    logger.info("benchmark command:\n    {}", " ".join(cmd))
+
+    result = subprocess.run(  # noqa: S603
+        cmd,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        check=False,
+        timeout=timeout,
+    )
+    logger.info("benchmark output:\n{}", indent(result.stdout, "    "))
+    assert result.returncode == 0, (
+        f"benchmark.py exited with non-zero return code: {result.returncode}"
+    )
+
+    with Path(output_file).open(encoding="utf-8") as f:
+        results = json.load(f)
+
+    metrics_dict: dict[str, float] = {}
+    for key, stats in results["timing"].items():
+        metrics_dict[f"bench_{key}"] = stats["mean"]
+    agg = results["aggregate"]
+    metrics_dict["bench_tokens_per_s"] = agg["effective_rank0_tokens_per_s"]
+    if results["memory"]["per_rank"]:
+        metrics_dict["bench_peak_allocated_mb"] = results["memory"]["per_rank"][0][
+            "peak_allocated_mb"
+        ]
+
+    _emit_ci_metric(metrics_dict)
+
+    return metrics_dict
 
 
 def run_vllm_engine(
