@@ -113,7 +113,8 @@ speculators prepare-data \
   --data ./target_responses.jsonl \
   --output ./output \
   --max-samples 5000 \
-  --seq-length 8192
+  --seq-length 8192 \
+  --no-skip-token-freq
 ```
 
 If your generation pipeline saves natural-language conversations instead, start the target model's vLLM server as described in Step 2, then use its render endpoint to convert those responses into speculator format:
@@ -127,7 +128,8 @@ speculators prepare-data \
   --render-endpoint http://localhost:8000 \
   --output ./output \
   --max-samples 5000 \
-  --seq-length 8192
+  --seq-length 8192 \
+  --no-skip-token-freq
 ```
 
 The render endpoint applies the serving chat template, tokenizes each turn, and derives its loss mask. It does not generate responses or make a dataset on-policy, so the assistant responses must already come from the same target model and generation configuration used for training.
@@ -140,6 +142,7 @@ The render endpoint applies the serving chat template, tokenizes each turn, and 
 - `--output` - Where to save preprocessed data
 - `--max-samples` - Limit samples (optional, good for testing/getting started)
 - `--seq-length` - Maximum sequence length
+- `--no-skip-token-freq` - Write `token_freq.pt`, which `speculators train --draft-vocab-size` needs to build the reduced draft vocab. Omit it if you train with the full verifier vocabulary.
 
 **Expected output:**
 

@@ -170,6 +170,7 @@ class DraftArgs(_Group):
     )
     sliding_window: int = Field(
         default=2048,
+        gt=0,
         description="Sliding window size for sliding window attention layers "
         "(default: 2048). All draft layers use sliding window by default (except mtp).",
     )
@@ -424,6 +425,13 @@ class TrainerArgs(_Group):
         "parameters are fully replicated (DDP-like). Enable when the model does not "
         "fit in a single GPU's memory.",
     )
+    fsdp_replicate_frozen: bool = Field(
+        default=False,
+        description="When FSDP sharding is enabled, exclude frozen "
+        "(requires_grad=False) parameters from sharding so they are replicated "
+        "on every rank instead of all-gathered on every step. Uses more per-rank "
+        "memory to reduce communication. No effect unless fsdp_shard is set.",
+    )
     gradient_checkpointing: bool = Field(
         default=False,
         description="Enable gradient checkpointing on decoder layers to save "
@@ -467,6 +475,13 @@ class LoggingArgs(_Group):
 class DFlashArgs(_Group):
     """Shared DFlash-family backbone knobs."""
 
+    causal_attention: bool | None = Field(
+        default=None,
+        description="Set causality for all DFlash-family draft layers when building "
+        "a fresh model. Saved as transformer_layer_config.is_causal for inference. "
+        "When unset, full-attention layers stay bidirectional and sliding-window "
+        "layers follow sliding_window_non_causal.",
+    )
     block_size: int | None = Field(
         default=None,
         description="Block size for DFlash model (default: 16 for dflash, 8 "
@@ -655,6 +670,10 @@ _DEFAULT_LOSS_FN: dict[str, str] = {
 }
 _DEFAULT_BLOCK_SIZE: dict[str, int] = {"dflash": 16, "xpress": 16}
 
+# Default block size of torch flex attention block masks. Kept here rather than
+# imported, so this module does not import torch.
+FLEX_ATTENTION_BLOCK_SIZE = 128
+
 
 class TrainConfig(BaseSettings):
     """Top-level trainer configuration -- the package's one public type.
@@ -840,6 +859,25 @@ class TrainConfig(BaseSettings):
                 raise ValueError(
                     f"--dpace-alpha must be in (0, 1], got {self.dflash.dpace_alpha}"
                 )
+        return self
+
+    @model_validator(mode="after")
+    def _validate_eagle3_flex_seq_len(self) -> "TrainConfig":
+        """Eagle3 with flex attention extends its block mask by whole blocks at each
+        TTT step, which matches the KV cache only when ``total_seq_len`` is a multiple
+        of the flex attention block size. Batches are padded to ``total_seq_len``, so
+        checking it here covers every batch."""
+        if (
+            self.speculator_type == "eagle3"
+            and self.draft.draft_attn_impl == "simple_flex_attention"
+            and self.data.total_seq_len % FLEX_ATTENTION_BLOCK_SIZE != 0
+        ):
+            raise ValueError(
+                "--total-seq-len must be a multiple of "
+                f"{FLEX_ATTENTION_BLOCK_SIZE} for eagle3 with "
+                f"--draft-attn-impl=simple_flex_attention, got "
+                f"{self.data.total_seq_len}"
+            )
         return self
 
     def flatten(self) -> dict[str, Any]:

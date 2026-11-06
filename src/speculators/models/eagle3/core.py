@@ -3,7 +3,7 @@ from typing import ClassVar
 
 import torch
 from torch.nn.attention.flex_attention import create_block_mask, create_mask
-from transformers import AutoConfig, DynamicCache, PretrainedConfig
+from transformers import DynamicCache, PretrainedConfig
 
 from speculators.config import SpeculatorsConfig, VerifierConfig
 from speculators.losses import LossConfig, resolve_loss_config
@@ -178,19 +178,6 @@ class Eagle3DraftModel(DraftVocabMixin, SpeculatorModel):
         super().load_verifier_weights()
 
         self.embed_tokens.weight.requires_grad_(self.config.embed_requires_grad)
-
-        verifier_config = self.config.speculators_config.verifier
-        verifier_model_config = AutoConfig.from_pretrained(verifier_config.name_or_path)  # type: ignore[arg-type]
-
-        # For multimodal models (Qwen3VL, etc.), extract text_config
-        if hasattr(verifier_model_config, "text_config"):
-            verifier_model_config = verifier_model_config.text_config
-
-        if verifier_model_config.hidden_size != self.hidden_size:
-            raise ValueError(
-                f"Verifier hidden size {verifier_model_config.hidden_size} does not"
-                f" match draft hidden size {self.hidden_size}."
-            )
 
     @conditional_torch_compile
     def forward(  # noqa: C901
