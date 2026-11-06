@@ -83,7 +83,8 @@ def test_mtp_roundtrip(tmp_path: Path, seed):
 
     # -- Step 3: Forward pass --
     logger.info("Running forward pass")
-    batch_size, seq_len = 2, 32
+    # packed rows, as the trainer produces
+    batch_size, seq_len = 1, 64
     input_ids = torch.randint(0, model.config.vocab_size, (batch_size, seq_len)).cuda()
     hidden_states = torch.randn(
         batch_size, seq_len, model.config.hidden_size, dtype=model.dtype

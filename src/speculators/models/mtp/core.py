@@ -266,7 +266,9 @@ class MTPDraftModel(DraftVocabMixin, SpeculatorModel):
             losses.append(loss)
             preds.append(pred)
         if not losses:
-            return hidden.new_zeros(0, dtype=torch.float32), targets.new_zeros(0)
+            # nothing supervised: an empty loss that is still part of the graph, so
+            # backward() works (and DDP sees every parameter) on such batches
+            return hidden.float().sum(dim=-1), targets.new_zeros(0)
         return torch.cat(losses), torch.cat(preds)
 
     @torch.compiler.disable
