@@ -51,8 +51,6 @@ speculators generate-agentic-traces \
   --output ./traces.jsonl
 ```
 
-The generation options live on the `generate-agentic-traces` group, so a direct invocation without a subcommand runs trace generation. `setup-pi` is the only subcommand.
-
 ## Arguments
 
 ### Data arguments
