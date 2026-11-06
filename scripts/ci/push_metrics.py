@@ -167,13 +167,23 @@ def _push_records(records: list[dict], target: str, branch: str) -> None:
                 )
 
 
+def _load_records(path: Path) -> list[dict]:
+    """Load a JSON file as a list of records (object or array)."""
+    data = json.loads(path.read_text())
+    if isinstance(data, list):
+        return data
+    return [data]
+
+
 def cmd_push(args: argparse.Namespace) -> None:
-    """Push a single JSON record."""
+    """Push a single JSON file (object or array of objects)."""
     if args.record_file == "-":
         raw = sys.stdin.read()
     else:
         raw = Path(args.record_file).read_text()
-    _push_records([json.loads(raw)], args.target, args.branch)
+    data = json.loads(raw)
+    records = data if isinstance(data, list) else [data]
+    _push_records(records, args.target, args.branch)
 
 
 def cmd_push_dir(args: argparse.Namespace) -> None:
@@ -185,7 +195,7 @@ def cmd_push_dir(args: argparse.Namespace) -> None:
 
     records: list[dict] = []
     for p in sorted(d.glob("*.json")):
-        records.append(json.loads(p.read_text()))
+        records.extend(_load_records(p))
 
     if not records:
         print("No .json files found.")
