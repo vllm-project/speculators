@@ -14,6 +14,7 @@ from typing import Any
 
 import pytest
 import torch
+from hs_connectors.fp8_utils import SCALES_KEY, quantize_tensor_to_fp8
 from safetensors.torch import load_file, save_file
 from tqdm import tqdm
 
@@ -254,6 +255,22 @@ def test_interrupted_copy_publishes_nothing(monkeypatch, tmp_path, output_dir):
         mod._publish_hidden_states(source, target, [1, 2, 3])
 
     assert list(output_dir.iterdir()) == []
+
+
+def test_fp8_connector_file_passes_validation(tmp_path, output_dir):
+    # The FP8 connector saves float8 hidden states with their scales.
+    source = tmp_path / "server" / "generated.safetensors"
+    source.parent.mkdir()
+    payload = _payload([1, 2, 3], fill=1.0)
+    fp8_hidden_states, scales = quantize_tensor_to_fp8(payload["hidden_states"])
+    save_file(
+        {**payload, "hidden_states": fp8_hidden_states, SCALES_KEY: scales}, source
+    )
+    target = output_dir / "hs_0.safetensors"
+
+    mod._publish_hidden_states(str(source), target, [1, 2, 3])
+
+    assert _token_ids(target) == [1, 2, 3]
 
 
 def test_failed_rename_leaves_nothing_staged(tmp_path, output_dir):
