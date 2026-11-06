@@ -363,7 +363,9 @@ class LiLiCorrDraftModel(DFlashDraftModel):
             weight_mask = aligned_loss_mask
         else:
             pos_idx = (
-                torch.arange(aligned_loss_mask.shape[1], device=aligned_loss_mask.device)
+                torch.arange(
+                    aligned_loss_mask.shape[1], device=aligned_loss_mask.device
+                )
                 .unsqueeze(0)
                 .float()
                 % block

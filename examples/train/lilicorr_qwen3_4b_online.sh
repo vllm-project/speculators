@@ -1,7 +1,7 @@
 #!/bin/bash
 # Online LiLiCorr Training Script -- Paper Recipe
 #
-# Trains a LiLiCorr drafter (arXiv:2608.20530) for Qwen/Qwen3-8B: a DFlash
+# Trains a LiLiCorr drafter (arXiv:2608.20530) for Qwen/Qwen3-4B: a DFlash
 # backbone plus a candidate-lattice head that rescores the backbone's per-slot
 # top-k candidates, so serving can commit a whole greedy path through the
 # lattice instead of only top-1 tokens. Settings below follow the paper's main
@@ -17,34 +17,46 @@
 # what the paper reports its main numbers with.
 #
 # The dataset below is UltraChat prompts with every assistant turn regenerated
-# on-policy by Qwen/Qwen3-8B.
+# on-policy (pretokenized, with input_ids + loss_mask).
 #
-# Usage: Copy this script, modify the configuration variables below, then run:
-#   bash examples/train/lilicorr_qwen3_8b_online.sh
+# Usage:
+#   bash examples/train/lilicorr_qwen3_4b_online.sh                 # full run, 100k samples
+#   RUN_MODE=smoke bash examples/train/lilicorr_qwen3_4b_online.sh  # 5-sample smoke test
 #
 # For a detailed walkthrough of the online pipeline, see
 # https://docs.vllm.ai/projects/speculators/en/latest/user_guide/tutorials/train/
 
-### Example E2E run for LiLiCorr Qwen3-8B on 5k regenerated UltraChat-200k samples ###
+### Example E2E run for LiLiCorr Qwen3-4B on 100k regenerated UltraChat samples ###
 
-# Note: With just 5k samples the drafter will not reach the paper's acceptance
-# numbers (the paper trains on much more data with a global batch of 64
-# sequences on 64 GPUs; this script uses 2 training GPUs, so scale lr/steps
-# accordingly if you chase that regime). There are enough samples to verify
-# the pipeline works and the lattice head learns: watch for lilicorr_ce
-# dropping below ln(8) ~= 2.08 and lilicorr_eal rising above
-# lilicorr_top1_eal. Run your own eval afterward (see examples/evaluate/).
+# Smoke mode (RUN_MODE=smoke) uses 5 samples and a single training GPU to
+# verify the pipeline end-to-end in minutes. Even with 100k samples the
+# drafter will not reach the paper's acceptance numbers (the paper trains
+# with a global batch of 64 sequences on 64 GPUs; this script uses 2
+# training GPUs, so scale lr/steps accordingly if you chase that regime),
+# but the lattice head learns: watch for lilicorr_ce dropping below
+# ln(8) ~= 2.08 and lilicorr_eal rising above lilicorr_top1_eal. Run your
+# own eval afterward (see examples/evaluate/).
 
 set -euo pipefail
 
 # ============ Configuration ============
-MODEL="Qwen/Qwen3-8B"
-DATASET="hf:inference-optimization/speculators-ci-datasets:tutorial_regen"  # on-policy regenerated Qwen3-8B data from UltraChat prompts (pretokenized); or a preset/path to custom data
-OUTPUT_DIR="./output/lilicorr_qwen3_8b_ultrachat_200k_regen"
+MODEL="Qwen/Qwen3-4B"
+DATASET="hf:inference-optimization/speculators-ci-datasets:tutorial_regen"  # on-policy regenerated data from UltraChat prompts (pretokenized); or a preset/path to custom data
 VLLM_PORT=8000
-MAX_SAMPLES=5000
-EPOCHS=6
 LR=6e-4
+EPOCHS=6
+
+# Run mode: "smoke" (5 samples, 1 training GPU, minutes) or "full" (100k
+# samples, 2 training GPUs).
+RUN_MODE="${RUN_MODE:-full}"
+if [[ "$RUN_MODE" == "smoke" ]]; then
+    OUTPUT_DIR="./output/lilicorr_qwen3_4b_smoke"
+    MAX_SAMPLES=5
+    EPOCHS=1
+else
+    OUTPUT_DIR="./output/lilicorr_qwen3_4b_ultrachat_100k"
+    MAX_SAMPLES=100000
+fi
 
 # LiLiCorr parameters (paper's main model)
 SPECULATOR_TYPE="lilicorr"
@@ -56,7 +68,7 @@ PER_POSITION_LOSS_WEIGHT="fixed-exp-decay"
 DFLASH_DECAY_GAMMA=7.0  # paper value; the lilicorr default is 4.0
 LOSS_FN="ce"
 TARGET_LAYER_IDS="2 10 18 26 34"  # Must match vLLM's eagle_aux_hidden_state_layer_ids
-MASK_TOKEN_ID=151669  # unused Qwen3-8B embedding slot, the ModelOpt/paper choice
+MASK_TOKEN_ID=151669  # unused Qwen3 embedding slot, the ModelOpt/paper choice
 
 # Optimizer (paper / ModelOpt recipe)
 WEIGHT_DECAY=0
@@ -66,9 +78,16 @@ SCHEDULER_WARMUP_RATIO=0.04
 # Note: no DRAFT_VOCAB_SIZE -- LiLiCorr requires the full verifier vocabulary.
 
 # GPU assignments (online training needs separate GPUs for vLLM and training)
+VLLM_DP_SIZE=2
 VLLM_GPUS="0,1"
 TRAIN_GPUS="2,3"
 NUM_TRAIN_GPUS=2
+if [[ "$RUN_MODE" == "smoke" ]]; then
+    VLLM_DP_SIZE=1
+    VLLM_GPUS="0"
+    TRAIN_GPUS="1"
+    NUM_TRAIN_GPUS=1
+fi
 # =======================================
 
 # Step 1: Prepare data
@@ -87,7 +106,7 @@ speculators prepare-data \
 echo "=== Step 2: Launching vLLM server ==="
 CUDA_VISIBLE_DEVICES="$VLLM_GPUS" python scripts/launch_vllm.py "$MODEL" \
     --target-layer-ids $TARGET_LAYER_IDS \
-    -- --data-parallel-size 2 --port "$VLLM_PORT" &
+    -- --data-parallel-size "$VLLM_DP_SIZE" --port "$VLLM_PORT" &
 VLLM_PID=$!
 
 # Ensure vLLM is cleaned up on exit

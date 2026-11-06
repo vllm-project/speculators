@@ -765,7 +765,7 @@ class TrainConfig(BaseSettings):
     mtp: MTPArgs = Field(default_factory=MTPArgs)
 
     @model_validator(mode="after")
-    def _resolve_derived_defaults(self) -> "TrainConfig":
+    def _resolve_derived_defaults(self) -> "TrainConfig":  # noqa: C901
         """Fill defaults that derive from other fields, mirroring the tail of the
         pre-refactor ``parse_args``: unset ``draft_arch`` -> ``llama`` for eagle3 else
         ``qwen3``; unset ``norm_before_fc`` / ``norm_output`` -> ``True`` for eagle3

@@ -101,15 +101,11 @@ def build_optimizers(model: Module, config) -> list[torch.optim.Optimizer]:
             param_groups.append(
                 {"params": [p for _, p in head_params], "lr": lilicorr_lr}
             )
-        return [
-            torch.optim.AdamW(param_groups, weight_decay=config.weight_decay)
-        ]
+        return [torch.optim.AdamW(param_groups, weight_decay=config.weight_decay)]
 
     if config.optimizer == "muon":
         muon_params, adamw_params = split_named_params_for_muon(model)
-        muon_backbone, muon_head = _split_by_prefix(
-            muon_params, _LILICORR_HEAD_PREFIX
-        )
+        muon_backbone, muon_head = _split_by_prefix(muon_params, _LILICORR_HEAD_PREFIX)
         adamw_backbone, adamw_head = _split_by_prefix(
             adamw_params, _LILICORR_HEAD_PREFIX
         )
