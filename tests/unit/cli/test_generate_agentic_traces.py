@@ -83,8 +83,38 @@ class TestSetupPiCommand:
         result = runner.invoke(app, ["generate-agentic-traces", "setup-pi", "--help"])
         assert result.exit_code == 0
         output = unstyled_output(result)
-        for flag in ("--path", "-p", "--node-version", "--force", "--skip-rg"):
+        for flag in ("--path", "-p", "--node-version", "--force", "--skip-rg", "--yes"):
             assert flag in output
+
+
+class TestSetupPiConfirmation:
+    def test_defaults_to_no(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(
+            gat, "_install_pi", lambda *a: pytest.fail("should not install")
+        )
+        result = runner.invoke(
+            app,
+            ["generate-agentic-traces", "setup-pi", "--path", str(tmp_path / "rt")],
+            input="n\n",
+        )
+        assert result.exit_code != 0
+        assert "Aborted." in unstyled_output(result)
+
+    def test_yes_skips_prompt(self, tmp_path, monkeypatch):
+        calls = []
+        monkeypatch.setattr(gat, "_install_pi", lambda *a: calls.append(a))
+        result = runner.invoke(
+            app,
+            [
+                "generate-agentic-traces",
+                "setup-pi",
+                "--path",
+                str(tmp_path / "rt"),
+                "--yes",
+            ],
+        )
+        assert result.exit_code == 0
+        assert calls
 
 
 class TestInstallPi:

@@ -34,6 +34,7 @@ Options:
 - `--node-version` (default: `v24.22.2`) Node.js version to download.
 - `--force` Replace an existing installation. Without it the installer leaves an existing directory alone, and it refuses to write into a non-empty directory that is not a Pi runtime.
 - `--skip-rg` Do not copy ripgrep into `bin/rg`. Pass this when the task container provides `rg` itself.
+- `--yes` / `-y` Skip the confirmation prompt. The prompt defaults to No and lists the Node version, npm package, ripgrep step, and whether an existing directory will be replaced.
 
 The installer supports Linux x86_64 and arm64. It fails on other platforms. If you prefer to build the runtime by hand, reproduce the same steps: download Node, install the Pi package with `npm install --prefix`, symlink `bin/pi` to `../node_modules/.bin/pi`, and copy `rg` into `bin/`.
 

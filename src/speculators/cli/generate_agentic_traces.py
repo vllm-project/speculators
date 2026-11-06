@@ -184,13 +184,32 @@ def setup_pi(
         bool,
         typer.Option(help="Do not copy ripgrep into the runtime"),
     ] = False,
+    yes: Annotated[
+        bool,
+        typer.Option("--yes", "-y", help="Skip the confirmation prompt"),
+    ] = False,
 ) -> None:
     """Install a Pi runtime directory for --pi-runtime."""
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
     )
-    _install_pi(path.resolve(), node_version, force, skip_rg)
+    target = path.resolve()
+    if not yes:
+        rg_note = (
+            "do not copy ripgrep" if skip_rg else "copy ripgrep from PATH when found"
+        )
+        replace_note = " and replace the existing directory" if force else ""
+        typer.echo(
+            f"Install the Pi runtime in {target}{replace_note}:\n"
+            f"  Node.js {node_version} from nodejs.org\n"
+            f"  @earendil-works/pi-coding-agent from npm\n"
+            f"  {rg_note}\n"
+        )
+        if not typer.confirm("Continue?", default=False):
+            typer.echo("Aborted.")
+            raise typer.Exit(1)
+    _install_pi(target, node_version, force, skip_rg)
 
 
 def _run_generate(  # noqa: PLR0917
