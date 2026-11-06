@@ -565,6 +565,7 @@ def _emit_ci_metric(metrics_dict: dict) -> None:
                 "BUILDKITE_BUILD_URL",
                 os.environ.get("GITHUB_RUN_URL", ""),
             ),
+            "pr_number": os.environ.get("BUILDKITE_PULL_REQUEST", ""),
             "test_id": test_id,
             "test_file": test_file,
         }
