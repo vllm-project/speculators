@@ -87,8 +87,12 @@ def git_sha(repo_root: Path | None) -> str:
         return "unknown"
 
 
-def git_diff(repo_root: Path | None, *, timeout: int = 30) -> str:
-    """Return ``git diff HEAD`` for *repo_root*, or empty string on failure."""
+def git_diff(repo_root: Path | None, *, timeout: int = 30) -> str | None:
+    """Return ``git diff HEAD`` for *repo_root*.
+
+    ``""`` is a clean tree, or no repo when *repo_root* is ``None``.
+    ``None`` means git failed; callers must not treat that as clean.
+    """
     if repo_root is None:
         return ""
     try:
@@ -100,9 +104,11 @@ def git_diff(repo_root: Path | None, *, timeout: int = 30) -> str:
             timeout=timeout,
             check=False,
         )
-        return result.stdout.strip() if result.returncode == 0 else ""
+        if result.returncode != 0:
+            return None
+        return result.stdout.strip()
     except (OSError, subprocess.TimeoutExpired):
-        return ""
+        return None
 
 
 def run_git(args: list[str], cwd: str | Path, *, timeout: int = 5) -> str:
