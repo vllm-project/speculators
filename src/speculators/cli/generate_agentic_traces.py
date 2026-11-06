@@ -90,6 +90,22 @@ def _download_node(version: str, destination: Path) -> None:
             shutil.move(str(entry), str(destination / entry.name))
 
 
+def _verify_pi(pi_launcher: Path, env: dict[str, str]) -> None:
+    log.info(f"Verifying {pi_launcher}")
+    version = subprocess.run(  # noqa: S603
+        [str(pi_launcher), "--version"],
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if version.returncode != 0:
+        log.error(f"{pi_launcher} --version failed with exit code {version.returncode}")
+        if version.stderr:
+            log.error(version.stderr.strip())
+        raise typer.Exit(1)
+
+
 def _install_pi(
     path: Path,
     node_version: str,
@@ -97,8 +113,11 @@ def _install_pi(
     skip_rg: bool,
 ) -> None:
     pi_launcher = path / "bin" / "pi"
+    env = os.environ.copy()
+    env["PATH"] = f"{path / 'bin'}{os.pathsep}{env.get('PATH', '')}"
 
     if pi_launcher.exists() and not force:
+        _verify_pi(pi_launcher, env)
         log.info(f"Pi runtime already installed at {path} (use --force to replace)")
         return
 
@@ -112,9 +131,6 @@ def _install_pi(
     path.mkdir(parents=True, exist_ok=True)
 
     _download_node(node_version, path)
-
-    env = os.environ.copy()
-    env["PATH"] = f"{path / 'bin'}{os.pathsep}{env.get('PATH', '')}"
 
     log.info(f"Installing {PI_PACKAGE}")
     npm = shutil.which("npm", path=env["PATH"])
@@ -144,19 +160,7 @@ def _install_pi(
             shutil.copy2(rg, bin_dir / "rg")
             log.info(f"Copied rg from {rg}")
 
-    log.info(f"Verifying {pi_launcher}")
-    version = subprocess.run(  # noqa: S603
-        [str(pi_launcher), "--version"],
-        env=env,
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    if version.returncode != 0:
-        log.error(f"{pi_launcher} --version failed with exit code {version.returncode}")
-        if version.stderr:
-            log.error(version.stderr.strip())
-        raise typer.Exit(1)
+    _verify_pi(pi_launcher, env)
 
     log.success(f"Pi runtime installed at {path}")
     log.info(f"Next: speculators generate-agentic-traces --pi-runtime {path} ...")
@@ -212,6 +216,45 @@ def setup_pi(
     _install_pi(target, node_version, force, skip_rg)
 
 
+def _remove_created_trace_dirs(
+    trace_path: Path,
+    existing_names: set[str],
+    created_ids: set[str],
+    output_path: Path,
+) -> None:
+    for name in created_ids - existing_names:
+        entry = trace_path / name
+        if not entry.is_dir():
+            continue
+        if output_path.resolve().is_relative_to(entry.resolve()):
+            continue
+        shutil.rmtree(entry, ignore_errors=True)
+
+
+def _cleanup_traces(
+    trace_path: Path,
+    existing_names: set[str],
+    results: list[dict],
+    output_path: Path,
+    trace_path_existed: bool,
+) -> None:
+    created_ids = {
+        result["instance_id"] for result in results if result.get("instance_id")
+    }
+    _remove_created_trace_dirs(trace_path, existing_names, created_ids, output_path)
+    if not trace_path_existed and trace_path.is_dir() and not any(trace_path.iterdir()):
+        trace_path.rmdir()
+
+
+def _validate_limits(limit: int | None, max_samples: int | None) -> None:
+    if limit is not None and limit < 0:
+        raise typer.BadParameter(f"--limit must be non-negative, got {limit}")
+    if max_samples is not None and max_samples < 0:
+        raise typer.BadParameter(
+            f"--max-samples must be non-negative, got {max_samples}"
+        )
+
+
 def _run_generate(  # noqa: PLR0917
     model: str,
     data: list[str],
@@ -220,7 +263,7 @@ def _run_generate(  # noqa: PLR0917
     pi_runtime: str,
     pi_endpoint: str,
     pi_provider: str,
-    pi_model: str,
+    pi_model: str | None,
     workers: int,
     timeout: int,
     seq_length: int,
@@ -235,8 +278,15 @@ def _run_generate(  # noqa: PLR0917
         format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
     )
 
+    _validate_limits(limit, max_samples)
+
     output_path = Path(output)
     trace_path = Path(trace_dir) if trace_dir is not None else Path(f"{output}.traces")
+    resolved_pi_model = pi_model or model
+    trace_path_existed = trace_path.is_dir()
+    existing_trace_names = (
+        {entry.name for entry in trace_path.iterdir()} if trace_path_existed else set()
+    )
 
     log.section("Generating agentic traces")
     log.config(
@@ -247,7 +297,7 @@ def _run_generate(  # noqa: PLR0917
             "Trace Dir": str(trace_path),
             "Render Endpoint": render_endpoint,
             "Pi Endpoint": pi_endpoint,
-            "Pi Model": pi_model,
+            "Pi Model": resolved_pi_model,
             "Workers": workers,
             "Tools": tools,
         }
@@ -268,7 +318,7 @@ def _run_generate(  # noqa: PLR0917
         pi_runtime=pi_runtime,
         pi_endpoint=pi_endpoint,
         pi_provider=pi_provider,
-        pi_model=pi_model,
+        pi_model=resolved_pi_model,
         tools=tools,
         timeout=timeout,
     )
@@ -311,7 +361,13 @@ def _run_generate(  # noqa: PLR0917
             f.write(json.dumps(row, ensure_ascii=False) + "\n")
 
     if not keep_traces:
-        shutil.rmtree(trace_path, ignore_errors=True)
+        _cleanup_traces(
+            trace_path,
+            existing_trace_names,
+            results,
+            output_path,
+            trace_path_existed,
+        )
 
     log.section("Done")
     log.success(f"Wrote {len(rows)} row(s) from {len(succeeded)} trace(s)")
@@ -365,9 +421,11 @@ def generate_agentic_traces(  # noqa: PLR0917
         typer.Option(help="Pi model provider name"),
     ] = "vllm",
     pi_model: Annotated[
-        str,
-        typer.Option(help="Model name exposed to Pi by the endpoint"),
-    ] = "qwen3.8-27b",
+        str | None,
+        typer.Option(
+            help="Model name exposed to Pi by the endpoint (defaults to --model)"
+        ),
+    ] = None,
     workers: Annotated[
         int,
         typer.Option(help="Number of tasks to run concurrently"),
@@ -427,6 +485,12 @@ def generate_agentic_traces(  # noqa: PLR0917
     if missing:
         typer.echo(f"Missing option: {', '.join(missing)}")
         raise typer.Exit(1)
+
+    assert model is not None  # noqa: S101
+    assert data is not None  # noqa: S101
+    assert output is not None  # noqa: S101
+    assert render_endpoint is not None  # noqa: S101
+    assert pi_runtime is not None  # noqa: S101
 
     _run_generate(
         model=model,

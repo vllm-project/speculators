@@ -59,9 +59,9 @@ speculators generate-agentic-traces \
 
 - **`--data`** (str, repeatable, required) SWE-smith-style task datasets: a local JSON/JSONL file, a directory of them, a HuggingFace dataset id, or a `hf:` prefixed id.
 
-- **`--limit`** (int, default: `None`) Run at most N tasks.
+- **`--limit`** (int, default: `None`) Run at most N tasks. Rejects negative values.
 
-- **`--max-samples`** (int, default: `None`) Write at most N output rows.
+- **`--max-samples`** (int, default: `None`) Write at most N output rows. Rejects negative values.
 
 ### Agent arguments
 
@@ -71,7 +71,7 @@ speculators generate-agentic-traces \
 
 - **`--pi-provider`** (str, default: `vllm`) Pi provider name.
 
-- **`--pi-model`** (str, default: `qwen3.8-27b`) Model name exposed to Pi by that endpoint.
+- **`--pi-model`** (str, default: `--model`) Model name exposed to Pi by that endpoint.
 
 - **`--tools`** (str, default: `read,bash,edit,write`) Comma-separated list of tools enabled for the agent.
 
@@ -89,7 +89,7 @@ speculators generate-agentic-traces \
 
 - **`--trace-dir`** (str, default: `<output>.traces`) Directory holding the raw traces.
 
-- **`--keep-traces` / `--no-keep-traces`** (default: keep) Keep the raw trace directory after conversion.
+- **`--keep-traces` / `--no-keep-traces`** (default: keep) Keep the raw trace directory after conversion. With `--no-keep-traces`, the command removes only the per-task trace directories it created and never the output file or unrelated entries.
 
 ## Output format
 
