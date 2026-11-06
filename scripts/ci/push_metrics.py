@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Push CI metrics to the ``metrics-data`` orphan branch.
 
-Stores JSONL files on an orphan branch readable by Grafana's
+Stores JSON arrays on an orphan branch readable by Grafana's
 Infinity data-source plugin via raw GitHub URLs.
 
 Examples::
@@ -10,10 +10,10 @@ Examples::
     python scripts/ci/push_metrics.py init
 
     # Push a single JSON record
-    python scripts/ci/push_metrics.py push record.json --target acceptance.jsonl
+    python scripts/ci/push_metrics.py push record.json --target acceptance.json
 
     # Push all .json files collected during a CI run
-    python scripts/ci/push_metrics.py push-dir /tmp/ci-metrics --target acceptance.jsonl
+    python scripts/ci/push_metrics.py push-dir /tmp/ci-metrics --target acceptance.json
 """
 
 from __future__ import annotations
@@ -97,8 +97,8 @@ def cmd_init(_args: argparse.Namespace) -> None:
     print(f"Created orphan branch '{BRANCH}'")
 
 
-def _push_lines(lines: list[str], target: str, branch: str) -> None:
-    """Append *lines* to *target* on *branch*, retrying on conflict."""
+def _push_records(records: list[dict], target: str, branch: str) -> None:
+    """Append *records* to the JSON array in *target* on *branch*."""
     remote_url = _remote_url(_repo_root())
 
     for attempt in range(MAX_RETRIES):
@@ -127,9 +127,13 @@ def _push_lines(lines: list[str], target: str, branch: str) -> None:
 
             target_path = Path(tmp) / target
             target_path.parent.mkdir(parents=True, exist_ok=True)
-            with open(target_path, "a") as fh:
-                for line in lines:
-                    fh.write(line if line.endswith("\n") else line + "\n")
+
+            existing: list[dict] = []
+            if target_path.exists():
+                existing = json.loads(target_path.read_text())
+
+            existing.extend(records)
+            target_path.write_text(json.dumps(existing))
 
             _git(["add", target], tmp)
 
@@ -137,8 +141,11 @@ def _push_lines(lines: list[str], target: str, branch: str) -> None:
                 print("No changes to push.")
                 return
 
-            n = len(lines)
-            _git(["commit", "-m", f"Add {n} record(s) to {target}"], tmp)
+            n = len(records)
+            _git(
+                ["commit", "-m", f"Add {n} record(s) to {target}"],
+                tmp,
+            )
 
             result = _git(
                 ["push", "origin", branch],
@@ -166,12 +173,7 @@ def cmd_push(args: argparse.Namespace) -> None:
         raw = sys.stdin.read()
     else:
         raw = Path(args.record_file).read_text()
-    record = json.loads(raw)
-    _push_lines(
-        [json.dumps(record, separators=(",", ":"))],
-        args.target,
-        args.branch,
-    )
+    _push_records([json.loads(raw)], args.target, args.branch)
 
 
 def cmd_push_dir(args: argparse.Namespace) -> None:
@@ -181,16 +183,15 @@ def cmd_push_dir(args: argparse.Namespace) -> None:
         print(f"Not a directory: {d}", file=sys.stderr)
         sys.exit(1)
 
-    lines: list[str] = []
+    records: list[dict] = []
     for p in sorted(d.glob("*.json")):
-        record = json.loads(p.read_text())
-        lines.append(json.dumps(record, separators=(",", ":")))
+        records.append(json.loads(p.read_text()))
 
-    if not lines:
+    if not records:
         print("No .json files found.")
         return
 
-    _push_lines(lines, args.target, args.branch)
+    _push_records(records, args.target, args.branch)
 
 
 # ---- CLI -------------------------------------------------------------------
@@ -209,7 +210,7 @@ def main() -> None:
     sp.add_argument(
         "--target",
         required=True,
-        help="JSONL file on the metrics branch (e.g. acceptance.jsonl)",
+        help="JSON file on the metrics branch (e.g. acceptance.json)",
     )
     sp.add_argument("--branch", default=BRANCH)
 
@@ -218,7 +219,7 @@ def main() -> None:
     sp.add_argument(
         "--target",
         required=True,
-        help="JSONL file on the metrics branch (e.g. acceptance.jsonl)",
+        help="JSON file on the metrics branch (e.g. acceptance.json)",
     )
     sp.add_argument("--branch", default=BRANCH)
 

@@ -1,6 +1,6 @@
 # Grafana Dashboard Setup
 
-CI regression tests push acceptance metrics to the `metrics-data` orphan branch as JSONL. Grafana reads them via the **Infinity** data-source plugin.
+CI regression tests push acceptance metrics to the `metrics-data` orphan branch as a JSON array. Grafana reads them via the **Infinity** data-source plugin.
 
 ## Prerequisites
 
@@ -19,12 +19,12 @@ CI regression tests push acceptance metrics to the `metrics-data` orphan branch 
 
 ### Acceptance rate over time
 
-| Setting | Value                                                                                      |
-| ------- | ------------------------------------------------------------------------------------------ |
-| URL     | `https://raw.githubusercontent.com/vllm-project/speculators/metrics-data/acceptance.jsonl` |
-| Type    | JSON                                                                                       |
-| Parser  | Backend                                                                                    |
-| Format  | Dataframe                                                                                  |
+| Setting | Value                                                                                     |
+| ------- | ----------------------------------------------------------------------------------------- |
+| URL     | `https://raw.githubusercontent.com/vllm-project/speculators/metrics-data/acceptance.json` |
+| Type    | JSON                                                                                      |
+| Parser  | Backend                                                                                   |
+| Format  | Dataframe                                                                                 |
 
 Columns to extract (add via **Columns** in the query editor):
 
@@ -41,7 +41,7 @@ Use a **Time series** panel. Add a **Filter by value** transformation on `test_i
 
 ### Record schema
 
-Each line in `acceptance.jsonl` is a JSON object:
+`acceptance.json` is a JSON array of objects, each with this schema:
 
 ```json
 {
@@ -75,5 +75,5 @@ This creates a `metrics-data` branch with no shared history.
 ```bash
 # Manually push a test record
 echo '{"timestamp":"2026-01-01T00:00:00Z","test_id":"manual","acceptance_at_token_0":0.5}' \
-  | python scripts/ci/push_metrics.py push - --target acceptance.jsonl
+  | python scripts/ci/push_metrics.py push - --target acceptance.json
 ```
