@@ -8,6 +8,8 @@ then renders and tokenizes each trace into speculator-format rows with
 
 Usage::
 
+    speculators generate-agentic-traces setup-pi --path ./pi-runtime
+
     speculators generate-agentic-traces \\
         --model meta-llama/Llama-3.1-8B-Instruct \\
         --data ./swe_smith_tasks.jsonl \\
@@ -18,7 +20,13 @@ Usage::
 
 import json
 import logging
+import os
+import platform
 import shutil
+import subprocess
+import tarfile
+import tempfile
+import urllib.request
 from pathlib import Path
 from typing import Annotated
 
@@ -34,99 +42,175 @@ from speculators.data_generation.preprocessing import load_processor
 
 log = PipelineLogger(__name__)
 
+DEFAULT_NODE_VERSION = "v24.22.2"
+PI_PACKAGE = "@earendil-works/pi-coding-agent"
 
-def generate_agentic_traces(  # noqa: PLR0917
-    model: Annotated[
-        str,
-        typer.Option(
-            help="HuggingFace model ID or local path used for tokenizer/processor",
-        ),
-    ],
-    data: Annotated[
-        list[str],
-        typer.Option(
-            "--data",
-            help=(
-                "SWE-smith-style task dataset: local JSON/JSONL file or directory, "
-                "HuggingFace id, or hf: prefix (repeatable)"
-            ),
-        ),
-    ],
-    output: Annotated[
-        str,
-        typer.Option(help="Output JSONL path, e.g. traces.jsonl"),
-    ],
-    render_endpoint: Annotated[
-        str,
-        typer.Option(
-            help=(
-                "Base URL of a running vLLM server used to render traces "
-                "(e.g. http://localhost:8000)"
-            ),
-        ),
-    ],
-    pi_runtime: Annotated[
-        str,
-        typer.Option(help="Path to the prepared Pi runtime"),
-    ],
-    pi_endpoint: Annotated[
-        str,
-        typer.Option(
-            help="OpenAI-compatible endpoint as seen from inside the task container",
-        ),
-    ] = "http://host.docker.internal:8000/v1",
-    pi_provider: Annotated[
-        str,
-        typer.Option(help="Pi model provider name"),
-    ] = "vllm",
-    pi_model: Annotated[
-        str,
-        typer.Option(help="Model name exposed to Pi by the endpoint"),
-    ] = "qwen3.8-27b",
-    workers: Annotated[
-        int,
-        typer.Option(help="Number of tasks to run concurrently"),
-    ] = 4,
-    timeout: Annotated[
-        int,
-        typer.Option(help="Per-task timeout in seconds"),
-    ] = 900,
-    seq_length: Annotated[
-        int,
-        typer.Option(help="Maximum sequence length of an output row"),
-    ] = 32768,
-    limit: Annotated[
-        int | None,
-        typer.Option(help="Maximum number of tasks to run"),
-    ] = None,
-    max_samples: Annotated[
-        int | None,
-        typer.Option(help="Maximum number of output rows to write"),
-    ] = None,
-    tools: Annotated[
-        str,
-        typer.Option(help="Comma-separated list of tools enabled for the agent"),
-    ] = "read,bash,edit,write",
-    trace_dir: Annotated[
-        str | None,
-        typer.Option(
-            help="Directory for raw traces (defaults to <output>.traces)",
-        ),
-    ] = None,
-    keep_traces: Annotated[
-        bool,
-        typer.Option(
-            "--keep-traces/--no-keep-traces",
-            help="Keep the raw trace directory after conversion",
-        ),
-    ] = True,
+generate_agentic_traces_app = typer.Typer(
+    help="Generate agentic traces with Pi and convert them to speculator rows.",
+)
+
+
+def _node_platform() -> str:
+    system = platform.system().lower()
+    machine = platform.machine().lower()
+    if system != "linux":
+        raise typer.BadParameter(
+            f"unsupported platform {system!r}; only Linux is supported"
+        )
+    if machine in ("x86_64", "amd64"):
+        return "linux-x64"
+    if machine in ("aarch64", "arm64"):
+        return "linux-arm64"
+    raise typer.BadParameter(
+        f"unsupported architecture {machine!r}; only x86_64 and arm64 are supported"
+    )
+
+
+def _download_node(version: str, destination: Path) -> None:
+    node_platform = _node_platform()
+    filename = f"node-{version}-{node_platform}.tar.xz"
+    url = f"https://nodejs.org/dist/{version}/{filename}"
+    log.info(f"Downloading {url}")
+
+    with tempfile.TemporaryDirectory() as tmp:
+        tmp_path = Path(tmp)
+        archive = tmp_path / filename
+        with urllib.request.urlopen(url) as response, archive.open("wb") as handle:
+            shutil.copyfileobj(response, handle)
+
+        extract_dir = tmp_path / "node"
+        extract_dir.mkdir()
+        with tarfile.open(archive) as tar:
+            tar.extractall(extract_dir, filter="data")
+
+        roots = list(extract_dir.iterdir())
+        if len(roots) != 1 or not roots[0].is_dir():
+            raise typer.BadParameter(f"unexpected layout in {filename}")
+        for entry in roots[0].iterdir():
+            shutil.move(str(entry), str(destination / entry.name))
+
+
+def _install_pi(
+    path: Path,
+    node_version: str,
+    force: bool,
+    skip_rg: bool,
 ) -> None:
-    """Generate agentic traces and convert them to speculator-format rows.
+    pi_launcher = path / "bin" / "pi"
 
-    Runs a Pi agent for each task in ``--data`` against the vLLM endpoint, then
-    renders and tokenizes each trace into rows with ``input_ids``/``loss_mask``
-    and writes them to ``--output`` as JSONL.
-    """
+    if pi_launcher.exists() and not force:
+        log.info(f"Pi runtime already installed at {path} (use --force to replace)")
+        return
+
+    if path.exists() and any(path.iterdir()) and not pi_launcher.exists() and not force:
+        raise typer.BadParameter(
+            f"{path} exists and is not an empty Pi runtime; pass --force to replace it"
+        )
+
+    if force and path.exists():
+        shutil.rmtree(path)
+    path.mkdir(parents=True, exist_ok=True)
+
+    _download_node(node_version, path)
+
+    env = os.environ.copy()
+    env["PATH"] = f"{path / 'bin'}{os.pathsep}{env.get('PATH', '')}"
+
+    log.info(f"Installing {PI_PACKAGE}")
+    npm = shutil.which("npm", path=env["PATH"])
+    if npm is None:
+        log.error("npm was not found in the downloaded Node runtime")
+        raise typer.Exit(1)
+    result = subprocess.run(  # noqa: S603
+        [npm, "install", "--prefix", str(path), PI_PACKAGE],
+        env=env,
+        check=False,
+    )
+    if result.returncode != 0:
+        log.error(f"npm install failed with exit code {result.returncode}")
+        raise typer.Exit(1)
+
+    bin_dir = path / "bin"
+    bin_dir.mkdir(exist_ok=True)
+    pi_package_bin = path / "node_modules" / ".bin" / "pi"
+    pi_launcher.unlink(missing_ok=True)
+    pi_launcher.symlink_to(os.path.relpath(pi_package_bin, bin_dir))
+
+    if not skip_rg:
+        rg = shutil.which("rg")
+        if rg is None:
+            log.warning("ripgrep (rg) not found on PATH; skipping copy")
+        else:
+            shutil.copy2(rg, bin_dir / "rg")
+            log.info(f"Copied rg from {rg}")
+
+    log.info(f"Verifying {pi_launcher}")
+    version = subprocess.run(  # noqa: S603
+        [str(pi_launcher), "--version"],
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if version.returncode != 0:
+        log.error(f"{pi_launcher} --version failed with exit code {version.returncode}")
+        if version.stderr:
+            log.error(version.stderr.strip())
+        raise typer.Exit(1)
+
+    log.success(f"Pi runtime installed at {path}")
+    log.info(f"Next: speculators generate-agentic-traces --pi-runtime {path} ...")
+
+
+@generate_agentic_traces_app.command("setup-pi")
+def setup_pi(
+    path: Annotated[
+        Path,
+        typer.Option(
+            "--path",
+            "-p",
+            help="Directory to install the Pi runtime into",
+        ),
+    ] = Path("./pi-runtime"),
+    node_version: Annotated[
+        str,
+        typer.Option(help="Node.js version to download"),
+    ] = DEFAULT_NODE_VERSION,
+    force: Annotated[
+        bool,
+        typer.Option(help="Replace an existing installation"),
+    ] = False,
+    skip_rg: Annotated[
+        bool,
+        typer.Option(help="Do not copy ripgrep into the runtime"),
+    ] = False,
+) -> None:
+    """Install a Pi runtime directory for --pi-runtime."""
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+    )
+    _install_pi(path.resolve(), node_version, force, skip_rg)
+
+
+def _run_generate(  # noqa: PLR0917
+    model: str,
+    data: list[str],
+    output: str,
+    render_endpoint: str,
+    pi_runtime: str,
+    pi_endpoint: str,
+    pi_provider: str,
+    pi_model: str,
+    workers: int,
+    timeout: int,
+    seq_length: int,
+    limit: int | None,
+    max_samples: int | None,
+    tools: str,
+    trace_dir: str | None,
+    keep_traces: bool,
+) -> None:
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
@@ -213,3 +297,133 @@ def generate_agentic_traces(  # noqa: PLR0917
     log.section("Done")
     log.success(f"Wrote {len(rows)} row(s) from {len(succeeded)} trace(s)")
     log.info(f"Output: {output_path}")
+
+
+@generate_agentic_traces_app.callback(invoke_without_command=True)
+def generate_agentic_traces(  # noqa: PLR0917
+    ctx: typer.Context,
+    model: Annotated[
+        str | None,
+        typer.Option(
+            help="HuggingFace model ID or local path used for tokenizer/processor",
+        ),
+    ] = None,
+    data: Annotated[
+        list[str] | None,
+        typer.Option(
+            "--data",
+            help=(
+                "SWE-smith-style task dataset: local JSON/JSONL file or directory, "
+                "HuggingFace id, or hf: prefix (repeatable)"
+            ),
+        ),
+    ] = None,
+    output: Annotated[
+        str | None,
+        typer.Option(help="Output JSONL path, e.g. traces.jsonl"),
+    ] = None,
+    render_endpoint: Annotated[
+        str | None,
+        typer.Option(
+            help=(
+                "Base URL of a running vLLM server used to render traces "
+                "(e.g. http://localhost:8000)"
+            ),
+        ),
+    ] = None,
+    pi_runtime: Annotated[
+        str | None,
+        typer.Option(help="Path to the prepared Pi runtime"),
+    ] = None,
+    pi_endpoint: Annotated[
+        str,
+        typer.Option(
+            help="OpenAI-compatible endpoint as seen from inside the task container",
+        ),
+    ] = "http://host.docker.internal:8000/v1",
+    pi_provider: Annotated[
+        str,
+        typer.Option(help="Pi model provider name"),
+    ] = "vllm",
+    pi_model: Annotated[
+        str,
+        typer.Option(help="Model name exposed to Pi by the endpoint"),
+    ] = "qwen3.8-27b",
+    workers: Annotated[
+        int,
+        typer.Option(help="Number of tasks to run concurrently"),
+    ] = 4,
+    timeout: Annotated[
+        int,
+        typer.Option(help="Per-task timeout in seconds"),
+    ] = 900,
+    seq_length: Annotated[
+        int,
+        typer.Option(help="Maximum sequence length of an output row"),
+    ] = 32768,
+    limit: Annotated[
+        int | None,
+        typer.Option(help="Maximum number of tasks to run"),
+    ] = None,
+    max_samples: Annotated[
+        int | None,
+        typer.Option(help="Maximum number of output rows to write"),
+    ] = None,
+    tools: Annotated[
+        str,
+        typer.Option(help="Comma-separated list of tools enabled for the agent"),
+    ] = "read,bash,edit,write",
+    trace_dir: Annotated[
+        str | None,
+        typer.Option(
+            help="Directory for raw traces (defaults to <output>.traces)",
+        ),
+    ] = None,
+    keep_traces: Annotated[
+        bool,
+        typer.Option(
+            "--keep-traces/--no-keep-traces",
+            help="Keep the raw trace directory after conversion",
+        ),
+    ] = True,
+) -> None:
+    """Generate agentic traces and convert them to speculator-format rows.
+
+    Runs a Pi agent for each task in ``--data`` against the vLLM endpoint, then
+    renders and tokenizes each trace into rows with ``input_ids``/``loss_mask``
+    and writes them to ``--output`` as JSONL. Run ``setup-pi`` first to install
+    the Pi runtime.
+    """
+    if ctx.invoked_subcommand is not None:
+        return
+
+    required = {
+        "--model": model,
+        "--data": data,
+        "--output": output,
+        "--render-endpoint": render_endpoint,
+        "--pi-runtime": pi_runtime,
+    }
+    missing = [name for name, value in required.items() if not value]
+    if missing:
+        typer.echo(f"Missing option: {', '.join(missing)}")
+        raise typer.Exit(1)
+
+    _run_generate(
+        model=model,
+        data=data,
+        output=output,
+        render_endpoint=render_endpoint,
+        pi_runtime=pi_runtime,
+        pi_endpoint=pi_endpoint,
+        pi_provider=pi_provider,
+        pi_model=pi_model,
+        workers=workers,
+        timeout=timeout,
+        seq_length=seq_length,
+        limit=limit,
+        max_samples=max_samples,
+        tools=tools,
+        trace_dir=trace_dir,
+        keep_traces=keep_traces,
+    )

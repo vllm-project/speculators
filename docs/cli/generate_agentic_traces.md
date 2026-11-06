@@ -15,40 +15,33 @@ flowchart LR
 
 - The optional Docker dependency: `pip install 'speculators[agentic]'`. The command imports the Docker SDK only when a task runs, so `--help` and argument parsing work without the extra.
 - A running vLLM server serving the target model, reachable from the host (used for rendering and tokenization) and from inside the task container (used by the agent). Start the server with `--enable-scale-out`, because the render step calls `/v1/chat/completions/render`, which otherwise returns `403` with `"Scale-out endpoints are disabled. Restart vllm serve with --enable-scale-out to enable them."`.
-- A prepared Pi runtime directory (`--pi-runtime`). The next section shows how to build it.
+- A prepared Pi runtime directory (`--pi-runtime`). The next section shows how to install it.
 - A container runtime able to start the SWE-smith task images. Missing task images are pulled on first use.
 
 ## Prepare the Pi runtime
 
-The command does not build the runtime. It mounts the directory read-only at `/opt/pi-runtime` and expects `bin/pi` and its Node dependencies to exist. Create the directory on the host, install Node 24 and the Pi package, and point `--pi-runtime` at it.
+Install the runtime with the built-in installer:
 
 ```bash
-export PI_RUNTIME="$PWD/pi-runtime"
-mkdir -p "$PI_RUNTIME"
-
-NODE_VERSION=v24.22.2
-curl -fsSL "https://nodejs.org/dist/${NODE_VERSION}/node-${NODE_VERSION}-linux-x64.tar.xz" \
-  | tar -xJ --strip-components=1 -C "$PI_RUNTIME"
-
-PATH="$PI_RUNTIME/bin:$PATH" npm install --prefix "$PI_RUNTIME" \
-  @earendil-works/pi-coding-agent
-ln -sfn ../node_modules/.bin/pi "$PI_RUNTIME/bin/pi"
-
-# Optional: copy ripgrep if the container does not provide it.
-if command -v rg >/dev/null 2>&1; then
-  cp "$(command -v rg)" "$PI_RUNTIME/bin/rg"
-fi
+speculators generate-agentic-traces setup-pi --path ./pi-runtime
 ```
 
-Check that the launcher starts:
+The installer downloads the pinned Node.js release for the host platform, runs `npm install @earendil-works/pi-coding-agent` into the target directory, creates `bin/pi`, and copies `rg` from your PATH when it finds it. It then runs `bin/pi --version` to check that the launcher starts. Point `--pi-runtime` at the resulting directory.
 
-```bash
-"$PI_RUNTIME/bin/pi" --version
-```
+Options:
+
+- `--path` / `-p` (default: `./pi-runtime`) Target directory.
+- `--node-version` (default: `v24.22.2`) Node.js version to download.
+- `--force` Replace an existing installation. Without it the installer leaves an existing directory alone, and it refuses to write into a non-empty directory that is not a Pi runtime.
+- `--skip-rg` Do not copy ripgrep into `bin/rg`. Pass this when the task container provides `rg` itself.
+
+The installer supports Linux x86_64 and arm64. It fails on other platforms. If you prefer to build the runtime by hand, reproduce the same steps: download Node, install the Pi package with `npm install --prefix`, symlink `bin/pi` to `../node_modules/.bin/pi`, and copy `rg` into `bin/`.
 
 ## Basic usage
 
 ```bash
+speculators generate-agentic-traces setup-pi --path ./pi-runtime
+
 speculators generate-agentic-traces \
   --model Qwen/Qwen3-32B \
   --data ./swe_smith_tasks.jsonl \
@@ -56,6 +49,8 @@ speculators generate-agentic-traces \
   --pi-runtime ./pi-runtime \
   --output ./traces.jsonl
 ```
+
+The generation options live on the `generate-agentic-traces` group, so a direct invocation without a subcommand runs trace generation. `setup-pi` is the only subcommand.
 
 ## Arguments
 
