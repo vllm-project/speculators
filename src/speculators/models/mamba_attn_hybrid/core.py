@@ -1,15 +1,10 @@
 from collections.abc import Callable
-from typing import cast
 
 import torch
 from torch import nn
 from torch.nn.attention.flex_attention import create_block_mask
 from transformers import PretrainedConfig
-from transformers.models.qwen3.modeling_qwen3 import (
-    Qwen3Config,
-    Qwen3RMSNorm,
-    Qwen3RotaryEmbedding,
-)
+from transformers.models.qwen3.modeling_qwen3 import Qwen3RMSNorm
 
 from speculators.config import SpeculatorsConfig, VerifierConfig
 from speculators.losses import LossConfig, tv_loss
@@ -29,6 +24,11 @@ from speculators.models.mamba_attn_hybrid.model_definitions import (
     AttentionSubLayer,
     MambaSubLayer,
     MLPSubLayer,
+)
+from speculators.models.mamba_attn_hybrid.rotary import (
+    MambaAttnHybridRotaryEmbedding,
+    reconcile_rope_with_verifier,
+    validate_checkpoint_rope_compat,
 )
 from speculators.models.utils import (
     GEMMA_STYLE_FINAL_NORM_MODEL_TYPES,
@@ -103,8 +103,11 @@ class MambaAttnHybridDraftModel(DraftVocabMixin, SpeculatorModel):
 
         hidden_size = tl_config.hidden_size
         self.norm = Qwen3RMSNorm(hidden_size, eps=tl_config.rms_norm_eps)
-        self.rotary_emb = Qwen3RotaryEmbedding(
-            cast("Qwen3Config", flatten_rope_parameters(tl_config))
+        # Partial-prefix rotary: matches the target's rotation of the shared K
+        # (the stock Qwen3RotaryEmbedding derives frequencies from the full
+        # head_dim and ignores partial_rotary_factor).
+        self.rotary_emb = MambaAttnHybridRotaryEmbedding(
+            flatten_rope_parameters(tl_config)
         )
         self.fc = nn.Linear(
             len(config.latent_fusion_layer_ids) * hidden_size, hidden_size, bias=False
@@ -187,6 +190,20 @@ class MambaAttnHybridDraftModel(DraftVocabMixin, SpeculatorModel):
             raise ValueError("mamba_attn_hybrid does not support sample_from_anchor.")
         verifier = kwargs["verifier_name_or_path"]
         block_size = kwargs["block_size"]
+        # The drafter shares the target's *already-rotated* K prefix, so its
+        # Q/K rotation must be the target's effective text/full-attention
+        # transform. Note: the ``verifier_config`` argument actually receives
+        # the constructed *draft decoder* config -- derive the target rotation
+        # from the real verifier config instead. This covers both the explicit
+        # --draft-config path and the automatic decoder-config path (whose
+        # generic builder strips partial_rotary_factor / rescales partial
+        # MRoPE to full-head).
+        reconcile_rope_with_verifier(
+            verifier_config,
+            verifier,
+            draft_config_path=kwargs.get("draft_config"),
+            trust_remote_code=kwargs.get("trust_remote_code", False),
+        )
         config = MambaAttnHybridSpeculatorConfig(
             transformer_layer_config=verifier_config,
             draft_vocab_size=kwargs["draft_vocab_size"],
@@ -261,6 +278,10 @@ class MambaAttnHybridDraftModel(DraftVocabMixin, SpeculatorModel):
     @staticmethod
     def get_trainer_kwargs(**kwargs) -> tuple[dict, dict]:
         return DSparkDraftModel.get_trainer_kwargs(**kwargs)
+
+    # Resume/finetune guard: an old wrong-rope checkpoint must fail loudly
+    # rather than be silently re-interpreted with the repaired rotation.
+    validate_checkpoint_rope_compat = staticmethod(validate_checkpoint_rope_compat)
 
     @torch.compiler.disable
     def _attention_masks(self, document_ids, anchor_positions, total_seq_len):

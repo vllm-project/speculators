@@ -5,7 +5,7 @@ from transformers.modeling_layers import GradientCheckpointingLayer
 from transformers.models.qwen3.modeling_qwen3 import Qwen3MLP, Qwen3RMSNorm
 
 from speculators.models.attention import flex_attention_forward
-from speculators.models.dflash.model_definitions import apply_rotary_pos_emb
+from speculators.models.eagle3.rotary_partial import partial_neox_apply_rotary_pos_emb
 
 try:
     from mamba_ssm.ops.triton.ssd_combined import mamba_chunk_scan_combined
@@ -169,7 +169,13 @@ class VerifierKVAttention(nn.Module):
         k = self.k_norm(self.k_proj(hidden_states).view(shape)).transpose(1, 2)
         v = self.v_proj(hidden_states).view(shape).transpose(1, 2)
         cos, sin = position_embeddings
-        q, k = apply_rotary_pos_emb(q, k, cos, sin)
+        # Partial-prefix rotation: rotate only the first ``rotary_dim``
+        # channels of the draft Q and the *newly generated* K (pairing
+        # j <-> j + rotary_dim/2 inside that prefix), keep the suffix
+        # unchanged, and append the already-rotated target prefix K without
+        # another rotation. The shared eagle3 helper implements exactly this
+        # when the cos/sin tables are narrower than head_dim.
+        q, k = partial_neox_apply_rotary_pos_emb(q, k, cos, sin)
         k = torch.cat([verifier_kv[0], k], dim=2)
         v = torch.cat([verifier_kv[1], v], dim=2)
         attn_output, _ = flex_attention_forward(

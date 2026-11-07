@@ -501,6 +501,16 @@ def build_draft_model(
     flags and ``--draft-config`` do not apply.
     """
     if args.from_pretrained:
+        # Model-specific resume guard: e.g. mamba_attn_hybrid refuses
+        # checkpoints whose rope geometry is incompatible with the verifier
+        # (an old wrong-rope checkpoint is not repaired by re-interpretation).
+        validate_rope = getattr(model_class, "validate_checkpoint_rope_compat", None)
+        if callable(validate_rope):
+            validate_rope(
+                args.from_pretrained,
+                args.verifier_name_or_path,
+                trust_remote_code=args.trust_remote_code,
+            )
         if is_config_only_dir(args.from_pretrained):
             logger.info(
                 "--from-pretrained points to a config-only directory ('%s'); "

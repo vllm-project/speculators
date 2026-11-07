@@ -54,6 +54,48 @@ qwen3_5 arch's gated q_proj doesn't fit the heuristic head derivation, and
 }
 ```
 
+### RoPE (critical for KV sharing)
+
+The drafter reads the target's **already-rotated** K prefix from the shared
+KV cache, so its Q/K rotation must be the target's effective
+text/full-attention rope. Qwen3.8-27B uses
+`head_dim=256`, `partial_rotary_factor=0.25`, `rope_theta=1e7` — i.e. only
+the first 64 channels of each head rotate (neox pairing `j ↔ j+32` inside
+that prefix; channels 64:256 and all V are unrotated), with attention scale
+`1/16`. The draft config JSON above deliberately **omits** rope fields:
+`from_training_args` reconciles the draft's rope against the actual verifier
+config on fresh construction (both the `--draft-config` and automatic
+decoder-config paths) and logs the resolved settings:
+
+```
+mamba_attn_hybrid rope resolved from verifier 'Qwen/Qwen3.8-27B': head_dim=256
+rotary_dim=64 rope_theta=10000000.0 partial_rotary_factor=0.25 (explicit draft override: False)
+```
+
+The saved checkpoint's `transformer_layer_config` therefore carries:
+
+```json
+{
+  "head_dim": 256,
+  "rope_parameters": {
+    "rope_type": "default",
+    "rope_theta": 10000000.0,
+    "partial_rotary_factor": 0.25
+  }
+}
+```
+
+which vLLM's `get_rope` reconstructs into the identical partial rotation
+(the fork's `get_rope` honors `partial_rotary_factor`; MRoPE metadata is
+normalized away since scalar text positions make an MRotaryEmbedding
+equivalent to ordinary partial RoPE). Explicit rope overrides in the draft
+config JSON that are incompatible with the shared target K are rejected at
+construction, and `--from-pretrained` checkpoints with incompatible rope
+geometry (e.g. checkpoints trained before this fix, which used the stock
+full-head `Qwen3RotaryEmbedding` with theta 1e4) fail with a clear
+diagnostic instead of being silently re-interpreted. Regression tests:
+`tests/unit/models/test_mamba_attn_hybrid_rotary.py`.
+
 ## 2. Extraction server (GPU 0, port 8000, TP=1)
 
 ```bash
