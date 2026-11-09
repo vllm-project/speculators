@@ -732,7 +732,12 @@ def run_benchmark(bench_args, train_args) -> dict:
 
         metrics_dir = getattr(bench_args, "metrics_dir", None)
         if metrics_dir:
-            _emit_benchmark_metrics(results, metrics_dir)
+            try:
+                _emit_benchmark_metrics(results, metrics_dir)
+            except (OSError, KeyError, TypeError):
+                logging.getLogger(__name__).warning(
+                    "Failed to emit benchmark metrics", exc_info=True
+                )
 
     # --- Cleanup ---
     shutdown_dataloader_workers(train_loader)
@@ -799,7 +804,11 @@ def _emit_benchmark_metrics(results: dict, metrics_dir: str) -> None:
         "build_url": os.environ.get(
             "BUILDKITE_BUILD_URL", os.environ.get("GITHUB_RUN_URL", "")
         ),
-        "pr_number": os.environ.get("BUILDKITE_PULL_REQUEST", ""),
+        "pr_number": (
+            pr
+            if (pr := os.environ.get("BUILDKITE_PULL_REQUEST", "")) != "false"
+            else ""
+        ),
         "test_id": f"bench_{config['speculator_type']}_{config['optimizer']}",
         "test_file": "scripts/benchmark.py",
         "speculator_type": config["speculator_type"],

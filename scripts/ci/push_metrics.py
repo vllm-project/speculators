@@ -21,6 +21,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -48,8 +49,10 @@ def _git(
         check=False,
     )
     if check and result.returncode != 0:
+        safe_args = [a for a in args if not a.startswith("https://")]
+        safe_stderr = re.sub(r"https://[^\s]+", "https://***", result.stderr)
         raise RuntimeError(
-            f"git {' '.join(args)} failed (rc={result.returncode}):\n{result.stderr}"
+            f"git {' '.join(safe_args)} failed (rc={result.returncode}):\n{safe_stderr}"
         )
     return result
 
@@ -87,7 +90,7 @@ def cmd_init(args: argparse.Namespace) -> None:
 
         Path(tmp, "README.md").write_text(
             "# Speculators CI Metrics\n\n"
-            "Orphan branch storing CI benchmark metrics as JSONL.\n"
+            "Orphan branch storing CI benchmark metrics as a JSON array.\n"
             "Consumed by Grafana via the Infinity data-source plugin.\n",
         )
 
