@@ -28,8 +28,8 @@ from pathlib import Path
 
 BRANCH = "metrics-data"
 MAX_RETRIES = 5
-BOT_NAME = "speculators-bot"
-BOT_EMAIL = "speculators-bot@users.noreply.github.com"
+BOT_NAME = "speculatorsbot"
+BOT_EMAIL = "speculatorsbot@users.noreply.github.com"
 
 
 def _git(
