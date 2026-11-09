@@ -59,6 +59,16 @@ def _all_reduce_metrics(metrics: dict[str, torch.Tensor]) -> dict[str, torch.Ten
     return dict(zip(keys, stacked, strict=True))
 
 
+def _accumulate_metrics(
+    accumulated: dict[str, torch.Tensor], metrics: dict[str, torch.Tensor]
+) -> None:
+    """Add detached metric sums and counts without retaining computation graphs."""
+    for key, value in metrics.items():
+        detached = value.detach().float()
+        previous = accumulated.get(key)
+        accumulated[key] = detached if previous is None else previous + detached
+
+
 class _StepTimer:
     # Each mark()/now() forces an accelerator.synchronize to capture true GPU time.
     # This serialises the CUDA pipeline, so profiled steps are slower; keep
@@ -579,10 +589,8 @@ class Trainer:
         self,
         epoch: int,
         local_step: int,
-        accum: int,
         opt_steps_per_epoch: int,
         step_interval: int | None,
-        is_boundary: bool,
     ) -> None:
         """Save a mid-epoch checkpoint at the configured optimizer-step cadence.
 
@@ -591,9 +599,9 @@ class Trainer:
         (a microbatch index on a window boundary) is what gets persisted, so resume
         lands on a fresh window start.
         """
-        if not is_boundary or step_interval is None or self.config.save_best:
+        if step_interval is None or self.config.save_best:
             return
-        opt_step = local_step // accum
+        opt_step = local_step // self.config.gradient_accumulation_steps
         if (
             opt_step % step_interval == 0
             and opt_steps_per_epoch - opt_step >= step_interval * MIN_STEP_PCT
@@ -683,6 +691,7 @@ class Trainer:
         timer = _StepTimer()
         recovery = BatchRecoveryCoordinator("training")
         remaining_steps = max(0, last_boundary - skip_steps)
+        accumulated: dict[str, torch.Tensor] = {}
         for local_step_rel, batch in enumerate(
             islice(train_loader, remaining_steps), 1
         ):
@@ -716,6 +725,7 @@ class Trainer:
             }
 
             if is_window_start:
+                accumulated.clear()
                 self._optimizers_zero_grad()
             # DDP requires both forward and backward inside no_sync.
             with self._maybe_no_sync(is_boundary):
@@ -728,6 +738,17 @@ class Trainer:
                     )
                 timer.mark("fwd")
                 (loss / accum).backward()
+
+            metrics["error_records_sum"] = torch.full(
+                (), batch["error_records"], dtype=torch.float32, device=loss.device
+            )
+            metrics["error_records_total"] = torch.full(
+                (),
+                1.0 if self.rank == 0 else 0,
+                dtype=torch.float32,
+                device=loss.device,
+            )
+            _accumulate_metrics(accumulated, metrics)
 
             if not is_boundary:
                 t_before_fetch = time.perf_counter()
@@ -743,15 +764,6 @@ class Trainer:
             self._schedulers_step()
             timer.mark("opt")
 
-            metrics["error_records_sum"] = torch.full(
-                (), batch["error_records"], dtype=torch.float32, device=loss.device
-            )
-            metrics["error_records_total"] = torch.full(
-                (),
-                1.0 if self.rank == 0 else 0,
-                dtype=torch.float32,
-                device=loss.device,
-            )
             t_before_fetch = timer.now() or time.perf_counter()
 
             profile = None
@@ -759,9 +771,9 @@ class Trainer:
                 num_tokens = int((gpu_batch["document_ids"] != -1).sum().item())
                 profile = timer.profile(num_tokens)
                 if self.is_distributed:
-                    metrics = _all_reduce_metrics(metrics)
+                    accumulated = _all_reduce_metrics(accumulated)
 
-                metrics = {k: v.item() for k, v in metrics.items()}
+                metrics = {k: v.item() / accum for k, v in accumulated.items()}
                 world_size = dist.get_world_size() if self.is_distributed else 1
                 metrics = normalize_counted_metrics(metrics, world_size)
                 lr_info = (
@@ -792,10 +804,8 @@ class Trainer:
             self._maybe_save_step_checkpoint(
                 epoch,
                 local_step,
-                accum,
                 opt_steps_per_epoch,
                 step_interval,
-                is_boundary,
             )
 
     def _maybe_val_sync(self, batch_index: int) -> None:
@@ -838,9 +848,7 @@ class Trainer:
                     **gpu_batch, **(self.config.val_call_kwargs or {})
                 )
 
-            for k, v in metrics.items():
-                acc = accumulated.get(k)
-                accumulated[k] = v.float() if acc is None else acc + v.float()
+            _accumulate_metrics(accumulated, metrics)
 
         val_metrics: dict[str, float] = {}
         if accumulated:
@@ -903,7 +911,7 @@ class Trainer:
                 self.checkpointer.save_scheduler_state_dict(self.schedulers, epoch)
             # maybe_save_checkpoint returns early when save_best is set, so the
             # end-of-epoch cursor has to be written here or resume restarts at 0.
-            self._save_training_state(epoch, 0)
+            self._save_training_state(epoch, local_step=0)
         elif self.config.checkpoint_freq >= 1 and not (
             epoch == 0 or (epoch + 1) % int(self.config.checkpoint_freq) == 0
         ):

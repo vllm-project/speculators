@@ -432,3 +432,23 @@ def test_resume_rejects_gradient_accumulation_mismatch(
         # Run 2: resuming with a different accum must fail loudly.
         with pytest.raises(ValueError, match="Cannot resume"):
             _make_trainer(tmpdir, trained_steps=[], resume=True, accum=3)
+
+
+@pytest.mark.parametrize("resume_accum", [2, 3])
+def test_save_best_persists_accumulation_and_resume_step(tmp_path, resume_accum):
+    """Best-only checkpoints enforce accumulation compatibility on resume."""
+    trainer = _make_trainer(str(tmp_path), trained_steps=[], accum=2)
+    trainer.config = trainer.config._replace(save_best=True)
+    trainer.global_step = 7
+    trainer.maybe_update_best(0, {"loss_epoch": 0.5})
+
+    if resume_accum != 2:
+        with pytest.raises(ValueError, match="gradient_accumulation_steps=2"):
+            _make_trainer(
+                str(tmp_path), trained_steps=[], resume=True, accum=resume_accum
+            )
+    else:
+        resumed = _make_trainer(str(tmp_path), trained_steps=[], resume=True, accum=2)
+        assert resumed.current_epoch == 1
+        assert resumed.global_step == 7
+        assert resumed._resume_local_step == 0

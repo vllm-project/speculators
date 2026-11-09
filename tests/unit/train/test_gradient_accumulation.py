@@ -201,19 +201,17 @@ def test_step_checkpoint_cadence_uses_optimizer_steps() -> None:
     stand_in = cast(
         "Trainer",
         SimpleNamespace(
-            config=SimpleNamespace(save_best=False),
+            config=SimpleNamespace(save_best=False, gradient_accumulation_steps=accum),
             maybe_save_checkpoint=lambda epoch, local_step: saved.append(local_step),
         ),
     )
-    for local_step in range(1, num_steps + 1):
+    for local_step in range(accum, num_steps + 1, accum):
         Trainer._maybe_save_step_checkpoint(
             stand_in,
             0,
             local_step,
-            accum,
             opt_steps_per_epoch,
             step_interval,
-            local_step % accum == 0,
         )
 
     assert saved == [48]
@@ -235,9 +233,22 @@ def test_train_epoch_syncs_only_at_optimizer_boundaries(
 
         def forward(self, x, error_records, document_ids):
             self.forwards += 1
-            return None, (self.weight * x).square().mean(), {}
+            return (
+                None,
+                (self.weight * x).square().mean(),
+                {
+                    "accuracy_sum": x.sum(),
+                    "accuracy_total": x.square().sum(),
+                    "plain_metric": x.mean(),
+                },
+            )
 
     monkeypatch.setattr(torch.accelerator, "synchronize", lambda: None)
+    logged = []
+    monkeypatch.setattr(
+        trainer_module.metric_logger, "info", lambda data, **kw: logged.append(data)
+    )
+    monkeypatch.setattr(trainer_module, "tqdm", lambda loader, **kw: loader)
     model = Model()
     ddp = DistributedDataParallel(model)
     syncs = []
@@ -268,15 +279,15 @@ def test_train_epoch_syncs_only_at_optimizer_boundaries(
             return 9
 
         def __iter__(self):
-            for _ in range(9):
+            for i in range(1, 10):
                 yield {
-                    "x": torch.ones(2),
+                    "x": torch.full((2,), float(i)),
                     "document_ids": torch.zeros(2, dtype=torch.long),
-                    "error_records": 0,
+                    "error_records": i,
                 }
 
     trainer.train_loader = cast("DataLoader", Loader())
-    trainer.rank = 1  # Avoid progress display.
+    trainer.rank = 0
     trainer.local_rank = "cpu"  # type: ignore[assignment]  # Exercise the loop on CPU.
     trainer.device_type = "cpu"
     trainer.is_distributed = False
@@ -290,6 +301,17 @@ def test_train_epoch_syncs_only_at_optimizer_boundaries(
     assert len(syncs) == updates
     assert trainer.global_step == 1 + updates
     assert callbacks == list(range(2, 2 + updates))
+    if profile:
+        assert len(logged) == updates
+        for update, record in enumerate(logged):
+            values = list(range(update * accum + 1, (update + 1) * accum + 1))
+            assert record["train"]["accuracy"] == pytest.approx(
+                sum(values) / sum(value * value for value in values)
+            )
+            assert record["train"]["plain_metric"] == pytest.approx(sum(values) / accum)
+            assert record["train"]["error_records"] == pytest.approx(
+                sum(values) / accum
+            )
 
 
 def test_trainer_config_preserves_positional_resume():
