@@ -26,7 +26,7 @@ Adaptive verification (AV, [vllm#60229](https://github.com/vllm-project/vllm/pul
 - Target: `google/gemma-4-31B-it` (`842da37`), BF16. Draft: `RedHatAI/gemma-4-31B-it-speculator.dflash2` (`b0cd01b`)
 - Algorithm: DFlash2 (`"method":"dflash"`), fixed K=3, 5, 7, or AV with K=7
 - Evaluation: `RedHatAI/speculator_benchmarks` HumanEval (164 prompts), output capped at 1,024 tokens, temperature 1.0, top_k 64, top_p 0.95
-- Serving: vLLM main `1b2505c033` (2026-11-06), TP1, `--max-num-seqs 128`, prefix caching off, `TRITON_ATTN`, each server swept over c1 to c128. Fixed K=7 and both AV settings were also rerun on 3 more GPUs (c1 to c64), and the plot pools these runs, so GPU placement does not bias them.
+- Serving: vLLM main `1b2505c033` (2026-11-06), TP1, `--max-num-seqs 128`, prefix caching off, `TRITON_ATTN`, one server per configuration swept over c1 to c128. Fixed K=7 and both AV settings ran on 4 GPUs each (c1 to c64) and the plot pools them, the other configurations ran on one GPU.
 - Client: AIPerf 0.13.0, 3 runs of 60 s per concurrency. Throughput counts output tokens in the steady window (c-th completion to last request issued). tok/s/user is 1000 / mean TPOT. AL is 1 + accepted / drafts, so it counts the bonus token.
 - Hardware: 1x H200 (143,771 MiB) per server, PyTorch 2.14.0+cu130. All cells had no errors, no preemptions and no queueing.
 
@@ -39,7 +39,7 @@ vllm serve google/gemma-4-31B-it --max-model-len 16384 --max-num-seqs 128 \
   --compilation-config '{"max_cudagraph_capture_size":1536}'
 ```
 
-The effective limit is 1,024 here (it is capped at `max_num_seqs` x (K+1) in every case we read back). Default limit: omit `--compilation-config`. Fixed budget: `"enable_adaptive_verification":false` and set `num_speculative_tokens`. Target only: omit `--speculative-config`.
+AV reports an effective limit of 1,024 here, consistent with a cap at `max_num_seqs` x (K+1). Default limit: omit `--compilation-config`. Fixed budget: `"enable_adaptive_verification":false` and set `num_speculative_tokens`. Target only: omit `--speculative-config`.
 
 Dataset, one `{"text": prompt}` per line:
 
@@ -109,12 +109,12 @@ At c128:
 
 - AV's cost table prices a 1,024-row step at 3.1x a 512-row step, while nsys measures 1.6x. So at c128 AV stays at exactly 512 rows in 65% of steps. With limit 1,024, no traced step ran at 512 rows (most ran at 768 to 1,024).
 - Steps above the limit are not really slower on Gemma4 (about 0.1 ms per row on both sides), unlike [Qwen3.5](dflash-adaptive-verification-cuda-graphs-tomasruizt.md) and [vllm#62556](https://github.com/vllm-project/vllm/issues/62556). Fixed K=7 gains nothing from the higher limit (-2.2%). The problem is the price, not the execution.
-- Below c128 the two AV limits are equivalent. A first sweep with one GPU per curve put limit 1,024 up to 2.2% behind, but that was GPU placement: running each setting on each of 3 GPUs shows the GPUs differing by up to 1.5% under the power cap, and with GPUs balanced limit 1,024 is -0.5% to +1.0% vs. default AV (better on all 3 GPUs at c64). Fixed K=3 and K=5 ran on one GPU each, so treat differences under about 1.5% against them as noise.
+- Below c128 the two AV limits are equivalent: limit 1,024 is -0.5% to +1.0% vs. default AV with GPUs balanced, and ahead on all 3 GPUs at c64. Individual H200s differ by up to 1.5% under the power cap, so differences under about 1.5% against the single-GPU curves (fixed K=3 and K=5) are noise.
 - At c8, AV is 2.8% slower than fixed K=7 on all 3 GPUs, at the same AL. nsys shows the same idle time per step but a different target CUDA graph: AV's TRITON_ATTN decode attention runs the 2D kernel (3.2 ms per step) instead of the split-KV 3D kernel with segment reduction (2.5 ms). AV's variable-length decode graphs are captured with one request per token, which pushes the 2D/3D choice past its threshold even when only 8 requests are running. There is no gap at c1, and from c16 on AV's shorter verification outweighs it. Reported in [vllm#66557](https://github.com/vllm-project/vllm/issues/66557).
 - Limit 2,048 (needs `--max-num-seqs 256`) shows no clear gain over 1,024. Graph memory grows from 1.14 GiB (512) to 2.34 GiB (1,024) and 3.65 GiB (2,048).
-- Fixed K=5 crashed with a CUDA OOM in the DFlash drafter's context-KV precompute at the start of c128, after 30 minutes on the same server. The c128 point comes from a fresh server.
+- The fixed K=5 point at c128 comes from a fresh server. On the long-running sweep server, the c128 prefill burst hit a CUDA OOM in the DFlash drafter's context-KV precompute, which has not been reproduced yet.
 - AL matches the earlier note (fixed K=7 5.75 vs. 5.72, AV 3.78 vs. 3.83). Our throughput is 3% to 9% higher, with a different vLLM version (main vs. 0.31.0) and client (AIPerf vs. guidellm).
-- Not tested: DFlash, DSpark, other dataset subsets, vLLM 0.31.0, and a fix in AV's cost table itself (e.g. profiling at the workload's context length instead of 8,192 tokens, which alone gave +3.8% at c128 with limit 512).
+- Not tested: DFlash, DSpark, other dataset subsets, and vLLM 0.31.0. A fix in AV's cost table itself is open: profiling it at a context length close to the workload's (400 instead of 8,192 tokens) gave +3.8% at c128 with limit 512 in a single separate measurement.
 
 ## References
 
