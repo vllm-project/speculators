@@ -790,6 +790,9 @@ def _emit_benchmark_metrics(results: dict, metrics_dir: str) -> None:
     labels = {
         "timestamp": prov["timestamp"],
         "git_sha": os.environ.get("BUILDKITE_COMMIT") or prov.get("git_sha", "unknown"),
+        "git_sha_short": (
+            os.environ.get("BUILDKITE_COMMIT") or prov.get("git_sha", "unknown")
+        )[:8],
         "branch": os.environ.get(
             "BUILDKITE_BRANCH", os.environ.get("GITHUB_REF_NAME", "")
         ),

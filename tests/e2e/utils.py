@@ -560,6 +560,10 @@ def _emit_ci_metric(
                 os.environ.get("BUILDKITE_COMMIT")
                 or git_sha(find_repo_root(Path(__file__)))
             ),
+            "git_sha_short": (
+                os.environ.get("BUILDKITE_COMMIT")
+                or git_sha(find_repo_root(Path(__file__)))
+            )[:8],
             "branch": os.environ.get(
                 "BUILDKITE_BRANCH",
                 os.environ.get("GITHUB_REF_NAME", ""),
