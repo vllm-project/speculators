@@ -1,6 +1,6 @@
 # Grafana Dashboard Setup
 
-CI metrics are stored on the `metrics-data` orphan branch as a JSON array of flat `(metric, value, labels)` records. Grafana reads them via the **Infinity** data-source plugin.
+CI metrics are stored on the `metrics-data` orphan branch of a dedicated metrics repo as a JSON array of flat `(metric, value, labels)` records. Grafana reads them via the **Infinity** data-source plugin.
 
 ## Data model
 
@@ -14,6 +14,7 @@ Every numeric value is its own record. Labels (timestamp, branch, test name, etc
   "git_sha": "ab2cab9",
   "branch": "main",
   "build_url": "https://buildkite.com/...",
+  "pr_number": "1359",
   "test_id": "test_eagle3_qwen3_8b_sharegpt",
   "test_file": "tests/e2e/regression/test_training_only_acceptance.py"
 }
@@ -39,7 +40,7 @@ This allows any metric name to be recorded without schema changes.
 Point queries at:
 
 ```
-https://raw.githubusercontent.com/vllm-project/speculators/metrics-data/metrics.json
+https://raw.githubusercontent.com/orestis-z/speculators-metrics/metrics-data/metrics.json
 ```
 
 Columns to extract:
@@ -53,22 +54,42 @@ Columns to extract:
 | `branch`    | branch    | String    |
 | `git_sha`   | git_sha   | String    |
 | `test_file` | test_file | String    |
+| `pr_number` | pr_number | String    |
 
 Use dashboard variables and **Filter by value** transformations to select specific metrics, tests, or branches.
 
 ## One-time setup
 
-Create the orphan branch (requires push access):
+Create the orphan branch on the metrics repo (requires push access):
 
 ```bash
-python scripts/ci/push_metrics.py init
+python scripts/ci/push_metrics.py \
+  --remote https://github.com/orestis-z/speculators-metrics.git init
+```
+
+## CI integration
+
+The nightly Buildkite pipeline needs three env vars:
+
+| Variable | Purpose |
+| --- | --- |
+| `SPECULATORS_METRICS_DIR` | Directory where tests write metric JSON files |
+| `METRICS_REMOTE_URL` | Git URL of the metrics repo |
+| `GITHUB_TOKEN` | PAT with `contents:write` on the metrics repo |
+
+After tests complete:
+
+```bash
+python scripts/ci/push_metrics.py push-dir "$SPECULATORS_METRICS_DIR" --target metrics.json
 ```
 
 ## Local testing
 
 ```bash
 echo '[{"metric":"test_metric","value":42,"timestamp":"2026-01-01T00:00:00Z","test_id":"manual"}]' \
-  | python scripts/ci/push_metrics.py push - --target metrics.json
+  | python scripts/ci/push_metrics.py \
+    --remote https://github.com/orestis-z/speculators-metrics.git \
+    push - --target metrics.json
 ```
 
 ## Emitting metrics from tests
