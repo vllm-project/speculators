@@ -112,6 +112,16 @@ def _csv(value: str, cast: Callable[[str], Any] = str) -> list[Any]:
     return [cast(item) for item in value.split(",") if item]
 
 
+def _int_at_least(minimum: int) -> Callable[[str], int]:
+    def parse(value: str) -> int:
+        number = int(value)
+        if number < minimum:
+            raise argparse.ArgumentTypeError(f"must be >= {minimum}, got {number}")
+        return number
+
+    return parse
+
+
 # ---------------------------------------------------------------------------
 # run
 # ---------------------------------------------------------------------------
@@ -196,7 +206,9 @@ def cmd_run(args: argparse.Namespace) -> dict:
         ):
             if value not in choices:
                 sys.exit(f"unknown {name} {value!r}; choose from {choices}")
-        if cfg.num_rows == 0:
+        if cfg.vocab < 1:
+            sys.exit(f"--vocab must be positive, got {cfg.vocab}")
+        if cfg.num_rows <= 0:
             sys.exit(f"--rows {cfg.rows} is smaller than --block-size {cfg.block_size}")
         try:
             cached_loss_config(cfg.loss, cfg.implementation)
@@ -251,9 +263,9 @@ def build_parser() -> argparse.ArgumentParser:
         "--rows", default="8192,16384", help="comma list; rows N = anchors x block"
     )
     run.add_argument("--vocab", default="110000,151936", help="comma list")
-    run.add_argument("--hidden", type=int, default=4096)
-    run.add_argument("--block-size", type=int, default=8)
-    run.add_argument("--markov-rank", type=int, default=256)
+    run.add_argument("--hidden", type=_int_at_least(1), default=4096)
+    run.add_argument("--block-size", type=_int_at_least(1), default=8)
+    run.add_argument("--markov-rank", type=_int_at_least(1), default=256)
     run.add_argument(
         "--loss",
         action="append",
@@ -272,8 +284,8 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument(
         "--dtype", default="bfloat16", choices=("bfloat16", "float16", "float32")
     )
-    run.add_argument("--iters", type=int, default=5)
-    run.add_argument("--warmup", type=int, default=2)
+    run.add_argument("--iters", type=_int_at_least(1), default=5)
+    run.add_argument("--warmup", type=_int_at_least(0), default=2)
     run.add_argument("--output", help="write results as JSON to this path")
     run.set_defaults(func=cmd_run)
 

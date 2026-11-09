@@ -293,11 +293,12 @@ def test_fused_bf16_error_vs_eager_reference(name):
     loss, _, grads = _run(fused_cfg, _inputs(fused_cfg, device, torch.bfloat16))
     torch.testing.assert_close(loss, ref_loss, rtol=BF16_LOSS_RTOL, atol=0.0)
     assert grads.keys() == ref_grads.keys()
-    errors = {
-        grad_name: float((grads[grad_name] - ref).abs().max() / ref.abs().max())
-        for grad_name, ref in ref_grads.items()
-    }
-    assert max(errors.values()) <= BF16_GRAD_ERR_BOUND[name], errors
+    bound = BF16_GRAD_ERR_BOUND[name]
+    for grad_name, ref in ref_grads.items():
+        error = float((grads[grad_name] - ref).abs().max())
+        limit = bound * float(ref.abs().max())
+        # Checked per gradient and written so that a NaN error fails.
+        assert error <= limit, f"{grad_name}: error {error:.3g} > limit {limit:.3g}"
 
 
 @pytest.mark.skipif(

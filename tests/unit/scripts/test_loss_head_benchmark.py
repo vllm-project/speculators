@@ -18,13 +18,14 @@ from tests.conftest import requires_cuda
         "--weighting=dpase",
         "--loss=kl",
         "--rows=4",
+        "--vocab=0",
     ],
 )
 def test_run_rejects_unknown_options_before_measuring(bad):
     # Tiny shapes: if validation regresses this measures fast, not GB. The
     # bad option goes last so it overrides the defaults given here.
     tiny = ["--rows=16", "--vocab=32", "--hidden=8", "--iters=1", "--warmup=0"]
-    with pytest.raises(SystemExit, match="unknown|invalid|smaller"):
+    with pytest.raises(SystemExit, match="unknown|invalid|smaller|positive"):
         main(["run", *tiny, bad])
 
 
@@ -48,3 +49,11 @@ def test_run_smoke(tmp_path):
     for result in payload["results"]:
         assert result["status"] == "ok"
         assert result["peak_above_inputs_mb"] > 0
+
+
+@pytest.mark.parametrize(
+    "bad", ["--block-size=0", "--iters=0", "--warmup=-1", "--hidden=0"]
+)
+def test_run_rejects_non_positive_sizes_at_parse_time(bad):
+    with pytest.raises(SystemExit):
+        main(["run", "--rows=16", "--vocab=32", bad])
