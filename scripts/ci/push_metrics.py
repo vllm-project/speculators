@@ -58,8 +58,10 @@ def _repo_root() -> Path:
     return Path(__file__).resolve().parents[2]
 
 
-def _remote_url(repo_dir: Path) -> str:
-    url = _git(["remote", "get-url", "origin"], repo_dir).stdout.strip()
+def _remote_url(repo_dir: Path, override: str | None = None) -> str:
+    url = override or os.environ.get("METRICS_REMOTE_URL") or ""
+    if not url:
+        url = _git(["remote", "get-url", "origin"], repo_dir).stdout.strip()
     token = os.environ.get("GITHUB_TOKEN")
     if token and url.startswith("https://"):
         url = url.replace("https://", f"https://x-access-token:{token}@", 1)
@@ -74,9 +76,9 @@ def _configure_bot(cwd: str | Path) -> None:
 # ---- subcommands -----------------------------------------------------------
 
 
-def cmd_init(_args: argparse.Namespace) -> None:
+def cmd_init(args: argparse.Namespace) -> None:
     """Create the orphan metrics-data branch with an initial README."""
-    remote_url = _remote_url(_repo_root())
+    remote_url = _remote_url(_repo_root(), getattr(args, "remote", None))
 
     with tempfile.TemporaryDirectory() as tmp:
         _git(["init", "."], tmp)
@@ -97,9 +99,11 @@ def cmd_init(_args: argparse.Namespace) -> None:
     print(f"Created orphan branch '{BRANCH}'")
 
 
-def _push_records(records: list[dict], target: str, branch: str) -> None:
+def _push_records(
+    records: list[dict], target: str, branch: str, remote: str | None = None
+) -> None:
     """Append *records* to the JSON array in *target* on *branch*."""
-    remote_url = _remote_url(_repo_root())
+    remote_url = _remote_url(_repo_root(), remote)
 
     for attempt in range(MAX_RETRIES):
         with tempfile.TemporaryDirectory() as tmp:
@@ -183,7 +187,7 @@ def cmd_push(args: argparse.Namespace) -> None:
         raw = Path(args.record_file).read_text()
     data = json.loads(raw)
     records = data if isinstance(data, list) else [data]
-    _push_records(records, args.target, args.branch)
+    _push_records(records, args.target, args.branch, args.remote)
 
 
 def cmd_push_dir(args: argparse.Namespace) -> None:
@@ -201,7 +205,7 @@ def cmd_push_dir(args: argparse.Namespace) -> None:
         print("No .json files found.")
         return
 
-    _push_records(records, args.target, args.branch)
+    _push_records(records, args.target, args.branch, args.remote)
 
 
 # ---- CLI -------------------------------------------------------------------
@@ -210,6 +214,11 @@ def cmd_push_dir(args: argparse.Namespace) -> None:
 def main() -> None:
     p = argparse.ArgumentParser(
         description="Push CI metrics to the metrics-data orphan branch",
+    )
+    p.add_argument(
+        "--remote",
+        default=None,
+        help="Git remote URL to push to. Overrides origin and METRICS_REMOTE_URL.",
     )
     sub = p.add_subparsers(dest="command", required=True)
 
@@ -220,7 +229,7 @@ def main() -> None:
     sp.add_argument(
         "--target",
         required=True,
-        help="JSON file on the metrics branch (e.g. acceptance.json)",
+        help="JSON file on the metrics branch (e.g. metrics.json)",
     )
     sp.add_argument("--branch", default=BRANCH)
 
@@ -229,7 +238,7 @@ def main() -> None:
     sp.add_argument(
         "--target",
         required=True,
-        help="JSON file on the metrics branch (e.g. acceptance.json)",
+        help="JSON file on the metrics branch (e.g. metrics.json)",
     )
     sp.add_argument("--branch", default=BRANCH)
 
