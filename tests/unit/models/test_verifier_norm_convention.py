@@ -26,6 +26,7 @@ from speculators.models.dflash.core import DFlashDraftModel, DFlashSpeculatorCon
 from speculators.models.eagle3 import Eagle3DraftModel, Eagle3SpeculatorConfig
 from speculators.models.peagle import PEagleDraftModel, PEagleSpeculatorConfig
 from speculators.models.utils import (
+    _verifier_model_type,
     resolve_verifier_norm_class,
     uses_gemma_style_final_norm,
 )
@@ -92,13 +93,13 @@ def test_detection_by_verifier_model_type(
 
 
 def test_unresolvable_verifier_defaults_to_plain(monkeypatch: pytest.MonkeyPatch):
-    """A verifier config AutoConfig cannot resolve keeps the plain convention."""
+    """A verifier whose config.json cannot be read keeps the plain convention."""
 
     def _raise(*args, **kwargs):
         raise OSError("cannot resolve")
 
     monkeypatch.setattr(
-        "speculators.models.utils.AutoConfig.from_pretrained",
+        "speculators.models.utils.PretrainedConfig.get_config_dict",
         _raise,
     )
     model = _make_model(DFlashDraftModel, draft_vocab_size=64)
@@ -230,3 +231,30 @@ def test_gemma3_rmsnorm_matches_verifier_final_norm(module: str, norm_class: str
     verifier_norm = verifier_norm_cls(16, eps=1e-6)
     verifier_norm.weight.data = w.clone()
     torch.testing.assert_close(gemma(x), verifier_norm(x), rtol=1e-5, atol=1e-5)
+
+
+def test_custom_code_verifier_resolves_without_trust_remote_code(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+):
+    """A verifier declaring an auto_map still resolves its final-norm convention."""
+    verifier_dir = tmp_path / "custom_code_verifier"
+    verifier_dir.mkdir()
+    (verifier_dir / "config.json").write_text(
+        json.dumps(
+            {
+                "model_type": "gemma3",
+                "auto_map": {"AutoConfig": "configuration_custom.CustomConfig"},
+            }
+        )
+    )
+
+    def _refuse(*args, **kwargs):
+        raise ValueError(
+            "contains custom code which must be executed to correctly load the model"
+        )
+
+    # Reaching for AutoConfig would make this verifier unresolvable again.
+    monkeypatch.setattr("speculators.models.utils.AutoConfig.from_pretrained", _refuse)
+
+    _verifier_model_type.cache_clear()
+    assert _verifier_model_type(str(verifier_dir)) == "gemma3"
