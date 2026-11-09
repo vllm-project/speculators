@@ -55,6 +55,8 @@ Columns to extract:
 | `git_sha`   | git_sha   | String    |
 | `test_file` | test_file | String    |
 | `pr_number` | pr_number | String    |
+| `gpu_name`  | gpu_name  | String    |
+| `hostname`  | hostname  | String    |
 
 Use dashboard variables and **Filter by value** transformations to select specific metrics, tests, or branches.
 
@@ -71,11 +73,11 @@ python scripts/ci/push_metrics.py \
 
 The nightly Buildkite pipeline needs three env vars:
 
-| Variable | Purpose |
-| --- | --- |
+| Variable                  | Purpose                                       |
+| ------------------------- | --------------------------------------------- |
 | `SPECULATORS_METRICS_DIR` | Directory where tests write metric JSON files |
-| `METRICS_REMOTE_URL` | Git URL of the metrics repo |
-| `GITHUB_TOKEN` | PAT with `contents:write` on the metrics repo |
+| `METRICS_REMOTE_URL`      | Git URL of the metrics repo                   |
+| `GITHUB_TOKEN`            | PAT with `contents:write` on the metrics repo |
 
 After tests complete:
 

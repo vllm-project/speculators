@@ -786,6 +786,7 @@ def _emit_benchmark_metrics(results: dict, metrics_dir: str) -> None:
     config = results["config"]
     prov = results["provenance"]
 
+    gpu_info = prov.get("gpu_info", [])
     labels = {
         "timestamp": prov["timestamp"],
         "git_sha": os.environ.get("BUILDKITE_COMMIT") or prov.get("git_sha", "unknown"),
@@ -802,6 +803,8 @@ def _emit_benchmark_metrics(results: dict, metrics_dir: str) -> None:
         "optimizer": config["optimizer"],
         "total_seq_len": config["total_seq_len"],
         "num_gpus": config["num_gpus_used"],
+        "gpu_name": gpu_info[0]["name"] if gpu_info else "unknown",
+        "hostname": prov.get("hostname", "unknown"),
     }
 
     records: list[dict] = []

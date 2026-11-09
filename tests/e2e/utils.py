@@ -534,7 +534,9 @@ def run_stitch_mtp(
     assert result.returncode == 0, f"speculators stitch-mtp failed:\n{result.stderr}"
 
 
-def _emit_ci_metric(metrics_dict: dict) -> None:
+def _emit_ci_metric(
+    metrics_dict: dict, extra_labels: dict[str, str] | None = None
+) -> None:
     """Write one ``(metric, value, labels)`` record per numeric metric.
 
     Activated by the ``SPECULATORS_METRICS_DIR`` env-var.  Labels are
@@ -570,6 +572,8 @@ def _emit_ci_metric(metrics_dict: dict) -> None:
             "test_id": test_id,
             "test_file": test_file,
         }
+        if extra_labels:
+            labels.update(extra_labels)
 
         records = [
             {"metric": key, "value": value, **labels}
@@ -652,7 +656,15 @@ def run_benchmark(
             "peak_allocated_mb"
         ]
 
-    _emit_ci_metric(metrics_dict)
+    prov = results.get("provenance", {})
+    gpu_info = prov.get("gpu_info", [])
+    _emit_ci_metric(
+        metrics_dict,
+        extra_labels={
+            "gpu_name": gpu_info[0]["name"] if gpu_info else "unknown",
+            "hostname": prov.get("hostname", "unknown"),
+        },
+    )
 
     return metrics_dict
 
