@@ -55,7 +55,16 @@ def _verifier_model_type(name_or_path: str) -> str | None:
     text_config = config_dict.get("text_config")
     if isinstance(text_config, dict) and text_config.get("model_type"):
         return str(text_config["model_type"]).lower()
-    return str(config_dict.get("model_type", "") or "").lower()
+    model_type = str(config_dict.get("model_type", "") or "").lower()
+    if not model_type:
+        logger.warning(
+            "config.json for verifier %s declares no model_type. Falling back to "
+            "the plain final-norm convention (x * w); if this verifier's final norm "
+            "is not x * w its reconstructed training targets will be mis-scaled.",
+            name_or_path,
+        )
+        return None
+    return model_type
 
 
 def uses_gemma_style_final_norm(config) -> bool:
