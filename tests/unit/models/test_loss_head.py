@@ -295,6 +295,7 @@ def test_fused_bf16_error_vs_eager_reference(name):
     assert grads.keys() == ref_grads.keys()
     bound = BF16_GRAD_ERR_BOUND[name]
     for grad_name, ref in ref_grads.items():
+        assert torch.isfinite(ref).all(), f"{grad_name}: non-finite reference gradient"
         error = float((grads[grad_name] - ref).abs().max())
         limit = bound * float(ref.abs().max())
         # Checked per gradient and written so that a NaN error fails.
