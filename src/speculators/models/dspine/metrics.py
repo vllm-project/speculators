@@ -6,6 +6,7 @@ import torch
 from torch.nn import functional
 
 from speculators.losses import dflash_loss_decay
+from speculators.losses.eager import ce_loss
 from speculators.models.metrics import (
     compute_accepted_length_counts,
     compute_accuracy_multi_step,
@@ -23,17 +24,6 @@ def _weighted_mean(
 ) -> torch.Tensor:
     weights = loss_mask.to(values.dtype) * position_weights.to(values.dtype)
     return (values * weights).sum() / weights.sum().clamp_min(1e-8)
-
-
-def _distribution_terms(
-    logits: torch.Tensor,
-    target_probs: torch.Tensor,
-    target_ids: torch.Tensor,
-) -> tuple[torch.Tensor, torch.Tensor]:
-    log_q = functional.log_softmax(logits.float(), dim=-1)
-    ce = -log_q.gather(-1, target_ids.unsqueeze(-1)).squeeze(-1)
-    l1 = (log_q.exp() - target_probs).abs().sum(dim=-1)
-    return ce, l1
 
 
 def compute_dspine_loss(
@@ -54,7 +44,7 @@ def compute_dspine_loss(
     global_step: int,
     transition_min_target_mass: float,
 ) -> tuple[torch.Tensor, dict[str, Any]]:
-    """Compute Equations (6)--(8) using sequence labels and teacher distributions."""
+    """Compute DSpine losses with verifier-argmax CE and teacher distributions."""
     seq_len = unary_logits.shape[1]
     positions = torch.arange(seq_len, device=unary_logits.device) % block_size
     positions = positions.unsqueeze(0)
@@ -63,9 +53,10 @@ def compute_dspine_loss(
     )
 
     target_probs = functional.softmax(targets.float(), dim=-1)
-    unary_ce_values, unary_l1_values = _distribution_terms(
-        unary_logits, target_probs, target_ids
-    )
+    ce_target_ids = targets.argmax(dim=-1)
+    unary_ce_values = ce_loss(unary_logits.float(), targets)
+    unary_probs = functional.softmax(unary_logits.float(), dim=-1)
+    unary_l1_values = (unary_probs - target_probs).abs().sum(dim=-1)
     unary_ce = _weighted_mean(unary_ce_values, loss_mask, position_weights)
     unary_l1 = _weighted_mean(unary_l1_values, loss_mask, position_weights)
     unary_loss = alpha * unary_ce + (1.0 - alpha) * unary_l1
@@ -78,17 +69,17 @@ def compute_dspine_loss(
     candidate_log_probs = functional.log_softmax(
         refined_candidate_logits.float(), dim=-1
     )
-    target_matches = candidate_ids.eq(target_ids.unsqueeze(-1))
-    contains_target = target_matches.any(dim=-1)
-    target_positions = target_matches.to(torch.int64).argmax(dim=-1)
-    refined_ce_values = -candidate_log_probs.gather(
-        -1, target_positions.unsqueeze(-1)
-    ).squeeze(-1)
+    ce_target_matches = candidate_ids.eq(ce_target_ids.unsqueeze(-1))
+    contains_ce_target = ce_target_matches.any(dim=-1)
+    # Preserve the global verifier argmax when tied tokens reorder in the pool.
+    refined_ce_values = ce_loss(
+        refined_candidate_logits.float(), ce_target_matches.float()
+    )
     refined_l1_values = (
         (candidate_log_probs.exp() - renormalized_targets).abs().sum(dim=-1)
     )
 
-    refined_ce_mask = loss_mask * contains_target.to(loss_mask.dtype)
+    refined_ce_mask = loss_mask * contains_ce_target.to(loss_mask.dtype)
     refined_l1_mask = loss_mask * candidate_mass.gt(transition_min_target_mass).to(
         loss_mask.dtype
     )
@@ -134,6 +125,8 @@ def compute_dspine_loss(
     }
 
     with torch.no_grad():
+        # Keep diagnostics referenced to the actual training tokens.
+        contains_target = candidate_ids.eq(target_ids.unsqueeze(-1)).any(dim=-1)
         valid = loss_mask.to(torch.bool)
         valid_float = valid.to(unary_logits.dtype)
         metrics[f"unary_candidate_recall_at_{candidate_ids.shape[-1]}_sum"] = (

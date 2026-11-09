@@ -414,15 +414,35 @@ def test_dspine_loss_reaches_unary_refinement_and_layer_features():
     assert metrics["embedding_lambda_sum"] > 0
 
 
-def test_hard_sequence_labels_are_not_replaced_by_teacher_argmax():
-    """A sampled sequence label controls CE and top-k membership, not soft targets."""
-    unary = torch.tensor([[[2.0, 1.0, -1.0], [2.0, 1.0, -1.0]]])
-    targets = torch.tensor([[[4.0, 0.0, -2.0], [4.0, 0.0, -2.0]]])
-    target_ids = torch.tensor([[0, 2]])
+@pytest.mark.parametrize("dtype", [torch.float32, torch.bfloat16])
+@pytest.mark.parametrize(
+    ("training_token", "verifier_logits", "candidate_tokens"),
+    [
+        (2, [4.0, 0.0, 0.0], [0, 1]),
+        (0, [0.0, 0.0, 4.0], [0, 1]),
+        (1, [4.0, 0.0, 0.0], [0, 1]),
+        # Global argmax is token 1 even though tied token 2 comes first locally.
+        (0, [0.0, 4.0, 4.0], [2, 1]),
+    ],
+)
+def test_ce_uses_verifier_argmax_while_metrics_use_sequence_labels(
+    dtype, training_token, verifier_logits, candidate_tokens
+):
+    """CE follows the global verifier argmax, including ties and top-k misses."""
+    unary = torch.tensor(
+        [[[2.0, 1.0, -1.0], [2.0, 1.0, -1.0]]],
+        dtype=dtype,
+        requires_grad=True,
+    )
+    targets = torch.tensor(verifier_logits, dtype=dtype).view(1, 1, 3).expand(1, 2, 3)
+    target_ids = torch.tensor([[0, training_token]])
+    candidates = torch.tensor(candidate_tokens).view(1, 1, 2).expand(1, 2, 2)
+    refined = unary.gather(-1, candidates)
+    verifier_token = int(targets[0, 1].argmax().item())
     loss, metrics = compute_dspine_loss(
         unary_logits=unary,
-        refined_candidate_logits=unary[..., :2],
-        candidate_ids=torch.tensor([[[0, 1], [0, 1]]]),
+        refined_candidate_logits=refined,
+        candidate_ids=candidates,
         targets=targets,
         target_ids=target_ids,
         layer_features=[],
@@ -436,14 +456,30 @@ def test_hard_sequence_labels_are_not_replaced_by_teacher_argmax():
         global_step=0,
         transition_min_target_mass=1e-4,
     )
-    torch.testing.assert_close(metrics["unary_ce_sum"], -unary[0, 1].log_softmax(-1)[2])
+    torch.testing.assert_close(
+        metrics["unary_ce_sum"], -unary[0, 1].float().log_softmax(-1)[verifier_token]
+    )
     torch.testing.assert_close(
         metrics["unary_l1_sum"],
-        (unary[0, 1].softmax(-1) - targets[0, 1].softmax(-1)).abs().sum(),
+        (unary[0, 1].float().softmax(-1) - targets[0, 1].float().softmax(-1))
+        .abs()
+        .sum(),
     )
-    assert metrics["refined_ce_sum"].item() == 0
-    assert metrics["unary_candidate_recall_at_2_sum"].item() == 0
+    expected_refined_ce = (
+        -refined[0, 1].float().log_softmax(-1)[candidate_tokens.index(verifier_token)]
+        if verifier_token in candidate_tokens
+        else torch.tensor(0.0)
+    )
+    torch.testing.assert_close(metrics["refined_ce_sum"], expected_refined_ce)
+    assert metrics["unary_candidate_recall_at_2_sum"].item() == (
+        training_token in candidate_tokens
+    )
+    selected_token = candidate_tokens[int(refined[0, 1].argmax().item())]
+    assert metrics["eal_sum"].item() == 1 + (training_token == selected_token)
     assert torch.isfinite(loss)
+    loss.backward()
+    assert unary.grad is not None
+    assert torch.isfinite(unary.grad).all()
 
 
 def test_training_eal_uses_sequence_labels_and_stops_at_first_mismatch():
