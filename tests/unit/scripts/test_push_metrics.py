@@ -29,6 +29,8 @@ def _git_config(cwd: Path) -> None:
 
 def _load_module():
     spec = importlib.util.spec_from_file_location("push_metrics", str(SCRIPT))
+    assert spec is not None, f"no import spec for {SCRIPT}"
+    assert spec.loader is not None, f"no loader for {SCRIPT}"
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
     return mod
