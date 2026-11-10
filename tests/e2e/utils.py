@@ -579,6 +579,7 @@ def _emit_ci_metric(
             ),
             "test_id": test_id,
             "test_file": test_file,
+            "node_name": os.environ.get("NODE_NAME", ""),
         }
         if extra_labels:
             labels.update(extra_labels)

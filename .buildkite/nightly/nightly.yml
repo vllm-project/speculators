@@ -203,6 +203,10 @@ steps:
                           secretKeyRef:
                             name: hf-token-secret
                             key: token
+                      - name: NODE_NAME
+                        valueFrom:
+                          fieldRef:
+                            fieldPath: spec.nodeName
 
                 volumes:
                   - name: ci-cache
@@ -292,6 +296,10 @@ steps:
                           secretKeyRef:
                             name: hf-token-secret
                             key: token
+                      - name: NODE_NAME
+                        valueFrom:
+                          fieldRef:
+                            fieldPath: spec.nodeName
 
                 volumes:
                   - name: ci-cache

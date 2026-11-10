@@ -817,6 +817,7 @@ def _emit_benchmark_metrics(results: dict, metrics_dir: str) -> None:
         "num_gpus": config["num_gpus_used"],
         "gpu_name": gpu_info[0]["name"] if gpu_info else "unknown",
         "hostname": prov.get("hostname", "unknown"),
+        "node_name": os.environ.get("NODE_NAME", ""),
     }
 
     records: list[dict] = []
