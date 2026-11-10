@@ -24,7 +24,6 @@ from transformers.models.qwen3.modeling_qwen3 import Qwen3RMSNorm
 from speculators import SpeculatorsConfig, VerifierConfig
 from speculators.models.dflash.core import DFlashDraftModel, DFlashSpeculatorConfig
 from speculators.models.eagle3 import Eagle3DraftModel, Eagle3SpeculatorConfig
-from speculators.models.peagle import PEagleDraftModel, PEagleSpeculatorConfig
 from speculators.models.utils import (
     _verifier_model_type,
     resolve_verifier_norm_class,
@@ -185,14 +184,6 @@ def test_gemma3_rmsnorm_matches_folded_qwen3_rmsnorm():
 
 
 @pytest.mark.parametrize(
-    ("model_cls", "config_cls"),
-    [
-        (Eagle3DraftModel, Eagle3SpeculatorConfig),
-        (PEagleDraftModel, PEagleSpeculatorConfig),
-    ],
-    ids=["eagle3", "peagle"],
-)
-@pytest.mark.parametrize(
     ("model_type", "expected_cls"),
     [
         ("qwen3_5", Gemma3RMSNorm),
@@ -201,19 +192,16 @@ def test_gemma3_rmsnorm_matches_folded_qwen3_rmsnorm():
     ],
     ids=["qwen3_5", "gemma3", "llama"],
 )
-def test_eagle3_family_resolves_verifier_norm_class(
+def test_eagle3_resolves_verifier_norm_class(
     tmp_path,
-    model_cls: type[Eagle3DraftModel],
-    config_cls: type[Eagle3SpeculatorConfig],
     model_type: str,
     expected_cls: type,
 ):
-    """Eagle3 and P-EAGLE rebuild their targets with verifier_norm too, so
-    they must pick the same class as DFlash for the same verifier."""
+    """Eagle3 picks the same verifier norm class as DFlash for the same verifier."""
     verifier_dir = tmp_path / model_type
     verifier_dir.mkdir()
     (verifier_dir / "config.json").write_text(json.dumps({"model_type": model_type}))
-    config = config_cls(
+    config = Eagle3SpeculatorConfig(
         transformer_layer_config=LlamaConfig(
             vocab_size=64,
             hidden_size=16,
@@ -224,13 +212,13 @@ def test_eagle3_family_resolves_verifier_norm_class(
         ),
         draft_vocab_size=64,
         speculators_config=SpeculatorsConfig(
-            algorithm=config_cls.model_fields["speculators_model_type"].default,
+            algorithm="eagle3",
             proposal_methods=[GreedyTokenProposalConfig(speculative_tokens=3)],
             default_proposal_method="greedy",
             verifier=VerifierConfig(name_or_path=str(verifier_dir), architectures=[]),
         ),
     )
-    model = model_cls(config)
+    model = Eagle3DraftModel(config)
     assert type(model.verifier_norm) is expected_cls
 
 

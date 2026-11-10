@@ -1,6 +1,6 @@
 """Integration tests for draft model forward passes with real weights.
 
-Covers DFlash, Eagle3, PEagle, and MTP models with shared parametrized tests
+Covers DFlash, Eagle3, and MTP models with shared parametrized tests
 for training, multi-batch, and vocab boundary scenarios, plus model-specific
 parameter variation tests.
 """
@@ -24,7 +24,6 @@ from tests.integration.conftest import (
     make_dflash_model,
     make_eagle3_model,
     make_mtp_model,
-    make_peagle_model,
     make_sample,
 )
 
@@ -72,15 +71,6 @@ DFLASH_SPEC = ModelSpec(
 EAGLE3_SPEC = ModelSpec(
     name="eagle3", factory=make_eagle3_model, forward_kwargs={"ttt_steps": 2}
 )
-PEAGLE_SPEC = ModelSpec(
-    name="peagle",
-    factory=make_peagle_model,
-    forward_kwargs={
-        "num_depths": 4,
-        "down_sample_ratio": 0.7,
-        "down_sample_ratio_min": 0.2,
-    },
-)
 MTP_SPEC = ModelSpec(
     name="mtp",
     factory=make_mtp_model,
@@ -93,14 +83,12 @@ MTP_SPEC = ModelSpec(
 ALL_SPECS = [
     pytest.param(DFLASH_SPEC, id="dflash"),
     pytest.param(EAGLE3_SPEC, id="eagle3"),
-    pytest.param(PEAGLE_SPEC, id="peagle"),
     pytest.param(MTP_SPEC, id="mtp", marks=_requires_qwen3_5),
 ]
 
 VOCAB_SPECS = [
     pytest.param(DFLASH_SPEC, id="dflash"),
     pytest.param(EAGLE3_SPEC, id="eagle3"),
-    pytest.param(PEAGLE_SPEC, id="peagle"),
 ]
 
 
@@ -404,95 +392,6 @@ class TestNormOutputParams:
         assert len(draft_tokens) == 3
         assert loss.isfinite()
         loss.backward()
-
-    def test_peagle_fc_norm(self):
-        model = make_peagle_model(fc_norm=True)
-        assert model.fc_norm is not None
-        assert len(model.fc_norm) == 3
-        samples = _make_samples([128])
-        batch = make_batch(max_len=MAX_LEN, samples=samples, hidden_size=HIDDEN_SIZE)
-        _draft_tokens, loss, _metrics = model(**batch, num_depths=4)
-
-        assert loss.isfinite()
-        loss.backward()
-
-    def test_peagle_norm_before_fc(self):
-        model = make_peagle_model()
-        assert model.input_norm is None
-
-        model = make_peagle_model(norm_before_fc=True)
-        assert model.input_norm is not None
-        samples = _make_samples([128])
-        batch = make_batch(max_len=MAX_LEN, samples=samples, hidden_size=HIDDEN_SIZE)
-        _draft_tokens, loss, _metrics = model(**batch, num_depths=4)
-
-        assert loss.isfinite()
-        loss.backward()
-
-
-@requires_cuda
-class TestPEagleParams:
-    @pytest.mark.parametrize("num_depths", [2, 4, 8])
-    def test_varying_num_depths(self, num_depths):
-        model = make_peagle_model(num_depths=num_depths)
-        samples = _make_samples([128])
-        batch = make_batch(max_len=MAX_LEN, samples=samples, hidden_size=HIDDEN_SIZE)
-        draft_tokens, loss, metrics = model(**batch, num_depths=num_depths)
-
-        assert loss.isfinite()
-        loss.backward()
-
-    @pytest.mark.parametrize("down_sample_ratio", [0.3, 0.7, 1.0])
-    def test_varying_down_sample_ratio(self, down_sample_ratio):
-        model = make_peagle_model()
-        samples = _make_samples([128])
-        batch = make_batch(max_len=MAX_LEN, samples=samples, hidden_size=HIDDEN_SIZE)
-        draft_tokens, loss, metrics = model(
-            **batch, num_depths=4, down_sample_ratio=down_sample_ratio
-        )
-
-        assert loss.isfinite()
-        loss.backward()
-
-    @pytest.mark.parametrize("draft_attn_impl", ["sdpa", "eager"])
-    @pytest.mark.parametrize("seq_lengths", SAMPLE_CONFIGS)
-    def test_attention_backend(self, draft_attn_impl, seq_lengths):
-        model = make_peagle_model(draft_attn_impl=draft_attn_impl)
-        samples = _make_samples(seq_lengths)
-        batch = make_batch(max_len=MAX_LEN, samples=samples, hidden_size=HIDDEN_SIZE)
-        draft_tokens, loss, metrics = model(**batch, num_depths=4)
-
-        assert loss.isfinite()
-        loss.backward()
-
-    ATTN_BACKENDS = ["simple_flex_attention", "sdpa", "eager"]
-
-    @pytest.mark.parametrize("seq_lengths", SAMPLE_CONFIGS)
-    def test_attention_backends_match(self, seq_lengths):
-        """All attention backends produce equivalent outputs for the same input."""
-        samples = _make_samples(seq_lengths)
-
-        results = {}
-        for backend in self.ATTN_BACKENDS:
-            torch.manual_seed(0)
-            model = make_peagle_model(draft_attn_impl=backend)
-            batch = make_batch(
-                max_len=MAX_LEN, samples=samples, hidden_size=HIDDEN_SIZE
-            )
-            _, loss, _ = model(**batch, num_depths=4)
-            results[backend] = loss.detach().cpu()
-            del model
-            torch.cuda.empty_cache()
-
-        ref_backend = self.ATTN_BACKENDS[0]
-        for backend in self.ATTN_BACKENDS[1:]:
-            torch.testing.assert_close(
-                results[backend],
-                results[ref_backend],
-                atol=1e-3,
-                rtol=1e-3,
-                msg=f"{backend} loss diverges from {ref_backend}",
-            )
 
 
 @requires_cuda
