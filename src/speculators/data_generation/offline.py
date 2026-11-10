@@ -26,6 +26,20 @@ def check_hidden_states(data: dict, tokens: list[int]):
             f" doesn't match num tokens {len(tokens)}"
         )
 
+    # aminmax has no float8 kernel, and the FP8 connector saves float8 files.
+    if hs.dtype == torch.float8_e4m3fn:
+        # float8_e4m3fn has no infinities, so NaN is the only non-finite value.
+        # Checking for it avoids a full-size copy in a wider dtype.
+        if bool(torch.isnan(hs).any()):
+            raise ValueError(
+                "Hidden states contain non-finite values (min=nan, max=nan)"
+            )
+        return
+
+    if hs.dtype == torch.float8_e5m2:
+        # bfloat16 holds every float8_e5m2 value exactly, including infinities.
+        hs = hs.to(torch.bfloat16)
+
     lo, hi = torch.aminmax(hs)
     if bool(torch.isfinite(torch.stack((lo, hi))).all()):
         return

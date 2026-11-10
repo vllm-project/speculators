@@ -250,3 +250,43 @@ class TestSave:
         # Raises before load_verifier_weights, so no verifier download.
         with pytest.raises(ValueError, match="Draft weights missing"):
             DFlashConverter()._save(_tiny_dflash_config(), {}, tmp_path)
+
+
+class TestMultimodalVerifier:
+    @patch("speculators.convert.dflash.converter.PretrainedConfig.get_config_dict")
+    def test_reads_text_config(self, mock_get_config):
+        mock_get_config.return_value = (
+            {
+                "architectures": ["Qwen3_5ForConditionalGeneration"],
+                "text_config": {"hidden_size": 4096, "num_hidden_layers": 34},
+            },
+            None,
+        )
+        config = DFlashConverter()._build_config(
+            _source_config(), "Qwen/Qwen3.5-9B", None
+        )
+        # 34 == num_hidden_layers (from text_config), so it is excluded
+        assert config.aux_hidden_state_layer_ids == [2, 10, 18, 26]
+        assert config.speculators_config.verifier.architectures == [
+            "Qwen3_5ForConditionalGeneration"
+        ]
+
+    @patch("speculators.convert.dflash.converter.PretrainedConfig.get_config_dict")
+    def test_null_text_config_falls_back_to_top_level(self, mock_get_config):
+        mock_get_config.return_value = (
+            {"hidden_size": 4096, "num_hidden_layers": 34, "text_config": None},
+            None,
+        )
+        config = DFlashConverter()._build_config(
+            _source_config(), "Qwen/Qwen3-8B", None
+        )
+        assert config.aux_hidden_state_layer_ids == [2, 10, 18, 26]
+
+    @patch("speculators.convert.dflash.converter.PretrainedConfig.get_config_dict")
+    def test_text_config_hidden_size_mismatch_raises(self, mock_get_config):
+        mock_get_config.return_value = (
+            {"text_config": {"hidden_size": 2048, "num_hidden_layers": 36}},
+            None,
+        )
+        with pytest.raises(ValueError, match="Architecture mismatch"):
+            DFlashConverter()._build_config(_source_config(), "some/model", None)
