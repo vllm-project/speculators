@@ -13,6 +13,7 @@ are silently mis-scaled.
 from __future__ import annotations
 
 import json
+from types import SimpleNamespace
 from typing import cast
 
 import pytest
@@ -93,6 +94,20 @@ def test_detection_by_verifier_model_type(
     _point_at_fake_verifier(model, tmp_path, model_type, text_model_type)
     assert uses_gemma_style_final_norm(model.config) is expected
     assert (resolve_verifier_norm_class(model.config) is Gemma3RMSNorm) is expected
+
+
+def test_minimax_outer_model_type(tmp_path, monkeypatch: pytest.MonkeyPatch):
+    """The outer ``minimax_m3_vl`` type is matched when no text_config is split off."""
+    monkeypatch.setattr(
+        "speculators.models.utils.get_verifier_config",
+        lambda *args, **kwargs: SimpleNamespace(model_type="minimax_m3_vl"),
+    )
+    model = _make_model(DFlashDraftModel, draft_vocab_size=64)
+    model.config.speculators_config.verifier.name_or_path = str(
+        tmp_path / "minimax_outer"
+    )
+    assert uses_gemma_style_final_norm(model.config)
+    assert resolve_verifier_norm_class(model.config) is Gemma3RMSNorm
 
 
 def test_unresolvable_verifier_defaults_to_plain(monkeypatch: pytest.MonkeyPatch):
