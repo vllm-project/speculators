@@ -57,6 +57,7 @@ Columns to extract:
 | `pr_number` | pr_number | String    |
 | `gpu_name`  | gpu_name  | String    |
 | `hostname`  | hostname  | String    |
+| `node_name` | node_name | String    |
 
 Use dashboard variables and **Filter by value** transformations to select specific metrics, tests, or branches.
 
