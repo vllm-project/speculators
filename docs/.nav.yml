@@ -29,6 +29,7 @@ nav:
     - Developer Guide:
           - developer/index.md
           - Contributing Guide: developer/contributing.md
+          - Governance: developer/governance.md
           - Code of Conduct: developer/code_of_conduct.md
           - Add New Spec Decode Algorithm: developer/add_algorithm.md
           - Design Documents: developer/design_docs.md
