@@ -15,8 +15,6 @@ from speculators.models.eagle3 import Eagle3SpeculatorConfig
 from speculators.models.eagle3.core import Eagle3DraftModel
 from speculators.models.mtp import MTPSpeculatorConfig
 from speculators.models.mtp.core import MTPDraftModel
-from speculators.models.peagle.config import PEagleSpeculatorConfig
-from speculators.models.peagle.core import PEagleDraftModel
 from speculators.proposals.greedy import GreedyTokenProposalConfig
 from speculators.train.data import _add_document_ids, _pad_samples, create_empty_batch
 
@@ -161,44 +159,6 @@ def make_dflash_model(
         ),
     )
     model = DFlashDraftModel(config)
-    _fill_nan_weights(model)
-    return model.to(device=device, dtype=dtype)  # type: ignore[call-arg]
-
-
-def make_peagle_model(
-    *,
-    draft_vocab_size: int = 64,
-    num_depths: int = 4,
-    norm_before_fc: bool = False,
-    fc_norm: bool = False,
-    norm_output: bool = False,
-    draft_attn_impl: str | None = None,
-    device: str = "cuda:0",
-    dtype: torch.dtype = torch.bfloat16,
-) -> PEagleDraftModel:
-    """Create a tiny PEagle model with real initialized weights."""
-    transformer_config = copy.deepcopy(TINY_LLAMA_CONFIG)
-    transformer_config._attn_implementation = draft_attn_impl or "simple_flex_attention"
-    config = PEagleSpeculatorConfig(
-        transformer_layer_config=transformer_config,
-        draft_vocab_size=draft_vocab_size,
-        norm_before_residual=False,
-        norm_before_fc=norm_before_fc,
-        fc_norm=fc_norm,
-        norm_output=norm_output,
-        embed_requires_grad=True,
-        mask_token_id=0,
-        speculators_config=SpeculatorsConfig(
-            algorithm="peagle",
-            proposal_methods=[GreedyTokenProposalConfig(speculative_tokens=num_depths)],
-            default_proposal_method="greedy",
-            verifier=VerifierConfig(
-                name_or_path=None,
-                architectures=["LlamaForCausalLM"],
-            ),
-        ),
-    )
-    model = PEagleDraftModel(config)
     _fill_nan_weights(model)
     return model.to(device=device, dtype=dtype)  # type: ignore[call-arg]
 
@@ -363,14 +323,6 @@ def eagle3_model():
 @pytest.fixture
 def dflash_model():
     model = make_dflash_model()
-    yield model
-    del model
-    torch.cuda.empty_cache()
-
-
-@pytest.fixture
-def peagle_model():
-    model = make_peagle_model()
     yield model
     del model
     torch.cuda.empty_cache()
