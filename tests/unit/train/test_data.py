@@ -674,7 +674,9 @@ def _fp8_test_hidden_states() -> torch.Tensor:
     return (per_token * torch.ones(3, 2, 4)).to(torch.bfloat16)
 
 
-def _fp8_connector_dataset(tmp_path: Path, transfer_cls) -> SpeculatorsDataset:
+def _fp8_connector_dataset(
+    tmp_path: Path, transfer_cls, with_scales: bool = True
+) -> SpeculatorsDataset:
     """An offline dataset over one file saved the way the FP8 connector saves it."""
     Dataset.from_dict(
         {"input_ids": [[1, 2, 3]], "loss_mask": [[1, 1, 1]], "seq_len": [3]}
@@ -682,14 +684,10 @@ def _fp8_connector_dataset(tmp_path: Path, transfer_cls) -> SpeculatorsDataset:
     hidden_states_dir = tmp_path / "data" / "hidden_states"
     hidden_states_dir.mkdir()
     fp8_hidden_states, scales = quantize_tensor_to_fp8(_fp8_test_hidden_states())
-    save_file(
-        {
-            "token_ids": torch.tensor([1, 2, 3]),
-            "hidden_states": fp8_hidden_states,
-            SCALES_KEY: scales,
-        },
-        hidden_states_dir / "hs_0.safetensors",
-    )
+    tensors = {"token_ids": torch.tensor([1, 2, 3]), "hidden_states": fp8_hidden_states}
+    if with_scales:
+        tensors[SCALES_KEY] = scales
+    save_file(tensors, hidden_states_dir / "hs_0.safetensors")
     records = ArrowDataset(datapath=str(tmp_path / "data"))
     records.data.set_format(type="torch")
     return SpeculatorsDataset(
@@ -707,6 +705,14 @@ def test_fp8_connector_file_without_fp8_backend_raises(tmp_path):
     # The default file backend does not apply the scales, so the batch would
     # hold the unscaled float8 values.
     dataset = _fp8_connector_dataset(tmp_path, FileTransfer)
+
+    with pytest.raises(ValueError, match="--hidden-states-backend fp8"):
+        dataset.__getitems__([0])
+
+
+def test_float8_hidden_states_without_scales_raise(tmp_path):
+    # Float8 values are rejected by dtype as well, even without the scales key.
+    dataset = _fp8_connector_dataset(tmp_path, FileTransfer, with_scales=False)
 
     with pytest.raises(ValueError, match="--hidden-states-backend fp8"):
         dataset.__getitems__([0])
