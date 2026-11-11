@@ -3,7 +3,7 @@
 Some verifier families store the final RMSNorm weight in the Gemma
 convention — the applied gain is ``1 + w`` — while a plain ``Qwen3RMSNorm``
 applies gain ``w``. This family includes Gemma itself, the Qwen3.5/Qwen3.8
-models, Qwen3-Next and Step3.5, whose final norms vLLM builds from
+models, Qwen3-Next, Step3.5 and MiniMax-M3, whose final norms vLLM builds from
 ``GemmaRMSNorm``.
 The frozen ``verifier_norm`` must therefore be constructed from the class
 matching the verifier's convention, or the reconstructed verifier targets
@@ -13,6 +13,7 @@ are silently mis-scaled.
 from __future__ import annotations
 
 import json
+from types import SimpleNamespace
 from typing import cast
 
 import pytest
@@ -24,8 +25,8 @@ from transformers.models.qwen3.modeling_qwen3 import Qwen3RMSNorm
 from speculators import SpeculatorsConfig, VerifierConfig
 from speculators.models.dflash.core import DFlashDraftModel, DFlashSpeculatorConfig
 from speculators.models.eagle3 import Eagle3DraftModel, Eagle3SpeculatorConfig
-from speculators.models.peagle import PEagleDraftModel, PEagleSpeculatorConfig
 from speculators.models.utils import (
+    _verifier_model_type,
     resolve_verifier_norm_class,
     uses_gemma_style_final_norm,
 )
@@ -36,6 +37,14 @@ from .test_checkpoint_key_ownership import (
     _make_fake_loader,
     _make_model,
 )
+
+
+@pytest.fixture(autouse=True)
+def _isolate_verifier_model_type_cache():
+    """Keep _verifier_model_type's @cache from leaking results across tests."""
+    _verifier_model_type.cache_clear()
+    yield
+    _verifier_model_type.cache_clear()
 
 
 def _point_at_fake_verifier(
@@ -62,6 +71,8 @@ def _point_at_fake_verifier(
         ("step3p7", "step3p5", True),
         ("gemma3_text", "", True),
         ("gemma2", "", True),
+        ("minimax_m3_vl", "", True),
+        ("minimax_m3_vl", "minimax_m3_vl_text", True),
         ("gemma3n", "", False),  # dropped the (1 + w) convention
         ("gemma4", "gemma4_text", False),  # dropped the (1 + w) convention
         ("qwen3", "", False),
@@ -76,6 +87,8 @@ def _point_at_fake_verifier(
         "step3p5_text_nested",
         "gemma3_text",
         "gemma2",
+        "minimax_m3_vl",
+        "minimax_m3_vl_text_nested",
         "gemma3n_negative",
         "gemma4_negative",
         "qwen3_negative",
@@ -91,19 +104,48 @@ def test_detection_by_verifier_model_type(
     assert (resolve_verifier_norm_class(model.config) is Gemma3RMSNorm) is expected
 
 
-def test_unresolvable_verifier_defaults_to_plain(monkeypatch: pytest.MonkeyPatch):
-    """A verifier config AutoConfig cannot resolve keeps the plain convention."""
+def test_minimax_outer_model_type(tmp_path, monkeypatch: pytest.MonkeyPatch):
+    """The outer ``minimax_m3_vl`` type is matched when no text_config is split off."""
+    monkeypatch.setattr(
+        "speculators.models.utils.get_verifier_config",
+        lambda *args, **kwargs: SimpleNamespace(model_type="minimax_m3_vl"),
+    )
+    model = _make_model(DFlashDraftModel, draft_vocab_size=64)
+    model.config.speculators_config.verifier.name_or_path = str(
+        tmp_path / "minimax_outer"
+    )
+    assert uses_gemma_style_final_norm(model.config)
+    assert resolve_verifier_norm_class(model.config) is Gemma3RMSNorm
 
-    def _raise(*args, **kwargs):
+
+def test_unresolvable_verifier_defaults_to_plain(monkeypatch: pytest.MonkeyPatch):
+    """A verifier whose config.json cannot be read keeps the plain convention."""
+
+    calls: list[str] = []
+
+    def _raise(name_or_path, *args, **kwargs):
+        calls.append(name_or_path)
         raise OSError("cannot resolve")
 
     monkeypatch.setattr(
-        "speculators.models.utils.AutoConfig.from_pretrained",
+        "speculators.models.utils.PretrainedConfig.get_config_dict",
         _raise,
     )
     model = _make_model(DFlashDraftModel, draft_vocab_size=64)
     assert uses_gemma_style_final_norm(model.config) is False
     assert isinstance(model.verifier_norm, Qwen3RMSNorm)
+    assert calls, "the patched config.json read was never reached"
+
+
+def test_missing_model_type_is_unresolved(tmp_path, caplog: pytest.LogCaptureFixture):
+    """A config.json without model_type is unresolved and warns, not a silent ''."""
+    verifier_dir = tmp_path / "gemma3_no_model_type"
+    verifier_dir.mkdir()
+    (verifier_dir / "config.json").write_text(json.dumps({"hidden_size": 16}))
+
+    with caplog.at_level("WARNING", logger="speculators.models.utils"):
+        assert _verifier_model_type(str(verifier_dir)) is None
+    assert "declares no model_type" in caplog.text
 
 
 def test_plain_construction_unchanged():
@@ -161,14 +203,6 @@ def test_gemma3_rmsnorm_matches_folded_qwen3_rmsnorm():
 
 
 @pytest.mark.parametrize(
-    ("model_cls", "config_cls"),
-    [
-        (Eagle3DraftModel, Eagle3SpeculatorConfig),
-        (PEagleDraftModel, PEagleSpeculatorConfig),
-    ],
-    ids=["eagle3", "peagle"],
-)
-@pytest.mark.parametrize(
     ("model_type", "expected_cls"),
     [
         ("qwen3_5", Gemma3RMSNorm),
@@ -177,19 +211,16 @@ def test_gemma3_rmsnorm_matches_folded_qwen3_rmsnorm():
     ],
     ids=["qwen3_5", "gemma3", "llama"],
 )
-def test_eagle3_family_resolves_verifier_norm_class(
+def test_eagle3_resolves_verifier_norm_class(
     tmp_path,
-    model_cls: type[Eagle3DraftModel],
-    config_cls: type[Eagle3SpeculatorConfig],
     model_type: str,
     expected_cls: type,
 ):
-    """Eagle3 and P-EAGLE rebuild their targets with verifier_norm too, so
-    they must pick the same class as DFlash for the same verifier."""
+    """Eagle3 picks the same verifier norm class as DFlash for the same verifier."""
     verifier_dir = tmp_path / model_type
     verifier_dir.mkdir()
     (verifier_dir / "config.json").write_text(json.dumps({"model_type": model_type}))
-    config = config_cls(
+    config = Eagle3SpeculatorConfig(
         transformer_layer_config=LlamaConfig(
             vocab_size=64,
             hidden_size=16,
@@ -200,13 +231,13 @@ def test_eagle3_family_resolves_verifier_norm_class(
         ),
         draft_vocab_size=64,
         speculators_config=SpeculatorsConfig(
-            algorithm=config_cls.model_fields["speculators_model_type"].default,
+            algorithm="eagle3",
             proposal_methods=[GreedyTokenProposalConfig(speculative_tokens=3)],
             default_proposal_method="greedy",
             verifier=VerifierConfig(name_or_path=str(verifier_dir), architectures=[]),
         ),
     )
-    model = model_cls(config)
+    model = Eagle3DraftModel(config)
     assert type(model.verifier_norm) is expected_cls
 
 
@@ -230,3 +261,29 @@ def test_gemma3_rmsnorm_matches_verifier_final_norm(module: str, norm_class: str
     verifier_norm = verifier_norm_cls(16, eps=1e-6)
     verifier_norm.weight.data = w.clone()
     torch.testing.assert_close(gemma(x), verifier_norm(x), rtol=1e-5, atol=1e-5)
+
+
+def test_custom_code_verifier_resolves_without_trust_remote_code(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+):
+    """A verifier declaring an auto_map still resolves its final-norm convention."""
+    verifier_dir = tmp_path / "custom_code_verifier"
+    verifier_dir.mkdir()
+    (verifier_dir / "config.json").write_text(
+        json.dumps(
+            {
+                "model_type": "gemma3",
+                "auto_map": {"AutoConfig": "configuration_custom.CustomConfig"},
+            }
+        )
+    )
+
+    def _refuse(*args, **kwargs):
+        raise ValueError(
+            "contains custom code which must be executed to correctly load the model"
+        )
+
+    # Reaching for AutoConfig would make this verifier unresolvable again.
+    monkeypatch.setattr("speculators.models.utils.AutoConfig.from_pretrained", _refuse)
+
+    assert _verifier_model_type(str(verifier_dir)) == "gemma3"

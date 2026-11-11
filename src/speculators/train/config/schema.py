@@ -190,7 +190,7 @@ class DraftArgs(_Group):
     draft_attn_impl: Literal["simple_flex_attention", "sdpa", "eager"] = Field(
         default="simple_flex_attention",
         description="Attention implementation for draft layers. Use 'sdpa' or 'eager' "
-        "for hardware that doesn't support flex attention. Not supported for MTP.",
+        "for hardware that doesn't support flex attention.",
     )
 
 

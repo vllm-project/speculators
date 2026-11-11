@@ -278,7 +278,7 @@ def test_mismatched_algorithm_block_warns_via_yaml(tmp_path):
     config_path = _write(tmp_path, "train:\n  dflash:\n    block_size: 16\n")
     with pytest.warns(UserWarning, match="does not use the 'dflash'"):
         TrainConfig.from_sources(
-            cli={"verifier_name_or_path": "m", "speculator_type": "peagle"},
+            cli={"verifier_name_or_path": "m", "speculator_type": "eagle3"},
             config_path=config_path,
             argv=["train.py"],
         )
@@ -338,24 +338,6 @@ def test_on_generate_flag_warns_deprecated():
 def test_on_generate_yaml_warns_deprecated(tmp_path):
     config_path = _write(tmp_path, "train:\n  generation:\n    on_generate: delete\n")
     with pytest.warns(FutureWarning, match="--on-generate is deprecated"):
-        TrainConfig.from_sources(
-            cli={"verifier_name_or_path": "m"},
-            config_path=config_path,
-            argv=["train.py"],
-        )
-
-
-def test_peagle_flag_warns_deprecated():
-    with pytest.warns(FutureWarning, match="P-EAGLE is deprecated"):
-        TrainConfig.from_sources(
-            cli={"verifier_name_or_path": "m", "speculator_type": "peagle"},
-            argv=["train.py"],
-        )
-
-
-def test_peagle_yaml_warns_deprecated(tmp_path):
-    config_path = _write(tmp_path, "train:\n  speculator_type: peagle\n")
-    with pytest.warns(FutureWarning, match="P-EAGLE is deprecated"):
         TrainConfig.from_sources(
             cli={"verifier_name_or_path": "m"},
             config_path=config_path,
@@ -680,26 +662,6 @@ RECIPES: dict[str, dict] = {
         "epochs": 3,
         "lr": 1e-4,
         "total_seq_len": 8192,
-        "on_missing": "generate",
-    },
-    "peagle_qwen3_8b_ultrachat_online_5k.sh": {
-        "verifier_name_or_path": "Qwen/Qwen3-8B",
-        "data_path": "./output/peagle_qwen3_8b_ultrachat_200k_regen",
-        "vllm_endpoint": "http://localhost:8108/v1",
-        "hidden_states_path": (
-            "./output/peagle_qwen3_8b_ultrachat_200k_regen/hidden_states"
-        ),
-        "save_path": "./output/peagle_qwen3_8b_ultrachat_200k_regen/checkpoints",
-        "epochs": 5,
-        "lr": 6e-4,
-        "total_seq_len": 4096,
-        "speculator_type": "peagle",
-        "num_layers": 4,
-        "num_depths": 4,
-        "down_sample_ratio": 0.7,
-        "down_sample_ratio_min": 0.2,
-        "norm_before_residual": False,
-        "scheduler_type": "cosine",
         "on_missing": "generate",
     },
 }

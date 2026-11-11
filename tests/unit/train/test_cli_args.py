@@ -9,7 +9,6 @@ from speculators.losses import eager
 from speculators.models.dflash.core import DFlashDraftModel
 from speculators.models.dspark.core import DSparkDraftModel
 from speculators.models.eagle3.core import Eagle3DraftModel
-from speculators.models.peagle.core import PEagleDraftModel
 from speculators.train.config import TrainConfig
 from speculators.train.config.schema import FLEX_ATTENTION_BLOCK_SIZE
 
@@ -79,22 +78,6 @@ def test_eagle3_default_uses_kl(monkeypatch):
 def test_eagle3_explicit_ce(monkeypatch):
     args = _parse(monkeypatch, ["--loss-fn", "ce"])
     train_kw, val_kw = Eagle3DraftModel.get_trainer_kwargs(**vars(args))
-    assert "ce" in train_kw["loss_config"]
-    assert train_kw["loss_config"]["ce"][0] is losses.ce_loss
-    assert "ce" in val_kw["loss_config"]
-
-
-def test_peagle_default_uses_kl(monkeypatch):
-    args = _parse(monkeypatch, [])
-    train_kw, val_kw = PEagleDraftModel.get_trainer_kwargs(**vars(args))
-    assert "kl_div" in train_kw["loss_config"]
-    assert train_kw["loss_config"]["kl_div"][0] is losses.kl_div_loss
-    assert "kl_div" in val_kw["loss_config"]
-
-
-def test_peagle_explicit_ce(monkeypatch):
-    args = _parse(monkeypatch, ["--loss-fn", "ce"])
-    train_kw, val_kw = PEagleDraftModel.get_trainer_kwargs(**vars(args))
     assert "ce" in train_kw["loss_config"]
     assert train_kw["loss_config"]["ce"][0] is losses.ce_loss
     assert "ce" in val_kw["loss_config"]
