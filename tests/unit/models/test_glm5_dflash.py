@@ -31,15 +31,12 @@ from speculators.models.dflash.model_definitions import (
     dflash_model_classes,
 )
 from speculators.models.dspark import DSparkSpeculatorConfig
-from speculators.models.dspark.config import EXPORT_ARCHITECTURES
 from speculators.models.dspark.core import DSparkDraftModel
 from speculators.models.utils import mla_kwargs_from_verifier
 from speculators.train.cli import (
     _apply_glm5_lora_rank_overrides,
     create_transformer_layer_config,
 )
-
-GLM5_DSPARK_ARCHITECTURE = EXPORT_ARCHITECTURES[GLM5_DSPARK_MODEL_TYPE]
 
 TINY_GLM5_KWARGS = {
     "vocab_size": 64,
@@ -81,14 +78,9 @@ def test_dflash_model_classes_table():
     assert glm5.decoder_layer_class is DFlashMLADecoderLayer
     assert issubclass(glm5.decoder_layer_class.attention_class, DeepseekV3Attention)
     assert glm5.rotary_head_dim_attr == "qk_rope_head_dim"
-    assert (glm5.context_proj_name, glm5.context_norm_name) == (
-        "context_proj",
-        "context_norm",
-    )
     qwen3 = dflash_model_classes["qwen3"]
     assert qwen3.decoder_layer_class is Qwen3DFlashDecoderLayer
     assert qwen3.rotary_head_dim_attr is None
-    assert (qwen3.context_proj_name, qwen3.context_norm_name) == ("fc", "hidden_norm")
 
 
 def test_qwen3_dflash_keeps_fc_and_hidden_norm():
@@ -116,7 +108,6 @@ def test_qwen3_dflash_keeps_fc_and_hidden_norm():
     assert isinstance(model.layers[0].self_attn, Qwen3DFlashAttention)
     assert hasattr(model, "fc")
     assert hasattr(model, "hidden_norm")
-    assert not hasattr(model, "context_proj")
     assert model.rotary_emb.config.head_dim == 16
     keys = model.state_dict()
     assert "fc.weight" in keys
@@ -411,13 +402,12 @@ def test_glm5_dflash_uses_mla_projections():
     # Upstream keeps a ``q_proj = None`` placeholder when Q LoRA is enabled.
     assert getattr(attn, "q_proj", None) is None
     assert not hasattr(attn, "k_proj")
-    assert hasattr(model, "context_proj")
-    assert hasattr(model, "context_norm")
-    assert not hasattr(model, "fc")
-    assert not hasattr(model, "hidden_norm")
+    assert hasattr(model, "fc")
+    assert hasattr(model, "hidden_norm")
     keys = model.state_dict()
-    assert "context_proj.weight" in keys
-    assert "fc.weight" not in keys
+    assert "fc.weight" in keys
+    assert "hidden_norm.weight" in keys
+    assert "context_proj.weight" not in keys
     assert "layers.0.self_attn.q_a_proj.weight" in keys
     assert "layers.0.self_attn.kv_a_proj_with_mqa.weight" in keys
     assert "layers.0.self_attn.fused_qkv_a_proj.weight" not in keys
@@ -465,7 +455,6 @@ def test_glm5_dspark_config_roundtrip():
     assert reloaded.transformer_layer_config.model_type == "glm5_dspark"
     assert reloaded.transformer_layer_config.q_lora_rank == 16
     assert reloaded.transformer_layer_config.kv_lora_rank == 8
-    assert reloaded.to_dict()["architectures"] == [GLM5_DSPARK_ARCHITECTURE]
 
 
 def test_glm5_dspark_builds_mla_layers():
@@ -481,8 +470,7 @@ def test_glm5_dspark_builds_mla_layers():
     model = DSparkDraftModel(config)
     assert isinstance(model.layers[0].self_attn, DFlashMLAAttention)
     assert model.markov_head is not None
-    assert hasattr(model, "context_proj")
-    assert config.to_dict()["architectures"] == [GLM5_DSPARK_ARCHITECTURE]
+    assert hasattr(model, "fc")
 
 
 def test_glm5_dspark_save_pretrained_export_contract(tmp_path):
@@ -500,25 +488,22 @@ def test_glm5_dspark_save_pretrained_export_contract(tmp_path):
     out = tmp_path / "glm5_dspark"
     model.save_pretrained(out)
     saved = json.loads((out / "config.json").read_text())
-    assert saved["architectures"] == [GLM5_DSPARK_ARCHITECTURE]
+    assert saved["architectures"] == ["DSparkDraftModel"]
     assert saved["transformer_layer_config"]["model_type"] == "glm5_dspark"
     assert saved["transformer_layer_config"]["kv_lora_rank"] == 8
     assert saved["transformer_layer_config"]["q_lora_rank"] == 16
-    # Weight names follow the architecture table (vLLM-Ascend contract).
     weights = out / "model.safetensors"
     assert weights.exists()
     from safetensors import safe_open  # noqa: PLC0415
 
     with safe_open(str(weights), framework="pt") as f:
         keys = set(f.keys())
-    assert "context_proj.weight" in keys
-    assert "context_norm.weight" in keys
-    assert "fc.weight" not in keys
-    # Reload resolves the nested decoder through AutoConfig and still exports
-    # the serving architecture name.
+    assert "fc.weight" in keys
+    assert "hidden_norm.weight" in keys
+    assert "context_proj.weight" not in keys
     reloaded = DSparkSpeculatorConfig.from_pretrained(out)
     assert isinstance(reloaded.transformer_layer_config, Glm5DSparkDecoderConfig)
-    assert reloaded.to_dict()["architectures"] == [GLM5_DSPARK_ARCHITECTURE]
+    assert reloaded.to_dict()["architectures"] == ["DSparkDraftModel"]
 
 
 def test_qwen3_dspark_keeps_python_architecture_name(tmp_path):

@@ -130,19 +130,14 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
             rotary_config.head_dim = getattr(tl_config, rotary_attr)
         self.rotary_emb = Qwen3RotaryEmbedding(rotary_config)  # type: ignore[arg-type]
 
-        # Module names come from the architecture table so state-dict keys
-        # match the serving runtime (e.g. fc/hidden_norm vs context_proj/context_norm).
-        self.add_module(
-            self._model_definitions.context_proj_name,
-            nn.Linear(
-                len(self.target_layer_ids) * tl_config.hidden_size,
-                tl_config.hidden_size,
-                bias=False,
-            ),
+        self.fc = nn.Linear(
+            len(self.target_layer_ids) * tl_config.hidden_size,
+            tl_config.hidden_size,
+            bias=False,
         )
-        self.add_module(
-            self._model_definitions.context_norm_name,
-            Qwen3RMSNorm(tl_config.hidden_size, eps=tl_config.rms_norm_eps),  # type: ignore[arg-type]
+        self.hidden_norm = Qwen3RMSNorm(
+            tl_config.hidden_size,
+            eps=tl_config.rms_norm_eps,  # type: ignore[arg-type]
         )
         self.verifier_norm = resolve_verifier_norm_class(config)(
             config.transformer_layer_config.hidden_size,
@@ -396,12 +391,6 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
 
         return full_attn_mask, sliding_window_attn_mask, anchor_positions, anchor_valid
 
-    def _project_context(self, hidden_states: torch.Tensor) -> torch.Tensor:
-        """Project concatenated target aux hiddens into draft width."""
-        proj = getattr(self, self._model_definitions.context_proj_name)
-        norm = getattr(self, self._model_definitions.context_norm_name)
-        return norm(proj(hidden_states))
-
     def _backbone_forward(
         self,
         hidden_states: torch.Tensor,  # [1, total_seq_len, num_hidden*hidden_size]
@@ -443,7 +432,7 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
         noise_embedding = self.embed_tokens(mask_token_ids)
         # shape: [1, num_anchors*block_size, hidden_size]
 
-        fc_output = self._project_context(hidden_states)
+        fc_output = self.hidden_norm(self.fc(hidden_states))
         # shape: [1, total_seq_len, hidden_size]
 
         mask_position_ids = get_base_indices_for_anchored_blocks(

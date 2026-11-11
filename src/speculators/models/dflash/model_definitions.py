@@ -356,32 +356,22 @@ class DFlashModelComponents(NamedTuple):
         rotary_head_dim_attr: Config attribute holding the RoPE width, or
             ``None`` to use ``config.head_dim`` (full-head GQA RoPE). MLA
             drafts rotate only ``qk_rope_head_dim``.
-        context_proj_name: Module name of the aux-hidden-state projection.
-        context_norm_name: Module name of the norm applied after it.
-
-    The module names become state-dict keys, so they must match what the
-    serving runtime expects for that architecture.
     """
 
     decoder_layer_class: type
     rotary_head_dim_attr: str | None
-    context_proj_name: str
-    context_norm_name: str
 
 
 dflash_model_classes: dict[str, DFlashModelComponents] = {
     "qwen3": DFlashModelComponents(
         decoder_layer_class=Qwen3DFlashDecoderLayer,
         rotary_head_dim_attr=None,
-        context_proj_name="fc",
-        context_norm_name="hidden_norm",
     ),
-    # GLM-5.x drafts: dense MLA. RoPE spans only qk_rope_head_dim and
-    # context_proj / context_norm are the weight names vLLM-Ascend loads.
+    # GLM-5.x drafts: dense MLA. RoPE spans only qk_rope_head_dim.
+    # Aux-hidden projection stays ``fc`` / ``hidden_norm`` (same checkpoint
+    # keys as Qwen3); serving loaders remap those names if they need to.
     "glm5_dspark": DFlashModelComponents(
         decoder_layer_class=DFlashMLADecoderLayer,
         rotary_head_dim_attr="qk_rope_head_dim",
-        context_proj_name="context_proj",
-        context_norm_name="context_norm",
     ),
 }

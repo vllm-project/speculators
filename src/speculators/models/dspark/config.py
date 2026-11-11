@@ -1,25 +1,12 @@
-from typing import Any, Literal
-
+from typing import Literal
 from pydantic import Field
 
 from speculators import SpeculatorModelConfig
-from speculators.models.dflash.config import (
-    GLM5_DSPARK_MODEL_TYPE,
-    DFlashSpeculatorConfig,
-)
+from speculators.models.dflash.config import DFlashSpeculatorConfig
 
 __all__ = [
-    "EXPORT_ARCHITECTURES",
     "DSparkSpeculatorConfig",
 ]
-
-# Serving-side class names keyed by draft decoder ``model_type``. HF
-# ``save_pretrained`` stamps ``architectures`` with the Python class name; these
-# entries replace it in the written ``config.json`` so the runtime can dispatch
-# the draft (vLLM-Ascend registers ``Glm5DSparkForCausalLM``).
-EXPORT_ARCHITECTURES: dict[str, str] = {
-    GLM5_DSPARK_MODEL_TYPE: "Glm5DSparkForCausalLM",
-}
 
 
 @SpeculatorModelConfig.register("dspark")
@@ -77,18 +64,3 @@ class DSparkSpeculatorConfig(DFlashSpeculatorConfig):
             "hidden state as the confidence-head input."
         ),
     )
-
-    def to_dict(self) -> dict[str, Any]:
-        """Serialize with the serving architecture name when one is registered.
-
-        Applied here (rather than on the ``architectures`` field) because HF
-        ``save_pretrained`` overwrites that field right before writing the
-        config; ``to_dict`` runs after the overwrite and feeds ``config.json``.
-        """
-        config_dict = super().to_dict()
-        export_arch = EXPORT_ARCHITECTURES.get(
-            self.transformer_layer_config.model_type
-        )
-        if export_arch is not None:
-            config_dict["architectures"] = [export_arch]
-        return config_dict
