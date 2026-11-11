@@ -5,6 +5,7 @@ from __future__ import annotations
 import importlib.util
 import json
 import subprocess
+from argparse import Namespace
 from pathlib import Path
 
 import pytest
@@ -37,8 +38,10 @@ def _load_module():
 
 
 @pytest.fixture
-def fake_repo(tmp_path: Path):
+def fake_repo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     """Create a bare git repo with a metrics-data branch."""
+    monkeypatch.delenv("METRICS_REMOTE_URL", raising=False)
+
     bare = tmp_path / "remote.git"
     _run_git(["init", "--bare", str(bare)])
 
@@ -101,18 +104,26 @@ def test_push_dir(fake_repo, tmp_path: Path):
 
     metrics_dir = tmp_path / "metrics"
     metrics_dir.mkdir()
-    for i in range(3):
-        (metrics_dir / f"r{i}.json").write_text(json.dumps({"idx": i}))
+    for name, data in (
+        ("r2.json", {"idx": 3}),
+        ("r0.json", {"idx": 0}),
+        ("r1.json", [{"idx": 1}, {"idx": 2}]),
+    ):
+        (metrics_dir / name).write_text(json.dumps(data))
 
     mod = _load_module()
-    records: list[dict] = []
-    for p in sorted(metrics_dir.glob("*.json")):
-        records.append(json.loads(p.read_text()))
 
     original = mod._repo_root
     mod._repo_root = lambda: work
     try:
-        mod._push_records(records, "batch.json", "metrics-data")
+        mod.cmd_push_dir(
+            Namespace(
+                directory=str(metrics_dir),
+                target="batch.json",
+                branch="metrics-data",
+                remote=None,
+            )
+        )
     finally:
         mod._repo_root = original
 
@@ -120,5 +131,5 @@ def test_push_dir(fake_repo, tmp_path: Path):
     _run_git(["clone", "--branch", "metrics-data", str(bare), str(verify)])
 
     result = json.loads((verify / "batch.json").read_text())
-    assert len(result) == 3
-    assert [r["idx"] for r in result] == [0, 1, 2]
+    assert len(result) == 4
+    assert [r["idx"] for r in result] == [0, 1, 2, 3]
