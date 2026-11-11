@@ -2,9 +2,16 @@
 
 Speculators is part of the [vLLM project](https://github.com/vllm-project). Speculators maintainers guide the project's technical direction, review and merge contributions, and help triage issues and feature requests.
 
-## Code ownership
+## Committers and Area Owners
 
-The repository's [CODEOWNERS file](https://github.com/vllm-project/speculators/blob/main/.github/CODEOWNERS) lists the people GitHub requests to review changes to specific files and directories. It covers model implementations, checkpoint conversion, data generation, training, tests, and CI. Check the entries for the paths your pull request changes to find the relevant reviewers.
+Committers have write access to the Speculators repository. Their responsibilities include:
+
+- Reviewing and merging pull requests.
+- Triaging issues and answering community questions.
+- Maintaining code quality and consistency and guiding the project's technical direction.
+- Reviewing changes, keeping documentation current, and guiding development in the areas they own.
+
+The repository's [CODEOWNERS file](https://github.com/vllm-project/speculators/blob/main/.github/CODEOWNERS) defines ownership by file and directory and determines whom GitHub automatically requests to review changes.
 
 ## Getting involved
 
