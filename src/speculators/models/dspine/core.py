@@ -1,3 +1,4 @@
+import math
 from typing import Any, ClassVar
 
 import torch
@@ -89,7 +90,6 @@ class DSpineDraftModel(DFlashDraftModel):
         """Create DSpine from the shared DFlash-family training arguments."""
         config = DSpineSpeculatorConfig(
             **cls._build_base_config_kwargs("dspine", verifier_config, **kwargs),
-            known_anchor_injection=kwargs.get("known_anchor_injection", True),
             transfer_dim=kwargs.get("transfer_dim", 1024),
             message_dim=kwargs.get("message_dim", 512),
             transition_top_k=kwargs.get("transition_top_k", 16),
@@ -174,6 +174,8 @@ class DSpineDraftModel(DFlashDraftModel):
         )
         mask_token_ids[:, :: self.block_size] = input_ids[:, anchor_positions]
         draft_hidden = self.embed_tokens(mask_token_ids)
+        if torch.is_autocast_enabled(device.type):
+            draft_hidden = draft_hidden.to(torch.get_autocast_dtype(device.type))
 
         target_hidden = self.hidden_norm(self.fc(hidden_states))
         mask_position_ids = get_base_indices_for_anchored_blocks(
@@ -243,9 +245,7 @@ class DSpineDraftModel(DFlashDraftModel):
                 layer_idx,
                 pre_injection,
                 transfer_embeddings=self.transfer_embeddings,
-                anchor_token_ids=(
-                    block_tokens[:, 0] if self.config.known_anchor_injection else None
-                ),
+                anchor_token_ids=block_tokens[:, 0],
                 correct_predecessor_ids=correct_predecessor_ids,
                 curriculum_blocks=use_curriculum,
             )
@@ -275,8 +275,11 @@ class DSpineDraftModel(DFlashDraftModel):
         self, hidden_states: torch.Tensor, candidate_ids: torch.Tensor
     ) -> torch.Tensor:
         """Score selected vocabulary rows without materializing full logits."""
-        candidate_weights = self.lm_head.weight[candidate_ids]
-        return torch.einsum("...h,...kh->...k", hidden_states, candidate_weights)
+        with torch.autocast(device_type=hidden_states.device.type, enabled=False):
+            candidate_weights = self.lm_head.weight[candidate_ids].float()
+            return torch.einsum(
+                "...h,...kh->...k", hidden_states.float(), candidate_weights
+            )
 
     @conditional_torch_compile
     def forward(
@@ -315,13 +318,21 @@ class DSpineDraftModel(DFlashDraftModel):
 
         candidate_ids = unary_logits.topk(self.config.transition_top_k, dim=-1).indices
 
-        correct_predecessor_features = self.injection.token_features(
-            self.transfer_embeddings, block_tokens[:, :-1]
-        )
+        correct_predecessor_features = self.transfer_embeddings[
+            block_tokens[:, :-1]
+        ].float() * math.sqrt(self.config.transfer_dim)
         refined_successors = self.injection.last_write(
             final_pre_injection, correct_predecessor_features
         )
-        refined_hidden = self.norm(refined_successors)
+        with torch.autocast(device_type=refined_successors.device.type, enabled=False):
+            refined_hidden = (
+                refined_successors
+                / (
+                    refined_successors.square().mean(-1, keepdim=True)
+                    + self.norm.variance_epsilon
+                ).sqrt()
+                * self.norm.weight.float()
+            )
 
         candidate_blocks = candidate_ids.view(
             max_anchors, self.block_size, self.config.transition_top_k
@@ -329,7 +340,9 @@ class DSpineDraftModel(DFlashDraftModel):
         refined_logits = self._compute_candidate_logits(
             refined_hidden, candidate_blocks[:, 1:]
         )
-        refined_candidate_logits = unary_logits.new_zeros(candidate_ids.shape)
+        refined_candidate_logits = unary_logits.new_zeros(
+            candidate_ids.shape, dtype=torch.float32
+        )
         refined_candidate_logits[:, :: self.block_size] = unary_logits[
             :, :: self.block_size
         ].gather(-1, candidate_ids[:, :: self.block_size])

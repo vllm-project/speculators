@@ -21,7 +21,6 @@ python -m speculators.train \
     --block-size 16 \
     --transfer-dim 1024 \
     --message-dim 512 \
-    --transition-top-k 16 \
-    --known-anchor-injection
+    --transition-top-k 16
 
-python -c 'import json, sys; from pathlib import Path; c=json.loads((Path(sys.argv[1]) / "config.json").read_text()); assert c["transformer_layer_config"]["is_causal"] is True; assert c["known_anchor_injection"] is True; assert c["block_size"] == 16; assert c["sample_from_anchor"] is False; print("DSpine checkpoint: known anchor, 15 draft proposals")' "$SAVE_PATH"
+python -c 'import json, sys; from pathlib import Path; c=json.loads((Path(sys.argv[1]) / "config.json").read_text()); assert c["transformer_layer_config"]["is_causal"] is True; assert c["block_size"] == 16; assert c["sample_from_anchor"] is False; print("DSpine checkpoint: known anchor, 15 draft proposals")' "$SAVE_PATH"

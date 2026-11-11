@@ -1,6 +1,6 @@
-from typing import Literal
+from typing import Literal, Self
 
-from pydantic import Field
+from pydantic import Field, model_validator
 
 from speculators import SpeculatorModelConfig
 from speculators.models.dflash.config import DFlashSpeculatorConfig
@@ -18,14 +18,6 @@ class DSpineSpeculatorConfig(DFlashSpeculatorConfig):
     architectures: list[str] = Field(
         default_factory=lambda: ["DSpineDraftModel"],
         description="Model architectures that can load these weights",
-    )
-    known_anchor_injection: bool = Field(
-        default=False,
-        description=(
-            "Use the known anchor's transfer embedding in every injection layer. "
-            "False preserves checkpoints created before this field was introduced; "
-            "new training defaults to True."
-        ),
     )
     transfer_dim: int = Field(
         default=1024,
@@ -92,3 +84,10 @@ class DSpineSpeculatorConfig(DFlashSpeculatorConfig):
         gt=0.0,
         description="Numerical floor used by PCA whitening and normalization.",
     )
+
+    @model_validator(mode="after")
+    def _require_causal_attention(self) -> Self:
+        if getattr(self.transformer_layer_config, "is_causal", None) is False:
+            raise ValueError("DSpine requires causal attention.")
+        self.transformer_layer_config.is_causal = True
+        return self

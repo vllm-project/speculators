@@ -238,7 +238,6 @@ def test_dspine_qwen3_8b_sharegpt(tmp_path: Path, prompts: list[list[dict[str, s
                 "3",
                 "--dflash-decay-gamma",
                 "7",
-                "--known-anchor-injection",
                 "--no-sample-from-anchor",
             ],
         )

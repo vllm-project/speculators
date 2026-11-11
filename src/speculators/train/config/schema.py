@@ -621,11 +621,6 @@ class XPressArgs(_Group):
 class DSpineArgs(_Group):
     """DSpine-exclusive injection, refinement, and supervision knobs."""
 
-    known_anchor_injection: bool = Field(
-        default=True,
-        description="DSpine: inject the known anchor token's transfer embedding.",
-    )
-
     transfer_dim: int = Field(
         default=1024, ge=1, description="DSpine: transfer-space dimension."
     )

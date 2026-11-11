@@ -13,11 +13,6 @@ __all__ = [
 ]
 
 
-def _scaled_normalize(x: torch.Tensor, dimension: int, eps: float) -> torch.Tensor:
-    normalized = functional.normalize(x.float(), dim=-1, eps=eps)
-    return normalized.to(x.dtype) * math.sqrt(dimension)
-
-
 @torch.no_grad()
 def build_output_embedding_transfer_space(
     output_embeddings: torch.Tensor,
@@ -145,16 +140,32 @@ class AdjacentCausalInjection(nn.Module):
             weight = cast("nn.Linear", layer_readout).weight
             weight.copy_(readout.to(weight))
 
+    @staticmethod
+    def rms(states: torch.Tensor) -> torch.Tensor:
+        return (
+            states.float()
+            .square()
+            .mean(-1, keepdim=True)
+            .clamp_min(torch.finfo(torch.float32).tiny)
+            .sqrt()
+        )
+
     def project(self, layer_idx: int, hidden_states: torch.Tensor) -> torch.Tensor:
-        projected = self.readouts[layer_idx](hidden_states)
-        return _scaled_normalize(projected, self.transfer_dim, self.eps)
+        normalized = hidden_states.float() / (self.rms(hidden_states) + self.eps)
+        projected = self.readouts[layer_idx](normalized.to(hidden_states.dtype)).float()
+        features = (
+            math.sqrt(self.transfer_dim)
+            * projected
+            / (projected.norm(dim=-1, keepdim=True) + self.eps)
+        )
+        return features.to(hidden_states.dtype)
 
     def token_features(
         self, transfer_embeddings: torch.Tensor, token_ids: torch.Tensor
     ) -> torch.Tensor:
-        return transfer_embeddings[token_ids.long()].to(
-            self.gate_bias.dtype
-        ) * math.sqrt(self.transfer_dim)
+        return (
+            transfer_embeddings[token_ids.long()].float() * math.sqrt(self.transfer_dim)
+        ).to(transfer_embeddings.dtype)
 
     def _write(
         self,
@@ -164,23 +175,23 @@ class AdjacentCausalInjection(nn.Module):
         predecessor_features: torch.Tensor,
     ) -> torch.Tensor:
         gate = torch.sigmoid(
-            self.receiver_gate(receiver_features)
-            + self.predecessor_gate(predecessor_features)
-            + self.gate_bias
+            self.receiver_gate(receiver_features).float()
+            + self.predecessor_gate(predecessor_features).float()
+            + self.gate_bias.float()
         )
-        message = self.message(predecessor_features)
-        update = self.writes[layer_idx](gate * message)
-        rms = receiver_states.float().square().mean(dim=-1, keepdim=True)
-        rms = rms.add(self.eps).sqrt().to(receiver_states.dtype)
-        return receiver_states + rms * update.to(receiver_states.dtype)
+        message = gate * self.message(predecessor_features).float()
+        update = self.writes[layer_idx](message.to(receiver_states.dtype)).float()
+        return (receiver_states.float() + self.rms(receiver_states) * update).to(
+            receiver_states.dtype
+        )
 
     def inject_layer(
         self,
         layer_idx: int,
         pre_injection_states: torch.Tensor,
         *,
-        transfer_embeddings: torch.Tensor | None = None,
-        anchor_token_ids: torch.Tensor | None = None,
+        transfer_embeddings: torch.Tensor,
+        anchor_token_ids: torch.Tensor,
         correct_predecessor_ids: torch.Tensor | None = None,
         curriculum_blocks: torch.Tensor | None = None,
     ) -> tuple[torch.Tensor, torch.Tensor]:
@@ -191,10 +202,8 @@ class AdjacentCausalInjection(nn.Module):
         predecessor = features[:, :-1]
 
         if curriculum_blocks is not None:
-            if transfer_embeddings is None or correct_predecessor_ids is None:
-                raise ValueError(
-                    "curriculum requires transfer embeddings and predecessor IDs"
-                )
+            if correct_predecessor_ids is None:
+                raise ValueError("curriculum requires predecessor IDs")
             correct = self.token_features(transfer_embeddings, correct_predecessor_ids)
             predecessor = torch.where(
                 curriculum_blocks.reshape(-1, 1, 1),
@@ -202,14 +211,11 @@ class AdjacentCausalInjection(nn.Module):
                 predecessor,
             )
 
-        if anchor_token_ids is not None:
-            if transfer_embeddings is None:
-                raise ValueError("known-anchor injection requires transfer embeddings")
-            anchor_features = self.token_features(transfer_embeddings, anchor_token_ids)
-            predecessor = torch.cat(
-                (anchor_features.reshape(-1, 1, self.transfer_dim), predecessor[:, 1:]),
-                dim=1,
-            )
+        anchor_features = self.token_features(transfer_embeddings, anchor_token_ids)
+        predecessor = torch.cat(
+            (anchor_features.reshape(-1, 1, self.transfer_dim), predecessor[:, 1:]),
+            dim=1,
+        )
 
         successors = self._write(
             layer_idx,
@@ -229,9 +235,20 @@ class AdjacentCausalInjection(nn.Module):
         layer_idx = self.num_layers - 1
         blocks = pre_injection_states.reshape(-1, self.block_size, self.hidden_size)
         receiver_features = self.project(layer_idx, blocks[:, 1:])
-        return self._write(
-            layer_idx,
-            blocks[:, 1:],
-            receiver_features,
-            predecessor_features,
-        )
+        receiver_query = self.receiver_gate(receiver_features).float()
+        with torch.autocast(device_type=blocks.device.type, enabled=False):
+            exact_features = predecessor_features.float()
+            gate = torch.sigmoid(
+                receiver_query
+                + functional.linear(
+                    exact_features, self.predecessor_gate.weight.float()
+                )
+                + self.gate_bias.float()
+            )
+            message = gate * functional.linear(
+                exact_features, self.message.weight.float()
+            )
+            write_weight = cast("nn.Linear", self.writes[layer_idx]).weight
+            update = functional.linear(message, write_weight.float())
+            states = blocks[:, 1:]
+            return states.float() + self.rms(states) * update

@@ -15,7 +15,6 @@ from speculators.models.dspine.model_definitions import (
     build_output_embedding_transfer_space,
 )
 from speculators.proposals import GreedyTokenProposalConfig
-from speculators.train.config.schema import DSpineArgs
 
 
 def _tiny_config(**overrides) -> DSpineSpeculatorConfig:
@@ -29,7 +28,6 @@ def _tiny_config(**overrides) -> DSpineSpeculatorConfig:
         vocab_size=16,
         _attn_implementation="eager",  # type: ignore[call-arg]
     )
-    transformer_config.is_causal = True
     values: dict[str, Any] = {
         "transformer_layer_config": transformer_config,
         "draft_vocab_size": 16,
@@ -40,7 +38,6 @@ def _tiny_config(**overrides) -> DSpineSpeculatorConfig:
         "message_dim": 3,
         "transition_top_k": 2,
         "curriculum_layers": 2,
-        "known_anchor_injection": True,
     }
     values.update(overrides)
     return DSpineSpeculatorConfig(**values)
@@ -76,7 +73,12 @@ def test_injection_starts_as_identity_and_keeps_anchor_unchanged():
     )
     hidden = torch.randn(1, 8, 8)
 
-    output, features = injection.inject_layer(0, hidden)
+    output, features = injection.inject_layer(
+        0,
+        hidden,
+        transfer_embeddings=torch.randn(2, 4),
+        anchor_token_ids=torch.tensor([0, 1]),
+    )
 
     torch.testing.assert_close(output, hidden)
     assert features.shape == (1, 8, 4)
@@ -100,7 +102,12 @@ def test_injection_never_crosses_block_boundaries():
         cast("torch.nn.Linear", injection.writes[0]).weight.copy_(torch.eye(2))
     hidden = torch.tensor([[[1.0, 0.0], [0.0, 1.0], [0.0, 2.0], [1.0, 0.0]]])
 
-    output, _ = injection.inject_layer(0, hidden)
+    output, _ = injection.inject_layer(
+        0,
+        hidden,
+        transfer_embeddings=torch.eye(2),
+        anchor_token_ids=torch.tensor([0, 1]),
+    )
 
     torch.testing.assert_close(output[:, 0], hidden[:, 0])
     torch.testing.assert_close(output[:, 2], hidden[:, 2])
@@ -124,6 +131,7 @@ def test_curriculum_replaces_predecessors_per_block():
         0,
         hidden,
         transfer_embeddings=transfer_embeddings,
+        anchor_token_ids=predecessor_ids[:, 0],
         correct_predecessor_ids=predecessor_ids,
         curriculum_blocks=torch.tensor([True, False]),
     )
@@ -144,11 +152,17 @@ def test_known_anchor_uses_token_feature_independently_of_curriculum(curriculum)
     hidden = torch.randn(2, 3, 4)
     transfer_embeddings = torch.nn.functional.normalize(torch.randn(7, 2), dim=-1)
     predecessor_ids = torch.tensor([[1, 2], [3, 4]])
+    rms = (
+        hidden.square()
+        .mean(-1, keepdim=True)
+        .clamp_min(torch.finfo(torch.float32).tiny)
+        .sqrt()
+    )
+    projected = (hidden / (rms + injection.eps)) @ cast(
+        "torch.nn.Linear", injection.readouts[0]
+    ).weight.T
     features = (
-        torch.nn.functional.normalize(
-            hidden @ cast("torch.nn.Linear", injection.readouts[0]).weight.T, dim=-1
-        )
-        * 2**0.5
+        2**0.5 * projected / (projected.norm(dim=-1, keepdim=True) + injection.eps)
     )
     predecessor = features[:, :-1].clone()
     predecessor[:, 0] = transfer_embeddings[predecessor_ids[:, 0]] * 2**0.5
@@ -161,8 +175,7 @@ def test_known_anchor_uses_token_feature_independently_of_curriculum(curriculum)
     )
     update = gate * (predecessor @ injection.message.weight.T)
     update = update @ cast("torch.nn.Linear", injection.writes[0]).weight.T
-    rms = (hidden[:, 1:].square().mean(-1, keepdim=True) + injection.eps).sqrt()
-    expected = torch.cat((hidden[:, :1], hidden[:, 1:] + rms * update), dim=1)
+    expected = torch.cat((hidden[:, :1], hidden[:, 1:] + rms[:, 1:] * update), dim=1)
 
     actual, post_features = injection.inject_layer(
         0,
@@ -199,17 +212,9 @@ def test_config_round_trip_preserves_dspine_contract(tmp_path):
     assert loaded.speculators_config.algorithm == "dspine"
     assert loaded.architectures == ["DSpineDraftModel"]
     assert loaded.transformer_layer_config.is_causal is True
-    assert loaded.known_anchor_injection is True
     assert loaded.transfer_dim == 4
     assert loaded.message_dim == 3
     assert loaded.transition_top_k == 2
-
-
-def test_legacy_checkpoint_keeps_predicted_anchor_but_new_training_uses_known_token():
-    legacy = _tiny_config().model_dump(exclude_none=True)
-    legacy.pop("known_anchor_injection")
-    assert DSpineSpeculatorConfig(**legacy).known_anchor_injection is False
-    assert DSpineArgs().known_anchor_injection is True
 
 
 def test_checkpoint_round_trip_preserves_transfer_and_injection(tmp_path):
@@ -245,6 +250,13 @@ def test_checkpoint_round_trip_preserves_transfer_and_injection(tmp_path):
     )
 
 
+def test_config_rejects_non_causal_attention():
+    transformer_config = _tiny_config().transformer_layer_config
+    transformer_config.is_causal = False
+    with pytest.raises(ValueError, match="DSpine requires causal attention"):
+        _tiny_config(transformer_layer_config=transformer_config)
+
+
 def test_model_rejects_pruned_draft_vocabulary():
     with pytest.raises(ValueError, match="full verifier vocabulary"):
         DSpineDraftModel(_tiny_config(draft_vocab_size=8))
@@ -255,7 +267,7 @@ def test_model_rejects_sampling_from_anchor():
         DSpineDraftModel(_tiny_config(sample_from_anchor=True))
 
 
-def test_candidate_logits_preserve_bfloat16_autocast():
+def test_candidate_logits_keep_float32_under_autocast():
     torch.manual_seed(25)
     model = DSpineDraftModel(_tiny_config()).float()
     with torch.no_grad():
@@ -265,9 +277,10 @@ def test_candidate_logits_preserve_bfloat16_autocast():
 
     with torch.autocast("cpu", dtype=torch.bfloat16):
         actual = model._compute_candidate_logits(hidden, candidates)
+    with torch.autocast("cpu", enabled=False):
         expected = model.lm_head(hidden).gather(-1, candidates)
 
-    assert actual.dtype == expected.dtype == torch.bfloat16
+    assert actual.dtype == expected.dtype == torch.float32
     torch.testing.assert_close(actual, expected)
     upstream = torch.randn_like(actual)
     actual_grad = torch.autograd.grad(actual, hidden, upstream, retain_graph=True)[0]
