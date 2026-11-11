@@ -24,7 +24,10 @@ def test_mtp_verifier_weights_frozen_after_from_pretrained(tmp_path: Path):
         validate=False,
     )
 
-    model = MTPDraftModel.from_pretrained(str(out))
+    # flex attention has no CPU backward; sdpa, as --draft-attn-impl selects it
+    config = MTPDraftModel.config_class.from_pretrained(str(out))
+    config.transformer_layer_config._attn_implementation = "sdpa"
+    model = MTPDraftModel.from_pretrained(str(out), config=config)
     assert isinstance(model, MTPDraftModel)
     model.train()
 
@@ -34,7 +37,11 @@ def test_mtp_verifier_weights_frozen_after_from_pretrained(tmp_path: Path):
     vc = model.config.transformer_layer_config
     input_ids = torch.randint(0, vc.vocab_size, (1, 32))
     hidden_states = torch.randn(1, 32, vc.hidden_size, dtype=torch.bfloat16)
-    _, loss, _ = model(input_ids=input_ids, hidden_states=hidden_states)
+    _, loss, _ = model(
+        input_ids=input_ids,
+        hidden_states=hidden_states,
+        document_ids=torch.zeros_like(input_ids),
+    )
     loss.backward()
 
     assert model.embed_tokens.weight.grad is None
