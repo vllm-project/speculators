@@ -36,17 +36,35 @@ GEMMA_STYLE_FINAL_NORM_MODEL_TYPES = frozenset(
 
 @cache
 def _verifier_model_type(name_or_path: str) -> str | None:
-    """The verifier's effective model_type, or None when unresolvable."""
+    """The verifier's effective model_type, or None when unresolvable.
+
+    Read from config.json; AutoConfig needs trust_remote_code for auto_map verifiers.
+    """
     try:
-        verifier_config = get_verifier_config(name_or_path)
-    except (KeyError, OSError, ValueError):
+        config_dict, _ = PretrainedConfig.get_config_dict(name_or_path)
+    except (KeyError, OSError, ValueError) as err:
         logger.warning(
-            "Could not resolve a config for verifier %s; assuming the plain "
-            "final-norm convention (x * w).",
+            "Could not read a config.json for verifier %s (%s): %s. Falling back to "
+            "the plain final-norm convention (x * w); if this verifier's final norm "
+            "is not x * w its reconstructed training targets will be mis-scaled.",
+            name_or_path,
+            type(err).__name__,
+            err,
+        )
+        return None
+    text_config = config_dict.get("text_config")
+    if isinstance(text_config, dict) and text_config.get("model_type"):
+        return str(text_config["model_type"]).lower()
+    model_type = str(config_dict.get("model_type", "") or "").lower()
+    if not model_type:
+        logger.warning(
+            "config.json for verifier %s declares no model_type. Falling back to "
+            "the plain final-norm convention (x * w); if this verifier's final norm "
+            "is not x * w its reconstructed training targets will be mis-scaled.",
             name_or_path,
         )
         return None
-    return str(getattr(verifier_config, "model_type", "") or "").lower()
+    return model_type
 
 
 def uses_gemma_style_final_norm(config) -> bool:

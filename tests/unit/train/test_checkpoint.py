@@ -1,3 +1,4 @@
+import json
 import os
 import signal
 from pathlib import Path
@@ -288,3 +289,34 @@ def test_graceful_shutdown_saves_interrupted_checkpoint(
     trainer.run_training()
 
     assert "interrupted" in saved_labels
+
+
+def test_save_best_persists_training_state_for_resume(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+):
+    trainer = _make_minimal_trainer(tmp_path, checkpoint_freq=1, save_best=True)
+    trainer.global_step = 12
+
+    def fake_cp_save_checkpoint(_model, _opt, epoch: int):
+        (tmp_path / str(epoch)).mkdir(exist_ok=True)
+
+    monkeypatch.setattr(
+        trainer.checkpointer, "save_checkpoint", fake_cp_save_checkpoint
+    )
+
+    trainer.maybe_update_best(0, {"loss_epoch": 0.4})
+
+    state_path = tmp_path / "0" / "training_state.json"
+    assert state_path.exists()
+    state = json.loads(state_path.read_text())
+    assert state["global_step"] == 12
+    assert state["local_step"] == 0
+    assert state["epoch"] == 0
+
+    resume = _make_minimal_trainer(tmp_path, checkpoint_freq=1, save_best=True)
+    resume.resume_from_checkpoint = True
+    assert resume.checkpointer.previous_epoch == 0
+    resume.setup_trainer()
+    assert resume.global_step == 12
+    assert resume.current_epoch == 1
+    assert resume._resume_local_step == 0
