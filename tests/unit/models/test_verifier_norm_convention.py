@@ -3,7 +3,7 @@
 Some verifier families store the final RMSNorm weight in the Gemma
 convention — the applied gain is ``1 + w`` — while a plain ``Qwen3RMSNorm``
 applies gain ``w``. This family includes Gemma itself, the Qwen3.5/Qwen3.8
-models, Qwen3-Next and Step3.5, whose final norms vLLM builds from
+models, Qwen3-Next, Step3.5 and MiniMax-M3, whose final norms vLLM builds from
 ``GemmaRMSNorm``.
 The frozen ``verifier_norm`` must therefore be constructed from the class
 matching the verifier's convention, or the reconstructed verifier targets
@@ -13,6 +13,7 @@ are silently mis-scaled.
 from __future__ import annotations
 
 import json
+from types import SimpleNamespace
 from typing import cast
 
 import pytest
@@ -70,6 +71,8 @@ def _point_at_fake_verifier(
         ("step3p7", "step3p5", True),
         ("gemma3_text", "", True),
         ("gemma2", "", True),
+        ("minimax_m3_vl", "", True),
+        ("minimax_m3_vl", "minimax_m3_vl_text", True),
         ("gemma3n", "", False),  # dropped the (1 + w) convention
         ("gemma4", "gemma4_text", False),  # dropped the (1 + w) convention
         ("qwen3", "", False),
@@ -84,6 +87,8 @@ def _point_at_fake_verifier(
         "step3p5_text_nested",
         "gemma3_text",
         "gemma2",
+        "minimax_m3_vl",
+        "minimax_m3_vl_text_nested",
         "gemma3n_negative",
         "gemma4_negative",
         "qwen3_negative",
@@ -97,6 +102,20 @@ def test_detection_by_verifier_model_type(
     _point_at_fake_verifier(model, tmp_path, model_type, text_model_type)
     assert uses_gemma_style_final_norm(model.config) is expected
     assert (resolve_verifier_norm_class(model.config) is Gemma3RMSNorm) is expected
+
+
+def test_minimax_outer_model_type(tmp_path, monkeypatch: pytest.MonkeyPatch):
+    """The outer ``minimax_m3_vl`` type is matched when no text_config is split off."""
+    monkeypatch.setattr(
+        "speculators.models.utils.get_verifier_config",
+        lambda *args, **kwargs: SimpleNamespace(model_type="minimax_m3_vl"),
+    )
+    model = _make_model(DFlashDraftModel, draft_vocab_size=64)
+    model.config.speculators_config.verifier.name_or_path = str(
+        tmp_path / "minimax_outer"
+    )
+    assert uses_gemma_style_final_norm(model.config)
+    assert resolve_verifier_norm_class(model.config) is Gemma3RMSNorm
 
 
 def test_unresolvable_verifier_defaults_to_plain(monkeypatch: pytest.MonkeyPatch):
