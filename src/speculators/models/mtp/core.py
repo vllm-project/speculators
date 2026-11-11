@@ -282,7 +282,7 @@ class MTPDraftModel(DraftVocabMixin, SpeculatorModel):
         self,
         input_ids: torch.Tensor,
         hidden_states: torch.Tensor,
-        document_ids: torch.Tensor | None = None,
+        document_ids: torch.Tensor,
         loss_mask: torch.Tensor | None = None,
         position_ids: torch.Tensor | None = None,
         step_weights: list[float] | None = None,
@@ -305,8 +305,7 @@ class MTPDraftModel(DraftVocabMixin, SpeculatorModel):
         :param input_ids: Token IDs [1, seq_len], packed documents.
         :param hidden_states: Verifier last-layer hidden states [1, seq_len, hidden].
         :param document_ids: Document index per position [1, seq_len], -1 for
-            padding (as the training collate produces). Derived from position
-            resets when omitted.
+            padding (as the training collate produces).
         :param loss_mask: Optional [1, seq_len]; 1 = supervise this target token.
         :param position_ids: Optional [1, seq_len]; Qwen3.5 also accepts the
             MRoPE layout [3, 1, seq_len].
@@ -337,14 +336,6 @@ class MTPDraftModel(DraftVocabMixin, SpeculatorModel):
             metrics["loss_total"] = torch.tensor(1.0, device=device)
             return (draft_tokens, total_loss, metrics)
 
-        if document_ids is None:
-            text_pos = (
-                position_ids[0]
-                if position_ids.ndim == _QWEN3_5_MROPE_POSITION_ID_RANK
-                else position_ids
-            )
-            # packed documents restart their positions at 0
-            document_ids = torch.cumsum(text_pos == 0, dim=-1) - 1
         doc = document_ids.reshape(-1).to(device=device, dtype=torch.long)
         supervised = (
             torch.ones(seq_len, dtype=torch.bool, device=device)

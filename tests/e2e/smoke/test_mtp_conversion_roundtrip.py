@@ -94,6 +94,7 @@ def test_mtp_roundtrip(tmp_path: Path, seed):
         logits_list, loss, _metrics = model(
             input_ids=input_ids,
             hidden_states=hidden_states,
+            document_ids=torch.zeros_like(input_ids),
         )
 
     assert len(logits_list) == model.config.num_speculative_steps

@@ -62,6 +62,7 @@ def test_forward_output_structure(mtp_model, seed):
         draft_tokens, total_loss, metrics = mtp_model(
             input_ids=input_ids,
             hidden_states=hidden_states,
+            document_ids=torch.zeros_like(input_ids),
         )
 
     assert len(draft_tokens) == num_steps
@@ -109,6 +110,7 @@ class TestLossMasking:
             _, total_loss, _ = mtp_model(
                 input_ids=input_ids,
                 hidden_states=hidden_states,
+                document_ids=torch.zeros_like(input_ids),
                 loss_mask=loss_mask,
             )
         assert total_loss == 0.0
@@ -119,14 +121,20 @@ class TestLossMasking:
         vocab_size = mtp_model.config.vocab_size
         input_ids = torch.randint(0, vocab_size, (BATCH, SEQ_LEN))
         hidden_states = torch.randn(BATCH, SEQ_LEN, hidden_size)
+        document_ids = torch.zeros_like(input_ids)
         with torch.no_grad():
             _, loss_no_mask, _ = mtp_model(
-                input_ids=input_ids, hidden_states=hidden_states
+                input_ids=input_ids,
+                hidden_states=hidden_states,
+                document_ids=document_ids,
             )
             mask = torch.ones(BATCH, SEQ_LEN)
             mask[:, -3:] = 0
             _, loss_partial_mask, _ = mtp_model(
-                input_ids=input_ids, hidden_states=hidden_states, loss_mask=mask
+                input_ids=input_ids,
+                hidden_states=hidden_states,
+                document_ids=document_ids,
+                loss_mask=mask,
             )
         assert loss_no_mask != loss_partial_mask
 
@@ -144,6 +152,7 @@ class TestStepWeights:
             _, _, metrics = mtp_model(
                 input_ids=input_ids,
                 hidden_states=hidden_states,
+                document_ids=torch.zeros_like(input_ids),
                 step_weights=[1.0, 0.0, 0.0],
             )
         assert metrics["loss_step_0"] > 0
@@ -165,6 +174,7 @@ def test_short_sequence_fewer_steps(mtp_model, seed):
         draft_tokens, _, _ = mtp_model(
             input_ids=input_ids,
             hidden_states=hidden_states,
+            document_ids=torch.zeros_like(input_ids),
         )
     assert len(draft_tokens) < num_steps
     assert len(draft_tokens) == 1
@@ -181,6 +191,11 @@ def test_ttt_forward_is_document_local(mtp_model, seed):
     seq_len = n + num_steps + 1
     position_ids = torch.zeros(1, seq_len, dtype=torch.long)
     position_ids[0, :n] = torch.cat([torch.arange(first), torch.arange(second)])
+    # two packed documents, then padding
+    document_ids = torch.full((1, seq_len), -1, dtype=torch.long)
+    document_ids[0, :n] = torch.cat(
+        [torch.zeros(first, dtype=torch.long), torch.ones(second, dtype=torch.long)]
+    )
     input_ids = torch.randint(0, mtp_model.config.vocab_size, (1, seq_len))
     hidden_states = torch.randn(1, seq_len, mtp_model.config.hidden_size)
 
@@ -189,6 +204,7 @@ def test_ttt_forward_is_document_local(mtp_model, seed):
             tokens, _, _ = mtp_model(
                 input_ids=ids,
                 hidden_states=hs,
+                document_ids=document_ids,
                 position_ids=position_ids,
             )
         return tokens
@@ -214,7 +230,11 @@ def test_forward_applies_frozen_verifier_norm(mtp_model, seed):
 
     def loss():
         with torch.no_grad():
-            return mtp_model(input_ids=input_ids, hidden_states=hidden_states)[1]
+            return mtp_model(
+                input_ids=input_ids,
+                hidden_states=hidden_states,
+                document_ids=torch.zeros_like(input_ids),
+            )[1]
 
     before = loss()
     # non-uniform: the MTP layer re-normalizes its hidden input, which would
