@@ -8,10 +8,10 @@ The repository's [CODEOWNERS file](https://github.com/vllm-project/speculators/b
 
 The owners listed for `src/speculators/` are:
 
-- [@shanjiaz](https://github.com/shanjiaz) — training, data generation, checkpoint conversion, and model implementations.
 - [@fynnsu](https://github.com/fynnsu) — training, data generation, checkpoint conversion, and model implementations.
 - [@rahul-tuli](https://github.com/rahul-tuli) — data generation, checkpoint conversion, and MTP models.
 - [@orestis-z](https://github.com/orestis-z) — P-Eagle, Eagle3, and DFlash models.
+- [@shanjiaz](https://github.com/shanjiaz) — training, data generation, checkpoint conversion, and model implementations.
 
 The file also lists reviewers for CI, tests, and repository configuration.
 
