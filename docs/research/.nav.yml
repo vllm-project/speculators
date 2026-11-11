@@ -1,3 +1,9 @@
 nav:
   - index.md
-  - "*.md"
+  - model-evaluations
+  - new-evaluations
+  - method-implementations
+  - dataset-ablations
+  - hyperparameter-tuning
+  - finetuning-experiments
+  - vllm-knobs

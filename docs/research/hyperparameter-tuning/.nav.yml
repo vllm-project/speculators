@@ -1,0 +1,6 @@
+nav:
+  - index.md
+  - TEMPLATE.md
+  - learning-rates
+  - block-sizes
+  - loss-functions

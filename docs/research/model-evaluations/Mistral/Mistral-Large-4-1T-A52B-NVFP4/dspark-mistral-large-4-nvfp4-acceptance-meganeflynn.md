@@ -104,7 +104,7 @@ Speculator-disabled reference (same flags minus `--speculative-config`, `--max-n
 
 Mean inter-token latency drops from 8.51 → 3.51 ms at one stream and 24.33 → 12.14 ms at 32 streams. Neither config queues (`mean_waiting_requests` ≈ 0 at every level). Acceptance length measured during the sweep was 3.12–3.18, consistent with the acceptance table (HumanEval 3.175).
 
-![Throughput versus interactivity, DSpark depth 3 vs target-only baseline](../assets/research/le-chonk-nvfp4-dspark-throughput-interactivity.png)
+![Throughput versus interactivity, DSpark depth 3 vs target-only baseline](../../../../assets/research/le-chonk-nvfp4-dspark-throughput-interactivity.png)
 
 ## Observations
 
