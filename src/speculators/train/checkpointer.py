@@ -238,7 +238,12 @@ class BaseCheckpointer:
         if not keep_dir.exists() or not keep_dir.is_dir():
             raise FileNotFoundError(f"Best epoch dir does not exist: {keep_dir}")
 
-        train_cmd_file = self.path / self.TRAIN_COMMAND_FILENAME
+        # Root provenance: run.yaml, train_command.txt, speculators.patch.
+        keep_names = {
+            self.TRAIN_COMMAND_FILENAME,
+            "run.yaml",
+            "speculators.patch",
+        }
 
         for child in self.path.iterdir():
             # Keep the symlink itself
@@ -249,7 +254,7 @@ class BaseCheckpointer:
             if child == keep_dir:
                 continue
 
-            if child == train_cmd_file:
+            if child.name in keep_names:
                 continue
 
             # Delete numbered epoch directories and any other stray dirs/files
