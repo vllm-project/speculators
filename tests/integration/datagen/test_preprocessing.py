@@ -67,6 +67,23 @@ def test_normalize_conversation_with_system():
 
 
 @pytest.mark.sanity
+def test_normalize_conversation_with_developer_role():
+    """The OpenAI Responses API 'developer' role is preserved as-is."""
+    conv = [
+        {"role": "developer", "content": "You are a coding tutor."},
+        {"role": "user", "content": "Hello"},
+        {"role": "assistant", "content": "Hi!"},
+    ]
+    result = _normalize_conversation(conv)
+
+    assert len(result) == 3
+    assert result[0]["role"] == "developer"
+    assert result[0]["content"] == "You are a coding tutor."
+    assert result[1]["role"] == "user"
+    assert result[2]["role"] == "assistant"
+
+
+@pytest.mark.sanity
 def test_normalize_conversation_unknown_role():
     """Test that unknown roles are mapped to assistant."""
     conv = [
