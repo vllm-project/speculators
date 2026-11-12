@@ -169,7 +169,7 @@ def _fake_exec(container_name, argv, *, timeout=None):
             "/tmp/pi.rc": b"0\n",
         }
         return subprocess.CompletedProcess(argv, 0, outputs[argv[1]], b"")
-    if argv[:2] == ["git", "-C"] and argv[-1] == "diff":
+    if argv[:2] == ["git", "-C"] and "diff" in argv:
         return subprocess.CompletedProcess(argv, 0, b"diff --git a/f b/f\n", b"")
     return subprocess.CompletedProcess(argv, 0, b"", b"")
 
@@ -252,7 +252,25 @@ def test_run_pi_trace_quotes_shell_arguments(tmp_path, monkeypatch):
     assert "model; rm -rf /" in tokens
     assert tokens[tokens.index("--tools") + 1] == "read, bash"
     assert "@/run-input/prompt.txt" in tokens
+    assert "/opt/pi-runtime/bin/pi" in tokens
+    assert pi_cmd.startswith("cd /testbed && PATH=/opt/pi-runtime/bin:")
     assert pi_cmd.count("> /tmp/pi.jsonl") == 1
+
+
+def test_run_pi_trace_captures_staged_and_unstaged_changes(tmp_path, monkeypatch):
+    _fake_docker(monkeypatch)
+    calls = []
+
+    def recording_exec(container_name, argv, *, timeout=None):
+        calls.append(argv)
+        return _fake_exec(container_name, argv, timeout=timeout)
+
+    monkeypatch.setattr(agentic_runner, "_docker_exec", recording_exec)
+
+    run_pi_trace(VALID, **_run_kwargs(tmp_path))
+
+    diff_calls = [argv for argv in calls if argv[3:4] == ["diff"]]
+    assert diff_calls == [["git", "-C", "/testbed", "diff", "HEAD"]]
 
 
 def test_run_pi_trace_sets_error_on_nonzero_rc(tmp_path, monkeypatch):

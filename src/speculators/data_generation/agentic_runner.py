@@ -346,7 +346,9 @@ def run_pi_trace(
             raise RuntimeError(f"git checkout {instance_id} failed: {stderr}")
 
         pi_cmd = (
-            f"cd {shlex.quote(_WORKDIR)} && pi "
+            f"cd {shlex.quote(_WORKDIR)} && "
+            "PATH=/opt/pi-runtime/bin:/opt/pi-runtime/node_modules/.bin:$PATH "
+            "/opt/pi-runtime/bin/pi "
             f"--provider {shlex.quote(pi_provider)} "
             f"--model {shlex.quote(pi_model)} --mode json --no-session "
             f"--tools {shlex.quote(tools)} "
@@ -370,7 +372,9 @@ def run_pi_trace(
             if pi_rc != 0:
                 result["error"] = f"Pi exited with code {pi_rc}"
 
-        diff = _docker_exec(name, ["git", "-C", _WORKDIR, "diff"], timeout=remaining())
+        diff = _docker_exec(
+            name, ["git", "-C", _WORKDIR, "diff", "HEAD"], timeout=remaining()
+        )
         patch_path.write_bytes(diff.stdout)
     except Exception as exc:
         if result["error"] is None:
