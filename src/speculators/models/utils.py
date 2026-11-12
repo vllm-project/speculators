@@ -14,15 +14,17 @@ logger = logging.getLogger(__name__)
 # `x_norm * (1 + w)` instead of the plain RMSNorm `x_norm * w`. Matched
 # exactly against the verifier's effective `model_type` (after text_config
 # extraction) — gemma3n and gemma4 dropped this convention, so prefix
-# matching would over-include. Qwen3.5, Qwen3-Next and Step3.5 are in here
-# because their transformers RMSNorm computes `output * (1.0 + weight)` and
-# vLLM uses GemmaRMSNorm for them.
+# matching would over-include. Qwen3.5, Qwen3-Next, Step3.5 and MiniMax-M3 are
+# in here because their transformers RMSNorm computes `output * (1.0 + weight)`
+# and vLLM uses GemmaRMSNorm for them.
 GEMMA_STYLE_FINAL_NORM_MODEL_TYPES = frozenset(
     (
         "gemma",
         "gemma2",
         "gemma3",
         "gemma3_text",
+        "minimax_m3_vl",
+        "minimax_m3_vl_text",
         "qwen3_5",
         "qwen3_5_text",
         "qwen3_5_moe",
@@ -36,17 +38,43 @@ GEMMA_STYLE_FINAL_NORM_MODEL_TYPES = frozenset(
 
 @cache
 def _verifier_model_type(name_or_path: str) -> str | None:
-    """The verifier's effective model_type, or None when unresolvable."""
+    """The verifier's effective model_type, or None when unresolvable.
+
+    Prefer the Transformers config, with a raw JSON fallback when it cannot load.
+    """
     try:
         verifier_config = get_verifier_config(name_or_path)
     except (KeyError, OSError, ValueError):
+        verifier_config = None
+    model_type = getattr(verifier_config, "model_type", None)
+    if model_type:
+        return str(model_type).lower()
+
+    try:
+        config_dict, _ = PretrainedConfig.get_config_dict(name_or_path)
+    except (KeyError, OSError, ValueError) as err:
         logger.warning(
-            "Could not resolve a config for verifier %s; assuming the plain "
-            "final-norm convention (x * w).",
+            "Could not read a config.json for verifier %s (%s): %s. Falling back to "
+            "the plain final-norm convention (x * w); if this verifier's final norm "
+            "is not x * w its reconstructed training targets will be mis-scaled.",
+            name_or_path,
+            type(err).__name__,
+            err,
+        )
+        return None
+    text_config = config_dict.get("text_config")
+    if isinstance(text_config, dict) and text_config.get("model_type"):
+        return str(text_config["model_type"]).lower()
+    model_type = str(config_dict.get("model_type", "") or "").lower()
+    if not model_type:
+        logger.warning(
+            "config.json for verifier %s declares no model_type. Falling back to "
+            "the plain final-norm convention (x * w); if this verifier's final norm "
+            "is not x * w its reconstructed training targets will be mis-scaled.",
             name_or_path,
         )
         return None
-    return str(getattr(verifier_config, "model_type", "") or "").lower()
+    return model_type
 
 
 def uses_gemma_style_final_norm(config) -> bool:

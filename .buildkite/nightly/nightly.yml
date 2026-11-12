@@ -203,6 +203,19 @@ steps:
                           secretKeyRef:
                             name: hf-token-secret
                             key: token
+                      - name: NODE_NAME
+                        valueFrom:
+                          fieldRef:
+                            fieldPath: spec.nodeName
+                      - name: SPECULATORS_METRICS_DIR
+                        value: "/tmp/ci-metrics"
+                      - name: METRICS_REMOTE_URL
+                        value: "https://github.com/orestis-z/speculators-metrics.git"
+                      - name: SPECULATORS_METRICS_TOKEN
+                        valueFrom:
+                          secretKeyRef:
+                            name: speculators-metrics-token
+                            key: token
 
                 volumes:
                   - name: ci-cache
@@ -291,6 +304,19 @@ steps:
                         valueFrom:
                           secretKeyRef:
                             name: hf-token-secret
+                            key: token
+                      - name: NODE_NAME
+                        valueFrom:
+                          fieldRef:
+                            fieldPath: spec.nodeName
+                      - name: SPECULATORS_METRICS_DIR
+                        value: "/tmp/ci-metrics"
+                      - name: METRICS_REMOTE_URL
+                        value: "https://github.com/orestis-z/speculators-metrics.git"
+                      - name: SPECULATORS_METRICS_TOKEN
+                        valueFrom:
+                          secretKeyRef:
+                            name: speculators-metrics-token
                             key: token
 
                 volumes:
