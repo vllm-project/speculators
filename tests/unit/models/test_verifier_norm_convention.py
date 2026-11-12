@@ -123,7 +123,7 @@ def test_unresolvable_verifier_defaults_to_plain(monkeypatch: pytest.MonkeyPatch
 
     calls: list[str] = []
 
-    def _raise(name_or_path, *args, **kwargs):
+    def _raise(name_or_path, /, *args, **kwargs):
         calls.append(name_or_path)
         raise OSError("cannot resolve")
 
@@ -139,7 +139,7 @@ def test_unresolvable_verifier_defaults_to_plain(monkeypatch: pytest.MonkeyPatch
 
 def test_missing_model_type_is_unresolved(tmp_path, caplog: pytest.LogCaptureFixture):
     """A config.json without model_type is unresolved and warns, not a silent ''."""
-    verifier_dir = tmp_path / "gemma3_no_model_type"
+    verifier_dir = tmp_path / "missing_type"
     verifier_dir.mkdir()
     (verifier_dir / "config.json").write_text(json.dumps({"hidden_size": 16}))
 

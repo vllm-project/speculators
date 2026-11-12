@@ -40,8 +40,16 @@ GEMMA_STYLE_FINAL_NORM_MODEL_TYPES = frozenset(
 def _verifier_model_type(name_or_path: str) -> str | None:
     """The verifier's effective model_type, or None when unresolvable.
 
-    Read from config.json; AutoConfig needs trust_remote_code for auto_map verifiers.
+    Prefer the Transformers config, with a raw JSON fallback when it cannot load.
     """
+    try:
+        verifier_config = get_verifier_config(name_or_path)
+    except (KeyError, OSError, ValueError):
+        verifier_config = None
+    model_type = getattr(verifier_config, "model_type", None)
+    if model_type:
+        return str(model_type).lower()
+
     try:
         config_dict, _ = PretrainedConfig.get_config_dict(name_or_path)
     except (KeyError, OSError, ValueError) as err:
