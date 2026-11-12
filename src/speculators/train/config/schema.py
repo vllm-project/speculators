@@ -28,6 +28,7 @@ from speculators.data_generation.vllm_client import (
     DEFAULT_MAX_RETRIES,
     DEFAULT_REQUEST_TIMEOUT,
 )
+from speculators.dspine_settings import DSpineSettings
 from speculators.losses import resolve_loss_config
 
 # A bool that must render as an argparse ``--x/--no-x`` (``BooleanOptionalAction``)
@@ -618,68 +619,8 @@ class XPressArgs(_Group):
     )
 
 
-class DSpineArgs(_Group):
+class DSpineArgs(DSpineSettings, _Group):
     """DSpine-exclusive injection, refinement, and supervision knobs."""
-
-    transfer_dim: int = Field(
-        default=1024, ge=1, description="DSpine: transfer-space dimension."
-    )
-    message_dim: int = Field(
-        default=512, ge=1, description="DSpine: gated message dimension."
-    )
-    transition_top_k: int = Field(
-        default=16, ge=1, description="DSpine: transition-cache candidate count."
-    )
-    distribution_loss_alpha: float = Field(
-        default=0.1,
-        ge=0.0,
-        le=1.0,
-        description="DSpine: CE weight in the CE/L1 distribution objective.",
-    )
-    embedding_loss_beta: float = Field(
-        default=0.5,
-        ge=0.0,
-        description="DSpine: maximum embedding-supervision multiplier.",
-    )
-    embedding_loss_warmup_steps: int = Field(
-        default=146,
-        ge=0,
-        description="DSpine: embedding-supervision linear warmup steps.",
-    )
-    curriculum_probability: float = Field(
-        default=0.5,
-        ge=0.0,
-        le=1.0,
-        description="DSpine: initial correct-predecessor substitution probability.",
-    )
-    curriculum_hold_ratio: float = Field(
-        default=1.0 / 6.0,
-        ge=0.0,
-        le=1.0,
-        description="DSpine: fraction of training holding curriculum probability.",
-    )
-    curriculum_end_ratio: float = Field(
-        default=1.0 / 3.0,
-        ge=0.0,
-        le=1.0,
-        description="DSpine: fraction of training where curriculum reaches zero.",
-    )
-    curriculum_layers: int = Field(
-        default=3,
-        ge=0,
-        description="DSpine: number of shallow curriculum layers.",
-    )
-    transition_min_target_mass: float = Field(
-        default=1e-4,
-        ge=0.0,
-        le=1.0,
-        description="DSpine: minimum top-k target mass for refinement L1.",
-    )
-    transfer_space_eps: float = Field(
-        default=1e-6,
-        gt=0.0,
-        description="DSpine: PCA-whitening numerical epsilon.",
-    )
 
 
 class PEagleArgs(_Group):

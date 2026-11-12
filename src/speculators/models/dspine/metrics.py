@@ -105,24 +105,19 @@ def compute_dspine_loss(
     loss = distribution_loss + embedding_lambda * embedding_loss
 
     one = unary_logits.new_ones(())
-    metrics: dict[str, Any] = {
-        "loss_sum": loss.detach().clone(),
-        "loss_total": one,
-        "distribution_loss_sum": distribution_loss.detach().clone(),
-        "distribution_loss_total": one.clone(),
-        "unary_ce_sum": unary_ce.detach().clone(),
-        "unary_ce_total": one.clone(),
-        "unary_l1_sum": unary_l1.detach().clone(),
-        "unary_l1_total": one.clone(),
-        "refined_ce_sum": refined_ce.detach().clone(),
-        "refined_ce_total": one.clone(),
-        "refined_l1_sum": refined_l1.detach().clone(),
-        "refined_l1_total": one.clone(),
-        "embedding_loss_sum": embedding_loss.detach().clone(),
-        "embedding_loss_total": one.clone(),
-        "embedding_lambda_sum": embedding_lambda.detach().clone(),
-        "embedding_lambda_total": one.clone(),
-    }
+    metrics: dict[str, Any] = {}
+    for name, value in {
+        "loss": loss,
+        "distribution_loss": distribution_loss,
+        "unary_ce": unary_ce,
+        "unary_l1": unary_l1,
+        "refined_ce": refined_ce,
+        "refined_l1": refined_l1,
+        "embedding_loss": embedding_loss,
+        "embedding_lambda": embedding_lambda,
+    }.items():
+        metrics[f"{name}_sum"] = value.detach().clone()
+        metrics[f"{name}_total"] = one.clone()
 
     with torch.no_grad():
         # Keep diagnostics referenced to the actual training tokens.
@@ -139,7 +134,7 @@ def compute_dspine_loss(
         selected_ids = candidate_ids.gather(
             -1, refined_candidate_logits.argmax(dim=-1, keepdim=True)
         ).squeeze(-1)
-        correct = selected_ids.eq(target_ids) & contains_target
+        correct = selected_ids.eq(target_ids)
         start_pos = 1
         # Match DFlash2/DSpark's token accuracy metric names and shared helper.
         correct_per_pos, total_per_pos = compute_accuracy_multi_step(
@@ -152,17 +147,14 @@ def compute_dspine_loss(
             metrics[f"position_{pos}_acc_total"] = total_per_pos[pos]
 
         num_blocks = seq_len // block_size
-        eal_sum, eal_total = compute_accepted_length_counts(
-            correct.view(num_blocks, block_size)[:, start_pos:],
-            valid.view(num_blocks, block_size)[:, start_pos:],
-        )
+        draft_correct = correct.view(num_blocks, block_size)[:, start_pos:]
+        draft_valid = valid.view(num_blocks, block_size)[:, start_pos:]
+        eal_sum, eal_total = compute_accepted_length_counts(draft_correct, draft_valid)
         metrics["eal_sum"] = eal_sum
         metrics["eal_total"] = eal_total
 
         # Teacher-forced prefix acceptance, excluding the known anchor.
         # Position 1 is the first draft token (paper p. 3, Section 2.1).
-        draft_correct = correct.view(num_blocks, block_size)[:, start_pos:]
-        draft_valid = valid.view(num_blocks, block_size)[:, start_pos:]
         accepted_prefix = (draft_correct & draft_valid).to(torch.float32).cumprod(-1)
         accepted_per_position = accepted_prefix.sum(dim=0)
         for position in range(block_size - start_pos):

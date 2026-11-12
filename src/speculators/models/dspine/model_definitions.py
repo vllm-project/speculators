@@ -105,7 +105,6 @@ class AdjacentCausalInjection(nn.Module):
         super().__init__()
         self.hidden_size = hidden_size
         self.transfer_dim = transfer_dim
-        self.message_dim = message_dim
         self.num_layers = num_layers
         self.block_size = block_size
         self.eps = eps
@@ -191,8 +190,7 @@ class AdjacentCausalInjection(nn.Module):
         pre_injection_states: torch.Tensor,
         *,
         transfer_embeddings: torch.Tensor,
-        anchor_token_ids: torch.Tensor,
-        correct_predecessor_ids: torch.Tensor | None = None,
+        block_tokens: torch.Tensor,
         curriculum_blocks: torch.Tensor | None = None,
     ) -> tuple[torch.Tensor, torch.Tensor]:
         """Inject every predecessor into its successor without crossing blocks."""
@@ -202,16 +200,14 @@ class AdjacentCausalInjection(nn.Module):
         predecessor = features[:, :-1]
 
         if curriculum_blocks is not None:
-            if correct_predecessor_ids is None:
-                raise ValueError("curriculum requires predecessor IDs")
-            correct = self.token_features(transfer_embeddings, correct_predecessor_ids)
+            correct = self.token_features(transfer_embeddings, block_tokens[:, :-1])
             predecessor = torch.where(
                 curriculum_blocks.reshape(-1, 1, 1),
                 correct.to(predecessor.dtype),
                 predecessor,
             )
 
-        anchor_features = self.token_features(transfer_embeddings, anchor_token_ids)
+        anchor_features = self.token_features(transfer_embeddings, block_tokens[:, 0])
         predecessor = torch.cat(
             (anchor_features.reshape(-1, 1, self.transfer_dim), predecessor[:, 1:]),
             dim=1,

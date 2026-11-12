@@ -4,6 +4,7 @@ from typing import Any, ClassVar
 import torch
 from transformers import PretrainedConfig
 
+from speculators.dspine_settings import DSpineSettings
 from speculators.model import SpeculatorModel
 from speculators.models.dflash.core import DFlashDraftModel
 from speculators.models.dspine.config import DSpineSpeculatorConfig
@@ -89,18 +90,11 @@ class DSpineDraftModel(DFlashDraftModel):
         """Create DSpine from the shared DFlash-family training arguments."""
         config = DSpineSpeculatorConfig(
             **cls._build_base_config_kwargs("dspine", verifier_config, **kwargs),
-            transfer_dim=kwargs.get("transfer_dim", 1024),
-            message_dim=kwargs.get("message_dim", 512),
-            transition_top_k=kwargs.get("transition_top_k", 16),
-            distribution_loss_alpha=kwargs.get("distribution_loss_alpha", 0.1),
-            embedding_loss_beta=kwargs.get("embedding_loss_beta", 0.5),
-            embedding_loss_warmup_steps=kwargs.get("embedding_loss_warmup_steps", 146),
-            curriculum_probability=kwargs.get("curriculum_probability", 0.5),
-            curriculum_hold_ratio=kwargs.get("curriculum_hold_ratio", 1.0 / 6.0),
-            curriculum_end_ratio=kwargs.get("curriculum_end_ratio", 1.0 / 3.0),
-            curriculum_layers=kwargs.get("curriculum_layers", 3),
-            transition_min_target_mass=kwargs.get("transition_min_target_mass", 1e-4),
-            transfer_space_eps=kwargs.get("transfer_space_eps", 1e-6),
+            **{
+                name: kwargs[name]
+                for name in DSpineSettings.model_fields
+                if name in kwargs
+            },
         )
         model = cls(config=config)
         model.load_verifier_weights()
@@ -175,8 +169,7 @@ class DSpineDraftModel(DFlashDraftModel):
             layer_idx,
             pre_injection,
             transfer_embeddings=self.transfer_embeddings,
-            anchor_token_ids=block_tokens[:, 0],
-            correct_predecessor_ids=block_tokens[:, :-1],
+            block_tokens=block_tokens,
             curriculum_blocks=(
                 layer_context["curriculum_blocks"]
                 if layer_idx < self.config.curriculum_layers
