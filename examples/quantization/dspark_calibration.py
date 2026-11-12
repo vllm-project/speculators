@@ -120,7 +120,10 @@ def calibration_forward(
     position_ids,
     max_anchors,
 ):
-    """Run the same anchored backbone as training, without logits or losses."""
+    """Run the backbone without training's verifier targets, logits, or losses.
+
+    Calibration only needs activations, and the compressor may disable lm_head.
+    """
     device = hidden_states.device
     full_mask, sliding_mask, anchors, valid = model._build_attention_mask(  # noqa: SLF001
         loss_mask, max_anchors, document_ids, device
