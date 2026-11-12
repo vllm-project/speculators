@@ -33,19 +33,15 @@ class DSpineDraftModel(DFlashDraftModel):
     def __init__(self, config: DSpineSpeculatorConfig) -> None:
         target_vocab_size = config.transformer_layer_config.vocab_size
         hidden_size = config.transformer_layer_config.hidden_size
-        if config.draft_vocab_size != target_vocab_size:
-            raise ValueError(
-                "DSpine requires the full verifier vocabulary: "
-                f"draft_vocab_size={config.draft_vocab_size}, "
-                f"verifier_vocab_size={target_vocab_size}."
-            )
-        if config.curriculum_end_ratio < config.curriculum_hold_ratio:
-            raise ValueError(
-                "curriculum_end_ratio must be greater than or equal to "
-                "curriculum_hold_ratio."
-            )
-        if config.sample_from_anchor:
-            raise ValueError("DSpine requires sample_from_anchor=False.")
+        assert config.draft_vocab_size == target_vocab_size, (  # noqa: S101
+            "DSpine requires the full verifier vocabulary."
+        )
+        assert config.curriculum_end_ratio >= config.curriculum_hold_ratio, (  # noqa: S101
+            "curriculum_end_ratio must be >= curriculum_hold_ratio."
+        )
+        assert not config.sample_from_anchor, (  # noqa: S101
+            "DSpine requires sample_from_anchor=False."
+        )
         super().__init__(config=config)
 
         self.injection = AdjacentCausalInjection(
