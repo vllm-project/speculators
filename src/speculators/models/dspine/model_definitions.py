@@ -28,10 +28,9 @@ def build_transfer_codebook(
     vocabulary embedding table.
     """
     vocab_size, hidden_size = output_embeddings.shape
-    if transfer_dim > hidden_size:
-        raise ValueError(
-            f"transfer_dim ({transfer_dim}) cannot exceed hidden_size ({hidden_size})."
-        )
+    assert transfer_dim <= hidden_size, (  # noqa: S101
+        f"transfer_dim ({transfer_dim}) cannot exceed hidden_size ({hidden_size})."
+    )
 
     output_device = output_embeddings.device
     compute_device = output_device
