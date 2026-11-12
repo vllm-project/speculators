@@ -65,7 +65,9 @@ def _remote_url(repo_dir: Path, override: str | None = None) -> str:
     url = override or os.environ.get("METRICS_REMOTE_URL") or ""
     if not url:
         url = _git(["remote", "get-url", "origin"], repo_dir).stdout.strip()
-    token = os.environ.get("GITHUB_TOKEN")
+    token = os.environ.get("SPECULATORS_METRICS_TOKEN") or os.environ.get(
+        "GITHUB_TOKEN"
+    )
     if token and url.startswith("https://"):
         url = url.replace("https://", f"https://x-access-token:{token}@", 1)
     return url
@@ -169,8 +171,9 @@ def _push_records(
                     f"Push conflict (attempt {attempt + 1}/{MAX_RETRIES}), retrying…",
                 )
             else:
+                safe_stderr = re.sub(r"https://[^\s]+", "https://***", result.stderr)
                 raise RuntimeError(
-                    f"Failed to push after {MAX_RETRIES} attempts:\n{result.stderr}",
+                    f"Failed to push after {MAX_RETRIES} attempts:\n{safe_stderr}",
                 )
 
 

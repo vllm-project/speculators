@@ -89,9 +89,12 @@ if [ -n "${VLLM_PYTHON:-}" ]; then
   VLLM_BIN_DIR="$(dirname "${VLLM_PYTHON}")"
   export PATH="$PATH:${VLLM_BIN_DIR}"
 fi
-python -m pytest -ra "${TEST_PATH}" "${PYTEST_EXTRA_ARGS[@]}"
+PYTEST_EXIT=0
+python -m pytest -ra "${TEST_PATH}" "${PYTEST_EXTRA_ARGS[@]}" || PYTEST_EXIT=$?
 
 if [ -n "${SPECULATORS_METRICS_DIR:-}" ] && [ -d "${SPECULATORS_METRICS_DIR}" ]; then
   echo "--- Pushing CI metrics"
   python scripts/ci/push_metrics.py push-dir "${SPECULATORS_METRICS_DIR}" --target metrics.json
 fi
+
+exit "${PYTEST_EXIT}"

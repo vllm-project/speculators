@@ -211,7 +211,7 @@ steps:
                         value: "/tmp/ci-metrics"
                       - name: METRICS_REMOTE_URL
                         value: "https://github.com/orestis-z/speculators-metrics.git"
-                      - name: GITHUB_TOKEN
+                      - name: SPECULATORS_METRICS_TOKEN
                         valueFrom:
                           secretKeyRef:
                             name: speculators-metrics-token
@@ -313,7 +313,7 @@ steps:
                         value: "/tmp/ci-metrics"
                       - name: METRICS_REMOTE_URL
                         value: "https://github.com/orestis-z/speculators-metrics.git"
-                      - name: GITHUB_TOKEN
+                      - name: SPECULATORS_METRICS_TOKEN
                         valueFrom:
                           secretKeyRef:
                             name: speculators-metrics-token
