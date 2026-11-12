@@ -1,1 +1,3 @@
 llmcompressor==0.15.0
+-e .
+./hs_connectors

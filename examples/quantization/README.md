@@ -6,13 +6,15 @@ From the repository root, create a separate `vllm_venv` as in the [training tuto
 
 ```bash
 uv venv --python 3.12 .venv-quant
-uv pip install --python .venv-quant/bin/python . ./hs_connectors -r examples/quantization/requirements.txt
+uv pip install --python .venv-quant/bin/python -r examples/quantization/requirements.txt
 uv pip install --python vllm_venv/bin/python ./hs_connectors
 ```
 
 Use `vllm_venv` for the generation, extraction and deployment servers, and `.venv-quant` for the clients and quantization scripts. Run all commands from the repository root.
 
-The NVFP4 example uses an experimental DSpark-only override of llm-compressor's validator because the released validator cannot read this checkpoint's speculators config. It rejects quantized and MTP checkpoints and checks the validator fingerprint. Both scripts require a new output directory and an unquantized DSpark checkpoint. The default draft revision is `87ca2fdc67f316f6c1f9ebc7ef7bbb0ad299a4ce`; override it with `--revision` for another Hub commit.
+The requirements install speculators from this checkout, including its local hidden-state connector. Both scripts expect an unquantized DSpark checkpoint and a fresh output directory. The NVFP4 example replaces llm-compressor 0.15.0's validator because Transformers `AutoConfig` cannot read the speculators config. This replacement accepts only DSpark and rejects quantized and MTP checkpoints.
+
+Passing a Hub ID loads its default revision; the scripts do not pin it. For reproducibility, download the desired revision separately and pass its local directory as `--model`. Record the revision used.
 
 ## Generate calibration data
 
@@ -105,4 +107,4 @@ curl -fsS http://127.0.0.1:9145/v1/completions \
 
 Check for nonempty output and accepted draft tokens in `metrics.speculative_decoding`, then repeat with `draft-nvfp4` and `eval-nvfp4`. Evaluate on a representative dataset before drawing quality conclusions.
 
-On H100, llm-compressor 0.15.0 completed both scripts on the target checkpoint; NVFP4 used 128 offline calibration rows. Both outputs reloaded and served a speculative completion. The served FP8 checkpoint was generated separately and had matching weight hashes. NVFP4 reported different fused input scales; an earlier H100 smoke with llm-compressor development commit `eac6972ca25f9e67abd8011aad5bb30ef9915e55` used BF16 activations and did not consume those scales. Native NVFP4 W4A4 execution and recovery quality were not measured.
+On H100, llm-compressor 0.15.0 completed both scripts on the target checkpoint; NVFP4 used 128 offline calibration rows. Both outputs reloaded and served a speculative completion. The served FP8 checkpoint was generated separately and had matching weight hashes. NVFP4 reported different fused input scales; an earlier H100 smoke with an llm-compressor development version used BF16 activations and did not consume those scales. Native NVFP4 W4A4 execution and recovery quality were not measured.

@@ -1,12 +1,16 @@
 """Behavior at the offline cache to calibration batch boundary."""
 
+import subprocess
+import sys
+from pathlib import Path
+
 import pytest
 import torch
 from datasets import Dataset
 from safetensors.torch import save_file
 from transformers import Qwen3Config
 
-from examples.quantization._dspark_calibration import (
+from examples.quantization.dspark_nvfp4_gptq_imatrix import (
     calibration_batches,
     calibration_forward,
 )
@@ -103,3 +107,40 @@ def test_calibration_activations_match_training():
         torch.manual_seed(42)
         actual = calibration_forward(model, **batch)
     torch.testing.assert_close(actual, expected)
+
+
+@pytest.mark.parametrize(
+    ("script", "extra_args"),
+    [
+        ("dspark_fp8.py", []),
+        (
+            "dspark_nvfp4_gptq_imatrix.py",
+            [
+                "--data-dir",
+                "unused",
+                "--hidden-states-dir",
+                "unused",
+                "--extraction-provenance",
+                "unused",
+            ],
+        ),
+    ],
+)
+def test_quantization_refuses_existing_output(tmp_path, script, extra_args):
+    script_path = Path(__file__).resolve().parents[3] / "examples/quantization" / script
+    result = subprocess.run(  # noqa: S603
+        [
+            sys.executable,
+            str(script_path),
+            "--model",
+            "unused",
+            "--output-dir",
+            str(tmp_path),
+            *extra_args,
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode != 0
+    assert "Output already exists" in result.stderr
