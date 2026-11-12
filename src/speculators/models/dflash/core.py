@@ -35,7 +35,86 @@ logger = logging.getLogger(__name__)
 _compiled_create_block_mask = torch.compile(create_block_mask)
 
 
-class DFlashBackbone:
+class DFlashBackbone(nn.Module):
+    def __init__(self, tl_config: PretrainedConfig):
+        super().__init__()
+        self.layers = nn.ModuleList(
+            [
+                self._make_decoder_layer(tl_config, layer_idx)
+                for layer_idx in range(tl_config.num_hidden_layers)
+            ]
+        )
+        self.sliding_window_indices = [
+            i
+            for i, layer_type in enumerate(
+                getattr(tl_config, "layer_types", None) or []
+            )
+            if layer_type == "sliding_attention"
+        ]
+
+        self.norm = Qwen3RMSNorm(
+            tl_config.hidden_size,
+            eps=tl_config.rms_norm_eps,  # type: ignore[arg-type]
+        )
+        rotary_config = flatten_rope_parameters(tl_config)
+        self.rotary_emb = Qwen3RotaryEmbedding(rotary_config)  # type: ignore[arg-type]
+
+        self.fc = nn.Linear(
+            len(self.target_layer_ids) * tl_config.hidden_size,
+            tl_config.hidden_size,
+            bias=False,
+        )
+        self.hidden_norm = Qwen3RMSNorm(
+            tl_config.hidden_size,
+            eps=tl_config.rms_norm_eps,  # type: ignore[arg-type]
+        )
+
+
+        noise_embedding = self.embed_tokens(token_ids)
+        # shape: [1, num_anchors*block_size, hidden_size]
+
+    def forward(
+        self,
+        token_embeddings,  # [1, num_anchors*block_size, hidden_size]
+        target_hidden: torch.Tensor,  # [1, total_seq_len, num_hidden*hidden_size]
+        position_ids: torch.Tensor,  # [1, total_seq_len + num_anchors*block_size]
+        sliding_window_attn_mask=None,
+        full_attn_mask=None,
+        **kwargs,
+    ):
+        """Run the anchored-block draft transformer up to the draft logits.
+
+        Returns ``(hidden, logits, targets, aligned_loss_mask,
+        anchored_block_indices)``. DSpark reuses this and adds its Markov and
+        confidence heads before computing its own loss.
+        """
+
+        fc_output = self.fc(target_hidden)
+        fc_output = self.hidden_norm(fc_output)
+        # shape: [1, total_seq_len, hidden_size]
+
+        # the hidden_states shape doesn't match position_ids but doesn't need
+        # to, as hidden_states is only used to set dtype and device in rotary_emb
+        position_embeddings = self.rotary_emb(target_hidden, position_ids)
+
+        hidden = token_embeddings
+        for layer_idx, layer in enumerate(self.layers):
+            hidden = layer(
+                hidden_states=hidden,
+                target_hidden=fc_output,
+                attention_mask=sliding_window_attn_mask
+                if layer_idx in self.sliding_window_indices
+                else full_attn_mask,
+                position_ids=position_ids,
+                use_cache=False,
+                position_embeddings=position_embeddings,
+                **kwargs,
+            )
+
+        return self.norm(hidden)
+        # shape: [1, num_anchors*block_size, hidden_size]
+
+
     def _make_decoder_layer(
         self, config: PretrainedConfig, layer_idx: int
     ) -> nn.Module:
@@ -94,12 +173,9 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
         tl_config = config.transformer_layer_config
         # Number of draft layers is encoded in transformer_layer_config
         num_draft_layers = tl_config.num_hidden_layers
-        self.layers = nn.ModuleList(
-            [
-                self._make_decoder_layer(config, layer_idx)
-                for layer_idx in range(num_draft_layers)
-            ]
-        )
+
+        self.backbone = DFlashBackbone(tl_config)
+
         # Both are optional: declared only for alternating/sliding attention.
         self.sliding_window = getattr(tl_config, "sliding_window", None)
         self.sliding_window_indices = [
@@ -112,22 +188,6 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
         self.uses_sliding_window_attn = bool(self.sliding_window_indices)
         self.uses_full_attn = bool(num_draft_layers - len(self.sliding_window_indices))
 
-        self.norm = Qwen3RMSNorm(
-            config.transformer_layer_config.hidden_size,
-            eps=config.transformer_layer_config.rms_norm_eps,  # type: ignore[arg-type]
-        )
-        rotary_config = flatten_rope_parameters(config.transformer_layer_config)
-        self.rotary_emb = Qwen3RotaryEmbedding(rotary_config)  # type: ignore[arg-type]
-
-        self.fc = nn.Linear(
-            len(self.target_layer_ids) * config.transformer_layer_config.hidden_size,
-            config.transformer_layer_config.hidden_size,
-            bias=False,
-        )
-        self.hidden_norm = Qwen3RMSNorm(
-            config.transformer_layer_config.hidden_size,
-            eps=config.transformer_layer_config.rms_norm_eps,  # type: ignore[arg-type]
-        )
         self.verifier_norm = resolve_verifier_norm_class(config)(
             config.transformer_layer_config.hidden_size,
             eps=config.transformer_layer_config.rms_norm_eps,  # type: ignore[arg-type]
@@ -376,48 +436,6 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
 
         return full_attn_mask, sliding_window_attn_mask
 
-    def _backbone_forward(
-        self,
-        hidden_states: torch.Tensor,  # [1, total_seq_len, num_hidden*hidden_size]
-        token_ids,  # [1, num_anchors*block_size]
-        position_ids: torch.Tensor,  # [1, total_seq_len + num_anchors*block_size]
-        sliding_window_attn_mask=None,
-        full_attn_mask=None,
-        **kwargs,
-    ):
-        """Run the anchored-block draft transformer up to the draft logits.
-
-        Returns ``(hidden, logits, targets, aligned_loss_mask,
-        anchored_block_indices)``. DSpark reuses this and adds its Markov and
-        confidence heads before computing its own loss.
-        """
-
-        noise_embedding = self.embed_tokens(token_ids)
-        # shape: [1, num_anchors*block_size, hidden_size]
-
-        fc_output = self.fc(hidden_states)
-        fc_output = self.hidden_norm(fc_output)
-        # shape: [1, total_seq_len, hidden_size]
-
-        # the hidden_states shape doesn't match position_ids but doesn't need
-        # to, as hidden_states is only used to set dtype and device in rotary_emb
-        position_embeddings = self.rotary_emb(hidden_states, position_ids)
-
-        for layer_idx, layer in enumerate(self.layers):
-            noise_embedding = layer(
-                hidden_states=noise_embedding,
-                target_hidden=fc_output,
-                attention_mask=sliding_window_attn_mask
-                if layer_idx in self.sliding_window_indices
-                else full_attn_mask,
-                position_ids=position_ids,
-                use_cache=False,
-                position_embeddings=position_embeddings,
-                **kwargs,
-            )
-
-        return self.norm(noise_embedding)
-        # shape: [1, num_anchors*block_size, hidden_size]
 
     @conditional_torch_compile
     def forward(
@@ -464,9 +482,12 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
             position_ids, anchor_positions, self.block_size
         )
 
-        hidden = self._backbone_forward(
+        token_embeddings = self.embed_tokens(mask_token_ids)
+        # shape: [1, num_anchors*block_size, hidden_size]
+
+        hidden = self.backbone(
+            token_embeddings,
             hidden_states,
-            mask_token_ids,
             position_ids,
             sliding_window_attn_mask=sliding_window_attn_mask,
             full_attn_mask=full_attn_mask,
