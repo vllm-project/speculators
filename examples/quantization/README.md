@@ -94,6 +94,11 @@ python scripts/launch_vllm.py eval "$MODEL" --spec-model "$RUN/draft-fp8" \
   --spec-tokens 7 --spec-method dspark --provenance-dir "$RUN/eval-fp8" \
   -- --port 9145 --max-model-len 4096 --gpu-memory-utilization 0.90 \
   --enforce-eager --per-request-spec-decode-metrics summary --no-enable-prefix-caching
+```
+
+Wait for `curl -fsS http://127.0.0.1:9145/v1/models` to succeed, then send a request from another terminal:
+
+```bash
 curl -fsS http://127.0.0.1:9145/v1/completions \
   -H 'Content-Type: application/json' \
   -d '{"model":"Qwen/Qwen3.8-27B","prompt":"Explain photosynthesis briefly.","max_tokens":64,"temperature":0}'
