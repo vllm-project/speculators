@@ -1,27 +1,21 @@
 # Quantize a DSpark drafter
 
-These examples target `RedHatAI/Qwen3.8-27B-speculator.dspark` with verifier `Qwen/Qwen3.8-27B`. FP8 uses model-free quantization; NVFP4 uses GPTQ with iMatrix calibration on verifier hidden states. Both leave embeddings, vocabulary, Markov and confidence heads unquantized.
+These examples quantize `RedHatAI/Qwen3.8-27B-speculator.dspark` for the verifier `Qwen/Qwen3.8-27B`. FP8 is data-free; NVFP4 uses GPTQ with iMatrix and verifier hidden states for calibration. Both leave embeddings, vocabulary, Markov and confidence heads unquantized.
 
-From the repository root, create separate Python 3.12 environments for vLLM and quantization. The serving commands below use vLLM 0.33.0. Install a hardware-appropriate PyTorch build if needed:
+## 1. Environment setup
+
+Run commands from the repository root. Create separate Python 3.12 environments for the vLLM servers and for the data-generation clients and quantization scripts. Install a hardware-appropriate PyTorch build if needed.
 
 ```bash
 uv venv --python 3.12 vllm_venv
-uv pip install --python vllm_venv/bin/python 'vllm==0.33.0' 'hs-connectors==0.9.0'
+uv pip install --python vllm_venv/bin/python 'vllm==0.33.0' 'speculators==0.9.0'
 uv venv --python 3.12 .venv-quant
 uv pip install --python .venv-quant/bin/python -r examples/quantization/requirements.txt
 ```
 
-Use `vllm_venv` for the generation, extraction and deployment servers, and `.venv-quant` for the clients and quantization scripts. Run all commands from the repository root.
+Speculators installs its matching `hs-connectors` dependency. The quantization environment also pins llm-compressor because the NVFP4 example uses its 0.15.0 interfaces.
 
-The quantization requirements pin released speculators, hs-connectors and llm-compressor versions. Both scripts expect an unquantized DSpark checkpoint and a fresh output directory. The NVFP4 example replaces llm-compressor 0.15.0's validator because Transformers `AutoConfig` cannot read the speculators config. This replacement accepts only unquantized DSpark checkpoints.
-
-Passing a drafter Hub ID to either quantization script loads its default revision; the scripts do not pin it. To use a particular drafter revision, download it separately and pass its local directory as `--model` (the `DRAFT` value below). Record the revision used.
-
-## Generate calibration data
-
-FP8 does not need data. For NVFP4, regenerate responses for representative prompts and extract verifier hidden states for at least 1024 eligible rows. The number of eligible rows can be smaller than `--limit`; inspect the output and increase the limit if needed. Full-length 2048-token BF16 caches can require approximately 180 GiB of disk for 1024 rows, plus staging and checkpoint space. During quantization, llm-compressor's basic pipeline caches all calibration inputs in host RAM: eight layers of width 5120 at 1024 × 2048 tokens require approximately 160 GiB for BF16 hidden states alone, plus other inputs and overhead. Shorter rows need less. See the [response regeneration guide](../../docs/user_guide/tutorials/response_regeneration.md) for dataset preparation.
-
-Set these variables in both the server and client terminals, from the repository root:
+Set these variables in each terminal. Both scripts require an unquantized drafter and a fresh output directory.
 
 ```bash
 MODEL=Qwen/Qwen3.8-27B
@@ -31,7 +25,17 @@ SAMPLES=1024
 mkdir -p "$RUN"
 ```
 
-In the server terminal, activate the vLLM environment and start a generation server. Record its command, model revision, versions and sampling parameters in `$RUN`:
+Hub IDs load their default revision. To pin a drafter revision, download it separately and set `DRAFT` to the local directory. Record the verifier and drafter revisions used.
+
+## 2. Generate calibration data
+
+Skip this step for data-free FP8. For NVFP4, regenerate responses to representative prompts, prepare the tokenized rows, then extract verifier hidden states. The example uses the `magpie` preset; choose data representative of your deployment. See the [response regeneration guide](../../docs/user_guide/tutorials/response_regeneration.md) for other datasets and the [offline data generation guide](../../docs/user_guide/tutorials/train.md#step-3-get-hidden-states) for extraction details.
+
+Full-length 2048-token BF16 caches can require approximately 180 GiB of disk for 1024 rows, plus staging and checkpoint space. During quantization, llm-compressor's basic pipeline caches calibration inputs in host RAM: eight layers of width 5120 at 1024 × 2048 tokens require approximately 160 GiB for BF16 hidden states alone, plus other inputs and overhead. Shorter rows need less.
+
+### Regenerate and prepare responses
+
+In a server terminal, activate the vLLM environment and start the verifier. Record the command, model revision, versions and sampling parameters in `$RUN`.
 
 ```bash
 source vllm_venv/bin/activate
@@ -39,11 +43,11 @@ python -m vllm.entrypoints.cli.main serve "$MODEL" \
   --host 127.0.0.1 --port 8000 --max-model-len 2049
 ```
 
-After `curl -fsS http://127.0.0.1:8000/v1/models` succeeds, activate the quantization environment in the client terminal and prepare rows. The minimum of nine supervised tokens ensures an anchor before the final eight-token block. Confirm the printed count is at least 1024 before continuing; if needed, increase `--limit` and prepare a fresh run.
+After `curl -fsS http://127.0.0.1:8000/v1/models` succeeds, use a second terminal for the client:
 
 ```bash
 source .venv-quant/bin/activate
-speculators regenerate-responses --dataset ./representative-prompts.jsonl \
+speculators regenerate-responses --dataset magpie \
   --model "$MODEL" --endpoint http://127.0.0.1:8000/v1/chat/completions \
   --limit 1280 --concurrency 4 --max-tokens 1024 \
   --sampling-params '{"temperature":0.6,"top_p":0.95,"seed":42}' \
@@ -54,7 +58,11 @@ speculators prepare-data --model "$MODEL" --data "$RUN/responses.jsonl" \
 python -c 'import sys; from datasets import load_from_disk; print(len(load_from_disk(sys.argv[1])))' "$RUN/prepared"
 ```
 
-Stop the generation server. In the same vLLM server terminal, start an extraction server on a shared filesystem. The launcher appends verifier layer 64 to the eight draft layers.
+The minimum of nine supervised tokens ensures an anchor before the final eight-token block. Confirm the printed count is at least `$SAMPLES`; fewer rows may be eligible than the regeneration limit. If needed, increase `--limit` and prepare a fresh run.
+
+### Extract hidden states offline
+
+Stop the generation server. In the vLLM terminal, start an extraction server on a filesystem shared with the client. The launcher appends verifier layer 64 to the eight draft layers.
 
 ```bash
 python scripts/launch_vllm.py train "$MODEL" \
@@ -63,7 +71,7 @@ python scripts/launch_vllm.py train "$MODEL" \
   -- --host 127.0.0.1 --port 8001 --max-model-len 2049
 ```
 
-After `curl -fsS http://127.0.0.1:8001/v1/models` succeeds, run the client in the quantization terminal:
+After `curl -fsS http://127.0.0.1:8001/v1/models` succeeds, run in the quantization terminal:
 
 ```bash
 speculators generate-offline-data --model "$MODEL" \
@@ -72,24 +80,31 @@ speculators generate-offline-data --model "$MODEL" \
   --validate-outputs --fail-on-error
 ```
 
-Stop the server before quantization. Use a fresh cache for each set of rows and extraction settings. The adapter validates token alignment, shape, layer count and finite values; it accepts FP16, BF16 and FP32 states, not raw scaled FP8. The cache does not record layer IDs. It assumes the capture order matches the drafter’s `target_layer_ids`, followed optionally by the final verifier layer; verify the extraction settings and keep the launcher provenance with the cache.
+Stop the server before quantization. Use a fresh cache for each set of rows and extraction settings. The adapter checks token alignment, shape, layer count and finite values; it accepts FP16, BF16 and FP32 states, not raw scaled FP8. The cache does not record layer IDs: capture them in the drafter's `target_layer_ids` order, optionally followed by the final verifier layer, and keep the launcher provenance with the cache.
 
-## Quantize and deploy
+## 3. Quantize
 
-Run quantization in the `.venv-quant` client terminal:
+Activate `.venv-quant` and choose an example. Data-free schemes do not need calibration inputs: llm-compressor's `model_free_ptq` quantizes the checkpoint without running the model. The [FP8 example](dspark_fp8.py) defaults to `FP8_DYNAMIC`; its recipe shows how to select `FP8_BLOCK`.
 
 ```bash
+source .venv-quant/bin/activate
 python examples/quantization/dspark_fp8.py --model "$DRAFT" \
   --output-dir "$RUN/draft-fp8"
-python examples/quantization/dspark_nvfp4_gptq_imatrix.py --model "$DRAFT" \
-  --data-dir "$RUN/prepared" --hidden-states-dir "$RUN/hidden_states" \
-  --samples "$SAMPLES" \
-  --output-dir "$RUN/draft-nvfp4"
 ```
 
-The NVFP4 example runs whole-model calibration. The drafter loads verifier weights by the name in its config. Ensure it resolves to the same verifier revision used for generation and extraction. Record the revisions, package and CUDA versions, prompt source and checksum, commands, seed, selected rows and recipe alongside the outputs. Keep the launcher provenance and patches with the run.
+The [NVFP4 example](dspark_nvfp4_gptq_imatrix.py) uses GPTQ and the iMatrix observer with the prepared rows and hidden states from step 2. DSpark's training forward computes verifier targets, logits and losses, while calibration only needs backbone activations and the compressor may disable the output head. The example supplies a [loss-free calibration forward](dspark_calibration.py) that runs the same backbone. It also replaces llm-compressor 0.15.0's model validator because Transformers `AutoConfig` cannot read the speculators config; the replacement accepts only unquantized DSpark checkpoints.
 
-In the `vllm_venv` server terminal, serve each output separately with the matching verifier and a fresh provenance directory:
+```bash
+python examples/quantization/dspark_nvfp4_gptq_imatrix.py --model "$DRAFT" \
+  --data-dir "$RUN/prepared" --hidden-states-dir "$RUN/hidden_states" \
+  --samples "$SAMPLES" --output-dir "$RUN/draft-nvfp4"
+```
+
+NVFP4 calibrates the whole model. The drafter loads verifier weights by the name in its config; ensure it resolves to the same verifier revision used for generation and extraction. Record revisions, package and CUDA versions, prompt source and checksum, commands, seed, selected rows and recipe alongside the outputs. Keep the launcher provenance and patches with the run.
+
+## 4. Deploy and validate
+
+In the vLLM terminal, serve each output separately with the matching verifier and a fresh provenance directory:
 
 ```bash
 python scripts/launch_vllm.py eval "$MODEL" --spec-model "$RUN/draft-fp8" \

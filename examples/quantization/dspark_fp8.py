@@ -3,6 +3,8 @@
 import argparse
 from pathlib import Path
 
+from llmcompressor import model_free_ptq
+
 
 def main():
     cli = argparse.ArgumentParser(description=__doc__)
@@ -11,8 +13,6 @@ def main():
     args = cli.parse_args()
     if args.output_dir.exists():
         raise FileExistsError(f"Output already exists: {args.output_dir}")
-    from llmcompressor import model_free_ptq  # noqa: PLC0415
-
     # Replace FP8_DYNAMIC with FP8_BLOCK for blockwise FP8.
     model_free_ptq(
         model_stub=args.model,

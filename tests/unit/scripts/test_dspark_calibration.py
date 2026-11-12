@@ -156,10 +156,7 @@ def test_calibration_activations_match_training():
     ],
 )
 def test_quantization_refuses_existing_output(tmp_path, script, extra_args):
-    if (
-        script == "dspark_nvfp4_gptq_imatrix.py"
-        and importlib.util.find_spec("llmcompressor") is None
-    ):
+    if importlib.util.find_spec("llmcompressor") is None:
         pytest.skip("llmcompressor is not installed")
     script_path = Path(__file__).resolve().parents[3] / "examples/quantization" / script
     result = subprocess.run(  # noqa: S603
