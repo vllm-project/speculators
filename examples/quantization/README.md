@@ -22,7 +22,7 @@ Install the appropriate PyTorch build for your hardware and record the actual in
 
 ## Generate calibration data
 
-Choose prompts representative of your deployment. This example regenerates responses using a local prompt JSONL supported by `regenerate-responses`; see the [response regeneration guide](../../docs/user_guide/tutorials/response_regeneration.md). Use a fresh run directory for each dataset and cache. Here 1024 is the number of prepared samples; 128 is suitable for a local smoke test, not a measured recovery recipe. Individual full-length 2048-token BF16 caches can take about 180 MiB each, or roughly 180 GiB for 1024, plus staging and checkpoint space. Actual sizes depend on sequence lengths.
+Choose prompts representative of your deployment. This example regenerates responses using a local prompt JSONL supported by `regenerate-responses`; see the [response regeneration guide](../../docs/user_guide/tutorials/response_regeneration.md). Use a fresh run directory for each dataset and cache. Here 1024 is the number of eligible prepared samples; 128 is suitable for a local smoke test, not a measured recovery recipe. Individual full-length 2048-token BF16 caches can take about 180 MiB each, or roughly 180 GiB for 1024, plus staging and checkpoint space. Actual sizes depend on sequence lengths.
 
 ```bash
 MODEL=Qwen/Qwen3.8-27B
@@ -40,7 +40,7 @@ python -m vllm.entrypoints.cli.main serve "$MODEL" \
   --host 127.0.0.1 --port 8000 --max-model-len 2049
 ```
 
-Wait for `curl -fsS http://127.0.0.1:8000/v1/models`. In another terminal, regenerate responses, then prepare rows. `--limit` counts input conversations, not successful output rows. Inspect the response/error files and increase the limit if too few rows survive. Responses and prepared rows can be truncated by the generation and sequence limits.
+Wait for `curl -fsS http://127.0.0.1:8000/v1/models`. In another terminal, regenerate responses, then prepare rows. `--limit` counts input conversations, not successful output rows. Inspect the response/error files and increase the limit if too few rows survive. Responses and prepared rows can be truncated by the generation and sequence limits. The checkpoint uses block size 8, so `--minimum-valid-tokens 9` ensures each row has a supervised token before its last eight positions, even after truncation. This conservative filter can discard some otherwise usable rows. Keep the preparation and calibration sequence lengths equal; for another checkpoint, set the minimum to its block size plus one.
 
 ```bash
 speculators regenerate-responses --dataset ./representative-prompts.jsonl \
@@ -49,7 +49,8 @@ speculators regenerate-responses --dataset ./representative-prompts.jsonl \
   --sampling-params '{"temperature":0.6,"top_p":0.95,"seed":42}' \
   --outfile "$RUN/responses.jsonl" --resume
 speculators prepare-data --model "$MODEL" --data "$RUN/responses.jsonl" \
-  --output "$RUN/prepared" --max-samples "$SAMPLES" --seq-length 2048 --seed 42
+  --output "$RUN/prepared" --max-samples "$SAMPLES" --seq-length 2048 \
+  --minimum-valid-tokens 9 --seed 42
 python - "$RUN/prepared" "$SAMPLES" <<'PY'
 import sys
 from datasets import load_from_disk
