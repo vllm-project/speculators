@@ -11,7 +11,7 @@ from speculators.models.dspine.config import DSpineSpeculatorConfig
 from speculators.models.dspine.metrics import compute_dspine_loss
 from speculators.models.dspine.model_definitions import (
     AdjacentCausalInjection,
-    build_output_embedding_transfer_space,
+    build_transfer_codebook,
 )
 from speculators.models.utils import conditional_torch_compile
 
@@ -66,13 +66,13 @@ class DSpineDraftModel(DFlashDraftModel):
         """Load verifier weights and derive the unified transfer space C."""
         super().load_verifier_weights()
         if self.transfer_embeddings.isnan().any():
-            # Initialize the transfer embeddings and per layer readouts.
-            transfer_embeddings, readout = build_output_embedding_transfer_space(
+            # Initialize the codebook and per-layer readouts.
+            codebook, readout = build_transfer_codebook(
                 self.lm_head.weight,
                 self.config.transfer_dim,
                 eps=self.config.transfer_space_eps,
             )
-            self.transfer_embeddings.copy_(transfer_embeddings)
+            self.transfer_embeddings.copy_(codebook)
             self.injection.initialize_readouts(readout)
 
     @classmethod
@@ -161,10 +161,10 @@ class DSpineDraftModel(DFlashDraftModel):
         # Keep the final raw decoder states for last-write refinement.
         layer_context["final_pre_injection"] = pre_injection
         block_tokens = layer_context["block_tokens"]
-        hidden_states, features = self.injection.inject_layer(
+        hidden_states, features = self.injection(
             layer_idx,
             pre_injection,
-            transfer_embeddings=self.transfer_embeddings,
+            codebook=self.transfer_embeddings,
             block_tokens=block_tokens,
             curriculum_blocks=(
                 layer_context["curriculum_blocks"]

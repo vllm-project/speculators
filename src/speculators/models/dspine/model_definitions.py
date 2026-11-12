@@ -9,19 +9,19 @@ from torch.nn import functional
 
 __all__ = [
     "AdjacentCausalInjection",
-    "build_output_embedding_transfer_space",
+    "build_transfer_codebook",
 ]
 
 
 @torch.no_grad()
-def build_output_embedding_transfer_space(
+def build_transfer_codebook(
     output_embeddings: torch.Tensor,
     transfer_dim: int,
     *,
     eps: float = 1e-6,
     covariance_chunk_size: int = 4096,
 ) -> tuple[torch.Tensor, torch.Tensor]:
-    """Build the fixed whitened transfer embeddings and PCA readout initialization.
+    """Build the fixed whitened codebook and PCA readout initialization.
 
     The implementation follows Appendix A of the DSpine paper while accumulating
     the hidden-size covariance in chunks, avoiding a full float32 copy of a large
@@ -63,7 +63,7 @@ def build_output_embedding_transfer_space(
     top_values = eigenvalues[-transfer_dim:].clamp_min(eps)
     basis = eigenvectors[:, -transfer_dim:]
 
-    transfer_embeddings_chunks: list[torch.Tensor] = []
+    codebook_chunks: list[torch.Tensor] = []
     inv_scale = top_values.rsqrt()
     for start in range(0, vocab_size, covariance_chunk_size):
         rows = functional.normalize(
@@ -74,19 +74,17 @@ def build_output_embedding_transfer_space(
             eps=eps,
         )
         whitened = ((rows - mean) @ basis) * inv_scale
-        transfer_embeddings_chunks.append(
+        codebook_chunks.append(
             functional.normalize(whitened, dim=-1, eps=eps).to(output_device)
         )
 
-    transfer_embeddings = torch.cat(transfer_embeddings_chunks, dim=0).to(
-        output_embeddings.dtype
-    )
+    codebook = torch.cat(codebook_chunks, dim=0).to(output_embeddings.dtype)
     readout = (
         basis.transpose(0, 1)
         .contiguous()
         .to(device=output_device, dtype=output_embeddings.dtype)
     )
-    return transfer_embeddings, readout
+    return codebook, readout
 
 
 class AdjacentCausalInjection(nn.Module):
@@ -160,13 +158,13 @@ class AdjacentCausalInjection(nn.Module):
         return features.to(hidden_states.dtype)
 
     def token_features(
-        self, transfer_embeddings: torch.Tensor, token_ids: torch.Tensor
+        self, codebook: torch.Tensor, token_ids: torch.Tensor
     ) -> torch.Tensor:
-        return (
-            transfer_embeddings[token_ids.long()].float() * math.sqrt(self.transfer_dim)
-        ).to(transfer_embeddings.dtype)
+        return (codebook[token_ids.long()].float() * math.sqrt(self.transfer_dim)).to(
+            codebook.dtype
+        )
 
-    def _write(
+    def write(
         self,
         layer_idx: int,
         receiver_states: torch.Tensor,
@@ -178,18 +176,18 @@ class AdjacentCausalInjection(nn.Module):
             + self.predecessor_gate(predecessor_features).float()
             + self.gate_bias.float()
         )
-        message = gate * self.message(predecessor_features).float()
-        update = self.writes[layer_idx](message.to(receiver_states.dtype)).float()
+        gated_message = gate * self.message(predecessor_features).float()
+        update = self.writes[layer_idx](gated_message.to(receiver_states.dtype)).float()
         return (receiver_states.float() + self.rms(receiver_states) * update).to(
             receiver_states.dtype
         )
 
-    def inject_layer(
+    def forward(
         self,
         layer_idx: int,
         pre_injection_states: torch.Tensor,
         *,
-        transfer_embeddings: torch.Tensor,
+        codebook: torch.Tensor,
         block_tokens: torch.Tensor,
         curriculum_blocks: torch.Tensor | None = None,
     ) -> tuple[torch.Tensor, torch.Tensor]:
@@ -200,20 +198,20 @@ class AdjacentCausalInjection(nn.Module):
         predecessor = features[:, :-1]
 
         if curriculum_blocks is not None:
-            correct = self.token_features(transfer_embeddings, block_tokens[:, :-1])
+            correct = self.token_features(codebook, block_tokens[:, :-1])
             predecessor = torch.where(
                 curriculum_blocks.reshape(-1, 1, 1),
                 correct.to(predecessor.dtype),
                 predecessor,
             )
 
-        anchor_features = self.token_features(transfer_embeddings, block_tokens[:, 0])
+        anchor_features = self.token_features(codebook, block_tokens[:, 0])
         predecessor = torch.cat(
             (anchor_features.reshape(-1, 1, self.transfer_dim), predecessor[:, 1:]),
             dim=1,
         )
 
-        successors = self._write(
+        successors = self.write(
             layer_idx,
             blocks[:, 1:],
             features[:, 1:],
@@ -241,10 +239,10 @@ class AdjacentCausalInjection(nn.Module):
                 )
                 + self.gate_bias.float()
             )
-            message = gate * functional.linear(
+            gated_message = gate * functional.linear(
                 exact_features, self.message.weight.float()
             )
             write_weight = cast("nn.Linear", self.writes[layer_idx]).weight
-            update = functional.linear(message, write_weight.float())
+            update = functional.linear(gated_message, write_weight.float())
             states = blocks[:, 1:]
             return states.float() + self.rms(states) * update
