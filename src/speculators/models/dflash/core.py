@@ -431,6 +431,34 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
 
         return full_attn_mask, sliding_window_attn_mask
 
+    def _build_targets(
+        self,
+        verifier_last_hidden_states: torch.Tensor,
+        block_positions: torch.Tensor,
+    ) -> torch.Tensor:
+        """Build verifier-logit targets for the selected draft block positions."""
+        total_seq_len = verifier_last_hidden_states.shape[1]
+
+        with torch.no_grad():
+            # If there are fewer block positions than base positions, compute
+            # the verifier head only for the positions used as targets.
+            if block_positions.numel() < total_seq_len:
+                target_indices = (
+                    block_positions
+                    if self.config.sample_from_anchor
+                    else (block_positions - 1) % total_seq_len
+                )
+                return self.verifier_lm_head(
+                    self.verifier_norm(verifier_last_hidden_states[:, target_indices])
+                )
+
+            verifier_logits = self.verifier_lm_head(
+                self.verifier_norm(verifier_last_hidden_states)
+            )
+            if not self.config.sample_from_anchor:
+                verifier_logits = torch.roll(verifier_logits, 1, dims=1)
+            return verifier_logits[:, block_positions]
+
 
     @conditional_torch_compile
     def forward(
@@ -494,27 +522,8 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
         logits = self.lm_head(hidden)
         # shape: [1, num_anchors*block_size, vocab_size]
 
-        with torch.no_grad():
-            # Small optimization: if there are less block positions than base positions
-            # only compute lm head on block_positions subset. Else compute full LM head
-            # and subset after. Reduces size of matmuls required
-            if block_positions.numel() < total_seq_len:
-                target_indices = (
-                    block_positions
-                    if self.config.sample_from_anchor
-                    else (block_positions - 1) % total_seq_len
-                )
-                targets = self.verifier_lm_head(
-                    self.verifier_norm(verifier_last_hidden_states[:, target_indices])
-                )
-            else:
-                verifier_logits = self.verifier_lm_head(
-                    self.verifier_norm(verifier_last_hidden_states)
-                )
-                if not self.config.sample_from_anchor:
-                    verifier_logits = torch.roll(verifier_logits, 1, dims=1)
-                targets = verifier_logits[:, block_positions]
-            # shape: [1, num_anchors*block_size, draft_vocab_size]
+        targets = self._build_targets(verifier_last_hidden_states, block_positions)
+        # shape: [1, num_anchors*block_size, draft_vocab_size]
 
         loss, metrics = compute_metrics(
             logits,

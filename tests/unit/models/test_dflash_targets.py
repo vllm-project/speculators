@@ -37,20 +37,15 @@ def test_targets_match_full_sequence_roll(sample_from_anchor, max_anchors):
     torch.manual_seed(0)
     model = _tiny_model(sample_from_anchor)
     seq_len = 32
-    hidden_states = torch.randn(1, seq_len, 2 * 16)
     verifier_last_hidden_states = torch.randn(1, seq_len, 16)
-    input_ids = torch.randint(0, 64, (1, seq_len))
-    loss_mask = torch.ones(1, seq_len)
-    document_ids = torch.zeros(1, seq_len, dtype=torch.long)
+    anchor_positions = torch.arange(max_anchors)
+    offsets = torch.arange(model.block_size)
+    block_positions = (anchor_positions[:, None] + offsets[None, :]).reshape(-1)
 
     with torch.no_grad():
-        _, _, targets, _, anchored_block_indices = model._backbone_forward(
-            hidden_states,
-            input_ids,
-            loss_mask,
+        targets = model._build_targets(
             verifier_last_hidden_states,
-            document_ids,
-            max_anchors=max_anchors,
+            block_positions,
         )
 
         full_logits = model.verifier_lm_head(
@@ -58,6 +53,6 @@ def test_targets_match_full_sequence_roll(sample_from_anchor, max_anchors):
         )
         if not sample_from_anchor:
             full_logits = torch.roll(full_logits, 1, dims=1)
-        expected = full_logits[:, anchored_block_indices]
+        expected = full_logits[:, block_positions]
 
     torch.testing.assert_close(targets, expected, atol=1e-5, rtol=0)
