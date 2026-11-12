@@ -24,6 +24,7 @@ Regenerate after an intentional semantic change with:
 from __future__ import annotations
 
 import dataclasses
+import functools
 import json
 import os
 from pathlib import Path
@@ -261,6 +262,24 @@ def test_fused_fp32_matches_eager_reference(name):
 # accurate: their gradient switches on dp <= tp, which bf16 logits flip near
 # ties, so the 0.1-0.4 bounds there only catch gross breakage, not precision.
 BF16_LOSS_RTOL = 2e-3
+# Relative L2 error ||g - g_ref|| / ||g_ref||: unlike the max error below, it
+# is not driven by a few outliers, so its bounds can be tighter.
+BF16_GRAD_L2_ERR_BOUND = {
+    "dflash-ce": 9e-3,
+    "dflash-ce-dpace": 8e-3,
+    "dflash-jsd": 2.3e-2,
+    "dflash-kl_div": 2.4e-2,
+    "dflash-kl_tv": 3.9e-2,
+    "dflash-kl_tv-dpace": 5.3e-2,
+    "dflash-lk_hybrid": 6.4e-2,
+    "dflash-nla": 0.17,
+    "dflash-rkl": 3e-2,
+    "dflash-tv": 0.15,
+    "dspark-ce-dpace": 1.1e-2,
+    "dspark-ce_tv": 6.5e-2,
+    "dspark-kl_div": 3.5e-2,
+    "dspark-lk_hybrid-dpace": 7e-2,
+}
 BF16_GRAD_ERR_BOUND = {
     "dflash-ce": 9e-3,
     "dflash-ce-dpace": 8e-3,
@@ -281,25 +300,46 @@ BF16_GRAD_ERR_BOUND = {
 
 def test_bf16_bounds_cover_every_case():
     assert sorted(BF16_GRAD_ERR_BOUND) == sorted(CASES)
+    assert sorted(BF16_GRAD_L2_ERR_BOUND) == sorted(CASES)
+
+
+@functools.cache
+def _bf16_fused_and_reference(
+    name: str,
+) -> tuple[torch.Tensor, torch.Tensor, dict, dict]:
+    """``(loss, ref_loss, grads, ref_grads)``, shared by both bf16 tests."""
+    cfg = CASES[name]
+    ref_loss, _, ref_grads = _reference(cfg, input_dtype=torch.bfloat16)
+    fused_cfg = dataclasses.replace(cfg, implementation="fused")
+    loss, _, grads = _run(fused_cfg, _inputs(fused_cfg, "cuda", torch.bfloat16))
+    assert grads.keys() == ref_grads.keys()
+    for grad_name, ref in ref_grads.items():
+        assert torch.isfinite(ref).all(), f"{grad_name}: non-finite reference gradient"
+    return loss, ref_loss, grads, ref_grads
 
 
 @requires_cuda
 @pytest.mark.parametrize("name", sorted(CASES))
 def test_fused_bf16_error_vs_eager_reference(name):
-    cfg = CASES[name]
-    ref_loss, _, ref_grads = _reference(cfg, input_dtype=torch.bfloat16)
-    fused_cfg = dataclasses.replace(cfg, implementation="fused")
-    device = "cuda"
-    loss, _, grads = _run(fused_cfg, _inputs(fused_cfg, device, torch.bfloat16))
+    loss, ref_loss, grads, ref_grads = _bf16_fused_and_reference(name)
     torch.testing.assert_close(loss, ref_loss, rtol=BF16_LOSS_RTOL, atol=0.0)
-    assert grads.keys() == ref_grads.keys()
     bound = BF16_GRAD_ERR_BOUND[name]
     for grad_name, ref in ref_grads.items():
-        assert torch.isfinite(ref).all(), f"{grad_name}: non-finite reference gradient"
         error = float((grads[grad_name] - ref).abs().max())
         limit = bound * float(ref.abs().max())
         # Checked per gradient and written so that a NaN error fails.
         assert error <= limit, f"{grad_name}: error {error:.3g} > limit {limit:.3g}"
+
+
+@requires_cuda
+@pytest.mark.parametrize("name", sorted(CASES))
+def test_fused_bf16_l2_error_vs_eager_reference(name):
+    _, _, grads, ref_grads = _bf16_fused_and_reference(name)
+    bound = BF16_GRAD_L2_ERR_BOUND[name]
+    for grad_name, ref in ref_grads.items():
+        error = float((grads[grad_name] - ref).norm())
+        limit = bound * float(ref.norm())
+        assert error <= limit, f"{grad_name}: L2 error {error:.3g} > limit {limit:.3g}"
 
 
 @pytest.mark.skipif(
