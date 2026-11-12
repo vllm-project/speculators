@@ -1,10 +1,10 @@
 # DSpark quantization examples
 
-These examples target `RedHatAI/Qwen3.8-27B-speculator.dspark` with verifier `Qwen/Qwen3.8-27B`. FP8 uses dynamic activations without calibration; NVFP4 uses GPTQ and iMatrix on verifier-generated hidden states. Both exclude embeddings, vocabulary heads, Markov and confidence heads. The commands and target checkpoint have not yet been validated end to end. Compressed DSpark serving also needs supporting vLLM changes; the commands below are a validation target, not a claim that current vLLM can serve the output.
+These examples target `RedHatAI/Qwen3.8-27B-speculator.dspark` with verifier `Qwen/Qwen3.8-27B`. FP8 uses dynamic activations without calibration; NVFP4 uses GPTQ and iMatrix on verifier-generated hidden states. Both exclude embeddings, vocabulary heads, Markov and confidence heads. A 128-sample H100 smoke covered offline extraction, quantization and reload, and one speculative completion with each output. It did not measure recovery quality or native NVFP4 W4A4 execution.
 
 The compressor integration is experimental and tied to llm-compressor commit `eac6972ca25f9e67abd8011aad5bb30ef9915e55`. On that revision, the default validator cannot load a speculators config. The examples use a DSpark-only override that reads the original local checkpoint config and rejects quantized and MTP inputs. It relies on compressor internals, and checks the validator's fingerprint at runtime; an unreviewed validator fails closed. An upstream speculator-aware validator is preferable.
 
-A joint Python 3.12 environment with the versions below passed dependency resolution and tiny CPU synthetic calibration, quantization, save and reload probes. The target checkpoint, GPU path and deployment have not been validated. Use a separate vLLM environment with `hs_connectors` installed for extraction; see the [training tutorial](../../docs/user_guide/tutorials/train.md).
+A Python 3.12 quantization environment with the versions below ran both examples on the target checkpoint and reloaded both outputs. The smoke used one H100 80 GB, PyTorch 2.14.1+cu130, and verifier revision `37561816e66b5b9153b1b64c10968c18c1e6f4a0`. A separate vLLM 0.33.0 environment ran extraction and serving with eager execution. Use a separate vLLM environment with `hs_connectors` installed for extraction; see the [training tutorial](../../docs/user_guide/tutorials/train.md).
 
 From the speculators checkout, create a fresh quantization environment and install the pinned compressor checkout and dependencies:
 
@@ -22,7 +22,7 @@ Install the appropriate PyTorch build for your hardware and record the actual in
 
 ## Generate calibration data
 
-Choose prompts representative of your deployment. This example regenerates responses using a local prompt JSONL supported by `regenerate-responses`; see the [response regeneration guide](../../docs/user_guide/tutorials/response_regeneration.md). Use a fresh run directory for each dataset and cache. Here 1024 is the number of eligible prepared samples; 128 is suitable for a local smoke test, not a measured recovery recipe. Individual full-length 2048-token BF16 caches can take about 180 MiB each, or roughly 180 GiB for 1024, plus staging and checkpoint space. Actual sizes depend on sequence lengths.
+Choose prompts representative of your deployment. This example regenerates responses using a local prompt JSONL supported by `regenerate-responses`; see the [response regeneration guide](../../docs/user_guide/tutorials/response_regeneration.md). Use a fresh run directory for each dataset and cache. Here 1024 is the number of eligible prepared samples; 128 is suitable for a local smoke test, not a measured recovery recipe. Individual full-length 2048-token BF16 caches can take about 180 MiB each, or roughly 180 GiB for 1024, plus staging and checkpoint space. Actual sizes depend on sequence lengths. The 128-row smoke cache occupied 3.2 GiB; all responses had been cut at 64 generated tokens, so it was not a representative calibration dataset.
 
 ```bash
 MODEL=Qwen/Qwen3.8-27B
@@ -93,19 +93,27 @@ python examples/quantization/dspark_nvfp4_gptq_imatrix.py --model "$DRAFT" \
   --output-dir "$RUN/draft-nvfp4"
 ```
 
-The default draft revision is `87ca2fdc67f316f6c1f9ebc7ef7bbb0ad299a4ce`; use `--revision` to select another immutable Hub commit. Output directories must not already exist. The NVFP4 example uses the basic whole-model calibration pipeline, which can use substantial memory and has not been measured on this checkpoint. It uses a loss-free backbone forward and avoids padded anchors. Exact numerical results depend on kernels and hardware; these settings are starting points, not independently verified quality results.
+The default draft revision is `87ca2fdc67f316f6c1f9ebc7ef7bbb0ad299a4ce`; use `--revision` to select another immutable Hub commit. Output directories must not already exist. The NVFP4 example uses the basic whole-model calibration pipeline, which can use substantial memory. It uses a loss-free backbone forward and avoids padded anchors. Exact numerical results depend on kernels and hardware; these settings are starting points, not independently verified quality results.
 
 Record the immutable draft and verifier revisions, actual packages and CUDA versions, prompt source and checksum, commands, seed, selected rows, sample count, sequence length, anchor count and recipe alongside the result. The draft loader also reads verifier weights by the verifier name in its config, so ensure that name resolves to the same verifier revision used for generation and extraction; this is not automatically verified. `vllm_command.txt`, `vllm.patch`, and `checkpoint_sha256.txt` record extraction provenance on a best-effort basis, but do not record the entire workflow.
 
 ## Deployment smoke
 
-Once the supporting vLLM changes are available, serve each output separately with the matching verifier. Use a fresh provenance directory per checkpoint:
+Serve each output separately with the matching verifier. The H100 smoke used eager execution; use a fresh provenance directory per checkpoint:
 
 ```bash
 python scripts/launch_vllm.py eval "$MODEL" --spec-model "$RUN/draft-fp8" \
   --spec-tokens 7 --spec-method dspark --provenance-dir "$RUN/eval-fp8" \
-  -- --port 9145 --max-model-len 4096 \
-  --per-request-spec-decode-metrics summary --no-enable-prefix-caching
+  -- --port 9145 --max-model-len 4096 --gpu-memory-utilization 0.90 \
+  --enforce-eager --per-request-spec-decode-metrics summary --no-enable-prefix-caching
 ```
 
-Repeat with `draft-nvfp4` and `eval-nvfp4`. Send a completion request, verify nonempty output and evidence that speculative decoding ran, then run the repository acceptance evaluator. Retain the server logs, software revisions, hardware, kernel/backend and provenance artifacts. Native NVFP4 requires suitable hardware; an H100 fallback, if available, is not evidence of native W4A4 execution. Neither recipe has yet been validated with actual vLLM generation or quality measurements.
+Send a completion request and check for nonempty output and accepted draft tokens in `metrics.speculative_decoding`:
+
+```bash
+curl -fsS http://127.0.0.1:9145/v1/completions \
+  -H 'Content-Type: application/json' \
+  -d '{"model":"Qwen/Qwen3.8-27B","prompt":"Explain photosynthesis briefly.","max_tokens":64,"temperature":0}'
+```
+
+Repeat with `draft-nvfp4` and `eval-nvfp4`, then run the repository acceptance evaluator on a representative dataset. In the H100 smoke, both outputs produced one 64-token completion with accepted draft tokens. vLLM reported 53.49 GiB for FP8 model loading and 52.74 GiB for NVFP4 model loading (verifier and drafter together, not total peak usage). The FP8 run selected `CutlassFP8ScaledMMLinearKernel`; NVFP4 selected `HummingNvFp4LinearKernel`. The NVFP4 loader warned that fused parallel layers had different input global scales and requested accuracy verification. The impact on accuracy was not measured. Retain the server logs, software revisions, hardware, kernel/backend and provenance artifacts. Native NVFP4 requires suitable hardware; this H100 smoke does not demonstrate native W4A4 execution or recovery quality.
