@@ -45,12 +45,10 @@ import importlib.metadata
 import json
 import logging
 import math
-import os
 import socket
 import statistics
 import subprocess
 import sys
-import uuid
 from datetime import UTC, datetime
 from html import escape as html_escape
 from pathlib import Path
@@ -730,15 +728,6 @@ def run_benchmark(bench_args, train_args) -> dict:
         print(f"\nResults written to {output_path}")
         _print_summary(results)
 
-        metrics_dir = getattr(bench_args, "metrics_dir", None)
-        if metrics_dir:
-            try:
-                _emit_benchmark_metrics(results, metrics_dir)
-            except (OSError, KeyError, TypeError):
-                logging.getLogger(__name__).warning(
-                    "Failed to emit benchmark metrics", exc_info=True
-                )
-
     # --- Cleanup ---
     shutdown_dataloader_workers(train_loader)
     del trainer, train_loader, draft_model
@@ -784,70 +773,6 @@ def _print_summary(results: dict) -> None:
     if memory["phases"]:
         phases = ", ".join(f"{p}={mb:.1f}" for p, mb in memory["phases"].items())
         print(f"  phase peaks (MB allocated): {phases}")
-
-
-def _emit_benchmark_metrics(results: dict, metrics_dir: str) -> None:
-    """Write flat ``(metric, value, labels)`` records for CI tracking."""
-    config = results["config"]
-    prov = results["provenance"]
-
-    gpu_info = prov.get("gpu_info", [])
-    labels = {
-        "timestamp": prov["timestamp"],
-        "git_sha": os.environ.get("BUILDKITE_COMMIT") or prov.get("git_sha", "unknown"),
-        "git_sha_short": (
-            os.environ.get("BUILDKITE_COMMIT") or prov.get("git_sha", "unknown")
-        )[:8],
-        "branch": os.environ.get(
-            "BUILDKITE_BRANCH", os.environ.get("GITHUB_REF_NAME", "")
-        ),
-        "build_url": os.environ.get(
-            "BUILDKITE_BUILD_URL", os.environ.get("GITHUB_RUN_URL", "")
-        ),
-        "pr_number": (
-            pr
-            if (pr := os.environ.get("BUILDKITE_PULL_REQUEST", "")) != "false"
-            else ""
-        ),
-        "test_id": f"bench_{config['speculator_type']}_{config['optimizer']}",
-        "test_file": "scripts/benchmark.py",
-        "speculator_type": config["speculator_type"],
-        "optimizer": config["optimizer"],
-        "total_seq_len": config["total_seq_len"],
-        "num_gpus": config["num_gpus_used"],
-        "gpu_name": gpu_info[0]["name"] if gpu_info else "unknown",
-        "hostname": prov.get("hostname", "unknown"),
-        "node_name": os.environ.get("NODE_NAME", ""),
-    }
-
-    records: list[dict] = []
-    for key, stats in results["timing"].items():
-        records.append({"metric": f"bench_{key}", "value": stats["mean"], **labels})
-
-    agg = results["aggregate"]
-    records.append(
-        {
-            "metric": "bench_tokens_per_s",
-            "value": agg["effective_rank0_tokens_per_s"],
-            **labels,
-        }
-    )
-
-    if results["memory"]["per_rank"]:
-        rank0 = results["memory"]["per_rank"][0]
-        records.append(
-            {
-                "metric": "bench_peak_allocated_mb",
-                "value": rank0["peak_allocated_mb"],
-                **labels,
-            }
-        )
-
-    out_dir = Path(metrics_dir)
-    out_dir.mkdir(parents=True, exist_ok=True)
-    out_file = out_dir / f"{uuid.uuid4().hex}.json"
-    out_file.write_text(json.dumps(records))
-    print(f"Wrote {len(records)} metric records to {out_file}")
 
 
 # ---------------------------------------------------------------------------
@@ -1838,13 +1763,6 @@ def build_parser():
         type=str,
         default="profile_traces",
         help="Directory for torch.profiler trace output. Default: profile_traces/.",
-    )
-    run_parser.add_argument(
-        "--metrics-dir",
-        type=str,
-        default=None,
-        help="Write flat (metric, value, labels) JSON records to this directory "
-        "for CI tracking. Use with push_metrics.py push-dir to ship to Grafana.",
     )
     run_parser.add_argument(
         "--profile-stacks",

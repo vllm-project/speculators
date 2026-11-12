@@ -667,11 +667,16 @@ def run_benchmark(
 
     prov = results.get("provenance", {})
     gpu_info = prov.get("gpu_info", [])
+    config = results.get("config", {})
     _emit_ci_metric(
         metrics_dict,
         extra_labels={
             "gpu_name": gpu_info[0]["name"] if gpu_info else "unknown",
             "hostname": prov.get("hostname", "unknown"),
+            "speculator_type": config.get("speculator_type", ""),
+            "optimizer": config.get("optimizer", ""),
+            "total_seq_len": str(config.get("total_seq_len", "")),
+            "num_gpus": str(config.get("num_gpus_used", "")),
         },
     )
 
