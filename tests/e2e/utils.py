@@ -580,6 +580,9 @@ def _emit_ci_metric(
             "test_id": test_id,
             "test_file": test_file,
             "node_name": os.environ.get("NODE_NAME", ""),
+            "python_version": os.environ.get("PYTHON_VERSION", ""),
+            "vllm_version": os.environ.get("VLLM_VERSION", ""),
+            "transformers_version": os.environ.get("TRANSFORMERS_VERSION", ""),
         }
         if extra_labels:
             labels.update(extra_labels)
@@ -659,7 +662,7 @@ def run_benchmark(
     for key, stats in results["timing"].items():
         metrics_dict[f"bench_{key}"] = stats["mean"]
     agg = results["aggregate"]
-    metrics_dict["bench_tokens_per_s"] = agg["effective_rank0_tokens_per_s"]
+    metrics_dict["bench_effective_tokens_per_s"] = agg["effective_rank0_tokens_per_s"]
     if results["memory"]["per_rank"]:
         metrics_dict["bench_peak_allocated_mb"] = results["memory"]["per_rank"][0][
             "peak_allocated_mb"
