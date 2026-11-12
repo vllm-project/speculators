@@ -2,27 +2,21 @@
 
 These examples target `RedHatAI/Qwen3.8-27B-speculator.dspark` with verifier `Qwen/Qwen3.8-27B`. FP8 uses model-free quantization; NVFP4 uses GPTQ with iMatrix calibration on verifier hidden states. Both leave embeddings, vocabulary, Markov and confidence heads unquantized.
 
-Create a Python 3.12 environment from the repository root and install the examples' dependencies. Install a PyTorch build appropriate for your hardware.
+From the repository root, create a separate `vllm_venv` as in the [training tutorial](../../docs/user_guide/tutorials/train.md#step-0-setup-your-environment). Install a hardware-appropriate PyTorch build and the example dependencies in a Python 3.12 quantization environment:
 
 ```bash
 uv venv --python 3.12 .venv-quant
 uv pip install --python .venv-quant/bin/python . ./hs_connectors -r examples/quantization/requirements.txt
-uv pip check --python .venv-quant/bin/python
-```
-
-Create a separate `vllm_venv` as in the [training tutorial](../../docs/user_guide/tutorials/train.md#step-0-setup-your-environment), then install the hidden-state connector in that environment:
-
-```bash
 uv pip install --python vllm_venv/bin/python ./hs_connectors
 ```
 
-Use `vllm_venv` for the generation, extraction and deployment servers. Use `.venv-quant` for the data-generation clients and quantization scripts. Run all commands from the repository root.
+Use `vllm_venv` for the generation, extraction and deployment servers, and `.venv-quant` for the clients and quantization scripts. Run all commands from the repository root.
 
 The NVFP4 example uses an experimental DSpark-only override of llm-compressor's validator because the released validator cannot read this checkpoint's speculators config. It rejects quantized and MTP checkpoints and checks the validator fingerprint. Both scripts require a new output directory and an unquantized DSpark checkpoint. The default draft revision is `87ca2fdc67f316f6c1f9ebc7ef7bbb0ad299a4ce`; override it with `--revision` for another Hub commit.
 
 ## Generate calibration data
 
-FP8 does not need data. For NVFP4, regenerate responses for at least 1024 representative prompts and extract their verifier hidden states. The number of eligible rows can be smaller than `--limit`; inspect the output and increase the limit if needed. Full-length 2048-token BF16 caches can require approximately 180 GiB for 1024 rows, plus staging and checkpoint space. See the [response regeneration guide](../../docs/user_guide/tutorials/response_regeneration.md) for dataset preparation.
+FP8 does not need data. For NVFP4, regenerate responses for representative prompts and extract verifier hidden states for at least 1024 eligible rows. The number of eligible rows can be smaller than `--limit`; inspect the output and increase the limit if needed. Full-length 2048-token BF16 caches can require approximately 180 GiB for 1024 rows, plus staging and checkpoint space. See the [response regeneration guide](../../docs/user_guide/tutorials/response_regeneration.md) for dataset preparation.
 
 Set these variables in both the server and client terminals, from the repository root:
 
@@ -42,7 +36,7 @@ python -m vllm.entrypoints.cli.main serve "$MODEL" \
   --host 127.0.0.1 --port 8000 --max-model-len 2049
 ```
 
-After `curl -fsS http://127.0.0.1:8000/v1/models` succeeds, activate the quantization environment in the client terminal, regenerate responses and prepare rows. The minimum of nine supervised tokens ensures an anchor before this draft's final eight-token block, including after truncation.
+After `curl -fsS http://127.0.0.1:8000/v1/models` succeeds, activate the quantization environment in the client terminal and prepare rows. The minimum of nine supervised tokens ensures an anchor before the final eight-token block. Confirm the printed count is at least 1024 before continuing; if needed, increase `--limit` and prepare a fresh run.
 
 ```bash
 source .venv-quant/bin/activate
@@ -54,14 +48,7 @@ speculators regenerate-responses --dataset ./representative-prompts.jsonl \
 speculators prepare-data --model "$MODEL" --data "$RUN/responses.jsonl" \
   --output "$RUN/prepared" --max-samples "$SAMPLES" --seq-length 2048 \
   --minimum-valid-tokens 9 --seed 42
-python - "$RUN/prepared" "$SAMPLES" <<'PY'
-import sys
-from datasets import load_from_disk
-count = len(load_from_disk(sys.argv[1]))
-print(f"Prepared {count} rows; need {sys.argv[2]}")
-if count < int(sys.argv[2]):
-    raise SystemExit("Not enough prepared rows")
-PY
+python -c 'import sys; from datasets import load_from_disk; print(len(load_from_disk(sys.argv[1])))' "$RUN/prepared"
 ```
 
 Stop the generation server. In the same vLLM server terminal, start an extraction server on a shared filesystem. The launcher appends verifier layer 64 to the eight draft layers.
@@ -94,7 +81,6 @@ python examples/quantization/dspark_fp8.py --model "$DRAFT" \
 python examples/quantization/dspark_nvfp4_gptq_imatrix.py --model "$DRAFT" \
   --data-dir "$RUN/prepared" --hidden-states-dir "$RUN/hidden_states" \
   --extraction-provenance "$RUN/vllm_command.txt" --samples "$SAMPLES" \
-  --sequence-length 2048 --max-anchors 32 --seed 42 \
   --output-dir "$RUN/draft-nvfp4"
 ```
 
