@@ -108,4 +108,4 @@ curl -fsS http://127.0.0.1:9145/v1/completions \
 
 Check for nonempty output and accepted draft tokens in `metrics.speculative_decoding`, then repeat with `draft-nvfp4` and `eval-nvfp4`. Evaluate on a representative dataset before drawing quality conclusions.
 
-On H100, llm-compressor 0.15.0 completed both scripts on the target checkpoint; NVFP4 used 128 offline calibration rows. Both outputs reloaded and served a speculative completion. The served FP8 checkpoint was generated separately and had matching weight hashes. NVFP4 reported different fused input scales; an earlier H100 smoke with an llm-compressor development version used BF16 activations and did not consume those scales. Native NVFP4 W4A4 execution and recovery quality were not measured.
+On H100, llm-compressor 0.15.0 completed both scripts on the target checkpoint; NVFP4 used 128 offline calibration rows. Both outputs reloaded and served a speculative completion with vLLM 0.33.0. NVFP4 serving warned that fused layers have different input global scales, which may reduce accuracy. The H100 Humming path uses BF16 activations; native NVFP4 W4A4 execution and recovery quality were not measured.
