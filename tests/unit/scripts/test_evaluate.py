@@ -13,6 +13,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "scripts" / "evaluate"))
 
+import acceptance_phases  # type: ignore[import-not-found]
 import evaluate  # type: ignore[import-not-found]
 
 
@@ -63,8 +64,11 @@ def native_run(monkeypatch):
     return runner
 
 
-@pytest.mark.parametrize("mode", ["acceptance", "speedup"])
-def test_native_command_preserves_overrides(tmp_path, native_run, mode):
+@pytest.mark.parametrize(
+    ("mode", "reasoning"),
+    [("acceptance", False), ("speedup", False), ("acceptance", True)],
+)
+def test_native_command_preserves_overrides(tmp_path, native_run, mode, reasoning):
     output = tmp_path / mode
     body = '{"max_completion_tokens":1024}'
     assert (
@@ -84,6 +88,7 @@ def test_native_command_preserves_overrides(tmp_path, native_run, mode):
                 "--concurrency=2",
                 "--extra-inputs",
                 body,
+                *(["--reasoning-acceptance"] if reasoning else []),
             ]
         )
         == 0
@@ -103,10 +108,11 @@ def test_native_command_preserves_overrides(tmp_path, native_run, mode):
     ]
     assert native_run.call_args.kwargs == {"check": False}
     assert "--concurrency" not in command
-    assert command.count("--extra-inputs") == 1
+    assert command.count("--extra-inputs") == (2 if reasoning else 1)
     assert command[command.index("--extra-inputs") + 1] == body
+    assert ("return_token_ids:true" in command) == reasoning
     assert command[command.index("--public-dataset") + 1] == "spec_al_humaneval"
-    assert ("--streaming" in command) == (mode == "speedup")
+    assert ("--streaming" in command) == (mode == "speedup" or reasoning)
     assert ("--auto-plot" in command) == (mode == "speedup")
     assert (
         shlex.split((output / "humaneval" / "aiperf_command.txt").read_text())
@@ -245,7 +251,9 @@ def test_multiple_datasets_continue_after_failure(tmp_path, native_run):
         command = call.args[0]
         assert command[command.index("--public-dataset") + 1] == f"spec_al_{name}"
         assert command[command.index("--output-artifact-dir") + 1] == str(output / name)
-    evaluate.summarize_output_directory.assert_called_once_with(output, "acceptance")
+    evaluate.summarize_output_directory.assert_called_once_with(
+        output, "acceptance", by_phase=False
+    )
     evaluate.save_eval_provenance.assert_called_once_with(output)
 
 
@@ -368,10 +376,62 @@ def test_native_category_report_uses_aiperf_server_metrics(tmp_path):
 def test_summarize_existing_native_runs_without_launching(tmp_path, native_run):
     (tmp_path / "eval_command.txt").write_text("original profiling command")
     assert evaluate.main(["summarize", "--output-artifact-dir", str(tmp_path)]) == 0
-    evaluate.summarize_output_directory.assert_called_once_with(tmp_path, "acceptance")
+    evaluate.summarize_output_directory.assert_called_once_with(
+        tmp_path, "acceptance", by_phase=False
+    )
     native_run.assert_not_called()
     evaluate.save_eval_provenance.assert_not_called()
     assert (tmp_path / "eval_command.txt").read_text() == "original profiling command"
+
+
+@pytest.mark.parametrize("detailed", [True, False])
+def test_reasoning_acceptance_report(tmp_path, monkeypatch, detailed):
+    """Check phase reporting with and without detailed counters."""
+    monkeypatch.setattr("acceptance_phases._marker_ids", lambda *_: (10, 11))
+    record = request_record({"0": 1, "1": 3})
+    record["metadata"]["x_request_id"] = "request-1"
+    spec = record["spec_decode_acceptance"]
+    spec.update(engine="vllm", completion_tokens=8, num_draft_tokens=7)
+    if detailed:
+        spec.update(per_step_accepted=[1, 1, 1, 0], per_step_drafted=[2, 2, 2, 1])
+    write_report(
+        tmp_path, [record], input_config={"tokenizer": {"name": "test-tokenizer"}}
+    )
+    events = [
+        {"prompt_token_ids": [10], "choices": [{"token_ids": [20]}]},
+        *({"choices": [{"token_ids": ids}]} for ids in ([21, 22], [11, 23], [24, 25])),
+        {"choices": [{"token_ids": [26], "finish_reason": "stop"}]},
+    ]
+    raw = {
+        "metadata": record["metadata"],
+        "status": 200,
+        "responses": [
+            {"packets": [{"name": "data", "value": json.dumps(event)}]}
+            for event in events
+        ],
+    }
+    (tmp_path / "profile_export_raw.jsonl").write_text(json.dumps(raw) + "\n")
+    args = [
+        "summarize",
+        "--reasoning-acceptance",
+        "--output-artifact-dir",
+        str(tmp_path),
+    ]
+    assert evaluate.main(args) == int(not detailed)
+    rows = {row["phase"]: row for row in read_csv(tmp_path, "acceptance_by_phase.csv")}
+    assert read_csv(tmp_path)
+    assert rows["thinking"]["acceptance_rate_pct"] == ("50.0" if detailed else "")
+    assert rows["final_answer"]["acceptance_rate_pct"] == ("33.33" if detailed else "")
+    assert rows["boundary"]["verification_steps"] == ("1" if detailed else "0")
+    assert rows["unresolved"]["verification_steps"] == "0"
+    assert rows["thinking"]["detailed_requests"] == ("1" if detailed else "0")
+
+
+def test_phase_alignment_handles_merged_chunks_and_trimming():
+    """Check that ambiguous placements and trimmed rounds stay unresolved."""
+    align = acceptance_phases._align_phases
+    assert align([2, 2], [6], 2) == ["unresolved", "unresolved"]
+    assert align([2, 2, 3], [1, 2, 2, 2], 3) == ["thinking", "boundary", "unresolved"]
 
 
 def test_prompt_bins_include_errors_but_exclude_their_metrics(tmp_path):
