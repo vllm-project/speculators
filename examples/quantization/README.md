@@ -2,23 +2,24 @@
 
 These examples target `RedHatAI/Qwen3.8-27B-speculator.dspark` with verifier `Qwen/Qwen3.8-27B`. FP8 uses model-free quantization; NVFP4 uses GPTQ with iMatrix calibration on verifier hidden states. Both leave embeddings, vocabulary, Markov and confidence heads unquantized.
 
-From the repository root, create a separate `vllm_venv` as in the [training tutorial](../../docs/user_guide/tutorials/train.md#step-0-setup-your-environment). Install a hardware-appropriate PyTorch build and the example dependencies in a Python 3.12 quantization environment:
+From the repository root, create separate Python 3.12 environments for vLLM and quantization. The serving commands below use vLLM 0.33.0. Install a hardware-appropriate PyTorch build if needed:
 
 ```bash
+uv venv --python 3.12 vllm_venv
+uv pip install --python vllm_venv/bin/python 'vllm==0.33.0' ./hs_connectors
 uv venv --python 3.12 .venv-quant
 uv pip install --python .venv-quant/bin/python -r examples/quantization/requirements.txt
-uv pip install --python vllm_venv/bin/python ./hs_connectors
 ```
 
 Use `vllm_venv` for the generation, extraction and deployment servers, and `.venv-quant` for the clients and quantization scripts. Run all commands from the repository root.
 
 The requirements install speculators from this checkout, including its local hidden-state connector. Both scripts expect an unquantized DSpark checkpoint and a fresh output directory. The NVFP4 example replaces llm-compressor 0.15.0's validator because Transformers `AutoConfig` cannot read the speculators config. This replacement accepts only DSpark and rejects quantized and MTP checkpoints.
 
-Passing a Hub ID loads its default revision; the scripts do not pin it. For reproducibility, download the desired revision separately and pass its local directory as `--model`. Record the revision used.
+Passing a drafter Hub ID to either quantization script loads its default revision; the scripts do not pin it. To use a particular drafter revision, download it separately and pass its local directory as `--model` (the `DRAFT` value below). Record the revision used.
 
 ## Generate calibration data
 
-FP8 does not need data. For NVFP4, regenerate responses for representative prompts and extract verifier hidden states for at least 1024 eligible rows. The number of eligible rows can be smaller than `--limit`; inspect the output and increase the limit if needed. Full-length 2048-token BF16 caches can require approximately 180 GiB for 1024 rows, plus staging and checkpoint space. See the [response regeneration guide](../../docs/user_guide/tutorials/response_regeneration.md) for dataset preparation.
+FP8 does not need data. For NVFP4, regenerate responses for representative prompts and extract verifier hidden states for at least 1024 eligible rows. The number of eligible rows can be smaller than `--limit`; inspect the output and increase the limit if needed. Full-length 2048-token BF16 caches can require approximately 180 GiB of disk for 1024 rows, plus staging and checkpoint space. During quantization, llm-compressor's basic pipeline caches all calibration inputs in host RAM: eight layers of width 5120 at 1024 × 2048 tokens require approximately 160 GiB for BF16 hidden states alone, plus other inputs and overhead. Shorter rows need less. See the [response regeneration guide](../../docs/user_guide/tutorials/response_regeneration.md) for dataset preparation.
 
 Set these variables in both the server and client terminals, from the repository root:
 
@@ -86,7 +87,7 @@ python examples/quantization/dspark_nvfp4_gptq_imatrix.py --model "$DRAFT" \
   --output-dir "$RUN/draft-nvfp4"
 ```
 
-The NVFP4 example runs whole-model calibration and can require substantial memory. The drafter loads verifier weights by the name in its config: ensure that resolves to the same verifier revision used for generation and extraction. Record the revisions, package and CUDA versions, prompt source and checksum, commands, seed, selected rows and recipe alongside the outputs. Keep the launcher provenance and patches with the run.
+The NVFP4 example runs whole-model calibration. The extraction command's verifier argument must exactly match the verifier name in the drafter config; a local snapshot path or alias for `MODEL` will be rejected even if it contains the same weights. The drafter also loads verifier weights by that name. Ensure it resolves to the same verifier revision used for generation and extraction; the script checks the name, not the revision. Record the revisions, package and CUDA versions, prompt source and checksum, commands, seed, selected rows and recipe alongside the outputs. Keep the launcher provenance and patches with the run.
 
 In the `vllm_venv` server terminal, serve each output separately with the matching verifier and a fresh provenance directory:
 
