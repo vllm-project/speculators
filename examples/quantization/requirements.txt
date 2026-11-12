@@ -1,4 +1,3 @@
+speculators==0.9.0
+hs-connectors==0.9.0
 llmcompressor==0.15.0
-# Install speculators from the repository root for the required APIs.
--e .
-./hs_connectors

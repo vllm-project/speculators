@@ -1,5 +1,6 @@
 """Behavior at the offline cache to calibration batch boundary."""
 
+import importlib.util
 import subprocess
 import sys
 from pathlib import Path
@@ -10,7 +11,7 @@ from datasets import Dataset
 from safetensors.torch import save_file
 from transformers import Qwen3Config
 
-from examples.quantization.dspark_nvfp4_gptq_imatrix import (
+from examples.quantization.dspark_calibration import (
     calibration_batches,
     calibration_forward,
 )
@@ -43,7 +44,6 @@ def test_calibration_batches_require_matching_cached_tokens(tmp_path):
         max_length=6,
         max_anchors=10,
         layer_ids=[1, 2],
-        captured_layer_ids=[1, 2, 3],
         width=2,
         block_size=2,
     )
@@ -56,6 +56,37 @@ def test_calibration_batches_require_matching_cached_tokens(tmp_path):
         {"token_ids": torch.tensor([1, 2, 3, 4, 5, 7]), "hidden_states": hidden}, path
     )
     with pytest.raises(ValueError, match="Token ids don't match"):
+        next(iter(batches))
+
+
+@pytest.mark.parametrize(
+    ("hidden", "message"),
+    [
+        (torch.ones(6, 4, 2), "Invalid hidden-state shape"),
+        (torch.full((6, 3, 2), float("nan")), "non-finite"),
+    ],
+)
+def test_calibration_rejects_invalid_hidden_states(tmp_path, hidden, message):
+    Dataset.from_dict(
+        {"input_ids": [[1, 2, 3, 4, 5, 6]], "loss_mask": [[0, 1, 1, 1, 1, 1]]}
+    ).save_to_disk(tmp_path / "records")
+    cache = tmp_path / "cache"
+    cache.mkdir()
+    save_file(
+        {"token_ids": torch.tensor([1, 2, 3, 4, 5, 6]), "hidden_states": hidden},
+        cache / "hs_0.safetensors",
+    )
+    batches = calibration_batches(
+        tmp_path / "records",
+        cache,
+        count=1,
+        max_length=6,
+        max_anchors=10,
+        layer_ids=[1, 2],
+        width=2,
+        block_size=2,
+    )
+    with pytest.raises(ValueError, match=message):
         next(iter(batches))
 
 
@@ -120,13 +151,16 @@ def test_calibration_activations_match_training():
                 "unused",
                 "--hidden-states-dir",
                 "unused",
-                "--extraction-provenance",
-                "unused",
             ],
         ),
     ],
 )
 def test_quantization_refuses_existing_output(tmp_path, script, extra_args):
+    if (
+        script == "dspark_nvfp4_gptq_imatrix.py"
+        and importlib.util.find_spec("llmcompressor") is None
+    ):
+        pytest.skip("llmcompressor is not installed")
     script_path = Path(__file__).resolve().parents[3] / "examples/quantization" / script
     result = subprocess.run(  # noqa: S603
         [

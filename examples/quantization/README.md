@@ -6,14 +6,14 @@ From the repository root, create separate Python 3.12 environments for vLLM and 
 
 ```bash
 uv venv --python 3.12 vllm_venv
-uv pip install --python vllm_venv/bin/python 'vllm==0.33.0' ./hs_connectors
+uv pip install --python vllm_venv/bin/python 'vllm==0.33.0' 'hs-connectors==0.9.0'
 uv venv --python 3.12 .venv-quant
 uv pip install --python .venv-quant/bin/python -r examples/quantization/requirements.txt
 ```
 
 Use `vllm_venv` for the generation, extraction and deployment servers, and `.venv-quant` for the clients and quantization scripts. Run all commands from the repository root.
 
-The requirements install speculators from this checkout, including its local hidden-state connector. Both scripts expect an unquantized DSpark checkpoint and a fresh output directory. The NVFP4 example replaces llm-compressor 0.15.0's validator because Transformers `AutoConfig` cannot read the speculators config. This replacement accepts only DSpark and rejects quantized and MTP checkpoints.
+The quantization requirements pin released speculators, hs-connectors and llm-compressor versions. Both scripts expect an unquantized DSpark checkpoint and a fresh output directory. The NVFP4 example replaces llm-compressor 0.15.0's validator because Transformers `AutoConfig` cannot read the speculators config. This replacement accepts only unquantized DSpark checkpoints.
 
 Passing a drafter Hub ID to either quantization script loads its default revision; the scripts do not pin it. To use a particular drafter revision, download it separately and pass its local directory as `--model` (the `DRAFT` value below). Record the revision used.
 
@@ -72,7 +72,7 @@ speculators generate-offline-data --model "$MODEL" \
   --validate-outputs --fail-on-error
 ```
 
-Stop the server before quantization. Use a fresh cache for each set of rows and extraction settings. The adapter validates token alignment, shape, finite values and layer order; it accepts FP16, BF16 and FP32 states, not raw scaled FP8. Check that the cache belongs to `vllm_command.txt`; provenance is not cryptographically bound to the cache.
+Stop the server before quantization. Use a fresh cache for each set of rows and extraction settings. The adapter validates token alignment, shape, layer count and finite values; it accepts FP16, BF16 and FP32 states, not raw scaled FP8. The cache does not record layer IDs. It assumes the capture order matches the drafter’s `target_layer_ids`, followed optionally by the final verifier layer; verify the extraction settings and keep the launcher provenance with the cache.
 
 ## Quantize and deploy
 
@@ -83,11 +83,11 @@ python examples/quantization/dspark_fp8.py --model "$DRAFT" \
   --output-dir "$RUN/draft-fp8"
 python examples/quantization/dspark_nvfp4_gptq_imatrix.py --model "$DRAFT" \
   --data-dir "$RUN/prepared" --hidden-states-dir "$RUN/hidden_states" \
-  --extraction-provenance "$RUN/vllm_command.txt" --samples "$SAMPLES" \
+  --samples "$SAMPLES" \
   --output-dir "$RUN/draft-nvfp4"
 ```
 
-The NVFP4 example runs whole-model calibration. The extraction command's verifier argument must exactly match the verifier name in the drafter config; a local snapshot path or alias for `MODEL` will be rejected even if it contains the same weights. The drafter also loads verifier weights by that name. Ensure it resolves to the same verifier revision used for generation and extraction; the script checks the name, not the revision. Record the revisions, package and CUDA versions, prompt source and checksum, commands, seed, selected rows and recipe alongside the outputs. Keep the launcher provenance and patches with the run.
+The NVFP4 example runs whole-model calibration. The drafter loads verifier weights by the name in its config. Ensure it resolves to the same verifier revision used for generation and extraction. Record the revisions, package and CUDA versions, prompt source and checksum, commands, seed, selected rows and recipe alongside the outputs. Keep the launcher provenance and patches with the run.
 
 In the `vllm_venv` server terminal, serve each output separately with the matching verifier and a fresh provenance directory:
 
