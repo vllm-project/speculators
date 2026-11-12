@@ -1,5 +1,6 @@
 """Unit tests for GLM-5 Dense MLA DFlash / DSpark draft layers."""
 
+import argparse
 import json
 import math
 from types import SimpleNamespace
@@ -94,7 +95,7 @@ def test_qwen3_dflash_keeps_fc_and_hidden_norm():
         head_dim=16,
         max_position_embeddings=64,
         tie_word_embeddings=False,
-        _attn_implementation="eager",
+        _attn_implementation="eager",  # type: ignore[call-arg]
     )
     model = DFlashDraftModel(
         DFlashSpeculatorConfig(
@@ -255,32 +256,32 @@ def test_create_transformer_layer_config_copies_glm5_mla_fields():
 
 def test_apply_glm5_lora_rank_overrides():
     config = _tiny_glm5_config()
-    args = SimpleNamespace(q_lora_rank=4096, kv_lora_rank=2048)
+    args = argparse.Namespace(q_lora_rank=4096, kv_lora_rank=2048)
     _apply_glm5_lora_rank_overrides(config, args)
     assert config.q_lora_rank == 4096
     assert config.kv_lora_rank == 2048
 
     config = _tiny_glm5_config()
     _apply_glm5_lora_rank_overrides(
-        config, SimpleNamespace(q_lora_rank=0, kv_lora_rank=None)
+        config, argparse.Namespace(q_lora_rank=0, kv_lora_rank=None)
     )
     assert config.q_lora_rank is None
     assert config.kv_lora_rank == 8
 
     with pytest.raises(ValueError, match="must be > 0"):
         _apply_glm5_lora_rank_overrides(
-            _tiny_glm5_config(), SimpleNamespace(q_lora_rank=None, kv_lora_rank=0)
+            _tiny_glm5_config(), argparse.Namespace(q_lora_rank=None, kv_lora_rank=0)
         )
 
     with pytest.raises(ValueError, match="must be >= 0"):
         _apply_glm5_lora_rank_overrides(
-            _tiny_glm5_config(), SimpleNamespace(q_lora_rank=-1, kv_lora_rank=None)
+            _tiny_glm5_config(), argparse.Namespace(q_lora_rank=-1, kv_lora_rank=None)
         )
 
     with pytest.raises(ValueError, match="require --draft-arch glm5"):
         _apply_glm5_lora_rank_overrides(
-            SimpleNamespace(model_type="qwen3"),
-            SimpleNamespace(q_lora_rank=4096, kv_lora_rank=2048),
+            Qwen3Config(),
+            argparse.Namespace(q_lora_rank=4096, kv_lora_rank=2048),
         )
 
 
@@ -517,7 +518,7 @@ def test_qwen3_dspark_keeps_python_architecture_name(tmp_path):
         head_dim=16,
         max_position_embeddings=64,
         tie_word_embeddings=False,
-        _attn_implementation="eager",
+        _attn_implementation="eager",  # type: ignore[call-arg]
     )
     config = DSparkSpeculatorConfig(
         transformer_layer_config=tl_config,

@@ -261,7 +261,7 @@ class DFlashMLAAttention(DeepseekV3Attention):
             else None
         )
 
-    def forward(
+    def forward(  # type: ignore[override]
         self,
         hidden_states: torch.Tensor,
         target_hidden: torch.Tensor,
@@ -273,11 +273,24 @@ class DFlashMLAAttention(DeepseekV3Attention):
     ) -> tuple[torch.Tensor, torch.Tensor | None]:
         bsz, q_len = hidden_states.shape[:-1]
         kv_len = target_hidden.shape[1] + q_len
+        v_head_dim = (
+            self.v_head_dim if self.v_head_dim is not None else self.qk_head_dim
+        )
 
         if self.q_lora_rank is None:
+            if self.q_proj is None:
+                raise RuntimeError("q_proj is required when q_lora_rank is unset")
             q = self.q_proj(hidden_states)
         else:
-            q = self.q_b_proj(self.q_a_layernorm(self.q_a_proj(hidden_states)))
+            q_a_proj = self.q_a_proj
+            q_a_layernorm = self.q_a_layernorm
+            q_b_proj = self.q_b_proj
+            if q_a_proj is None or q_a_layernorm is None or q_b_proj is None:
+                raise RuntimeError(
+                    "q_a_proj, q_a_layernorm, and q_b_proj are required "
+                    "when q_lora_rank is set"
+                )
+            q = q_b_proj(q_a_layernorm(q_a_proj(hidden_states)))
         q = q.view(bsz, q_len, -1, self.qk_head_dim).transpose(1, 2)
         q_pass, q_rot = torch.split(
             q, [self.qk_nope_head_dim, self.qk_rope_head_dim], dim=-1
@@ -292,17 +305,15 @@ class DFlashMLAAttention(DeepseekV3Attention):
         )
         k_pass = (
             self.kv_b_proj(self.kv_a_layernorm(k_pass))
-            .view(bsz, kv_len, -1, self.qk_nope_head_dim + self.v_head_dim)
+            .view(bsz, kv_len, -1, self.qk_nope_head_dim + v_head_dim)
             .transpose(1, 2)
         )
-        k_pass, v = torch.split(
-            k_pass, [self.qk_nope_head_dim, self.v_head_dim], dim=-1
-        )
+        k_pass, v = torch.split(k_pass, [self.qk_nope_head_dim, v_head_dim], dim=-1)
         k_rot = k_rot.view(bsz, 1, kv_len, self.qk_rope_head_dim)
 
         cos, sin = position_embeddings
         q_rot, k_rot = _apply_mla_rope(
-            self.config.rope_interleave, q_rot, k_rot, cos, sin
+            bool(self.config.rope_interleave), q_rot, k_rot, cos, sin
         )
         k_rot = k_rot.expand(*k_pass.shape[:-1], -1)
         q = torch.cat((q_pass, q_rot), dim=-1)
@@ -310,8 +321,8 @@ class DFlashMLAAttention(DeepseekV3Attention):
 
         # Flash/flex kernels need matching Q/K/V head dims; GLM-5 has
         # v_head_dim == qk_head_dim, DeepSeek-style verifiers do not.
-        if self.v_head_dim != self.qk_head_dim:
-            v = nn.functional.pad(v, (0, self.qk_head_dim - self.v_head_dim))
+        if v_head_dim != self.qk_head_dim:
+            v = nn.functional.pad(v, (0, self.qk_head_dim - v_head_dim))
 
         if past_key_values is not None:
             cache_kwargs = {"sin": sin, "cos": cos, "cache_position": cache_position}
@@ -336,8 +347,8 @@ class DFlashMLAAttention(DeepseekV3Attention):
             sliding_window=self.sliding_window,
             **kwargs,
         )
-        if self.v_head_dim != self.qk_head_dim:
-            attn_output = attn_output[..., : self.v_head_dim]
+        if v_head_dim != self.qk_head_dim:
+            attn_output = attn_output[..., :v_head_dim]
         attn_output = attn_output.reshape(bsz, q_len, -1)
         return self.o_proj(attn_output), attn_weights
 

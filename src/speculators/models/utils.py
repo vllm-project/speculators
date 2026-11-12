@@ -2,6 +2,7 @@ import logging
 import warnings
 from copy import deepcopy
 from functools import cache, partial
+from typing import Any
 
 import torch
 from transformers import AutoConfig, PretrainedConfig
@@ -179,10 +180,12 @@ def flatten_rope_parameters(config: PretrainedConfig) -> PretrainedConfig:
     return config
 
 
-def mla_kwargs_from_verifier(verifier_config: PretrainedConfig) -> dict:
+def mla_kwargs_from_verifier(verifier_config: Any) -> dict[str, Any]:
     """Copy dense MLA ranks/head dims from a GLM-5 / DeepSeek-style verifier.
 
-    Returns ``DeepseekV3Config`` kwargs; ``qk_head_dim`` is derived by the config.
+    ``verifier_config`` is duck-typed (``PretrainedConfig`` or a namespace
+    with the same attributes). Returns ``DeepseekV3Config`` kwargs;
+    ``qk_head_dim`` is derived by the config.
     """
     required = (
         "q_lora_rank",
