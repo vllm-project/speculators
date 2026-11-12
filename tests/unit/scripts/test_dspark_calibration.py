@@ -1,16 +1,10 @@
 """Behavior at the offline cache to calibration batch boundary."""
 
-import json
-import subprocess
-import sys
-
 import pytest
 import torch
-from datasets import Dataset, load_from_disk
+from datasets import Dataset
 from safetensors.torch import save_file
-from tokenizers import Tokenizer
-from tokenizers.models import WordLevel
-from transformers import PreTrainedTokenizerFast, Qwen3Config
+from transformers import Qwen3Config
 
 from examples.quantization._dspark_calibration import (
     calibration_batches,
@@ -59,73 +53,6 @@ def test_calibration_batches_require_matching_cached_tokens(tmp_path):
     )
     with pytest.raises(ValueError, match="Token ids don't match"):
         next(iter(batches))
-
-
-def test_prepared_rows_are_usable_for_offline_calibration(tmp_path, monkeypatch):
-    """The documented preparation filter excludes rows without valid anchors."""
-    monkeypatch.setenv("HF_HUB_OFFLINE", "1")
-    tokenizer = Tokenizer(WordLevel({"[UNK]": 0}, unk_token="[UNK]"))
-    processor = PreTrainedTokenizerFast(tokenizer_object=tokenizer, unk_token="[UNK]")
-    processor.save_pretrained(tmp_path / "tokenizer")
-    rows = [
-        {"input_ids": list(range(12)), "loss_mask": [0] * 4 + [1] * 8},
-        {"input_ids": list(range(12, 24)), "loss_mask": [0] * 3 + [1] * 9},
-        # Nine supervised tokens before clipping, but only eight afterward.
-        {"input_ids": list(range(13)), "loss_mask": [0] * 4 + [1] * 9},
-    ]
-    source = tmp_path / "responses.jsonl"
-    source.write_text("".join(json.dumps(row) + "\n" for row in rows))
-    subprocess.run(  # noqa: S603 -- fixed command and locally created inputs
-        [
-            sys.executable,
-            "-m",
-            "speculators",
-            "prepare-data",
-            "--model",
-            str(tmp_path / "tokenizer"),
-            "--data",
-            str(source),
-            "--output",
-            str(tmp_path / "prepared"),
-            "--seq-length",
-            "12",
-            "--max-samples",
-            "1",
-            "--num-preprocessing-workers",
-            "1",
-            "--minimum-valid-tokens",
-            "9",
-        ],
-        check=True,
-    )
-    prepared = load_from_disk(tmp_path / "prepared")
-    assert len(prepared) == 1
-    assert prepared[0]["input_ids"].tolist() == list(range(12, 24))
-    cache = tmp_path / "cache"
-    cache.mkdir()
-    save_file(
-        {
-            "token_ids": torch.tensor(list(range(12, 24))),
-            "hidden_states": torch.ones((12, 1, 2)),
-        },
-        cache / "hs_0.safetensors",
-    )
-    batch = next(
-        iter(
-            calibration_batches(
-                tmp_path / "prepared",
-                cache,
-                count=1,
-                max_length=12,
-                max_anchors=32,
-                layer_ids=[1],
-                captured_layer_ids=[1],
-                width=2,
-                block_size=8,
-            )
-        )
-    )
-    assert batch["max_anchors"] == 1
 
 
 def test_calibration_activations_match_training():

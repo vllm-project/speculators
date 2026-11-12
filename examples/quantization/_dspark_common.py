@@ -1,4 +1,4 @@
-"""Experimental integration for the pinned llm-compressor checkout in README."""
+"""Shared checkpoint handling and DSpark support for calibrated quantization."""
 
 import argparse
 import hashlib
@@ -15,7 +15,7 @@ from speculators import SpeculatorModel
 from speculators.models.dspark import DSparkDraftModel
 
 IGNORE = [
-    "Embedding",
+    r"re:.*(^|\.)embed_tokens$",
     "lm_head",
     "verifier_lm_head",
     r"re:.*(^|\.)markov_head\..*",
@@ -28,6 +28,15 @@ def check_unquantized(config):
     if isinstance(config, dict):
         if config.get("quantization_config") is not None:
             raise ValueError("Use an unquantized DSpark checkpoint for these examples")
+        if any(
+            config.get(name, 0)
+            for name in (
+                "num_mtp_layers",
+                "mtp_num_hidden_layers",
+                "num_nextn_predict_layers",
+            )
+        ):
+            raise ValueError("MTP checkpoints are not supported by these examples")
         for value in config.values():
             check_unquantized(value)
     elif isinstance(config, list):
@@ -76,7 +85,7 @@ def parser(description):
     return result
 
 
-def load_model(args):
+def checkpoint_path(args):
     if args.output_dir.exists():
         raise FileExistsError(f"Output already exists: {args.output_dir}")
     local = Path(args.model)
@@ -85,8 +94,17 @@ def load_model(args):
         if local.is_dir()
         else snapshot_download(args.model, revision=args.revision)
     )
+    if args.output_dir.resolve().is_relative_to(Path(checkpoint).resolve()):
+        raise ValueError("Output must be outside the input checkpoint")
     raw, _ = PretrainedConfig.get_config_dict(checkpoint, local_files_only=True)
     check_unquantized(raw)
+    if raw.get("speculators_model_type") != "dspark":
+        raise TypeError("Only DSpark models are supported")
+    return checkpoint
+
+
+def load_model(args):
+    checkpoint = checkpoint_path(args)
     model = SpeculatorModel.from_pretrained(checkpoint, torch_dtype=torch.bfloat16)
     if not isinstance(model, DSparkDraftModel):
         raise TypeError("Only DSpark models are supported")

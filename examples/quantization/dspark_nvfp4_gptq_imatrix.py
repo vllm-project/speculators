@@ -47,7 +47,10 @@ def main():
     print(f"Calibrating on prepared rows 0 through {args.samples - 1}", flush=True)
     model.forward = MethodType(calibration_forward, model)
     recipe = GPTQModifier(
-        targets="Linear", scheme="NVFP4", weight_observer="imatrix_mse", ignore=IGNORE
+        targets="Linear",
+        scheme="NVFP4",
+        weight_observer="imatrix_mse",
+        ignore=["Embedding", *IGNORE],
     )
     tokenizer = AutoTokenizer.from_pretrained(verifier)
     DSparkOneshot(
