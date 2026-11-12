@@ -6,7 +6,6 @@ from transformers import PretrainedConfig
 
 from speculators.model import SpeculatorModel
 from speculators.models.dflash.core import DFlashDraftModel
-from speculators.models.dflash.utils import get_base_indices_for_anchored_blocks
 from speculators.models.dspine.config import DSpineSpeculatorConfig
 from speculators.models.dspine.metrics import compute_dspine_loss
 from speculators.models.dspine.model_definitions import (
@@ -134,142 +133,58 @@ class DSpineDraftModel(DFlashDraftModel):
         remaining = (config.curriculum_end_ratio - progress) / span
         return config.curriculum_probability * min(1.0, max(0.0, remaining))
 
-    def _dspine_backbone_forward(
+    def _forward_backbone_layer(
         self,
+        layer_idx: int,
         hidden_states: torch.Tensor,
         input_ids: torch.Tensor,
-        loss_mask: torch.Tensor,
-        verifier_last_hidden_states: torch.Tensor,
-        document_ids: torch.Tensor,
-        position_ids: torch.Tensor | None,
-        *,
-        max_anchors: int,
-        global_step: int,
-        total_training_steps: int,
+        anchored_block_indices: torch.Tensor,
+        layer_context: dict[str, Any] | None,
         **kwargs,
-    ) -> tuple[
-        torch.Tensor,
-        torch.Tensor,
-        torch.Tensor,
-        torch.Tensor,
-        list[torch.Tensor],
-        torch.Tensor,
-    ]:
-        device = hidden_states.device
-        total_seq_len = hidden_states.shape[1]
-        if position_ids is None:
-            position_ids = torch.arange(
-                total_seq_len, dtype=torch.long, device=device
-            ).unsqueeze(0)
-
-        full_attn_mask, sliding_window_attn_mask, anchor_positions, anchor_valid = (
-            self._build_attention_mask(loss_mask, max_anchors, document_ids, device)
-        )
-        mask_tokens_size = max_anchors * self.block_size
-        mask_token_ids = torch.full(
-            (1, mask_tokens_size),
-            self.mask_token_id,
-            dtype=torch.long,
-            device=device,
-        )
-        mask_token_ids[:, :: self.block_size] = input_ids[:, anchor_positions]
-        draft_hidden = self.embed_tokens(mask_token_ids)
-        if torch.is_autocast_enabled(device.type):
-            draft_hidden = draft_hidden.to(torch.get_autocast_dtype(device.type))
-
-        target_hidden = self.hidden_norm(self.fc(hidden_states))
-        mask_position_ids = get_base_indices_for_anchored_blocks(
-            position_ids[0, anchor_positions], self.block_size
-        )
-        all_position_ids = torch.cat(
-            [position_ids, mask_position_ids.unsqueeze(0)], dim=1
-        )
-        position_embeddings = self.rotary_emb(hidden_states, all_position_ids)
-
-        anchored_block_indices = get_base_indices_for_anchored_blocks(
-            anchor_positions, self.block_size
-        )
-        with torch.no_grad():
-            if anchored_block_indices.numel() < total_seq_len:
-                target_indices = (anchored_block_indices - 1) % total_seq_len
-                targets = self.verifier_lm_head(
-                    self.verifier_norm(verifier_last_hidden_states[:, target_indices])
+    ) -> torch.Tensor:
+        assert layer_context is not None  # noqa: S101
+        if layer_idx == 0:
+            if torch.is_autocast_enabled(hidden_states.device.type):
+                hidden_states = hidden_states.to(
+                    torch.get_autocast_dtype(hidden_states.device.type)
                 )
-            else:
-                verifier_logits = self.verifier_lm_head(
-                    self.verifier_norm(verifier_last_hidden_states)
-                )
-                targets = torch.roll(verifier_logits, 1, dims=1)[
-                    :, anchored_block_indices
-                ]
-
-        # Prepare correct predecessors and the curriculum substitution probability.
-        block_tokens = input_ids[0, anchored_block_indices].view(
-            max_anchors, self.block_size
-        )
-        correct_predecessor_ids = block_tokens[:, :-1]
-        curriculum_probability = self._curriculum_probability(
-            global_step, total_training_steps
-        )
-        curriculum_blocks = None
-        if curriculum_probability > 0:
-            curriculum_blocks = (
-                torch.rand(max_anchors, device=device) < curriculum_probability
+            block_tokens = input_ids[0, anchored_block_indices].view(
+                -1, self.block_size
+            )
+            layer_context["block_tokens"] = block_tokens
+            probability = layer_context["curriculum_probability"]
+            layer_context["curriculum_blocks"] = (
+                torch.rand(block_tokens.shape[0], device=hidden_states.device)
+                < probability
+                if probability > 0
+                else None
             )
 
-        layer_features: list[torch.Tensor] = []
-        final_pre_injection: torch.Tensor | None = None
-        for layer_idx, layer in enumerate(self.layers):
-            pre_injection = layer(
-                hidden_states=draft_hidden,
-                target_hidden=target_hidden,
-                attention_mask=sliding_window_attn_mask
-                if layer_idx in self.sliding_window_indices
-                else full_attn_mask,
-                position_ids=all_position_ids,
-                use_cache=False,
-                position_embeddings=position_embeddings,
-                **kwargs,
-            )
-            if layer_idx == len(self.layers) - 1:
-                # Cache u_{L,t} so last-write refinement can replace the final
-                # injection with one conditioned on a chosen predecessor token,
-                # without rerunning the Transformer (paper §4.3, p. 7).
-                final_pre_injection = pre_injection
-            use_curriculum = (
-                curriculum_blocks if layer_idx < self.config.curriculum_layers else None
-            )
-            # States: [1, max_anchors * block_size, hidden_size].
-            # Features: [1, max_anchors * block_size, transfer_dim].
-            draft_hidden, post_features = self.injection.inject_layer(
-                layer_idx,
-                pre_injection,
-                transfer_embeddings=self.transfer_embeddings,
-                anchor_token_ids=block_tokens[:, 0],
-                correct_predecessor_ids=correct_predecessor_ids,
-                curriculum_blocks=use_curriculum,
-            )
-            layer_features.append(post_features)
-
-        assert final_pre_injection is not None  # noqa: S101
-        hidden = self.norm(draft_hidden)
-        # shape: [1, max_anchors * block_size, vocab_size]
-        unary_logits = self.lm_head(hidden)
-        aligned_loss_mask = loss_mask[:, anchored_block_indices]
-        aligned_loss_mask = aligned_loss_mask * (
-            anchor_valid.repeat_interleave(self.block_size)
-            .unsqueeze(0)
-            .to(aligned_loss_mask.dtype)
+        pre_injection = super()._forward_backbone_layer(
+            layer_idx,
+            hidden_states,
+            input_ids,
+            anchored_block_indices,
+            layer_context,
+            **kwargs,
         )
-        aligned_loss_mask[:, :: self.block_size] = 0
-        return (
-            unary_logits,
-            targets,
-            aligned_loss_mask,
-            block_tokens,
-            layer_features,
-            final_pre_injection,
+        # Keep the final raw decoder states for last-write refinement.
+        layer_context["final_pre_injection"] = pre_injection
+        block_tokens = layer_context["block_tokens"]
+        hidden_states, features = self.injection.inject_layer(
+            layer_idx,
+            pre_injection,
+            transfer_embeddings=self.transfer_embeddings,
+            anchor_token_ids=block_tokens[:, 0],
+            correct_predecessor_ids=block_tokens[:, :-1],
+            curriculum_blocks=(
+                layer_context["curriculum_blocks"]
+                if layer_idx < self.config.curriculum_layers
+                else None
+            ),
         )
+        layer_context["layer_features"].append(features)
+        return hidden_states
 
     def _compute_candidate_logits(
         self, hidden_states: torch.Tensor, candidate_ids: torch.Tensor
@@ -296,14 +211,13 @@ class DSpineDraftModel(DFlashDraftModel):
         total_training_steps: int = 1,
         **kwargs,
     ) -> tuple[None, torch.Tensor, dict[str, Any]]:
-        (
-            unary_logits,
-            targets,
-            aligned_loss_mask,
-            block_tokens,
-            layer_features,
-            final_pre_injection,
-        ) = self._dspine_backbone_forward(
+        layer_context: dict[str, Any] = {
+            "curriculum_probability": self._curriculum_probability(
+                global_step, total_training_steps
+            ),
+            "layer_features": [],
+        }
+        _, unary_logits, targets, aligned_loss_mask, _ = self._backbone_forward(
             hidden_states,
             input_ids,
             loss_mask,
@@ -311,10 +225,10 @@ class DSpineDraftModel(DFlashDraftModel):
             document_ids,
             position_ids,
             max_anchors=max_anchors,
-            global_step=global_step,
-            total_training_steps=total_training_steps,
+            layer_context=layer_context,
             **kwargs,
         )
+        block_tokens = layer_context["block_tokens"]
 
         candidate_ids = unary_logits.topk(self.config.transition_top_k, dim=-1).indices
 
@@ -322,7 +236,7 @@ class DSpineDraftModel(DFlashDraftModel):
             block_tokens[:, :-1]
         ].float() * math.sqrt(self.config.transfer_dim)
         refined_successors = self.injection.last_write(
-            final_pre_injection, correct_predecessor_features
+            layer_context["final_pre_injection"], correct_predecessor_features
         )
         with torch.autocast(device_type=refined_successors.device.type, enabled=False):
             refined_hidden = (
@@ -360,7 +274,7 @@ class DSpineDraftModel(DFlashDraftModel):
             candidate_ids=candidate_ids,
             targets=targets,
             target_ids=target_ids,
-            layer_features=layer_features,
+            layer_features=layer_context["layer_features"],
             target_features=target_features,
             loss_mask=aligned_loss_mask,
             block_size=self.block_size,
