@@ -28,15 +28,6 @@ def check_unquantized(config):
     if isinstance(config, dict):
         if config.get("quantization_config") is not None:
             raise ValueError("Use an unquantized DSpark checkpoint for these examples")
-        if any(
-            config.get(name, 0)
-            for name in (
-                "num_mtp_layers",
-                "mtp_num_hidden_layers",
-                "num_nextn_predict_layers",
-            )
-        ):
-            raise ValueError("MTP checkpoints are not supported by these examples")
         for value in config.values():
             check_unquantized(value)
     elif isinstance(config, list):
