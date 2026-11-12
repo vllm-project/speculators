@@ -36,7 +36,7 @@ _compiled_create_block_mask = torch.compile(create_block_mask)
 
 
 class DFlashBackbone(nn.Module):
-    def __init__(self, tl_config: PretrainedConfig):
+    def __init__(self, tl_config: PretrainedConfig, num_target_layers: int) -> None:
         super().__init__()
         self.layers = nn.ModuleList(
             [
@@ -60,7 +60,7 @@ class DFlashBackbone(nn.Module):
         self.rotary_emb = Qwen3RotaryEmbedding(rotary_config)  # type: ignore[arg-type]
 
         self.fc = nn.Linear(
-            len(self.target_layer_ids) * tl_config.hidden_size,
+            num_target_layers * tl_config.hidden_size,
             tl_config.hidden_size,
             bias=False,
         )
@@ -68,11 +68,6 @@ class DFlashBackbone(nn.Module):
             tl_config.hidden_size,
             eps=tl_config.rms_norm_eps,  # type: ignore[arg-type]
         )
-
-
-        noise_embedding = self.embed_tokens(token_ids)
-        # shape: [1, num_anchors*block_size, hidden_size]
-
     def forward(
         self,
         token_embeddings,  # [1, num_anchors*block_size, hidden_size]
@@ -174,7 +169,7 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
         # Number of draft layers is encoded in transformer_layer_config
         num_draft_layers = tl_config.num_hidden_layers
 
-        self.backbone = DFlashBackbone(tl_config)
+        self.backbone = DFlashBackbone(tl_config, len(self.target_layer_ids))
 
         # Both are optional: declared only for alternating/sliding attention.
         self.sliding_window = getattr(tl_config, "sliding_window", None)
@@ -451,11 +446,10 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
         max_anchors: int = 512,
         per_position_loss_weight: str = "fixed-exp-decay",
         dpace_alpha: float = 0.5,
-        **kwargs,
+        **_kwargs,
     ):
         device = hidden_states.device
         total_seq_len = hidden_states.shape[1]
-        num_anchors = kwargs.pop("max_anchors", 512)
 
         if position_ids is None:
             position_ids = torch.arange(
@@ -463,20 +457,23 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
             ).unsqueeze(0)
 
         anchor_positions, block_positions, aligned_loss_mask = select_anchors(
-            loss_mask, max_anchors, self.block_size
+            loss_mask,
+            max_anchors,
+            self.block_size,
+            train_anchor=self.config.sample_from_anchor,
         )
-        # shape: [1, num_anchors], [1, num_anchors*block_size], same as prev
+        # shape: [1, max_anchors], [1, max_anchors*block_size], same as prev
 
         mask_token_ids = torch.full(
-            (1, num_anchors * self.block_size),
+            (1, max_anchors * self.block_size),
             self.mask_token_id,
             dtype=torch.long,
             device=device,
         )  # shape: [1, num_anchors*block_size]
         mask_token_ids[:, :: self.block_size] = input_ids[:, anchor_positions]
 
-        full_attn_mask, sliding_window_attn_mask = self._build_attention_mask(
-            anchor_positions, document_ids, total_seq_len, device
+        full_attn_mask, sliding_window_attn_mask = self._build_attention_masks(
+            anchor_positions, document_ids, device
         )
         position_ids = extend_position_ids_with_mask_tokens(
             position_ids, anchor_positions, self.block_size

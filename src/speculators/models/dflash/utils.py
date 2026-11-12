@@ -17,7 +17,9 @@ def extend_position_ids_with_mask_tokens(
     offsets = torch.arange(
         block_size, device=anchor_position_ids.device, dtype=torch.long
     )
-    block_position_ids = (anchor_positions[:, None] + offsets[None, :]).reshape(1, -1)
+    block_position_ids = (
+        anchor_position_ids[:, None] + offsets[None, :]
+    ).reshape(1, -1)
     # shape: [1, num_anchors*block_size]
 
     return torch.cat([position_ids, block_position_ids], dim=1)
@@ -70,18 +72,18 @@ def select_anchors(
     anchors[:k] = torch.sort(torch.gather(valid_indices, 0, perm[:k])).values
 
     offsets = torch.arange(block_size, device=anchors.device, dtype=torch.long)
-    block_positions = (anchors[:, None] + offsets[None, :]).reshape(1, -1)
+    block_positions = (anchors[:, None] + offsets[None, :]).reshape(-1)
     # shape: [num_anchors*block_size]
 
     aligned_loss_mask = loss_mask.clone()[:, block_positions]
     # shape: [1, num_anchors*block_size]
 
     # zero out any padded anchor blocks
-    aligned_loss_mask[k * block_size :] = False
+    aligned_loss_mask[:, k * block_size :] = False
 
     # For sample_from_anchor=False, mask slot 0 (anchor) since it's not trained
     if not train_anchor:
         aligned_loss_mask[:, ::block_size] = False
 
     return anchors, block_positions, aligned_loss_mask
-    # shape: [num_anchors], [1, num_anchors*block_size], [1, num_anchors*block_size]
+    # shape: [num_anchors], [num_anchors*block_size], [1, num_anchors*block_size]
