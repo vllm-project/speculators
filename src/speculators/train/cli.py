@@ -556,26 +556,15 @@ def build_draft_model(
                 t2d=t2d,
                 d2t=d2t,
                 verifier_name_or_path=args.verifier_name_or_path,
-                draft_attn_impl=(
-                    args.draft_attn_impl if args.speculator_type != "mtp" else None
-                ),
+                draft_attn_impl=args.draft_attn_impl,
             )
-        if args.speculator_type != "mtp":
-            # _attn_implementation is never serialized by HF configs, so re-apply
-            # the CLI selection before construction -- mirroring from_training_args.
-            # MTP is skipped: its from_training_args never sets the field and its
-            # __init__ resolves its own default ("sdpa") when it is absent.
-            config = model_class.config_class.from_pretrained(args.from_pretrained)
-            config.transformer_layer_config._attn_implementation = args.draft_attn_impl  # noqa: SLF001
-            return model_class.from_pretrained(
-                args.from_pretrained,
-                config=config,
-                t2d=t2d,
-                d2t=d2t,
-                verifier=args.verifier_name_or_path,
-            )
+        # _attn_implementation is never serialized by HF configs, so re-apply
+        # the CLI selection before construction -- mirroring from_training_args.
+        config = model_class.config_class.from_pretrained(args.from_pretrained)
+        config.transformer_layer_config._attn_implementation = args.draft_attn_impl  # noqa: SLF001
         return model_class.from_pretrained(
             args.from_pretrained,
+            config=config,
             t2d=t2d,
             d2t=d2t,
             verifier=args.verifier_name_or_path,
@@ -680,11 +669,6 @@ def main(cfg: TrainConfig):  # noqa: C901
     hidden_states_dtype = getattr(torch, args.hidden_states_dtype)
 
     if args.speculator_type == "mtp":
-        if args.draft_attn_impl != "simple_flex_attention":
-            raise ValueError(
-                "--draft-attn-impl is not configurable for MTP. "
-                "Must be left with the default value ('simple_flex_attention')."
-            )
         # MTP reuses the verifier's own decoder as the draft and extracts the
         # native MTP head weights from the verifier, so there are no vocab
         # mappings or draft mask token to resolve from the CLI. This works both
