@@ -52,16 +52,6 @@ def _fused():
     return pytest.importorskip("speculators.losses.fused")
 
 
-@pytest.fixture
-def narrowest_tile(monkeypatch):
-    """Pin both kernels to their narrowest tile: one compile per term set."""
-    fused = _fused()
-    for kernel in (fused.loss_forward_kernel, fused.loss_backward_kernel):
-        floor = min(config.kwargs["BLOCK_SIZE"] for config in kernel.configs)
-        narrow = [c for c in kernel.configs if c.kwargs["BLOCK_SIZE"] == floor]
-        monkeypatch.setattr(kernel, "configs", narrow[:1])
-
-
 def _inputs(rows: int, vocab: int, dtype: torch.dtype, seed: int):
     gen = torch.Generator(device=DEVICE).manual_seed(seed)
     logits = torch.randn(1, rows, vocab, device=DEVICE, generator=gen) * 3
