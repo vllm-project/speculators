@@ -13,9 +13,22 @@ from transformers.models.qwen3.modeling_qwen3 import Qwen3Config
 from speculators.models.dflash import DFlashSpeculatorConfig
 from speculators.models.dflash.core import DFlashDraftModel
 
+pytestmark = pytest.mark.usefixtures("narrowest_tile")
+
 requires_gpu = pytest.mark.skipif(
     not torch.cuda.is_available(), reason="fused losses need a CUDA or ROCm device"
 )
+
+
+@pytest.fixture
+def aot_eager_forward(monkeypatch):
+    """Compile DFlash.forward with aot_eager: Dynamo and AOTAutograd trace the
+    op as in training, without Inductor codegen (~25 s per cold compile)."""
+    original = getattr(DFlashDraftModel.forward, "_torchdynamo_orig_callable", None)
+    if original is not None:
+        compiled = torch.compile(original, backend="aot_eager")
+        monkeypatch.setattr(DFlashDraftModel, "forward", compiled)
+
 
 HIDDEN = 64
 VOCAB = 1000
@@ -139,6 +152,7 @@ def test_training_step_matches_fused_eager(
 
 
 @requires_gpu
+@pytest.mark.usefixtures("aot_eager_forward")
 @pytest.mark.parametrize("spec", ["kl_div", '{"kl_div": 0.5, "tv": 0.5}'])
 def test_training_step_matches_fused_compiled(spec, monkeypatch):
     """DFlash.forward is torch.compile'd on GPU; the op must trace as one node."""
@@ -169,6 +183,7 @@ def test_training_step_bf16():
 
 
 @requires_gpu
+@pytest.mark.usefixtures("aot_eager_forward")
 @pytest.mark.parametrize("params", [torch.float32, torch.bfloat16], ids=str)
 @pytest.mark.parametrize("compiled", [False, True])
 def test_training_step_under_autocast(params, compiled):
