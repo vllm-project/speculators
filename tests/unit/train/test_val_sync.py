@@ -125,3 +125,41 @@ def test_val_epoch_empty_loader_returns_empty_metrics():
     trainer = _make_val_trainer(0, is_distributed=False)
     result = trainer.val_epoch(0)
     assert result == {}
+
+
+def test_val_epoch_scores_an_unchanged_model_the_same_every_epoch():
+    """checkpoint_best compares loss_epoch across epochs, so the validation packing
+    must not change between epochs."""
+    from torch.utils.data import DataLoader  # noqa: PLC0415
+
+    from speculators.train.distributed_batch_sampler import (  # noqa: PLC0415
+        MultipackDistributedBatchSamplerV2,
+    )
+
+    gen = torch.Generator().manual_seed(0)
+    lengths = torch.randint(200, 8000, (400,), generator=gen)
+    sample_loss = torch.rand(400, generator=gen) * 4
+
+    sampler = MultipackDistributedBatchSamplerV2(
+        batch_max_length=16384, lengths=lengths.tolist(), num_replicas=1, rank=0
+    )
+    loader = DataLoader(
+        range(len(lengths)),
+        batch_sampler=sampler,
+        # Plain lists stay on the CPU when val_epoch moves tensors to the device.
+        collate_fn=lambda idx: {"idx": list(idx)},
+    )
+
+    def model(idx):
+        # Token-weighted mean over the packed samples, like the real loss.
+        w = lengths[idx].float()
+        loss = (sample_loss[idx] * w).sum() / w.sum()
+        return None, loss, {"loss": loss}
+
+    trainer = _make_val_trainer(0, is_distributed=False)
+    trainer.model = MagicMock(side_effect=model)
+    trainer.val_loader = loader
+
+    first = trainer.val_epoch(0)["loss_epoch"]
+    for epoch in range(1, 4):
+        assert trainer.val_epoch(epoch)["loss_epoch"] == pytest.approx(first)
