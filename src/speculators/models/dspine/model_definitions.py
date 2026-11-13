@@ -169,17 +169,27 @@ class AdjacentCausalInjection(nn.Module):
         receiver_states: torch.Tensor,
         receiver_features: torch.Tensor,
         predecessor_features: torch.Tensor,
+        *,
+        refine: bool = False,
     ) -> torch.Tensor:
+        def linear(layer: nn.Module, features: torch.Tensor) -> torch.Tensor:
+            if refine:
+                with torch.autocast(device_type=features.device.type, enabled=False):
+                    weight = cast("nn.Linear", layer).weight
+                    return functional.linear(features, weight.float())
+            return layer(features).float()
+
         gate = torch.sigmoid(
             self.receiver_gate(receiver_features).float()
-            + self.predecessor_gate(predecessor_features).float()
+            + linear(self.predecessor_gate, predecessor_features)
             + self.gate_bias.float()
         )
-        gated_message = gate * self.message(predecessor_features).float()
-        update = self.writes[layer_idx](gated_message.to(receiver_states.dtype)).float()
-        return (receiver_states.float() + self.rms(receiver_states) * update).to(
-            receiver_states.dtype
-        )
+        gated_message = gate * linear(self.message, predecessor_features)
+        if not refine:
+            gated_message = gated_message.to(receiver_states.dtype)
+        update = linear(self.writes[layer_idx], gated_message)
+        result = receiver_states.float() + self.rms(receiver_states) * update
+        return result if refine else result.to(receiver_states.dtype)
 
     def forward(
         self,
@@ -228,20 +238,10 @@ class AdjacentCausalInjection(nn.Module):
         layer_idx = self.num_layers - 1
         blocks = pre_injection_states.reshape(-1, self.block_size, self.hidden_size)
         receiver_features = self.project(layer_idx, blocks[:, 1:])
-        receiver_query = self.receiver_gate(receiver_features).float()
-        with torch.autocast(device_type=blocks.device.type, enabled=False):
-            exact_features = predecessor_features.float()
-            gate = torch.sigmoid(
-                receiver_query
-                + functional.linear(
-                    exact_features, self.predecessor_gate.weight.float()
-                )
-                + self.gate_bias.float()
-            )
-            gated_message = gate * functional.linear(
-                exact_features, self.message.weight.float()
-            )
-            write_weight = cast("nn.Linear", self.writes[layer_idx]).weight
-            update = functional.linear(gated_message, write_weight.float())
-            states = blocks[:, 1:]
-            return states.float() + self.rms(states) * update
+        return self.write(
+            layer_idx,
+            blocks[:, 1:],
+            receiver_features,
+            predecessor_features.float(),
+            refine=True,
+        )
