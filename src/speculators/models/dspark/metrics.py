@@ -23,6 +23,7 @@ from speculators.losses import (
     compound_loss,
     dflash_loss_decay,
     dpace_loss_decay,
+    global_token_weighted_mean,
     tv_loss,
 )
 from speculators.models.metrics import (
@@ -50,6 +51,10 @@ def _masked_decayed_mean(
         weighted = weighted * decay_fn(
             pos_idx.to(weighted.dtype), elementwise_loss=elementwise
         )
+    global_mean = global_token_weighted_mean(weighted.sum(), loss_mask.sum())
+    if global_mean is not None:
+        return global_mean
+
     denominator = loss_mask.sum(dim=1) + _EPS
     return (weighted.sum(dim=1) / denominator).mean()
 
