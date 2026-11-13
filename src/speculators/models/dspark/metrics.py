@@ -20,7 +20,7 @@ from torch.nn.functional import binary_cross_entropy_with_logits
 
 from speculators.losses import (
     LossConfig,
-    compound_loss,
+    compound_loss_with_outputs,
     dflash_loss_decay,
     dpace_loss_decay,
     tv_loss,
@@ -86,14 +86,27 @@ def compute_metrics(
             dflash_loss_decay, gamma=gamma, sample_from_anchor=sample_from_anchor
         )
 
-    loss, term_losses = compound_loss(
-        logits, targets, loss_mask, pos_idx, loss_config=loss_config, decay_fn=decay_fn
+    # With an all-fused config the TV behind accept_rate and both argmaxes
+    # come from the loss's own kernel pass (TV as a metric-only term when the
+    # loss does not use it); otherwise they are computed separately below.
+    out = compound_loss_with_outputs(
+        logits,
+        targets,
+        loss_mask,
+        pos_idx,
+        loss_config=loss_config,
+        decay_fn=decay_fn,
+        metric_terms=("tv",),
     )
+    loss, term_losses = out.loss, out.term_losses
 
     # Analytical per-position acceptance rate = distributional overlap
     # = 1 - TV; the fused kernel avoids the two full-vocab fp32 softmaxes.
     with torch.no_grad():
-        accept_rate = 1.0 - tv_loss_fn(logits, targets)  # [1, T]
+        tv = out.metric_terms.get("tv")
+        if tv is None:
+            tv = tv_loss_fn(logits, targets)
+        accept_rate = 1.0 - tv  # [1, T]
         # Per-block cumulative acceptance product over the draft slots (slot 0
         # is the anchor), shared by the accept-length and calibration metrics.
         num_blocks = seq_len // block_size
@@ -161,8 +174,7 @@ def compute_metrics(
         metrics["accept_len_total"] = block_valid.sum().clamp_min(1.0)
 
     # Per-position greedy accuracy
-    pred_ids = torch.argmax(logits, dim=-1)
-    target_ids = torch.argmax(targets, dim=-1)
+    pred_ids, target_ids = out.pred_ids, out.target_ids
     correct_per_pos, total_per_pos = compute_accuracy_multi_step(
         pred_ids, target_ids, loss_mask, pos_idx, block_size
     )
