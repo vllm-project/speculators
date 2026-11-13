@@ -17,6 +17,8 @@ from tests.unit.models.test_fused_losses import (
     requires_cuda,
 )
 
+pytestmark = pytest.mark.usefixtures("narrowest_tile")
+
 NAMES = ("kl_div", "rkl", "jsd", "ce", "tv", "nla", "lk_hybrid")
 
 
@@ -208,7 +210,7 @@ def test_compiles_fullgraph_without_recompiling_on_new_row_counts():
         )
         return out.losses["kl_div"].sum() + out.losses["nla"].sum()
 
-    compiled = torch.compile(step, fullgraph=True, dynamic=True)
+    compiled = torch.compile(step, fullgraph=True, dynamic=True, backend="aot_eager")
     for rows in (256, 320, 448):
         h, _, vh, _ = _inputs(rows, 64, 48, 2000, torch.float32, DEVICE, seed=rows)
         x = h.requires_grad_(True)
