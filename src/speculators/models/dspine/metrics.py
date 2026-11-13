@@ -123,12 +123,12 @@ def compute_dspine_loss(
         # Keep diagnostics referenced to the actual training tokens.
         contains_target = candidate_ids.eq(target_ids.unsqueeze(-1)).any(dim=-1)
         valid = loss_mask.to(torch.bool)
-        valid_float = valid.to(unary_logits.dtype)
+        valid_float = valid.float()
         metrics[f"unary_candidate_recall_at_{candidate_ids.shape[-1]}_sum"] = (
             contains_target.to(valid_float.dtype) * valid_float
         ).sum()
         metrics[f"unary_candidate_recall_at_{candidate_ids.shape[-1]}_total"] = (
-            valid_float.sum().clamp_min(1.0)
+            valid_float.sum()
         )
 
         selected_ids = candidate_ids.gather(

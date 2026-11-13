@@ -62,7 +62,11 @@ def build_transfer_codebook(
     top_values = eigenvalues[-transfer_dim:].clamp_min(eps)
     basis = eigenvectors[:, -transfer_dim:]
 
-    codebook_chunks: list[torch.Tensor] = []
+    codebook = torch.empty(
+        (vocab_size, transfer_dim),
+        dtype=output_embeddings.dtype,
+        device=output_device,
+    )
     inv_scale = top_values.rsqrt()
     for start in range(0, vocab_size, covariance_chunk_size):
         rows = functional.normalize(
@@ -73,11 +77,10 @@ def build_transfer_codebook(
             eps=eps,
         )
         whitened = ((rows - mean) @ basis) * inv_scale
-        codebook_chunks.append(
+        codebook[start : start + covariance_chunk_size].copy_(
             functional.normalize(whitened, dim=-1, eps=eps).to(output_device)
         )
 
-    codebook = torch.cat(codebook_chunks, dim=0).to(output_embeddings.dtype)
     readout = (
         basis.transpose(0, 1)
         .contiguous()

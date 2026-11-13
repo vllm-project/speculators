@@ -255,6 +255,7 @@ class Trainer:
         self.local_rank = get_local_rank()
         self.rank = get_rank()
         self.train_loader = train_loader
+        self._train_loader_len = len(train_loader)
         self.val_loader = val_loader
         self.is_distributed = is_distributed()
         self.resume_from_checkpoint = config.resume_from_checkpoint
@@ -469,12 +470,17 @@ class Trainer:
                 dist.broadcast(param.data, src=0)
             dist.barrier()
 
-        # DDP constructor broadcasts rank 0's params to all ranks
+        broadcast_buffers = not getattr(
+            self.model, "disable_ddp_buffer_broadcast", False
+        )
+        if not broadcast_buffers:
+            # Share initialized/restored buffers once, without mutating them per step.
+            for buffer in self.model.buffers():
+                dist.broadcast(buffer, src=0)
+
+        # DDP constructor broadcasts rank 0's params to all ranks.
         self.model = DistributedDataParallel(  # type: ignore[assignment]
-            self.model,
-            broadcast_buffers=not getattr(
-                self.model, "disable_ddp_buffer_broadcast", False
-            ),
+            self.model, broadcast_buffers=broadcast_buffers
         )
 
     def setup_optimizer(self):
@@ -539,7 +545,7 @@ class Trainer:
         kwargs = dict(configured or {})
         unwrapped = getattr(self.model, "module", self.model)
         if getattr(unwrapped, "requires_global_step", False):
-            default_total = self.config.num_epochs * len(self.train_loader)
+            default_total = self.config.num_epochs * self._train_loader_len
             total_training_steps = (
                 self.config.max_steps
                 or self.config.scheduler_total_steps
