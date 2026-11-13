@@ -59,6 +59,7 @@ DECODER_SHAPING_FLAGS: dict[str, str] = {
         "num_layers",
         "draft_arch",
         "draft_hidden_act",
+        "draft_num_key_value_heads",
         "sliding_window",
         "full_attention_indices",
     )
