@@ -1,4 +1,5 @@
 import logging
+from copy import deepcopy
 from typing import ClassVar
 
 import torch
@@ -16,7 +17,7 @@ from speculators.models.attention import create_float_mask
 from speculators.models.dflash import DFlashSpeculatorConfig
 from speculators.models.dflash.attention import create_anchor_block_mask_mod
 from speculators.models.dflash.metrics import compute_metrics
-from speculators.models.dflash.model_definitions import Qwen3DFlashDecoderLayer
+from speculators.models.dflash.model_definitions import dflash_model_classes
 from speculators.models.dflash.utils import (
     get_base_indices_for_anchored_blocks,
     select_anchors,
@@ -38,8 +39,8 @@ _compiled_create_block_mask = torch.compile(create_block_mask)
 @SpeculatorModel.register("dflash")
 class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
     config_class: ClassVar[type[DFlashSpeculatorConfig]] = DFlashSpeculatorConfig  # type: ignore[misc]
-    supports_gradient_checkpointing = True  # noqa: D003  # Qwen3DFlashDecoderLayer inherits GradientCheckpointingLayer
-    _no_split_modules = ["Qwen3DFlashDecoderLayer"]
+    supports_gradient_checkpointing = True  # noqa: D003  # DFlash decoder layers inherit GradientCheckpointingLayer
+    _no_split_modules = ["Qwen3DFlashDecoderLayer", "DFlashMLADecoderLayer"]
     _keys_to_ignore_on_load_missing: ClassVar[list[str]] = [  # type: ignore[misc]
         "embed_tokens.weight",
         "verifier_norm.weight",
@@ -67,7 +68,9 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
         DFlash-family variants override this factory when they wrap the shared
         attention and MLP with additional modules.
         """
-        return Qwen3DFlashDecoderLayer(config.transformer_layer_config, layer_idx)  # type: ignore[arg-type]
+        return self._model_definitions.decoder_layer_class(
+            config.transformer_layer_config, layer_idx
+        )
 
     def __init__(
         self,
@@ -90,6 +93,11 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
         self._init_vocab(config)
 
         tl_config = config.transformer_layer_config
+        # Unknown decoder types keep the historical Qwen3 GQA backbone.
+        self._model_definitions = dflash_model_classes.get(
+            tl_config.model_type, dflash_model_classes["qwen3"]
+        )
+
         # Number of draft layers is encoded in transformer_layer_config
         num_draft_layers = tl_config.num_hidden_layers
         self.layers = nn.ModuleList(
@@ -114,17 +122,22 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
             config.transformer_layer_config.hidden_size,
             eps=config.transformer_layer_config.rms_norm_eps,  # type: ignore[arg-type]
         )
-        rotary_config = flatten_rope_parameters(config.transformer_layer_config)
+        # Build the RoPE cache at the architecture's rotary width without
+        # mutating transformer_layer_config.head_dim.
+        rotary_config = flatten_rope_parameters(tl_config)
+        if rotary_attr := self._model_definitions.rotary_head_dim_attr:
+            rotary_config = deepcopy(rotary_config)
+            rotary_config.head_dim = getattr(tl_config, rotary_attr)
         self.rotary_emb = Qwen3RotaryEmbedding(rotary_config)  # type: ignore[arg-type]
 
         self.fc = nn.Linear(
-            len(self.target_layer_ids) * config.transformer_layer_config.hidden_size,
-            config.transformer_layer_config.hidden_size,
+            len(self.target_layer_ids) * tl_config.hidden_size,
+            tl_config.hidden_size,
             bias=False,
         )
         self.hidden_norm = Qwen3RMSNorm(
-            config.transformer_layer_config.hidden_size,
-            eps=config.transformer_layer_config.rms_norm_eps,  # type: ignore[arg-type]
+            tl_config.hidden_size,
+            eps=tl_config.rms_norm_eps,  # type: ignore[arg-type]
         )
         self.verifier_norm = resolve_verifier_norm_class(config)(
             config.transformer_layer_config.hidden_size,
@@ -419,8 +432,7 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
         noise_embedding = self.embed_tokens(mask_token_ids)
         # shape: [1, num_anchors*block_size, hidden_size]
 
-        fc_output = self.fc(hidden_states)
-        fc_output = self.hidden_norm(fc_output)
+        fc_output = self.hidden_norm(self.fc(hidden_states))
         # shape: [1, total_seq_len, hidden_size]
 
         mask_position_ids = get_base_indices_for_anchored_blocks(

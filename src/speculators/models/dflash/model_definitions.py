@@ -1,8 +1,13 @@
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, NamedTuple
 
 import torch
 from torch import nn
 from transformers.cache_utils import Cache
+from transformers.models.deepseek_v3.configuration_deepseek_v3 import DeepseekV3Config
+from transformers.models.deepseek_v3.modeling_deepseek_v3 import (
+    DeepseekV3Attention,
+    apply_rotary_pos_emb_interleave,
+)
 from transformers.models.qwen3.modeling_qwen3 import (
     ALL_ATTENTION_FUNCTIONS,
     FlashAttentionKwargs,
@@ -156,10 +161,12 @@ class Qwen3DFlashAttention(nn.Module):
 
 
 class Qwen3DFlashDecoderLayer(GradientCheckpointingLayer):
+    attention_class: type[nn.Module] = Qwen3DFlashAttention
+
     def __init__(self, config: Qwen3Config, layer_idx: int):
         super().__init__()
         self.hidden_size = config.hidden_size
-        self.self_attn = Qwen3DFlashAttention(config=config, layer_idx=layer_idx)
+        self.self_attn = self.attention_class(config=config, layer_idx=layer_idx)
         self.mlp = Qwen3MLP(config)
         self.input_layernorm = Qwen3RMSNorm(config.hidden_size, eps=config.rms_norm_eps)  # type: ignore[arg-type]
         self.post_attention_layernorm = Qwen3RMSNorm(
@@ -205,3 +212,177 @@ class Qwen3DFlashDecoderLayer(GradientCheckpointingLayer):
         hidden_states = self.post_attention_layernorm(hidden_states)
         hidden_states = self.mlp(hidden_states)
         return residual + hidden_states  # type: ignore[operator]
+
+
+def _apply_mla_rope(
+    interleave: bool,
+    q_rot: torch.Tensor,
+    k_rot: torch.Tensor,
+    cos: torch.Tensor,
+    sin: torch.Tensor,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Rotate the MLA rope channels for DFlash's asymmetric Q/K lengths.
+
+    ``cos``/``sin`` span the full context+draft length; Q covers only the
+    trailing draft block. The upstream helpers expect Q and K of equal length,
+    so each side is rotated separately (cheap: ``qk_rope_head_dim`` wide).
+    """
+    if not interleave:
+        return apply_rotary_pos_emb(q_rot, k_rot, cos, sin)
+    q_len = q_rot.size(-2)
+    q_rot, _ = apply_rotary_pos_emb_interleave(
+        q_rot, q_rot, cos[..., -q_len:, :], sin[..., -q_len:, :]
+    )
+    _, k_rot = apply_rotary_pos_emb_interleave(k_rot, k_rot, cos, sin)
+    return q_rot, k_rot
+
+
+class DFlashMLAAttention(DeepseekV3Attention):
+    """Upstream DeepSeek-style MLA with DFlash dual-source KV injection.
+
+    Projections, latent norms, ``rope_interleave`` and the YaRN mscale softmax
+    scaling all come from :class:`DeepseekV3Attention`. Only ``forward`` is
+    DFlash-specific, mirroring :class:`Qwen3DFlashAttention`: Q is projected
+    from the draft block, while the compressed KV latent is projected from
+    ``cat(target_hidden, draft)`` so the block attends over the verifier context.
+    """
+
+    def __init__(self, config: DeepseekV3Config, layer_idx: int):
+        super().__init__(config, layer_idx)
+        # Draft blocks attend bidirectionally under the DFlash block mask.
+        self.is_causal = False
+        # kv_b_proj already expands the latent to num_heads K/V heads.
+        self.num_key_value_groups = 1
+        self.sliding_window = (
+            config.sliding_window
+            if hasattr(config, "layer_types")
+            and config.layer_types is not None
+            and config.layer_types[layer_idx] == "sliding_attention"
+            else None
+        )
+
+    def forward(  # type: ignore[override]
+        self,
+        hidden_states: torch.Tensor,
+        target_hidden: torch.Tensor,
+        position_embeddings: tuple[torch.Tensor, torch.Tensor],
+        attention_mask: torch.Tensor | None,
+        past_key_values: Cache | None = None,
+        cache_position: torch.LongTensor | None = None,
+        **kwargs: Unpack[FlashAttentionKwargs],
+    ) -> tuple[torch.Tensor, torch.Tensor | None]:
+        bsz, q_len = hidden_states.shape[:-1]
+        kv_len = target_hidden.shape[1] + q_len
+        v_head_dim = (
+            self.v_head_dim if self.v_head_dim is not None else self.qk_head_dim
+        )
+
+        if self.q_lora_rank is None:
+            if self.q_proj is None:
+                raise RuntimeError("q_proj is required when q_lora_rank is unset")
+            q = self.q_proj(hidden_states)
+        else:
+            q_a_proj = self.q_a_proj
+            q_a_layernorm = self.q_a_layernorm
+            q_b_proj = self.q_b_proj
+            if q_a_proj is None or q_a_layernorm is None or q_b_proj is None:
+                raise RuntimeError(
+                    "q_a_proj, q_a_layernorm, and q_b_proj are required "
+                    "when q_lora_rank is set"
+                )
+            q = q_b_proj(q_a_layernorm(q_a_proj(hidden_states)))
+        q = q.view(bsz, q_len, -1, self.qk_head_dim).transpose(1, 2)
+        q_pass, q_rot = torch.split(
+            q, [self.qk_nope_head_dim, self.qk_rope_head_dim], dim=-1
+        )
+
+        # DFlash: the KV latent sees the verifier context followed by the block.
+        kv_input = torch.cat([target_hidden, hidden_states], dim=1)
+        k_pass, k_rot = torch.split(
+            self.kv_a_proj_with_mqa(kv_input),
+            [self.kv_lora_rank, self.qk_rope_head_dim],
+            dim=-1,
+        )
+        k_pass = (
+            self.kv_b_proj(self.kv_a_layernorm(k_pass))
+            .view(bsz, kv_len, -1, self.qk_nope_head_dim + v_head_dim)
+            .transpose(1, 2)
+        )
+        k_pass, v = torch.split(k_pass, [self.qk_nope_head_dim, v_head_dim], dim=-1)
+        k_rot = k_rot.view(bsz, 1, kv_len, self.qk_rope_head_dim)
+
+        cos, sin = position_embeddings
+        q_rot, k_rot = _apply_mla_rope(
+            bool(self.config.rope_interleave), q_rot, k_rot, cos, sin
+        )
+        k_rot = k_rot.expand(*k_pass.shape[:-1], -1)
+        q = torch.cat((q_pass, q_rot), dim=-1)
+        k = torch.cat((k_pass, k_rot), dim=-1)
+
+        # Flash/flex kernels need matching Q/K/V head dims; GLM-5 has
+        # v_head_dim == qk_head_dim, DeepSeek-style verifiers do not.
+        if v_head_dim != self.qk_head_dim:
+            v = nn.functional.pad(v, (0, self.qk_head_dim - v_head_dim))
+
+        if past_key_values is not None:
+            cache_kwargs = {"sin": sin, "cos": cos, "cache_position": cache_position}
+            k, v = past_key_values.update(k, v, self.layer_idx, cache_kwargs)
+
+        attn_fn: Callable = eager_attention_forward
+        if (
+            self.config._attn_implementation is not None  # noqa: SLF001
+            and self.config._attn_implementation != "eager"  # noqa: SLF001
+        ):
+            attn_fn = ALL_ATTENTION_FUNCTIONS[
+                self.config._attn_implementation  # noqa: SLF001
+            ]
+        attn_output, attn_weights = attn_fn(
+            self,
+            q,
+            k,
+            v,
+            attention_mask,
+            dropout=0.0 if not self.training else self.attention_dropout,
+            scaling=self.scaling,
+            sliding_window=self.sliding_window,
+            **kwargs,
+        )
+        if v_head_dim != self.qk_head_dim:
+            attn_output = attn_output[..., :v_head_dim]
+        attn_output = attn_output.reshape(bsz, q_len, -1)
+        return self.o_proj(attn_output), attn_weights
+
+
+class DFlashMLADecoderLayer(Qwen3DFlashDecoderLayer):
+    """Dense DFlash block (RMSNorm + gated MLP) with MLA attention."""
+
+    attention_class = DFlashMLAAttention
+
+
+class DFlashModelComponents(NamedTuple):
+    """Per-``model_type`` building blocks for the DFlash backbone.
+
+    Attributes:
+        decoder_layer_class: Draft decoder layer class.
+        rotary_head_dim_attr: Config attribute holding the RoPE width, or
+            ``None`` to use ``config.head_dim`` (full-head GQA RoPE). MLA
+            drafts rotate only ``qk_rope_head_dim``.
+    """
+
+    decoder_layer_class: type
+    rotary_head_dim_attr: str | None
+
+
+dflash_model_classes: dict[str, DFlashModelComponents] = {
+    "qwen3": DFlashModelComponents(
+        decoder_layer_class=Qwen3DFlashDecoderLayer,
+        rotary_head_dim_attr=None,
+    ),
+    # GLM-5.x drafts: dense MLA. RoPE spans only qk_rope_head_dim.
+    # Aux-hidden projection stays ``fc`` / ``hidden_norm`` (same checkpoint
+    # keys as Qwen3); serving loaders remap those names if they need to.
+    "glm5_dspark": DFlashModelComponents(
+        decoder_layer_class=DFlashMLADecoderLayer,
+        rotary_head_dim_attr="qk_rope_head_dim",
+    ),
+}
