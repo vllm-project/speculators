@@ -1,0 +1,508 @@
+{
+  "description": "fp32 eager loss-head fingerprints; regenerate with `SPECULATORS_REGENERATE_GOLDEN=1 pytest tests/unit/models/test_loss_head.py -k regenerate`",
+  "torch_version": "2.13.0+rocm10.0.0",
+  "cases": {
+    "dflash-ce": {
+      "loss": 1.983965516090393,
+      "metrics": {
+        "eal_sum": 6.0,
+        "eal_total": 6.0,
+        "full_acc_sum": 7.0,
+        "full_acc_total": 37.0,
+        "loss_sum": 1.983965516090393,
+        "loss_total": 1.0,
+        "position_1_acc_sum": 0.0,
+        "position_1_acc_total": 4.0,
+        "position_2_acc_sum": 0.0,
+        "position_2_acc_total": 6.0,
+        "position_3_acc_sum": 2.0,
+        "position_3_acc_total": 5.0,
+        "position_4_acc_sum": 1.0,
+        "position_4_acc_total": 6.0,
+        "position_5_acc_sum": 2.0,
+        "position_5_acc_total": 6.0,
+        "position_6_acc_sum": 1.0,
+        "position_6_acc_total": 6.0,
+        "position_7_acc_sum": 1.0,
+        "position_7_acc_total": 4.0
+      },
+      "grads": {
+        "hidden": {
+          "norm": 0.2164265215396881,
+          "probe": 0.25241321325302124
+        }
+      }
+    },
+    "dflash-ce-dpace": {
+      "loss": 1.3439640998840332,
+      "metrics": {
+        "eal_sum": 6.0,
+        "eal_total": 6.0,
+        "full_acc_sum": 7.0,
+        "full_acc_total": 37.0,
+        "loss_sum": 1.3439640998840332,
+        "loss_total": 1.0,
+        "position_1_acc_sum": 0.0,
+        "position_1_acc_total": 4.0,
+        "position_2_acc_sum": 0.0,
+        "position_2_acc_total": 6.0,
+        "position_3_acc_sum": 2.0,
+        "position_3_acc_total": 5.0,
+        "position_4_acc_sum": 1.0,
+        "position_4_acc_total": 6.0,
+        "position_5_acc_sum": 2.0,
+        "position_5_acc_total": 6.0,
+        "position_6_acc_sum": 1.0,
+        "position_6_acc_total": 6.0,
+        "position_7_acc_sum": 1.0,
+        "position_7_acc_total": 4.0
+      },
+      "grads": {
+        "hidden": {
+          "norm": 0.19919027388095856,
+          "probe": 0.258256733417511
+        }
+      }
+    },
+    "dflash-jsd": {
+      "loss": 0.11608287692070007,
+      "metrics": {
+        "eal_sum": 6.0,
+        "eal_total": 6.0,
+        "full_acc_sum": 7.0,
+        "full_acc_total": 37.0,
+        "loss_sum": 0.11608287692070007,
+        "loss_total": 1.0,
+        "position_1_acc_sum": 0.0,
+        "position_1_acc_total": 4.0,
+        "position_2_acc_sum": 0.0,
+        "position_2_acc_total": 6.0,
+        "position_3_acc_sum": 2.0,
+        "position_3_acc_total": 5.0,
+        "position_4_acc_sum": 1.0,
+        "position_4_acc_total": 6.0,
+        "position_5_acc_sum": 2.0,
+        "position_5_acc_total": 6.0,
+        "position_6_acc_sum": 1.0,
+        "position_6_acc_total": 6.0,
+        "position_7_acc_sum": 1.0,
+        "position_7_acc_total": 4.0
+      },
+      "grads": {
+        "hidden": {
+          "norm": 0.012951015494763851,
+          "probe": -0.001086392905563116
+        }
+      }
+    },
+    "dflash-kl_div": {
+      "loss": 0.6033241152763367,
+      "metrics": {
+        "eal_sum": 6.0,
+        "eal_total": 6.0,
+        "full_acc_sum": 7.0,
+        "full_acc_total": 37.0,
+        "loss_sum": 0.6033241152763367,
+        "loss_total": 1.0,
+        "position_1_acc_sum": 0.0,
+        "position_1_acc_total": 4.0,
+        "position_2_acc_sum": 0.0,
+        "position_2_acc_total": 6.0,
+        "position_3_acc_sum": 2.0,
+        "position_3_acc_total": 5.0,
+        "position_4_acc_sum": 1.0,
+        "position_4_acc_total": 6.0,
+        "position_5_acc_sum": 2.0,
+        "position_5_acc_total": 6.0,
+        "position_6_acc_sum": 1.0,
+        "position_6_acc_total": 6.0,
+        "position_7_acc_sum": 1.0,
+        "position_7_acc_total": 4.0
+      },
+      "grads": {
+        "hidden": {
+          "norm": 0.06948354840278625,
+          "probe": 0.002680255100131035
+        }
+      }
+    },
+    "dflash-kl_tv": {
+      "loss": 0.4437054991722107,
+      "metrics": {
+        "eal_sum": 6.0,
+        "eal_total": 6.0,
+        "full_acc_sum": 7.0,
+        "full_acc_total": 37.0,
+        "kl_div_loss_sum": 0.6033241152763367,
+        "kl_div_loss_total": 1.0,
+        "loss_sum": 0.4437054991722107,
+        "loss_total": 1.0,
+        "position_1_acc_sum": 0.0,
+        "position_1_acc_total": 4.0,
+        "position_2_acc_sum": 0.0,
+        "position_2_acc_total": 6.0,
+        "position_3_acc_sum": 2.0,
+        "position_3_acc_total": 5.0,
+        "position_4_acc_sum": 1.0,
+        "position_4_acc_total": 6.0,
+        "position_5_acc_sum": 2.0,
+        "position_5_acc_total": 6.0,
+        "position_6_acc_sum": 1.0,
+        "position_6_acc_total": 6.0,
+        "position_7_acc_sum": 1.0,
+        "position_7_acc_total": 4.0,
+        "tv_loss_sum": 0.2840868830680847,
+        "tv_loss_total": 1.0
+      },
+      "grads": {
+        "hidden": {
+          "norm": 0.04333214461803436,
+          "probe": 0.003984168171882629
+        }
+      }
+    },
+    "dflash-kl_tv-dpace": {
+      "loss": 0.7712860107421875,
+      "metrics": {
+        "eal_sum": 6.0,
+        "eal_total": 6.0,
+        "full_acc_sum": 7.0,
+        "full_acc_total": 37.0,
+        "kl_div_loss_sum": 0.8117525577545166,
+        "kl_div_loss_total": 1.0,
+        "loss_sum": 0.7712860107421875,
+        "loss_total": 1.0,
+        "position_1_acc_sum": 0.0,
+        "position_1_acc_total": 4.0,
+        "position_2_acc_sum": 0.0,
+        "position_2_acc_total": 6.0,
+        "position_3_acc_sum": 2.0,
+        "position_3_acc_total": 5.0,
+        "position_4_acc_sum": 1.0,
+        "position_4_acc_total": 6.0,
+        "position_5_acc_sum": 2.0,
+        "position_5_acc_total": 6.0,
+        "position_6_acc_sum": 1.0,
+        "position_6_acc_total": 6.0,
+        "position_7_acc_sum": 1.0,
+        "position_7_acc_total": 4.0,
+        "tv_loss_sum": 0.7308195233345032,
+        "tv_loss_total": 1.0
+      },
+      "grads": {
+        "hidden": {
+          "norm": 0.07953475415706635,
+          "probe": 0.0008617918938398361
+        }
+      }
+    },
+    "dflash-lk_hybrid": {
+      "loss": 0.37151581048965454,
+      "metrics": {
+        "eal_sum": 6.0,
+        "eal_total": 6.0,
+        "full_acc_sum": 7.0,
+        "full_acc_total": 37.0,
+        "loss_sum": 0.37151581048965454,
+        "loss_total": 1.0,
+        "position_1_acc_sum": 0.0,
+        "position_1_acc_total": 4.0,
+        "position_2_acc_sum": 0.0,
+        "position_2_acc_total": 6.0,
+        "position_3_acc_sum": 2.0,
+        "position_3_acc_total": 5.0,
+        "position_4_acc_sum": 1.0,
+        "position_4_acc_total": 6.0,
+        "position_5_acc_sum": 2.0,
+        "position_5_acc_total": 6.0,
+        "position_6_acc_sum": 1.0,
+        "position_6_acc_total": 6.0,
+        "position_7_acc_sum": 1.0,
+        "position_7_acc_total": 4.0
+      },
+      "grads": {
+        "hidden": {
+          "norm": 0.03241116926074028,
+          "probe": 0.006010988727211952
+        }
+      }
+    },
+    "dflash-nla": {
+      "loss": 0.4150718152523041,
+      "metrics": {
+        "eal_sum": 6.0,
+        "eal_total": 6.0,
+        "full_acc_sum": 7.0,
+        "full_acc_total": 37.0,
+        "loss_sum": 0.4150718152523041,
+        "loss_total": 1.0,
+        "position_1_acc_sum": 0.0,
+        "position_1_acc_total": 4.0,
+        "position_2_acc_sum": 0.0,
+        "position_2_acc_total": 6.0,
+        "position_3_acc_sum": 2.0,
+        "position_3_acc_total": 5.0,
+        "position_4_acc_sum": 1.0,
+        "position_4_acc_total": 6.0,
+        "position_5_acc_sum": 2.0,
+        "position_5_acc_total": 6.0,
+        "position_6_acc_sum": 1.0,
+        "position_6_acc_total": 6.0,
+        "position_7_acc_sum": 1.0,
+        "position_7_acc_total": 4.0
+      },
+      "grads": {
+        "hidden": {
+          "norm": 0.04451987147331238,
+          "probe": 0.011091457679867744
+        }
+      }
+    },
+    "dflash-rkl": {
+      "loss": 0.590204119682312,
+      "metrics": {
+        "eal_sum": 6.0,
+        "eal_total": 6.0,
+        "full_acc_sum": 7.0,
+        "full_acc_total": 37.0,
+        "loss_sum": 0.590204119682312,
+        "loss_total": 1.0,
+        "position_1_acc_sum": 0.0,
+        "position_1_acc_total": 4.0,
+        "position_2_acc_sum": 0.0,
+        "position_2_acc_total": 6.0,
+        "position_3_acc_sum": 2.0,
+        "position_3_acc_total": 5.0,
+        "position_4_acc_sum": 1.0,
+        "position_4_acc_total": 6.0,
+        "position_5_acc_sum": 2.0,
+        "position_5_acc_total": 6.0,
+        "position_6_acc_sum": 1.0,
+        "position_6_acc_total": 6.0,
+        "position_7_acc_sum": 1.0,
+        "position_7_acc_total": 4.0
+      },
+      "grads": {
+        "hidden": {
+          "norm": 0.10454114526510239,
+          "probe": -0.045807547867298126
+        }
+      }
+    },
+    "dflash-tv": {
+      "loss": 0.2840868830680847,
+      "metrics": {
+        "eal_sum": 6.0,
+        "eal_total": 6.0,
+        "full_acc_sum": 7.0,
+        "full_acc_total": 37.0,
+        "loss_sum": 0.2840868830680847,
+        "loss_total": 1.0,
+        "position_1_acc_sum": 0.0,
+        "position_1_acc_total": 4.0,
+        "position_2_acc_sum": 0.0,
+        "position_2_acc_total": 6.0,
+        "position_3_acc_sum": 2.0,
+        "position_3_acc_total": 5.0,
+        "position_4_acc_sum": 1.0,
+        "position_4_acc_total": 6.0,
+        "position_5_acc_sum": 2.0,
+        "position_5_acc_total": 6.0,
+        "position_6_acc_sum": 1.0,
+        "position_6_acc_total": 6.0,
+        "position_7_acc_sum": 1.0,
+        "position_7_acc_total": 4.0
+      },
+      "grads": {
+        "hidden": {
+          "norm": 0.019939692690968513,
+          "probe": 0.005288178566843271
+        }
+      }
+    },
+    "dspark-ce-dpace": {
+      "loss": 1.1493370532989502,
+      "metrics": {
+        "accept_len_sum": 8.93882942199707,
+        "accept_len_total": 6.0,
+        "accept_rate_sum": 19.05215835571289,
+        "accept_rate_total": 41.0,
+        "eal_sum": 7.0,
+        "eal_total": 6.0,
+        "full_acc_sum": 8.0,
+        "full_acc_total": 41.0,
+        "loss_sum": 1.1493370532989502,
+        "loss_total": 1.0,
+        "position_0_acc_sum": 1.0,
+        "position_0_acc_total": 4.0,
+        "position_1_acc_sum": 0.0,
+        "position_1_acc_total": 4.0,
+        "position_2_acc_sum": 0.0,
+        "position_2_acc_total": 6.0,
+        "position_3_acc_sum": 2.0,
+        "position_3_acc_total": 5.0,
+        "position_4_acc_sum": 1.0,
+        "position_4_acc_total": 6.0,
+        "position_5_acc_sum": 2.0,
+        "position_5_acc_total": 6.0,
+        "position_6_acc_sum": 1.0,
+        "position_6_acc_total": 6.0,
+        "position_7_acc_sum": 1.0,
+        "position_7_acc_total": 4.0
+      },
+      "grads": {
+        "hidden": {
+          "norm": 0.17136241495609283,
+          "probe": 0.2650258541107178
+        },
+        "markov_input": {
+          "norm": 0.007941835559904575,
+          "probe": -0.004624346271157265
+        },
+        "markov_weight": {
+          "norm": 0.19945962727069855,
+          "probe": -0.12032889574766159
+        }
+      }
+    },
+    "dspark-ce_tv": {
+      "loss": 0.39289534091949463,
+      "metrics": {
+        "accept_len_sum": 8.93882942199707,
+        "accept_len_total": 6.0,
+        "accept_rate_sum": 19.05215835571289,
+        "accept_rate_total": 41.0,
+        "ce_loss_sum": 1.6861896514892578,
+        "ce_loss_total": 1.0,
+        "eal_sum": 7.0,
+        "eal_total": 6.0,
+        "full_acc_sum": 8.0,
+        "full_acc_total": 41.0,
+        "loss_sum": 0.39289534091949463,
+        "loss_total": 1.0,
+        "position_0_acc_sum": 1.0,
+        "position_0_acc_total": 4.0,
+        "position_1_acc_sum": 0.0,
+        "position_1_acc_total": 4.0,
+        "position_2_acc_sum": 0.0,
+        "position_2_acc_total": 6.0,
+        "position_3_acc_sum": 2.0,
+        "position_3_acc_total": 5.0,
+        "position_4_acc_sum": 1.0,
+        "position_4_acc_total": 6.0,
+        "position_5_acc_sum": 2.0,
+        "position_5_acc_total": 6.0,
+        "position_6_acc_sum": 1.0,
+        "position_6_acc_total": 6.0,
+        "position_7_acc_sum": 1.0,
+        "position_7_acc_total": 4.0,
+        "tv_loss_sum": 0.24919597804546356,
+        "tv_loss_total": 1.0
+      },
+      "grads": {
+        "hidden": {
+          "norm": 0.027845090255141258,
+          "probe": 0.02997138723731041
+        },
+        "markov_input": {
+          "norm": 0.0012341727269813418,
+          "probe": -0.00042440995457582176
+        },
+        "markov_weight": {
+          "norm": 0.030812012031674385,
+          "probe": -0.043104469776153564
+        }
+      }
+    },
+    "dspark-kl_div": {
+      "loss": 0.5156935453414917,
+      "metrics": {
+        "accept_len_sum": 8.93882942199707,
+        "accept_len_total": 6.0,
+        "accept_rate_sum": 19.05215835571289,
+        "accept_rate_total": 41.0,
+        "eal_sum": 7.0,
+        "eal_total": 6.0,
+        "full_acc_sum": 8.0,
+        "full_acc_total": 41.0,
+        "loss_sum": 0.5156935453414917,
+        "loss_total": 1.0,
+        "position_0_acc_sum": 1.0,
+        "position_0_acc_total": 4.0,
+        "position_1_acc_sum": 0.0,
+        "position_1_acc_total": 4.0,
+        "position_2_acc_sum": 0.0,
+        "position_2_acc_total": 6.0,
+        "position_3_acc_sum": 2.0,
+        "position_3_acc_total": 5.0,
+        "position_4_acc_sum": 1.0,
+        "position_4_acc_total": 6.0,
+        "position_5_acc_sum": 2.0,
+        "position_5_acc_total": 6.0,
+        "position_6_acc_sum": 1.0,
+        "position_6_acc_total": 6.0,
+        "position_7_acc_sum": 1.0,
+        "position_7_acc_total": 4.0
+      },
+      "grads": {
+        "hidden": {
+          "norm": 0.05409526452422142,
+          "probe": 0.015376094728708267
+        },
+        "markov_input": {
+          "norm": 0.0020185858011245728,
+          "probe": -0.0006041538435965776
+        },
+        "markov_weight": {
+          "norm": 0.05514749884605408,
+          "probe": 0.00968344509601593
+        }
+      }
+    },
+    "dspark-lk_hybrid-dpace": {
+      "loss": 0.7421554327011108,
+      "metrics": {
+        "accept_len_sum": 8.93882942199707,
+        "accept_len_total": 6.0,
+        "accept_rate_sum": 19.05215835571289,
+        "accept_rate_total": 41.0,
+        "eal_sum": 7.0,
+        "eal_total": 6.0,
+        "full_acc_sum": 8.0,
+        "full_acc_total": 41.0,
+        "loss_sum": 0.7421554327011108,
+        "loss_total": 1.0,
+        "position_0_acc_sum": 1.0,
+        "position_0_acc_total": 4.0,
+        "position_1_acc_sum": 0.0,
+        "position_1_acc_total": 4.0,
+        "position_2_acc_sum": 0.0,
+        "position_2_acc_total": 6.0,
+        "position_3_acc_sum": 2.0,
+        "position_3_acc_total": 5.0,
+        "position_4_acc_sum": 1.0,
+        "position_4_acc_total": 6.0,
+        "position_5_acc_sum": 2.0,
+        "position_5_acc_total": 6.0,
+        "position_6_acc_sum": 1.0,
+        "position_6_acc_total": 6.0,
+        "position_7_acc_sum": 1.0,
+        "position_7_acc_total": 4.0
+      },
+      "grads": {
+        "hidden": {
+          "norm": 0.0667792484164238,
+          "probe": 0.023253750056028366
+        },
+        "markov_input": {
+          "norm": 0.0026062983088195324,
+          "probe": 4.0155951865017414e-05
+        },
+        "markov_weight": {
+          "norm": 0.06979229301214218,
+          "probe": -0.05399472266435623
+        }
+      }
+    }
+  }
+}
