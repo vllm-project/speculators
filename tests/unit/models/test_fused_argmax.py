@@ -21,6 +21,8 @@ from tests.unit.models.test_fused_losses import (
     requires_cuda,
 )
 
+pytestmark = pytest.mark.usefixtures("narrowest_tile")
+
 
 def _fused():
     return pytest.importorskip("speculators.losses.fused")
