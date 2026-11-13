@@ -1,29 +1,32 @@
 """Prepare offline DSpark calibration inputs and run its loss-free backbone."""
 
+from collections.abc import Sequence
 from pathlib import Path
 
 import torch
+from datasets import Dataset as HFDataset
 from datasets import load_from_disk
 from safetensors.torch import load_file
 from torch.utils.data import DataLoader, Dataset
 
 from speculators.data_generation.offline import check_hidden_states
 from speculators.models.dflash.utils import get_base_indices_for_anchored_blocks
+from speculators.models.dspark import DSparkDraftModel
 
 
 class CalibrationDataset(Dataset):
     def __init__(
         self,
-        records,
-        hidden_states_dir,
+        records: HFDataset,
+        hidden_states_dir: Path,
         *,
-        count,
-        max_length,
-        max_anchors,
-        layer_ids,
-        width,
-        block_size,
-    ):
+        count: int,
+        max_length: int,
+        max_anchors: int,
+        layer_ids: Sequence[int],
+        width: int,
+        block_size: int,
+    ) -> None:
         if (
             count <= 0
             or count > len(records)
@@ -31,22 +34,19 @@ class CalibrationDataset(Dataset):
             or max_anchors <= 0
         ):
             raise ValueError("Invalid sample count, sequence length, or anchor count")
-        self.records, self.hidden_states_dir, self.count = (
-            records,
-            hidden_states_dir,
-            count,
-        )
-        self.max_length, self.max_anchors, self.block_size = (
-            max_length,
-            max_anchors,
-            block_size,
-        )
-        self.layers, self.width = len(layer_ids), width
+        self.records = records
+        self.hidden_states_dir = hidden_states_dir
+        self.count = count
+        self.max_length = max_length
+        self.max_anchors = max_anchors
+        self.block_size = block_size
+        self.layers = len(layer_ids)
+        self.width = width
 
-    def __len__(self):
+    def __len__(self) -> int:
         return self.count
 
-    def __getitem__(self, index):
+    def __getitem__(self, index: int) -> dict[str, torch.Tensor | int]:
         record = self.records[index]
         data = load_file(str(self.hidden_states_dir / f"hs_{index}.safetensors"))
         hs = data.get("hidden_states")
@@ -86,16 +86,16 @@ class CalibrationDataset(Dataset):
 
 
 def calibration_batches(
-    data_dir,
-    hidden_states_dir,
+    data_dir: str | Path,
+    hidden_states_dir: str | Path,
     *,
-    count,
-    max_length,
-    max_anchors,
-    layer_ids,
-    width,
-    block_size,
-):
+    count: int,
+    max_length: int,
+    max_anchors: int,
+    layer_ids: Sequence[int],
+    width: int,
+    block_size: int,
+) -> DataLoader:
     records = load_from_disk(str(data_dir)).with_format("torch")
     dataset = CalibrationDataset(
         records,
@@ -111,15 +111,15 @@ def calibration_batches(
 
 
 def calibration_forward(
-    model,
+    model: DSparkDraftModel,
     *,
-    hidden_states,
-    input_ids,
-    loss_mask,
-    document_ids,
-    position_ids,
-    max_anchors,
-):
+    hidden_states: torch.Tensor,
+    input_ids: torch.Tensor,
+    loss_mask: torch.Tensor,
+    document_ids: torch.Tensor,
+    position_ids: torch.Tensor,
+    max_anchors: int,
+) -> torch.Tensor:
     """Run the backbone without training's verifier targets, logits, or losses.
 
     Calibration only needs activations, and the compressor may disable lm_head.

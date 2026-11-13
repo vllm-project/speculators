@@ -4,16 +4,24 @@ These examples quantize speculator drafters with llm-compressor. The worked exam
 
 ## 1. Environment setup
 
-Run commands from the repository root. Create separate Python 3.12 environments for the vLLM servers and for the data-generation clients and quantization scripts. Install a hardware-appropriate PyTorch build if needed.
+Run commands from the repository root. Create separate Python 3.12 environments for the vLLM servers and for the data-generation clients and quantization scripts. We recommend `uv` for virtual-environment management. Install a hardware-appropriate PyTorch build if needed.
 
 ```bash
-uv venv --python 3.12 vllm_venv
-uv pip install --python vllm_venv/bin/python 'vllm==0.33.0' 'speculators==0.9.0'
-uv venv --python 3.12 .venv-quant
-uv pip install --python .venv-quant/bin/python -r examples/quantization/requirements.txt
+uv venv \
+  --python 3.12 \
+  vllm_venv
+uv pip install \
+  --python vllm_venv/bin/python \
+  'vllm==0.33.0'
+uv venv \
+  --python 3.12 \
+  .venv-quant
+uv pip install \
+  --python .venv-quant/bin/python \
+  -r examples/quantization/requirements.txt
 ```
 
-Speculators installs its matching `hs-connectors` dependency. The quantization environment pins llm-compressor because the NVFP4 example uses its 0.15.0 interfaces.
+The quantization environment installs Speculators and its matching `hs-connectors` dependency through `requirements.txt`. The file-based hidden-state extraction path uses vLLM's built-in connector, so the vLLM environment does not require Speculators or `hs-connectors`. The quantization environment pins llm-compressor because the NVFP4 example uses its 0.15.0 interfaces.
 
 Set these variables in each terminal. Use an unquantized drafter and a fresh output directory for each quantization run.
 
@@ -35,8 +43,10 @@ The [FP8 example](fp8.py) uses llm-compressor's `model_free_ptq`, which requires
 
 ```bash
 source .venv-quant/bin/activate
-python examples/quantization/fp8.py --model "$DRAFT" \
-  --scheme FP8_DYNAMIC --output-dir "$RUN/draft-fp8"
+python examples/quantization/fp8.py \
+  --model "$DRAFT" \
+  --scheme FP8_DYNAMIC \
+  --output-dir "$RUN/draft-fp8"
 ```
 
 Pass `--scheme FP8_BLOCK` for blockwise FP8, with a fresh output directory. Check that your hardware and serving runtime support the selected scheme.
@@ -69,22 +79,39 @@ In a server terminal, activate the vLLM environment and start the verifier:
 ```bash
 source vllm_venv/bin/activate
 python -m vllm.entrypoints.cli.main serve "$MODEL" \
-  --host 127.0.0.1 --port 8000 --max-model-len "$((SEQ_LENGTH + 1))"
+  --host 127.0.0.1 \
+  --port 8000 \
+  --max-model-len "$((SEQ_LENGTH + 1))"
 ```
 
 After `curl -fsS http://127.0.0.1:8000/v1/models` succeeds, regenerate responses in a second terminal, then prepare them:
 
 ```bash
 source .venv-quant/bin/activate
-speculators regenerate-responses --dataset magpie \
-  --model "$MODEL" --endpoint http://127.0.0.1:8000/v1/chat/completions \
-  --limit "$REGEN_LIMIT" --concurrency 4 --max-tokens 1024 \
+speculators regenerate-responses \
+  --dataset magpie \
+  --model "$MODEL" \
+  --endpoint http://127.0.0.1:8000/v1/chat/completions \
+  --limit "$REGEN_LIMIT" \
+  --concurrency 4 \
+  --max-tokens 1024 \
   --sampling-params '{"temperature":0.6,"top_p":0.95,"seed":42}' \
-  --outfile "$RUN/responses.jsonl" --resume
-speculators prepare-data --model "$MODEL" --data "$RUN/responses.jsonl" \
-  --output "$RUN/prepared" --max-samples "$SAMPLES" --seq-length "$SEQ_LENGTH" \
-  --minimum-valid-tokens "$MIN_VALID_TOKENS" --seed 42
-python -c 'import sys; from datasets import load_from_disk; print(len(load_from_disk(sys.argv[1])))' "$RUN/prepared"
+  --outfile "$RUN/responses.jsonl" \
+  --resume
+speculators prepare-data \
+  --model "$MODEL" \
+  --data "$RUN/responses.jsonl" \
+  --output "$RUN/prepared" \
+  --max-samples "$SAMPLES" \
+  --seq-length "$SEQ_LENGTH" \
+  --minimum-valid-tokens "$MIN_VALID_TOKENS" \
+  --seed 42
+python - "$RUN/prepared" <<'PY'
+import sys
+from datasets import load_from_disk
+
+print(len(load_from_disk(sys.argv[1])))
+PY
 ```
 
 Confirm that the printed count is at least `$SAMPLES`. If filtering leaves fewer rows, increase `REGEN_LIMIT` and prepare a fresh run.
@@ -96,17 +123,26 @@ See [Get Hidden States](../../docs/user_guide/tutorials/train.md#step-3-get-hidd
 ```bash
 python scripts/launch_vllm.py train "$MODEL" \
   --target-layer-ids "${TARGET_LAYER_IDS[@]}" \
-  --hidden-states-path "$RUN/staging" --provenance-dir "$RUN" \
-  -- --host 127.0.0.1 --port 8001 --max-model-len "$((SEQ_LENGTH + 1))"
+  --hidden-states-path "$RUN/staging" \
+  --provenance-dir "$RUN" \
+  -- \
+  --host 127.0.0.1 \
+  --port 8001 \
+  --max-model-len "$((SEQ_LENGTH + 1))"
 ```
 
 After `curl -fsS http://127.0.0.1:8001/v1/models` succeeds, run in the quantization terminal:
 
 ```bash
-speculators generate-offline-data --model "$MODEL" \
-  --endpoint http://127.0.0.1:8001/v1 --preprocessed-data "$RUN/prepared" \
-  --output "$RUN/hidden_states" --max-samples "$SAMPLES" --concurrency 4 \
-  --validate-outputs --fail-on-error
+speculators generate-offline-data \
+  --model "$MODEL" \
+  --endpoint http://127.0.0.1:8001/v1 \
+  --preprocessed-data "$RUN/prepared" \
+  --output "$RUN/hidden_states" \
+  --max-samples "$SAMPLES" \
+  --concurrency 4 \
+  --validate-outputs \
+  --fail-on-error
 ```
 
 Stop the server before quantization. Use a fresh cache for each set of rows and extraction settings. The adapter checks token alignment, shape, layer count, and finite values; it accepts FP16, BF16, and FP32 states, not raw scaled FP8. The cache does not record layer IDs, so keep the launcher provenance with the cache and preserve the drafter's `aux_hidden_state_layer_ids` order, optionally followed by the final verifier layer.
@@ -114,9 +150,12 @@ Stop the server before quantization. Use a fresh cache for each set of rows and 
 ### Quantize with NVFP4
 
 ```bash
-python examples/quantization/dspark_nvfp4_gptq_imatrix.py --model "$DRAFT" \
-  --data-dir "$RUN/prepared" --hidden-states-dir "$RUN/hidden_states" \
-  --samples "$SAMPLES" --sequence-length "$SEQ_LENGTH" \
+python examples/quantization/dspark_nvfp4_gptq_imatrix.py \
+  --model "$DRAFT" \
+  --data-dir "$RUN/prepared" \
+  --hidden-states-dir "$RUN/hidden_states" \
+  --samples "$SAMPLES" \
+  --sequence-length "$SEQ_LENGTH" \
   --output-dir "$RUN/draft-nvfp4"
 ```
 
@@ -141,10 +180,18 @@ EVAL_RUN="$RUN/eval-fp8"
 Serve the selected output with the matching verifier. `--spec-method dspark` and `--spec-tokens 7` are DSpark example settings; adapt them to your drafter.
 
 ```bash
-python scripts/launch_vllm.py eval "$MODEL" --spec-model "$QUANTIZED_DRAFT" \
-  --spec-tokens 7 --spec-method dspark --provenance-dir "$EVAL_RUN" \
-  -- --port 9145 --max-model-len 4096 --gpu-memory-utilization 0.90 \
-  --enforce-eager --per-request-spec-decode-metrics summary --no-enable-prefix-caching
+python scripts/launch_vllm.py eval "$MODEL" \
+  --spec-model "$QUANTIZED_DRAFT" \
+  --spec-tokens 7 \
+  --spec-method dspark \
+  --provenance-dir "$EVAL_RUN" \
+  -- \
+  --port 9145 \
+  --max-model-len 4096 \
+  --gpu-memory-utilization 0.90 \
+  --enforce-eager \
+  --per-request-spec-decode-metrics summary \
+  --no-enable-prefix-caching
 ```
 
 Wait for `curl -fsS http://127.0.0.1:9145/v1/models` to succeed, then send a request from another terminal:
@@ -152,7 +199,12 @@ Wait for `curl -fsS http://127.0.0.1:9145/v1/models` to succeed, then send a req
 ```bash
 curl -fsS http://127.0.0.1:9145/v1/completions \
   -H 'Content-Type: application/json' \
-  -d "{\"model\":\"$MODEL\",\"prompt\":\"Explain photosynthesis briefly.\",\"max_tokens\":64,\"temperature\":0}"
+  -d "{
+    \"model\": \"$MODEL\",
+    \"prompt\": \"Explain photosynthesis briefly.\",
+    \"max_tokens\": 64,
+    \"temperature\": 0
+  }"
 ```
 
 Check for nonempty output and accepted draft tokens in `metrics.speculative_decoding`. Evaluate each quantized drafter on a representative dataset before drawing quality conclusions.

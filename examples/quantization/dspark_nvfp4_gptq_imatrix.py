@@ -1,6 +1,7 @@
 """Quantize a DSpark drafter with NVFP4 GPTQ and iMatrix calibration."""
 
 import argparse
+from collections.abc import Sequence
 from pathlib import Path
 from types import MethodType
 
@@ -13,6 +14,15 @@ from transformers import AutoTokenizer, PretrainedConfig
 
 from speculators import SpeculatorModel
 from speculators.models.dspark import DSparkDraftModel
+
+IGNORE = (
+    "Embedding",
+    r"re:.*(^|\.)embed_tokens$",
+    "lm_head",
+    "verifier_lm_head",
+    r"re:.*(^|\.)markov_head\..*",
+    r"re:.*(^|\.)confidence_head\..*",
+)
 
 
 class DSparkOneshot(Oneshot):
@@ -30,24 +40,14 @@ class DSparkOneshot(Oneshot):
             raise ValueError("Use an unquantized DSpark checkpoint")
 
 
-def _nvfp4_recipe():
+def _nvfp4_recipe() -> GPTQModifier:
     scheme = preset_name_to_scheme("NVFP4", targets=["Linear"])
     scheme.weights.observer = "imatrix_mse"
     scheme.weights.observer_kwargs = {"strict": True}
-    return GPTQModifier(
-        config_groups={"group_0": scheme},
-        ignore=[
-            "Embedding",
-            r"re:.*(^|\.)embed_tokens$",
-            "lm_head",
-            "verifier_lm_head",
-            r"re:.*(^|\.)markov_head\..*",
-            r"re:.*(^|\.)confidence_head\..*",
-        ],
-    )
+    return GPTQModifier(config_groups={"group_0": scheme}, ignore=IGNORE)
 
 
-def main():
+def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     cli = argparse.ArgumentParser(description=__doc__)
     cli.add_argument("--model", required=True, help="DSpark Hub ID or local checkpoint")
     cli.add_argument("--output-dir", type=Path, required=True)
@@ -57,7 +57,10 @@ def main():
     cli.add_argument("--sequence-length", type=int, default=2048)
     cli.add_argument("--max-anchors", type=int, default=32)
     cli.add_argument("--seed", type=int, default=42)
-    args = cli.parse_args()
+    return cli.parse_args(argv)
+
+
+def quantize(args: argparse.Namespace) -> None:
     if args.output_dir.exists():
         raise FileExistsError(f"Output already exists: {args.output_dir}")
 
@@ -90,6 +93,10 @@ def main():
         pipeline="basic",
         output_dir=str(args.output_dir),
     )()
+
+
+def main() -> None:
+    quantize(parse_args())
 
 
 if __name__ == "__main__":

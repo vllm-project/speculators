@@ -1,17 +1,23 @@
+import sys
+from types import SimpleNamespace
+
 import pytest
 
-from examples.quantization.fp8 import IGNORE, main
+from examples.quantization.fp8 import IGNORE, parse_args, quantize
 
 
 @pytest.mark.parametrize("scheme", ["FP8_DYNAMIC", "FP8_BLOCK"])
-def test_fp8_main_passes_quantization_arguments(tmp_path, scheme):
+def test_fp8_quantize_passes_quantization_arguments(tmp_path, monkeypatch, scheme):
     calls = []
 
     def fake_ptq(**kwargs):
         calls.append(kwargs)
 
+    monkeypatch.setitem(
+        sys.modules, "llmcompressor", SimpleNamespace(model_free_ptq=fake_ptq)
+    )
     output_dir = tmp_path / "output"
-    main(
+    args = parse_args(
         [
             "--model",
             "model",
@@ -19,9 +25,10 @@ def test_fp8_main_passes_quantization_arguments(tmp_path, scheme):
             str(output_dir),
             "--scheme",
             scheme,
-        ],
-        ptq=fake_ptq,
+        ]
     )
+
+    quantize(args)
 
     assert calls == [
         {
@@ -33,17 +40,19 @@ def test_fp8_main_passes_quantization_arguments(tmp_path, scheme):
     ]
 
 
-def test_fp8_main_refuses_existing_output(tmp_path):
+def test_fp8_quantize_refuses_existing_output(tmp_path, monkeypatch):
     called = False
 
     def fake_ptq(**kwargs):
         nonlocal called
         called = True
 
+    monkeypatch.setitem(
+        sys.modules, "llmcompressor", SimpleNamespace(model_free_ptq=fake_ptq)
+    )
+    args = parse_args(["--model", "model", "--output-dir", str(tmp_path)])
+
     with pytest.raises(FileExistsError, match="Output already exists"):
-        main(
-            ["--model", "model", "--output-dir", str(tmp_path)],
-            ptq=fake_ptq,
-        )
+        quantize(args)
 
     assert not called

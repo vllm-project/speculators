@@ -41,4 +41,5 @@ def test_nvfp4_recipe_uses_strict_imatrix_mse(monkeypatch):
     assert scheme.weights.observer_kwargs == {"strict": True}
     kwargs = modifier.call_args.kwargs
     assert kwargs["config_groups"] == {"group_0": scheme}
+    assert kwargs["ignore"] is module["IGNORE"]
     assert "targets" not in kwargs
