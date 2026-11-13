@@ -258,7 +258,10 @@ def _skip_unsupported(name: str, implementation: str) -> None:
 
 
 @requires_cuda
-@pytest.mark.parametrize("implementation", IMPLEMENTATIONS)
+# fp32 inputs give fp32 logit tiles either way: fused_linear_fp32 adds nothing here.
+@pytest.mark.parametrize(
+    "implementation", [i for i in IMPLEMENTATIONS if i != "fused_linear_fp32"]
+)
 @pytest.mark.parametrize("name", sorted(CASES))
 def test_fused_fp32_matches_eager_reference(name, implementation):
     _skip_unsupported(name, implementation)

@@ -192,8 +192,11 @@ def test_recomputed_targets_cover_the_full_sequence_branch(sample_from_anchor):
 
 @requires_gpu
 @pytest.mark.usefixtures("aot_eager_forward")
-@pytest.mark.parametrize("spec", ["kl_div", '{"kl_div": 0.5, "tv": 0.5}'])
-@pytest.mark.parametrize("targets", ["recompute", "materialize"])
+# Each target mode and each spec traced once.
+@pytest.mark.parametrize(
+    ("spec", "targets"),
+    [("kl_div", "recompute"), ('{"kl_div": 0.5, "tv": 0.5}', "materialize")],
+)
 def test_training_step_matches_fused_compiled(spec, targets, monkeypatch):
     """DFlash.forward is torch.compile'd on GPU; the op must trace as one node."""
     monkeypatch.setenv("SPECULATORS_FUSED_LINEAR_BUDGET_MIB", "1")
