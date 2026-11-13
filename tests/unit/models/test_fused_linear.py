@@ -25,6 +25,8 @@ from tests.unit.models.test_fused_losses import (
     requires_cuda,
 )
 
+pytestmark = pytest.mark.usefixtures("narrowest_tile")
+
 NAMES = ("kl_div", "rkl", "jsd", "ce", "tv", "nla", "lk_hybrid")
 EAGER = {
     "kl_div": eager.kl_div_loss,
@@ -291,7 +293,7 @@ def test_compiles_fullgraph_without_recompiling_on_new_row_counts():
         out = fl.fused_linear_compound(x, w, t, ("kl_div", "nla"), chunk_rows=128)
         return out.losses["kl_div"].sum() + out.losses["nla"].sum()
 
-    compiled = torch.compile(step, fullgraph=True, dynamic=True)
+    compiled = torch.compile(step, fullgraph=True, dynamic=True, backend="aot_eager")
     for rows in (256, 320, 448):
         h, _, t = _inputs(rows, 64, 2000, torch.float32, DEVICE, seed=rows)
         x = h.requires_grad_(True)
@@ -480,7 +482,11 @@ def test_autocast_uses_one_operand_dtype_in_both_directions(compiled):
         with torch.autocast(str(DEVICE), dtype=torch.bfloat16):
             return fl.fused_linear_compound(x, w, t, names, chunk_rows=64)
 
-    fn = torch.compile(under_autocast, fullgraph=True) if compiled else under_autocast
+    fn = (
+        torch.compile(under_autocast, fullgraph=True, backend="aot_eager")
+        if compiled
+        else under_autocast
+    )
     out, grad = _run(fn, h, names)
     explicit, explicit_grad = _run(
         lambda x: fl.fused_linear_compound(
