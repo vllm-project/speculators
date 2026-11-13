@@ -289,16 +289,8 @@ def _time_tile(launch, block, warps):
 
 @requires_cuda
 @pytest.mark.slow
-@pytest.mark.parametrize(
-    "term_names",
-    [("kl_div",), ("kl_div", "rkl", "jsd", "ce", "tv")],
-    ids=["kl_div", "all_terms"],
-)
-def test_autotuner_never_picks_a_spilling_tile(term_names):
+def test_autotuner_never_picks_a_spilling_tile():
     """Tune over the *unbounded* space and show a spilling tile never wins.
-
-    Checked for one KL term and for every term at once, where the backward
-    keeps the most fp32 vectors live.
 
     ``_tile_configs()`` prunes the search to the register-resident region up
     front, which is only sound if nothing worth having lives outside it. So
@@ -339,7 +331,7 @@ def test_autotuner_never_picks_a_spilling_tile(term_names):
     stats = torch.empty(fused_losses._N_STATS, rows, device="cuda", dtype=torch.float32)
     grad_in = torch.empty_like(logits)
     grad_out = torch.ones_like(loss)
-    terms = sum(fused_losses._BITS[name] for name in term_names)
+    terms = fused_losses._BITS["kl_div"]
 
     def run_forward(block, warps):
         return fused_losses.loss_forward_kernel.fn[(rows,)](

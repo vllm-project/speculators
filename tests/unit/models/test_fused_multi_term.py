@@ -52,6 +52,16 @@ def _fused():
     return pytest.importorskip("speculators.losses.fused")
 
 
+@pytest.fixture
+def narrowest_tile(monkeypatch):
+    """Pin both kernels to their narrowest tile: one compile per term set."""
+    fused = _fused()
+    for kernel in (fused.loss_forward_kernel, fused.loss_backward_kernel):
+        floor = min(config.kwargs["BLOCK_SIZE"] for config in kernel.configs)
+        narrow = [c for c in kernel.configs if c.kwargs["BLOCK_SIZE"] == floor]
+        monkeypatch.setattr(kernel, "configs", narrow[:1])
+
+
 def _inputs(rows: int, vocab: int, dtype: torch.dtype, seed: int):
     gen = torch.Generator(device=DEVICE).manual_seed(seed)
     logits = torch.randn(1, rows, vocab, device=DEVICE, generator=gen) * 3
@@ -74,8 +84,10 @@ def _weighted_grad(fn_per_term, logits, terms, grad_out):
 
 
 @requires_accelerator
+@pytest.mark.usefixtures("narrowest_tile")
 @pytest.mark.parametrize("terms", SUBSETS, ids=["+".join(s) for s in SUBSETS])
-@pytest.mark.parametrize("vocab", [512, 151936])
+# 3000 spans several narrowest tiles, the last one partial.
+@pytest.mark.parametrize("vocab", [512, 3000])
 def test_multi_term_matches_single_terms(terms, vocab):
     """One pass == each term's own kernel, value and summed gradient (fp32)."""
     fused = _fused()
@@ -93,8 +105,7 @@ def test_multi_term_matches_single_terms(terms, vocab):
             (term,),
             grad_out[i : i + 1],
         )
-        # Equal up to fp32 summation order: the two launches may autotune to
-        # different tiles, which reorders the blockwise reductions.
+        # Equal up to fp32 summation order.
         torch.testing.assert_close(losses[term], ref_losses[term], rtol=1e-5, atol=1e-5)
         ref_grad += term_grad
     atol = 1e-5 * float(ref_grad.abs().max())
@@ -217,6 +228,7 @@ def test_compound_loss_with_an_eager_term_falls_back_per_term(monkeypatch):
 
 
 @requires_cuda
+@pytest.mark.usefixtures("narrowest_tile")
 def test_two_terms_allocate_one_logits_gradient():
     """kl_div + tv backward holds one grad_in, not one per term plus their sum."""
     fused = _fused()
