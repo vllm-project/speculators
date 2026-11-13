@@ -163,6 +163,20 @@ _EXTRACT_CASES = [
     pytest.param(
         {
             "messages": [
+                {"role": "developer", "content": "You are a terse assistant."},
+                {"role": "user", "content": "Hi"},
+            ]
+        },
+        "prompt",
+        [
+            {"role": "developer", "content": "You are a terse assistant."},
+            {"role": "user", "content": "Hi"},
+        ],
+        id="developer_role_preserved",
+    ),
+    pytest.param(
+        {
+            "messages": [
                 {"role": "user", "content": ""},
                 {"role": "user", "content": "u"},
             ]

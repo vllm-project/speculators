@@ -52,15 +52,16 @@ def _conversation_messages(row: dict[str, Any]) -> list:
 
 def _message_role_content(m: dict) -> tuple[str | None, Any]:
     """Canonical ``(role, content)`` for a message across the role/content and
-    from/value schemas. ``role`` collapses ``human`` to ``user``; ``system`` and
-    ``tool`` pass through; anything else (assistant/gpt) returns ``None``."""
+    from/value schemas. ``role`` collapses ``human`` to ``user``; ``system``,
+    ``developer``, and ``tool`` pass through; anything else (assistant/gpt)
+    returns ``None``."""
     role = m.get("role") or m.get("from")
     content = m.get("content")
     if content is None:
         content = m.get("value")
     if role in ("user", "human"):
         return "user", content
-    if role in ("system", "tool"):
+    if role in ("system", "developer", "tool"):
         return role, content
     return None, content
 
@@ -71,10 +72,10 @@ def extract_conversation(
     """Read the regeneration turns and the cached tool results in one pass.
 
     Walks a ``messages``/``conversations`` field (role/content or from/value
-    schema). System and user turns drive regeneration; the original assistant
-    turns are dropped and regenerated. Each tool-result turn is captured as a
-    ``(content, tool_names)`` pair, where ``tool_names`` are the tools that
-    result answers (read from its ``<tool_response>`` payload) -- used to guard
+    schema). System, developer, and user turns drive regeneration; the
+    original assistant turns are dropped and regenerated. Each tool-result
+    turn is captured as a ``(content, tool_names)`` pair, where ``tool_names``
+    are the tools that result answers (read from its ``<tool_response>`` payload) -- used to guard
     the positional splice against a call for a different tool. Rows without a
     usable conversation fall back to a single ``prompt_field`` user turn and
     carry no results.
@@ -85,7 +86,7 @@ def extract_conversation(
         if not isinstance(m, dict):
             continue
         role, content = _message_role_content(m)
-        if role in ("system", "user") and content:
+        if role in ("system", "developer", "user") and content:
             turns.append({"role": role, "content": content})
         elif role == "tool" and content is not None:
             results.append((content, _tool_result_names(content)))
@@ -434,8 +435,8 @@ async def regenerate_conversation(
     truncated = False
 
     for turn in turns:
-        if turn["role"] == "system":
-            prefix.append({"role": "system", "content": turn["content"]})
+        if turn["role"] in ("system", "developer"):
+            prefix.append({"role": turn["role"], "content": turn["content"]})
             continue
 
         prefix.append({"role": "user", "content": turn["content"]})
