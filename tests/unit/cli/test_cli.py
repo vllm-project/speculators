@@ -202,6 +202,31 @@ class TestRegenerateResponsesCommand:
         assert result.exit_code != 0
         assert "must sum to 1.0" in unstyled_output(result)
 
+    def test_existing_outfile_without_resume_is_rejected(self, tmp_path):
+        dataset = tmp_path / "prompts.jsonl"
+        dataset.write_text('{"prompt": "hi"}\n', encoding="utf-8")
+        outfile = tmp_path / "out.jsonl"
+        original = '{"id": "already"}\n'
+        outfile.write_text(original, encoding="utf-8")
+
+        result = runner.invoke(
+            app,
+            [
+                "regenerate-responses",
+                "--dataset",
+                str(dataset),
+                "--outfile",
+                str(outfile),
+                "--model",
+                "org/should-not-load",
+            ],
+        )
+        assert result.exit_code != 0
+        output = unstyled_output(result)
+        assert "--resume" in output
+        assert "delete" in output
+        assert outfile.read_text(encoding="utf-8") == original
+
 
 class TestTrainCommand:
     def test_help(self):
