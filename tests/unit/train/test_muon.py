@@ -51,6 +51,24 @@ def fallbacks(monkeypatch) -> list[tuple[int, ...]]:
     return calls
 
 
+@pytest.fixture
+def fused(monkeypatch) -> list[tuple[int, ...]]:
+    """Shapes that took the fused elementwise path, in call order.
+
+    The fused and eager paths are bitwise equal, so an equivalence test passes
+    either way; ``_fusable`` turning itself off would go unnoticed.
+    """
+    calls: list[tuple[int, ...]] = []
+    reference = muon._momentum_update
+
+    def counting(grad, *args, **kwargs):
+        calls.append(tuple(grad.shape))
+        return reference(grad, *args, **kwargs)
+
+    monkeypatch.setattr(muon, "_momentum_update", counting)
+    return calls
+
+
 @requires_cuda
 @pytest.mark.parametrize("shape", [(4096, 8192), (8192, 4096), (4096, 4096)])
 def test_split_matches_the_reference_on_cuda(shape, fallbacks):
@@ -125,6 +143,8 @@ def test_module_imports_without_triton(monkeypatch):
 
     assert not module.HAS_TRITON
     assert not hasattr(module, "_mirror_lower_blocks_kernel")
+    assert not hasattr(module, "_nesterov_momentum_kernel")
+    assert not hasattr(module, "_apply_update_kernel")
 
 
 @pytest.mark.parametrize("device", ["cpu", pytest.param("cuda", marks=requires_cuda)])
@@ -193,6 +213,53 @@ def test_step_matches_torch_muon(adjust_lr_fn, fallbacks):
         torch.testing.assert_close(
             opt.state[p]["momentum_buffer"], ref_opt.state[r]["momentum_buffer"]
         )
+
+
+@requires_cuda
+@pytest.mark.parametrize("nesterov", [True, False])
+@pytest.mark.parametrize("shape", [(2048, 4096), (4096, 2048), (1024, 512), (37, 100)])
+def test_fused_step_is_bit_identical_to_torch_muon_on_cuda(
+    shape, nesterov, monkeypatch, fused
+):
+    # Drop the size bound so the small and ragged shapes still reach the kernels.
+    monkeypatch.setattr(muon, "_MIN_FUSED_NUMEL", 0)
+    torch.manual_seed(0)
+    rows, cols = shape
+    weight = torch.randn(rows, cols, device="cuda") * 0.02
+    ours = torch.nn.Parameter(weight.clone())
+    ref = torch.nn.Parameter(weight.clone())
+    kwargs: dict[str, Any] = {
+        "lr": 1e-3,
+        "weight_decay": 0.1,
+        "nesterov": nesterov,
+        "adjust_lr_fn": "match_rms_adamw",
+    }
+    opt = Muon([ours], **kwargs)
+    ref_opt = torch.optim.Muon([ref], **kwargs)
+
+    for _ in range(3):
+        grad = _grad(rows, cols, device="cuda") + torch.randn_like(weight) * 1e-3
+        ours.grad, ref.grad = grad.clone(), grad.clone()
+        opt.step()
+        ref_opt.step()
+
+    assert fused == [(rows, cols)] * 3
+    torch.testing.assert_close(
+        opt.state[ours]["momentum_buffer"],
+        ref_opt.state[ref]["momentum_buffer"],
+        atol=0,
+        rtol=0,
+    )
+    torch.testing.assert_close(ours, ref, atol=0, rtol=0)
+
+
+@requires_cuda
+@pytest.mark.parametrize(
+    ("shape", "expected"), [((2048, 4096), True), ((1024, 512), False)]
+)
+def test_the_size_bound_picks_the_path(shape, expected):
+    param = torch.zeros(*shape, device="cuda")
+    assert muon._fusable(param, param, param) is expected
 
 
 @requires_cuda
