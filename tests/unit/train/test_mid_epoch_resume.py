@@ -133,6 +133,7 @@ def _make_trainer(
     trained_steps: list[tuple[int, int, int]],
     resume: bool = False,
     epochs: int = 1,
+    accum: int = 1,
 ) -> _MockTrainer:
     cfg = TrainerConfig(
         save_path=save_path,
@@ -142,6 +143,7 @@ def _make_trainer(
         checkpoint_freq=0.3,
         log_freq=1,
         scheduler_type="none",
+        gradient_accumulation_steps=accum,
     )
     trainer = _MockTrainer(_dummy_model(), cfg, _make_loader())
     trainer._trained_steps = trained_steps
@@ -175,6 +177,7 @@ def test_mid_epoch_checkpoint_saves_training_state(
             "epoch": 0,
             "local_step": step_interval,
             "global_step": step_interval,
+            "gradient_accumulation_steps": 1,
         }
         assert state == expected
 
@@ -414,3 +417,38 @@ def test_fast_skip_sampler_slice_avoids_skipped_getitem(
         assert sampler.generated_for_epoch == 0
         assert sampler._cached_generated_batches == (0, sampler.all_batches[3:])
         assert dataset.seen_indices == list(range(3, 10))
+
+
+def test_resume_rejects_gradient_accumulation_mismatch(
+    trained_steps: list[tuple[int, int, int]],
+) -> None:
+    """Resuming with a different gradient_accumulation_steps misaligns accumulation
+    windows, so it is rejected rather than silently corrupting the run."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        # Run 1: persist a checkpoint trained with accum=2.
+        t1 = _make_trainer(tmpdir, trained_steps=trained_steps, accum=2)
+        t1.maybe_save_checkpoint(0, local_step=2)  # boundary for accum=2
+
+        # Run 2: resuming with a different accum must fail loudly.
+        with pytest.raises(ValueError, match="Cannot resume"):
+            _make_trainer(tmpdir, trained_steps=[], resume=True, accum=3)
+
+
+@pytest.mark.parametrize("resume_accum", [2, 3])
+def test_save_best_persists_accumulation_and_resume_step(tmp_path, resume_accum):
+    """Best-only checkpoints enforce accumulation compatibility on resume."""
+    trainer = _make_trainer(str(tmp_path), trained_steps=[], accum=2)
+    trainer.config = trainer.config._replace(save_best=True)
+    trainer.global_step = 7
+    trainer.maybe_update_best(0, {"loss_epoch": 0.5})
+
+    if resume_accum != 2:
+        with pytest.raises(ValueError, match="gradient_accumulation_steps=2"):
+            _make_trainer(
+                str(tmp_path), trained_steps=[], resume=True, accum=resume_accum
+            )
+    else:
+        resumed = _make_trainer(str(tmp_path), trained_steps=[], resume=True, accum=2)
+        assert resumed.current_epoch == 1
+        assert resumed.global_step == 7
+        assert resumed._resume_local_step == 0

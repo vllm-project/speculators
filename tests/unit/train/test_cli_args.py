@@ -275,3 +275,23 @@ def test_eagle3_flex_rejects_unaligned_total_seq_len(monkeypatch, total_seq_len)
 def test_unaligned_total_seq_len_allowed_elsewhere(monkeypatch, extra):
     args = _parse(monkeypatch, extra)
     assert args.total_seq_len == int(extra[1])
+
+
+# ---------------------------------------------------------------------------
+# Gradient accumulation
+# ---------------------------------------------------------------------------
+
+
+def test_gradient_accumulation_steps_default(monkeypatch):
+    args = _parse(monkeypatch, [])
+    assert args.gradient_accumulation_steps == 1
+
+
+def test_gradient_accumulation_steps_explicit(monkeypatch):
+    args = _parse(monkeypatch, ["--gradient-accumulation-steps", "8"])
+    assert args.gradient_accumulation_steps == 8
+
+
+def test_gradient_accumulation_steps_rejects_zero(monkeypatch):
+    with pytest.raises(SystemExit):
+        _parse(monkeypatch, ["--gradient-accumulation-steps", "0"])
