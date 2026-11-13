@@ -28,7 +28,9 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     cli.add_argument("--model", required=True, help="Hub ID or local checkpoint")
     cli.add_argument("--output-dir", type=Path, required=True)
     cli.add_argument(
-        "--scheme", choices=["FP8_DYNAMIC", "FP8_BLOCK"], default="FP8_DYNAMIC"
+        "--scheme",
+        choices=["FP8_DYNAMIC", "FP8_BLOCK"],
+        default="FP8_DYNAMIC",  # Change to "FP8_BLOCK" for blockwise FP8.
     )
     return cli.parse_args(args=argv)
 

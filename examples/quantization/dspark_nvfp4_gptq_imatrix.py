@@ -16,10 +16,9 @@ from speculators import SpeculatorModel
 from speculators.models.dspark import DSparkDraftModel
 
 IGNORE = (
-    "Embedding",
     r"re:.*(^|\.)embed_tokens$",
-    "lm_head",
-    "verifier_lm_head",
+    r"re:.*(^|\.)lm_head$",
+    r"re:.*(^|\.)verifier_lm_head$",
     r"re:.*(^|\.)markov_head\..*",
     r"re:.*(^|\.)confidence_head\..*",
 )
@@ -28,7 +27,7 @@ IGNORE = (
 class DSparkOneshot(Oneshot):
     """Run one-shot quantization with DSpark-specific validation."""
 
-    def validate_model(self, model):
+    def validate_model(self, model: object) -> None:
         """Reject non-DSpark models and checkpoints that are already quantized.
 
         Args:
@@ -96,7 +95,11 @@ def quantize(args: argparse.Namespace) -> None:
     model = SpeculatorModel.from_pretrained(
         pretrained_model_name_or_path=args.model, torch_dtype=torch.bfloat16
     ).eval()
+    if not isinstance(model, DSparkDraftModel):
+        raise TypeError("Only DSpark models are supported")
     verifier = model.config.speculators_config.verifier.name_or_path
+    if verifier is None:
+        raise ValueError("The DSpark checkpoint must identify its verifier")
     layers = model.target_layer_ids
     loader = calibration_batches(
         data_dir=args.data_dir,

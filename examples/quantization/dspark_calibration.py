@@ -41,13 +41,20 @@ class CalibrationDataset(Dataset):
             width: Width of each target hidden state.
             block_size: Number of draft positions per anchored block.
         """
-        if (
-            count <= 0
-            or count > len(records)
-            or max_length <= block_size
-            or max_anchors <= 0
-        ):
-            raise ValueError("Invalid sample count, sequence length, or anchor count")
+        if not 0 < count <= len(records):
+            raise ValueError(f"count must be in [1, {len(records)}], got {count}")
+        if block_size <= 0:
+            raise ValueError(f"block_size must be positive, got {block_size}")
+        if max_length <= block_size:
+            raise ValueError(
+                f"max_length must exceed block_size ({block_size}), got {max_length}"
+            )
+        if max_anchors <= 0:
+            raise ValueError(f"max_anchors must be positive, got {max_anchors}")
+        if not layer_ids:
+            raise ValueError("layer_ids must not be empty")
+        if width <= 0:
+            raise ValueError(f"width must be positive, got {width}")
         self.records = records
         self.hidden_states_dir = hidden_states_dir
         self.count = count

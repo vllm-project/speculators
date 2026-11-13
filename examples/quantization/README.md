@@ -7,18 +7,13 @@ These examples quantize speculator drafters with llm-compressor. The worked exam
 Run commands from the repository root. Create separate Python 3.12 environments for the vLLM servers and for the data-generation clients and quantization scripts. We recommend `uv` for virtual-environment management. Install a hardware-appropriate PyTorch build if needed.
 
 ```bash
-uv venv \
-  --python 3.12 \
-  vllm_venv
-uv pip install \
-  --python vllm_venv/bin/python \
-  'vllm==0.33.0'
-uv venv \
-  --python 3.12 \
-  .venv-quant
-uv pip install \
-  --python .venv-quant/bin/python \
-  -r examples/quantization/requirements.txt
+uv venv -p3.12 vllm_venv && \
+source vllm_venv/bin/activate && \
+uv pip install vllm==0.33.0
+
+uv venv -p3.12 .venv-quant && \
+source .venv-quant/bin/activate && \
+uv pip install -r examples/quantization/requirements.txt
 ```
 
 The quantization environment installs Speculators and its matching `hs-connectors` dependency through `requirements.txt`. The file-based hidden-state extraction path uses vLLM's built-in connector, so the vLLM environment does not require Speculators or `hs-connectors`. The quantization environment pins llm-compressor because the NVFP4 example uses its 0.15.0 interfaces.
@@ -66,9 +61,9 @@ TARGET_LAYER_IDS=(4 12 20 28 36 44 52 60)
 MIN_VALID_TOKENS=$((BLOCK_SIZE + 1))
 ```
 
-For the DSpark example, `BLOCK_SIZE` is the drafter's block size and `TARGET_LAYER_IDS` must match the drafter's `aux_hidden_state_layer_ids` in order. `MIN_VALID_TOKENS` is `BLOCK_SIZE + 1` so each row has an anchor before its final draft block. Use the same `SEQ_LENGTH` for data preparation and NVFP4 calibration, and set the vLLM server's maximum model length to at least `SEQ_LENGTH + 1`. `REGEN_LIMIT` can exceed `SAMPLES` because preparation filters out ineligible rows.
+For the DSpark example, `BLOCK_SIZE` is the drafter's block size and `TARGET_LAYER_IDS` must match the drafter's `aux_hidden_state_layer_ids` in order. These are eight verifier hidden-state inputs to the drafter's `fc` layer, not its five draft transformer layers. `MIN_VALID_TOKENS` is `BLOCK_SIZE + 1` so each row has an anchor before its final draft block. Use the same `SEQ_LENGTH` for data preparation and NVFP4 calibration, and set the vLLM server's maximum model length to at least `SEQ_LENGTH + 1`. `REGEN_LIMIT` can exceed `SAMPLES` because preparation filters out ineligible rows.
 
-The following resource figures are examples for this checkpoint and these settings, not general requirements. Full-length 2048-token BF16 caches can require approximately 180 GiB of disk for 1024 rows, plus staging and checkpoint space. During quantization, llm-compressor's basic pipeline caches calibration inputs in host RAM: eight layers of width 5120 at 1024 × 2048 tokens require approximately 160 GiB for BF16 hidden states alone, plus other inputs and overhead. Shorter rows need less.
+The following resource figures are examples for this checkpoint and these settings, not general requirements. Full-length 2048-token BF16 caches with eight auxiliary states plus the final verifier state can require approximately 180 GiB of disk for 1024 rows, plus staging and checkpoint space. During quantization, llm-compressor's basic pipeline caches calibration inputs in host RAM: the eight auxiliary layers of width 5120 at 1024 × 2048 tokens require approximately 160 GiB for BF16 hidden states alone, plus other inputs and overhead. Shorter rows need less.
 
 ### Regenerate and prepare responses
 
@@ -78,7 +73,7 @@ In a server terminal, activate the vLLM environment and start the verifier:
 
 ```bash
 source vllm_venv/bin/activate
-python -m vllm.entrypoints.cli.main serve "$MODEL" \
+vllm serve "$MODEL" \
   --host 127.0.0.1 \
   --port 8000 \
   --max-model-len "$((SEQ_LENGTH + 1))"
@@ -118,7 +113,7 @@ Confirm that the printed count is at least `$SAMPLES`. If filtering leaves fewer
 
 ### Extract hidden states offline
 
-See [Get Hidden States](../../docs/user_guide/tutorials/train.md#step-3-get-hidden-states) for the offline extraction workflow. Stop the regeneration server, then start an extraction server on a filesystem shared with the client. The launcher appends the final verifier layer to the requested draft layers by default.
+See [Get Hidden States](../../docs/user_guide/tutorials/train.md#step-3-get-hidden-states) for the offline extraction workflow. Stop the regeneration server, then start an extraction server on a filesystem shared with the client. The launcher appends the final verifier layer to the requested auxiliary layers by default.
 
 ```bash
 python scripts/launch_vllm.py train "$MODEL" \

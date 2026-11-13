@@ -1,2 +1,2 @@
-speculators==0.9.0
 llmcompressor==0.15.0
+speculators==0.9.0
