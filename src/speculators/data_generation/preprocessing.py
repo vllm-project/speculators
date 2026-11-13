@@ -512,7 +512,10 @@ def _preprocess_batch(
         )
 
     results: dict[str, list] = {"input_ids": [], "loss_mask": [], "seq_len": []}
-    conversations: list[list[dict]] = examples.get("conversations", [])
+    # Accept either ``conversations`` or ``messages``
+    conversations: list[list[dict]] = (
+        examples.get("conversations") or examples.get("messages") or []
+    )
 
     # MM inputs are extracted via the Chat Completions API, which needs the
     # original messages -- token ids alone cannot carry the images.
@@ -521,7 +524,9 @@ def _preprocess_batch(
         results["is_multimodal"] = []
 
     if not conversations:
-        log.warning(f"No conversations key found. Keys: {list(examples.keys())}")
+        log.warning(
+            f"No conversations or messages key found. Keys: {list(examples.keys())}"
+        )
         return results
 
     tools_col = examples.get("tools")
@@ -708,12 +713,16 @@ def _load_hf_dataset(spec: str) -> tuple[HFDataset, None]:
     raw_dataset = load_dataset(hf_id, name=subset, split=split)
 
     columns = set(raw_dataset.column_names)
-    if "conversations" not in columns and not {"input_ids", "loss_mask"} <= columns:
+    if (
+        not columns & {"conversations", "messages"}
+        and not {"input_ids", "loss_mask"} <= columns
+    ):
         raise ValueError(
             f"HuggingFace dataset '{hf_id}' (split '{split}') is not in "
             "a supported format: expected a conversations format with a "
-            "'conversations' column or a pre-tokenized format with both "
-            f"'input_ids' and 'loss_mask', but found {raw_dataset.column_names}. "
+            "'conversations' or 'messages' column or a pre-tokenized format "
+            f"with both 'input_ids' and 'loss_mask', but found "
+            f"{raw_dataset.column_names}. "
             "Pass a dataset in one of those formats."
         )
 

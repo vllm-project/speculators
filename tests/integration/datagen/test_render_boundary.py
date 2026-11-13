@@ -400,6 +400,27 @@ def test_preprocess_keeps_conversation_specific_render_error_policy(
     assert result["loss_mask"][0].tolist() == [False, False, True]
 
 
+@pytest.mark.sanity
+def test_preprocess_batch_accepts_messages_column(monkeypatch):
+    def handle(request):
+        body = json.loads(request.content)
+        ids = [1, 2] if body["add_generation_prompt"] else [1, 2, 3]
+        return httpx.Response(200, json={"token_ids": ids})
+
+    messages = [
+        [{"role": "user", "content": "hi"}, {"role": "assistant", "content": "ok"}]
+    ]
+    with httpx.Client(transport=httpx.MockTransport(handle)) as client:
+        monkeypatch.setattr(render_client, "_client", client)
+        monkeypatch.setattr(render_client, "_client_pid", os.getpid())
+        result = preprocessing._preprocess_batch(
+            {"messages": messages}, False, "http://render.test", 2048
+        )
+    assert len(result["input_ids"]) == 1
+    assert result["input_ids"][0].tolist() == [1, 2, 3]
+    assert result["loss_mask"][0].tolist() == [False, False, True]
+
+
 class _ProcessorMixinStub(ProcessorMixin):
     """Routes preprocessing down the multimodal path; never called."""
 
