@@ -130,6 +130,13 @@ plugins:
         user_guide/tutorials/train_dflash_online.md: user_guide/tutorials/train.md
         user_guide/tutorials/train_peagle_offline.md: user_guide/tutorials/train.md
         user_guide/tutorials/train_mtp_online.md: user_guide/tutorials/train.md
+        research/adaptive-verification-dflash-dflash2-dspark-gemma4-shubhra.md: research/vllm-knobs/adaptive-verification-dflash-dflash2-dspark-gemma4-shubhra.md
+        research/dflash-adaptive-verification-cuda-graphs-tomasruizt.md: research/vllm-knobs/dflash-adaptive-verification-cuda-graphs-tomasruizt.md
+        research/dspark-gdn-block16-adaptive-verification-tomasruizt.md: research/vllm-knobs/dspark-gdn-block16-adaptive-verification-tomasruizt.md
+        research/dflash2-selector-and-loss-normalization-ablation-shubhra.md: research/hyperparameter-tuning/loss-functions/dflash2-selector-and-loss-normalization-ablation-shubhra.md
+        research/dspark-qwen3-4b-code-finetune-lr-ablation-meganeflynn.md: research/finetuning-experiments/dspark-qwen3-4b-code-finetune-lr-ablation-meganeflynn.md
+        research/dspark-qwen3-4b-data-ablation-meganeflynn.md: research/dataset-ablations/dspark-qwen3-4b-data-ablation-meganeflynn.md
+        research/dspark-mistral-large-4-nvfp4-acceptance-meganeflynn.md: research/model-evaluations/Mistral/Mistral-Large-4-1T-A52B-NVFP4/dspark-mistral-large-4-nvfp4-acceptance-meganeflynn.md
   - search
   - section-index
   - social
