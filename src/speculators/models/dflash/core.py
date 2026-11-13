@@ -15,7 +15,10 @@ from speculators.model import DraftVocabMixin, SpeculatorModel
 from speculators.models.attention import create_float_mask
 from speculators.models.dflash import DFlashSpeculatorConfig
 from speculators.models.dflash.attention import create_anchor_block_mask_mod
-from speculators.models.dflash.metrics import compute_metrics
+from speculators.models.dflash.metrics import (
+    compute_metrics,
+    compute_metrics_from_hidden,
+)
 from speculators.models.dflash.model_definitions import Qwen3DFlashDecoderLayer
 from speculators.models.dflash.utils import (
     get_base_indices_for_anchored_blocks,
@@ -288,8 +291,12 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
         Returns:
             Tuple of (train_call_kwargs, val_call_kwargs)
         """
+        implementation = kwargs.get("loss_implementation", "fused")
+        # fused_linear computes the same fused losses from hidden states; the
+        # config is resolved as "fused" and forward takes the hidden-state path.
+        fused_linear = implementation == "fused_linear"
         loss_config = resolve_loss_config(
-            kwargs["loss_fn"], kwargs.get("loss_implementation", "fused")
+            kwargs["loss_fn"], "fused" if fused_linear else implementation
         )
         gamma = kwargs.get("dflash_decay_gamma", 4.0)
         max_anchors = kwargs.get("max_anchors", 512)
@@ -303,6 +310,9 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
             "max_anchors": max_anchors,
             "per_position_loss_weight": per_position_loss_weight,
             "dpace_alpha": dpace_alpha,
+            "fused_linear": fused_linear,
+            "fused_linear_targets": kwargs.get("fused_linear_targets", "recompute"),
+            "fused_linear_logits": kwargs.get("fused_linear_logits", "input"),
         }
         return dict(shared), dict(shared)
 
@@ -386,13 +396,19 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
         verifier_last_hidden_states: torch.Tensor,  # [1, total_seq_len, hidden_size]
         document_ids: torch.Tensor,  # [1, total_seq_len]
         position_ids: torch.Tensor | None = None,  # [1, total_seq_len]
+        materialize_logits: bool = True,
+        materialize_targets: bool = True,
         **kwargs,
     ):
         """Run the anchored-block draft transformer up to the draft logits.
 
         Returns ``(hidden, logits, targets, aligned_loss_mask,
         anchored_block_indices)``. DSpark reuses this and adds its Markov and
-        confidence heads before computing its own loss.
+        confidence heads before computing its own loss. With
+        ``materialize_logits=False`` the ``lm_head`` projection is skipped and
+        ``logits`` is None (the fused_linear loss projects ``hidden`` itself);
+        with ``materialize_targets=False`` ``targets`` holds the gathered
+        post-norm verifier hidden states ``[1, N, H]`` instead of their logits.
         """
         device = hidden_states.device
         total_seq_len = hidden_states.shape[1]
@@ -438,7 +454,20 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
         )  # shape: [num_anchors*block_size]
 
         with torch.no_grad():
-            if anchored_block_indices.numel() < total_seq_len:
+            if not materialize_targets:
+                # fused_linear recomputes the target logits per chunk from the
+                # verifier hidden states. Gathering the rows first is the same
+                # as both branches below: RMSNorm and the projection are
+                # per-row, and roll(x, 1)[i] == x[(i - 1) % T].
+                target_indices = (
+                    anchored_block_indices
+                    if self.config.sample_from_anchor
+                    else (anchored_block_indices - 1) % total_seq_len
+                )
+                targets = self.verifier_norm(
+                    verifier_last_hidden_states[:, target_indices]
+                )
+            elif anchored_block_indices.numel() < total_seq_len:
                 target_indices = (
                     anchored_block_indices
                     if self.config.sample_from_anchor
@@ -470,7 +499,7 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
             )
 
         hidden = self.norm(noise_embedding)
-        logits = self.lm_head(hidden)
+        logits = self.lm_head(hidden) if materialize_logits else None
         # shape: [1, num_anchors*block_size, vocab_size]
 
         aligned_loss_mask = loss_mask.clone()[:, anchored_block_indices]
@@ -503,27 +532,55 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
         max_anchors: int = 512,
         per_position_loss_weight: str = "fixed-exp-decay",
         dpace_alpha: float = 0.5,
+        fused_linear: bool = False,
+        fused_linear_targets: str = "recompute",
+        fused_linear_logits: str = "input",
         **kwargs,
     ):
-        _, logits, targets, aligned_loss_mask, _ = self._backbone_forward(
+        recompute_targets = fused_linear and fused_linear_targets == "recompute"
+        hidden, logits, targets, aligned_loss_mask, _ = self._backbone_forward(
             hidden_states,
             input_ids,
             loss_mask,
             verifier_last_hidden_states,
             document_ids,
             position_ids,
+            materialize_logits=not fused_linear,
+            materialize_targets=not recompute_targets,
             max_anchors=max_anchors,
             **kwargs,
         )
+        metric_kwargs = {
+            "gamma": gamma,
+            "loss_config": loss_config,
+            "per_position_loss_weight": per_position_loss_weight,
+            "dpace_alpha": dpace_alpha,
+            "sample_from_anchor": self.config.sample_from_anchor,
+        }
+        if fused_linear:
+            # loss_implementation="fused_linear": no [1, T, V] draft logits, and
+            # with recomputed targets no [1, T, V] target logits either.
+            loss, metrics = compute_metrics_from_hidden(
+                hidden,
+                self.lm_head.weight,
+                targets,
+                aligned_loss_mask,
+                self.block_size,
+                target_weight=(
+                    self.verifier_lm_head.weight if recompute_targets else None
+                ),
+                logits_dtype=fused_linear_logits,
+                # aligned_loss_mask masks slot 0 when not sampling from the
+                # anchor (above), so those rows need not be projected at all.
+                skip_anchor_rows=True,
+                **metric_kwargs,
+            )
+            return None, loss, metrics
         loss, metrics = compute_metrics(
             logits,
             targets,
             aligned_loss_mask,
             self.block_size,
-            gamma=gamma,
-            loss_config=loss_config,
-            per_position_loss_weight=per_position_loss_weight,
-            dpace_alpha=dpace_alpha,
-            sample_from_anchor=self.config.sample_from_anchor,
+            **metric_kwargs,
         )
         return None, loss, metrics

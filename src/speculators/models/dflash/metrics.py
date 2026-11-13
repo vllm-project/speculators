@@ -1,13 +1,16 @@
 """Metrics and loss functions for DFlash draft model."""
 
+from collections.abc import Callable
 from functools import partial
 from typing import Any
 
 import torch
 
 from speculators.losses import (
+    CompoundLossOutput,
     LossConfig,
-    compound_loss,
+    compound_loss_from_hidden,
+    compound_loss_with_outputs,
     dflash_loss_decay,
     dpace_loss_decay,
     kl_div_loss,
@@ -51,10 +54,98 @@ def compute_metrics(
             - eal: Expected Accepted Length, the mean per-block accepted run
               plus the verifier's bonus token (headline metric)
     """
+    return _compute_metrics(
+        partial(compound_loss_with_outputs, logits, targets),
+        loss_mask,
+        block_size=block_size,
+        gamma=gamma,
+        loss_config=loss_config,
+        per_position_loss_weight=per_position_loss_weight,
+        dpace_alpha=dpace_alpha,
+        sample_from_anchor=sample_from_anchor,
+    )
+
+
+def compute_metrics_from_hidden(
+    hidden: torch.Tensor,  # shape: [1, num_anchors*block_size, hidden_size]
+    lm_head_weight: torch.Tensor,  # shape: [draft_vocab_size, hidden_size]
+    targets: torch.Tensor,  # shape: [1, num_anchors*block_size, draft_vocab_size]
+    loss_mask: torch.Tensor,  # shape: [1, num_anchors*block_size]
+    block_size: int = 1,
+    gamma: float = 4.0,
+    loss_config: LossConfig | None = None,
+    per_position_loss_weight: str = "fixed-exp-decay",
+    dpace_alpha: float = 0.5,
+    sample_from_anchor: bool = False,
+    chunk_rows: int | None = None,
+    target_weight: torch.Tensor | None = None,
+    logits_dtype: str = "input",
+    grad_mode: str = "auto",
+    skip_anchor_rows: bool = False,
+) -> tuple[torch.Tensor, dict]:
+    """``compute_metrics`` without materializing the draft logits.
+
+    The loss, both argmaxes and the metrics come from the final hidden states
+    and the frozen ``lm_head`` weight in row chunks
+    (``loss_implementation="fused_linear"``); ``loss_config`` must be
+    resolved with the ``"fused"`` implementation. With ``target_weight``
+    (the verifier ``lm_head``), ``targets`` holds the gathered post-norm
+    verifier hidden states ``[1, T, H]`` and the target logits are recomputed
+    per chunk as well. ``logits_dtype`` and ``grad_mode`` are passed to
+    ``fused_linear_compound``.
+
+    With ``skip_anchor_rows`` and ``sample_from_anchor=False``, slot 0 of every
+    block (the anchor, which DFlash always masks) is not projected at all:
+    1 / ``block_size`` fewer rows in every GEMM. The caller guarantees that
+    those rows are masked; their losses and ids are reported as 0.
+    """
+    rows = None
+    if skip_anchor_rows and not sample_from_anchor and block_size > 1:
+        seq_len = loss_mask.shape[1]
+        rows = (
+            torch.arange(seq_len, device=loss_mask.device)
+            .view(-1, block_size)[:, 1:]
+            .reshape(-1)
+        )
+    return _compute_metrics(
+        partial(
+            compound_loss_from_hidden,
+            hidden,
+            lm_head_weight,
+            targets,
+            chunk_rows=chunk_rows,
+            target_weight=target_weight,
+            logits_dtype=logits_dtype,
+            grad_mode=grad_mode,
+            rows=rows,
+        ),
+        loss_mask,
+        block_size=block_size,
+        gamma=gamma,
+        loss_config=loss_config,
+        per_position_loss_weight=per_position_loss_weight,
+        dpace_alpha=dpace_alpha,
+        sample_from_anchor=sample_from_anchor,
+    )
+
+
+def _compute_metrics(
+    loss_fn: Callable[..., CompoundLossOutput],
+    loss_mask: torch.Tensor,
+    block_size: int,
+    gamma: float,
+    loss_config: LossConfig | None,
+    per_position_loss_weight: str,
+    dpace_alpha: float,
+    sample_from_anchor: bool,
+) -> tuple[torch.Tensor, dict]:
+    """Shared body: ``loss_fn(loss_mask, pos_idx, loss_config=..., decay_fn=...)``
+    returns the loss and both argmaxes; the rest is per-position accuracy."""
     if loss_config is None:
         loss_config = _DEFAULT_LOSS_CONFIG
-    seq_len = logits.shape[1]
-    pos_idx = torch.arange(seq_len, device=logits.device) % block_size
+    seq_len = loss_mask.shape[1]
+    device = loss_mask.device
+    pos_idx = torch.arange(seq_len, device=device) % block_size
     pos_idx = pos_idx.unsqueeze(0)  # shape: [1, T]
 
     if per_position_loss_weight == "dpace":
@@ -69,23 +160,16 @@ def compute_metrics(
             dflash_loss_decay, gamma=gamma, sample_from_anchor=sample_from_anchor
         )
 
-    loss, term_losses = compound_loss(
-        logits,
-        targets,
-        loss_mask,
-        pos_idx,
-        loss_config=loss_config,
-        decay_fn=decay_fn,
-    )
-
-    pred_ids = torch.argmax(logits, dim=-1)
-    target_ids = torch.argmax(targets, dim=-1)
+    # The argmaxes come from the fused loss pass when the config is all fused.
+    out = loss_fn(loss_mask, pos_idx, loss_config=loss_config, decay_fn=decay_fn)
+    loss, term_losses = out.loss, out.term_losses
+    pred_ids, target_ids = out.pred_ids, out.target_ids
 
     correct_per_pos, total_per_pos = compute_accuracy_multi_step(
         pred_ids, target_ids, loss_mask, pos_idx, block_size
     )
 
-    ones = torch.tensor(1.0, device=logits.device)
+    ones = torch.tensor(1.0, device=device)
     metrics: dict[str, Any] = {}
     metrics["loss_sum"] = loss.detach().clone()
     metrics["loss_total"] = ones

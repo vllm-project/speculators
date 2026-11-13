@@ -306,10 +306,28 @@ class GenerationArgs(_Group):
 
 
 class LossArgs(_Group):
-    loss_implementation: Literal["fused", "eager"] = Field(
+    loss_implementation: Literal["fused", "eager", "fused_linear"] = Field(
         default="fused",
         description="Loss implementation to use; eager is for compatibility and "
-        "numerical validation and may OOM with DFlash-family models.",
+        "numerical validation and may OOM with DFlash-family models. "
+        "fused_linear (DFlash only) computes the loss from hidden states in row "
+        "chunks without materializing the draft logits.",
+    )
+    fused_linear_targets: Literal["recompute", "materialize"] = Field(
+        default="recompute",
+        description="With loss_implementation=fused_linear: recompute the target "
+        "logits per chunk from the verifier hidden states (no [T, V] tensor; one "
+        "extra verifier GEMM per chunk in backward), or materialize them once "
+        "(no target recompute; keeps one [T, V] tensor). Ignored by the other "
+        "implementations.",
+    )
+    fused_linear_logits: Literal["input", "float32"] = Field(
+        default="input",
+        description="With loss_implementation=fused_linear: dtype of the logit "
+        "tiles. input keeps them in the training dtype (bf16), like materialized "
+        "logits; float32 takes them from the GEMM accumulator -- more accurate "
+        "gradients (notably for TV-based losses), slower GEMMs. Ignored by the "
+        "other implementations.",
     )
     loss_fn: str | None = Field(
         default=None,
