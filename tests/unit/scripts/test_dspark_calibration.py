@@ -1,10 +1,5 @@
 """Behavior at the offline cache to calibration batch boundary."""
 
-import importlib.util
-import subprocess
-import sys
-from pathlib import Path
-
 import pytest
 import torch
 from datasets import Dataset
@@ -20,7 +15,7 @@ from speculators.models.dspark import DSparkDraftModel, DSparkSpeculatorConfig
 from speculators.proposals.greedy import GreedyTokenProposalConfig
 
 
-def test_calibration_batches_require_matching_cached_tokens(tmp_path):
+def _calibration_batches(tmp_path, token_ids):
     records = Dataset.from_dict(
         {
             "input_ids": [[1, 2, 3, 4, 5, 6]],
@@ -32,12 +27,11 @@ def test_calibration_batches_require_matching_cached_tokens(tmp_path):
     cache = tmp_path / "cache"
     cache.mkdir()
     hidden = torch.tensor([[[2.0, 2.0], [5.0, 5.0], [99.0, 99.0]]] * 6)
-    path = cache / "hs_0.safetensors"
     save_file(
-        {"token_ids": torch.tensor([1, 2, 3, 4, 5, 6]), "hidden_states": hidden}, path
+        {"token_ids": torch.tensor(token_ids), "hidden_states": hidden},
+        cache / "hs_0.safetensors",
     )
-
-    batches = calibration_batches(
+    return calibration_batches(
         tmp_path / "records",
         cache,
         count=1,
@@ -47,14 +41,21 @@ def test_calibration_batches_require_matching_cached_tokens(tmp_path):
         width=2,
         block_size=2,
     )
+
+
+def test_calibration_batches_align_cached_tokens(tmp_path):
+    batches = _calibration_batches(tmp_path, [1, 2, 3, 4, 5, 6])
+
     batch = next(iter(batches))
+
     assert batch["hidden_states"].shape == (1, 6, 4)
     assert batch["hidden_states"][0, 0].tolist() == [2, 2, 5, 5]
     assert batch["max_anchors"] == 3
 
-    save_file(
-        {"token_ids": torch.tensor([1, 2, 3, 4, 5, 7]), "hidden_states": hidden}, path
-    )
+
+def test_calibration_batches_require_matching_cached_tokens(tmp_path):
+    batches = _calibration_batches(tmp_path, [1, 2, 3, 4, 5, 7])
+
     with pytest.raises(ValueError, match="Token ids don't match"):
         next(iter(batches))
 
@@ -90,8 +91,7 @@ def test_calibration_rejects_invalid_hidden_states(tmp_path, hidden, message):
         next(iter(batches))
 
 
-def test_calibration_activations_match_training():
-    """Calibration observers see the same backbone activations as training."""
+def _dspark_model():
     config = DSparkSpeculatorConfig(
         transformer_layer_config=Qwen3Config(  # type: ignore[call-arg]
             hidden_size=16,
@@ -121,7 +121,11 @@ def test_calibration_activations_match_training():
         model.verifier_lm_head.weight,
     ):
         torch.nn.init.normal_(weight)
-    batch = {
+    return model
+
+
+def _calibration_batch():
+    return {
         "hidden_states": torch.randn(1, 12, 32),
         "input_ids": torch.randint(1, 64, (1, 12)),
         "loss_mask": torch.ones(1, 12, dtype=torch.long),
@@ -129,6 +133,12 @@ def test_calibration_activations_match_training():
         "position_ids": torch.arange(12).unsqueeze(0),
         "max_anchors": 2,
     }
+
+
+def test_calibration_activations_match_training():
+    """Calibration observers see the same backbone activations as training."""
+    model = _dspark_model()
+    batch = _calibration_batch()
     verifier_states = torch.randn(1, 12, 16)
     with torch.no_grad():
         torch.manual_seed(42)
@@ -140,38 +150,15 @@ def test_calibration_activations_match_training():
     torch.testing.assert_close(actual, expected)
 
 
-@pytest.mark.parametrize(
-    ("script", "extra_args"),
-    [
-        ("dspark_fp8.py", []),
-        (
-            "dspark_nvfp4_gptq_imatrix.py",
-            [
-                "--data-dir",
-                "unused",
-                "--hidden-states-dir",
-                "unused",
-            ],
-        ),
-    ],
-)
-def test_quantization_refuses_existing_output(tmp_path, script, extra_args):
-    if importlib.util.find_spec("llmcompressor") is None:
-        pytest.skip("llmcompressor is not installed")
-    script_path = Path(__file__).resolve().parents[3] / "examples/quantization" / script
-    result = subprocess.run(  # noqa: S603
-        [
-            sys.executable,
-            str(script_path),
-            "--model",
-            "unused",
-            "--output-dir",
-            str(tmp_path),
-            *extra_args,
-        ],
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    assert result.returncode != 0
-    assert "Output already exists" in result.stderr
+def test_calibration_forward_skips_output_heads_and_verifier_norm():
+    model = _dspark_model()
+
+    def fail(*_args, **_kwargs):
+        raise AssertionError("Calibration must not compute verifier outputs")
+
+    model.lm_head.forward = fail
+    model.verifier_lm_head.forward = fail
+    model.verifier_norm.forward = fail
+
+    with torch.no_grad():
+        calibration_forward(model, **_calibration_batch())

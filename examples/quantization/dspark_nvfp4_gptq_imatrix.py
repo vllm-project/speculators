@@ -1,11 +1,11 @@
 """Quantize a DSpark drafter with NVFP4 GPTQ and iMatrix calibration."""
 
 import argparse
-import random
 from pathlib import Path
 from types import MethodType
 
 import torch
+from compressed_tensors.quantization import preset_name_to_scheme
 from dspark_calibration import calibration_batches, calibration_forward
 from llmcompressor.entrypoints.oneshot import Oneshot
 from llmcompressor.modifiers.gptq import GPTQModifier
@@ -30,6 +30,23 @@ class DSparkOneshot(Oneshot):
             raise ValueError("Use an unquantized DSpark checkpoint")
 
 
+def _nvfp4_recipe():
+    scheme = preset_name_to_scheme("NVFP4", targets=["Linear"])
+    scheme.weights.observer = "imatrix_mse"
+    scheme.weights.observer_kwargs = {"strict": True}
+    return GPTQModifier(
+        config_groups={"group_0": scheme},
+        ignore=[
+            "Embedding",
+            r"re:.*(^|\.)embed_tokens$",
+            "lm_head",
+            "verifier_lm_head",
+            r"re:.*(^|\.)markov_head\..*",
+            r"re:.*(^|\.)confidence_head\..*",
+        ],
+    )
+
+
 def main():
     cli = argparse.ArgumentParser(description=__doc__)
     cli.add_argument("--model", required=True, help="DSpark Hub ID or local checkpoint")
@@ -44,7 +61,6 @@ def main():
     if args.output_dir.exists():
         raise FileExistsError(f"Output already exists: {args.output_dir}")
 
-    random.seed(args.seed)
     torch.manual_seed(args.seed)
     torch.cuda.manual_seed_all(args.seed)
     model = SpeculatorModel.from_pretrained(
@@ -64,19 +80,7 @@ def main():
     )
     print(f"Calibrating on prepared rows 0 through {args.samples - 1}", flush=True)
     model.forward = MethodType(calibration_forward, model)
-    recipe = GPTQModifier(
-        targets="Linear",
-        scheme="NVFP4",
-        weight_observer="imatrix_mse",
-        ignore=[
-            "Embedding",
-            r"re:.*(^|\.)embed_tokens$",
-            "lm_head",
-            "verifier_lm_head",
-            r"re:.*(^|\.)markov_head\..*",
-            r"re:.*(^|\.)confidence_head\..*",
-        ],
-    )
+    recipe = _nvfp4_recipe()
     tokenizer = AutoTokenizer.from_pretrained(verifier)
     DSparkOneshot(
         model=model,
