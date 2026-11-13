@@ -16,16 +16,29 @@ IGNORE = (
 
 
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
+    """Parse command-line arguments.
+
+    Args:
+        argv: Optional argument sequence; defaults to the process arguments.
+
+    Returns:
+        Parsed quantization options.
+    """
     cli = argparse.ArgumentParser(description=__doc__)
     cli.add_argument("--model", required=True, help="Hub ID or local checkpoint")
     cli.add_argument("--output-dir", type=Path, required=True)
     cli.add_argument(
         "--scheme", choices=["FP8_DYNAMIC", "FP8_BLOCK"], default="FP8_DYNAMIC"
     )
-    return cli.parse_args(argv)
+    return cli.parse_args(args=argv)
 
 
 def quantize(args: argparse.Namespace) -> None:
+    """Quantize a checkpoint into a new output directory.
+
+    Args:
+        args: Parsed command-line arguments.
+    """
     if args.output_dir.exists():
         raise FileExistsError(f"Output already exists: {args.output_dir}")
 
@@ -40,7 +53,8 @@ def quantize(args: argparse.Namespace) -> None:
 
 
 def main() -> None:
-    quantize(parse_args())
+    """Run the FP8 quantization command-line interface."""
+    quantize(args=parse_args())
 
 
 if __name__ == "__main__":

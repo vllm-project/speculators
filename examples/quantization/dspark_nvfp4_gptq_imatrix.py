@@ -26,11 +26,20 @@ IGNORE = (
 
 
 class DSparkOneshot(Oneshot):
+    """Run one-shot quantization with DSpark-specific validation."""
+
     def validate_model(self, model):
+        """Reject non-DSpark models and checkpoints that are already quantized.
+
+        Args:
+            model: Model instance supplied by llmcompressor.
+        """
         # llmcompressor 0.15 cannot load a speculators config with AutoConfig.
         if not isinstance(model, DSparkDraftModel):
             raise TypeError("Only DSpark models are supported")
-        raw, _ = PretrainedConfig.get_config_dict(model.config.name_or_path)
+        raw, _ = PretrainedConfig.get_config_dict(
+            pretrained_model_name_or_path=model.config.name_or_path
+        )
         if (
             raw.get("quantization_config") is not None
             or raw.get("transformer_layer_config", {}).get("quantization_config")
@@ -41,13 +50,26 @@ class DSparkOneshot(Oneshot):
 
 
 def _nvfp4_recipe() -> GPTQModifier:
-    scheme = preset_name_to_scheme("NVFP4", targets=["Linear"])
+    """Build the strict-iMatrix NVFP4 GPTQ recipe.
+
+    Returns:
+        Configured GPTQ modifier with DSpark exclusions.
+    """
+    scheme = preset_name_to_scheme(name="NVFP4", targets=["Linear"])
     scheme.weights.observer = "imatrix_mse"
     scheme.weights.observer_kwargs = {"strict": True}
     return GPTQModifier(config_groups={"group_0": scheme}, ignore=IGNORE)
 
 
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
+    """Parse command-line arguments.
+
+    Args:
+        argv: Optional argument sequence; defaults to the process arguments.
+
+    Returns:
+        Parsed model, calibration, and quantization options.
+    """
     cli = argparse.ArgumentParser(description=__doc__)
     cli.add_argument("--model", required=True, help="DSpark Hub ID or local checkpoint")
     cli.add_argument("--output-dir", type=Path, required=True)
@@ -57,23 +79,28 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     cli.add_argument("--sequence-length", type=int, default=2048)
     cli.add_argument("--max-anchors", type=int, default=32)
     cli.add_argument("--seed", type=int, default=42)
-    return cli.parse_args(argv)
+    return cli.parse_args(args=argv)
 
 
 def quantize(args: argparse.Namespace) -> None:
+    """Quantize a DSpark checkpoint with strict-iMatrix NVFP4 GPTQ.
+
+    Args:
+        args: Parsed command-line arguments.
+    """
     if args.output_dir.exists():
         raise FileExistsError(f"Output already exists: {args.output_dir}")
 
-    torch.manual_seed(args.seed)
-    torch.cuda.manual_seed_all(args.seed)
+    torch.manual_seed(seed=args.seed)
+    torch.cuda.manual_seed_all(seed=args.seed)
     model = SpeculatorModel.from_pretrained(
-        args.model, torch_dtype=torch.bfloat16
+        pretrained_model_name_or_path=args.model, torch_dtype=torch.bfloat16
     ).eval()
     verifier = model.config.speculators_config.verifier.name_or_path
     layers = model.target_layer_ids
     loader = calibration_batches(
-        args.data_dir,
-        args.hidden_states_dir,
+        data_dir=args.data_dir,
+        hidden_states_dir=args.hidden_states_dir,
         count=args.samples,
         max_length=args.sequence_length,
         max_anchors=args.max_anchors,
@@ -84,7 +111,7 @@ def quantize(args: argparse.Namespace) -> None:
     print(f"Calibrating on prepared rows 0 through {args.samples - 1}", flush=True)
     model.forward = MethodType(calibration_forward, model)
     recipe = _nvfp4_recipe()
-    tokenizer = AutoTokenizer.from_pretrained(verifier)
+    tokenizer = AutoTokenizer.from_pretrained(pretrained_model_name_or_path=verifier)
     DSparkOneshot(
         model=model,
         processor=tokenizer,
@@ -96,7 +123,8 @@ def quantize(args: argparse.Namespace) -> None:
 
 
 def main() -> None:
-    quantize(parse_args())
+    """Run the DSpark NVFP4 quantization command-line interface."""
+    quantize(args=parse_args())
 
 
 if __name__ == "__main__":

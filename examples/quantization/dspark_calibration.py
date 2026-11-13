@@ -15,6 +15,8 @@ from speculators.models.dspark import DSparkDraftModel
 
 
 class CalibrationDataset(Dataset):
+    """Provide validated DSpark calibration samples."""
+
     def __init__(
         self,
         records: HFDataset,
@@ -27,6 +29,18 @@ class CalibrationDataset(Dataset):
         width: int,
         block_size: int,
     ) -> None:
+        """Initialize the dataset and validate its sampling limits.
+
+        Args:
+            records: Token records loaded from disk.
+            hidden_states_dir: Directory containing per-sample safetensors files.
+            count: Number of records to expose.
+            max_length: Maximum input sequence length.
+            max_anchors: Maximum anchored draft blocks per sample.
+            layer_ids: Target hidden-state layer IDs.
+            width: Width of each target hidden state.
+            block_size: Number of draft positions per anchored block.
+        """
         if (
             count <= 0
             or count > len(records)
@@ -44,11 +58,22 @@ class CalibrationDataset(Dataset):
         self.width = width
 
     def __len__(self) -> int:
+        """Return the number of calibration samples."""
         return self.count
 
     def __getitem__(self, index: int) -> dict[str, torch.Tensor | int]:
+        """Load and validate one calibration sample.
+
+        Args:
+            index: Prepared record and hidden-state file index.
+
+        Returns:
+            Single-sample model inputs and the number of anchored blocks.
+        """
         record = self.records[index]
-        data = load_file(str(self.hidden_states_dir / f"hs_{index}.safetensors"))
+        data = load_file(
+            filename=str(self.hidden_states_dir / f"hs_{index}.safetensors")
+        )
         hs = data.get("hidden_states")
         if hs is None:
             raise ValueError(f"Missing hidden states for sample {index}")
@@ -62,7 +87,7 @@ class CalibrationDataset(Dataset):
             raise ValueError(
                 f"Invalid hidden-state shape for sample {index}: {hs.shape}"
             )
-        check_hidden_states(data, record["input_ids"].tolist())
+        check_hidden_states(data=data, tokens=record["input_ids"].tolist())
         length = min(len(record["input_ids"]), self.max_length)
         if record["loss_mask"].ndim != 1 or len(record["loss_mask"]) != len(
             record["input_ids"]
@@ -74,13 +99,13 @@ class CalibrationDataset(Dataset):
             raise ValueError(f"No valid anchors for sample {index}")
         return {
             "hidden_states": hs[:length, : self.layers]
-            .flatten(1)
-            .to(torch.bfloat16)
-            .unsqueeze(0),
-            "input_ids": record["input_ids"][:length].unsqueeze(0),
-            "loss_mask": loss_mask.unsqueeze(0),
-            "document_ids": torch.zeros((1, length), dtype=torch.long),
-            "position_ids": torch.arange(length).unsqueeze(0),
+            .flatten(start_dim=1)
+            .to(dtype=torch.bfloat16)
+            .unsqueeze(dim=0),
+            "input_ids": record["input_ids"][:length].unsqueeze(dim=0),
+            "loss_mask": loss_mask.unsqueeze(dim=0),
+            "document_ids": torch.zeros(size=(1, length), dtype=torch.long),
+            "position_ids": torch.arange(end=length).unsqueeze(dim=0),
             "max_anchors": anchors,
         }
 
@@ -96,10 +121,25 @@ def calibration_batches(
     width: int,
     block_size: int,
 ) -> DataLoader:
-    records = load_from_disk(str(data_dir)).with_format("torch")
+    """Create a loader over offline DSpark calibration samples.
+
+    Args:
+        data_dir: Hugging Face dataset directory.
+        hidden_states_dir: Directory containing per-sample safetensors files.
+        count: Number of records to expose.
+        max_length: Maximum input sequence length.
+        max_anchors: Maximum anchored draft blocks per sample.
+        layer_ids: Target hidden-state layer IDs.
+        width: Width of each target hidden state.
+        block_size: Number of draft positions per anchored block.
+
+    Returns:
+        Data loader that yields individual calibration samples without collation.
+    """
+    records = load_from_disk(dataset_path=str(data_dir)).with_format(type="torch")
     dataset = CalibrationDataset(
-        records,
-        Path(hidden_states_dir),
+        records=records,
+        hidden_states_dir=Path(hidden_states_dir),
         count=count,
         max_length=max_length,
         max_anchors=max_anchors,
@@ -107,7 +147,7 @@ def calibration_batches(
         width=width,
         block_size=block_size,
     )
-    return DataLoader(dataset, batch_size=None, num_workers=0)
+    return DataLoader(dataset=dataset, batch_size=None, num_workers=0)
 
 
 def calibration_forward(
@@ -123,27 +163,42 @@ def calibration_forward(
     """Run the backbone without training's verifier targets, logits, or losses.
 
     Calibration only needs activations, and the compressor may disable lm_head.
+
+    Args:
+        model: DSpark model to run.
+        hidden_states: Target hidden states.
+        input_ids: Input token IDs.
+        loss_mask: Token loss mask used to select anchors.
+        document_ids: Document boundaries for attention.
+        position_ids: Token position IDs.
+        max_anchors: Maximum number of anchored blocks.
+
+    Returns:
+        Normalized backbone activations for the anchored draft blocks.
     """
     device = hidden_states.device
     full_mask, sliding_mask, anchors, valid = model._build_attention_mask(  # noqa: SLF001
-        loss_mask, max_anchors, document_ids, device
+        loss_mask=loss_mask,
+        max_anchors=max_anchors,
+        document_ids=document_ids,
+        device=device,
     )
     if not bool(valid.all()):
         raise ValueError("Calibration must not include padded anchors")
     mask_ids = torch.full(
-        (1, max_anchors * model.block_size),
-        model.mask_token_id,
+        size=(1, max_anchors * model.block_size),
+        fill_value=model.mask_token_id,
         dtype=torch.long,
         device=device,
     )
     mask_ids[:, :: model.block_size] = input_ids[:, anchors]
-    noise = model.embed_tokens(mask_ids)
-    target = model.hidden_norm(model.fc(hidden_states))
+    noise = model.embed_tokens(input=mask_ids)
+    target = model.hidden_norm(hidden_states=model.fc(input=hidden_states))
     positions = get_base_indices_for_anchored_blocks(
-        position_ids[0, anchors], model.block_size
+        anchor_positions=position_ids[0, anchors], block_size=model.block_size
     )
-    position_ids = torch.cat([position_ids, positions.unsqueeze(0)], dim=1)
-    embeddings = model.rotary_emb(hidden_states, position_ids)
+    position_ids = torch.cat(tensors=[position_ids, positions.unsqueeze(dim=0)], dim=1)
+    embeddings = model.rotary_emb(x=hidden_states, position_ids=position_ids)
     for idx, layer in enumerate(model.layers):
         noise = layer(
             hidden_states=noise,
@@ -155,4 +210,4 @@ def calibration_forward(
             use_cache=False,
             position_embeddings=embeddings,
         )
-    return model.norm(noise)
+    return model.norm(hidden_states=noise)
