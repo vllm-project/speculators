@@ -7,12 +7,14 @@ over a fake endpoint.
 
 import asyncio
 import copy
+import importlib
 import json
 import time
 from typing import Any
 
 import pytest
 import typer
+from aiohttp import web
 
 from speculators.cli.regenerate_responses import (
     _post_chat,
@@ -32,6 +34,9 @@ from speculators.data_generation import vllm_client
 from speculators.data_generation.configs import DATASET_CONFIGS, DatasetConfig
 from speculators.data_generation.preprocessing import _preprocess_batch
 from speculators.data_generation.vllm_client import InvalidResponseError
+
+# `speculators.cli` re-exports the command function under the module's name.
+regen_module = importlib.import_module("speculators.cli.regenerate_responses")
 
 
 @pytest.fixture(autouse=True)
@@ -1046,3 +1051,70 @@ def test_tools_and_results_are_read_from_the_normalized_row():
     assert tool_results == [("sunny", [])]
     # the raw row hides the conversation behind `input`: results would be lost
     assert extract_conversation(row, None)[1] == []
+
+
+# ---------------------------------------------------------------------------
+# _run exit status over a real local HTTP server
+# ---------------------------------------------------------------------------
+
+
+async def _run_against_404_server(tmp_path, monkeypatch, *, resume):
+    # The tokenizer is only used for the review-only `text` field.
+    monkeypatch.setattr(regen_module, "build_detokenizer", lambda _: str)
+    dataset = tmp_path / "prompts.jsonl"
+    dataset.write_text(
+        "".join(json.dumps({"id": f"p{i}", "prompt": "hi"}) + "\n" for i in range(3))
+    )
+    outfile = tmp_path / "out.jsonl"
+    if resume:
+        outfile.write_text(
+            "".join(json.dumps({"primary_id": f"p{i}"}) + "\n" for i in range(3))
+        )
+
+    # No routes: every POST gets a 404, as when --endpoint is the /v1 base URL.
+    runner = web.AppRunner(web.Application())
+    await runner.setup()
+    site = web.TCPSite(runner, "127.0.0.1", 0)
+    await site.start()
+    port = site._server.sockets[0].getsockname()[1]  # type: ignore[union-attr]
+    try:
+        await regen_module._run(
+            endpoint=f"http://127.0.0.1:{port}/v1",
+            model="m",
+            dataset_name=str(dataset),
+            split=None,
+            subset=None,
+            limit=None,
+            concurrency=2,
+            max_tokens=8,
+            sampling_params={},
+            outfile=str(outfile),
+            resume=resume,
+            language_filter=None,
+            max_retries=0,
+            reasoning_effort_dist=None,
+            temperature_dist=None,
+            seed=None,
+        )
+    finally:
+        await runner.cleanup()
+    return tmp_path / "out.errors.jsonl"
+
+
+def test_run_exits_nonzero_when_every_conversation_fails(tmp_path, monkeypatch):
+    with pytest.raises(typer.Exit) as exc_info:
+        asyncio.run(_run_against_404_server(tmp_path, monkeypatch, resume=False))
+
+    assert exc_info.value.exit_code == 1
+    errors = (tmp_path / "out.errors.jsonl").read_text().splitlines()
+    assert len(errors) == 3
+    assert "HTTP 404" in json.loads(errors[0])["metadata"]["error"]
+
+
+def test_run_with_nothing_left_to_do_exits_cleanly(tmp_path, monkeypatch):
+    # --resume over a finished output file sends no requests: not a failure.
+    error_file = asyncio.run(
+        _run_against_404_server(tmp_path, monkeypatch, resume=True)
+    )
+
+    assert error_file.read_text() == ""
