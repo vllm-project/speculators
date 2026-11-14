@@ -6,13 +6,12 @@ from transformers import PretrainedConfig
 
 from speculators.model import SpeculatorModel
 from speculators.models.dflash.core import DFlashDraftModel
-from speculators.models.dspine.config import DSpineSpeculatorConfig
+from speculators.models.dspine.config import DSpineSettings, DSpineSpeculatorConfig
 from speculators.models.dspine.metrics import compute_dspine_loss
 from speculators.models.dspine.model_definitions import (
     AdjacentCausalInjection,
     build_transfer_codebook,
 )
-from speculators.models.dspine.settings import DSpineSettings
 from speculators.models.utils import conditional_torch_compile
 
 __all__ = [
