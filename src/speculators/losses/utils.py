@@ -167,6 +167,11 @@ _FUSED_LOSS_FN_MAP: dict[str, Callable[[torch.Tensor, torch.Tensor], torch.Tenso
 }
 
 
+# Fused map functions back to their names: compound_loss routes a config whose
+# terms are all fused through a single kernel call.
+_FUSED_NAME_BY_FN = {fn: name for name, fn in _FUSED_LOSS_FN_MAP.items()}
+
+
 _EAGER_LOSS_FN_MAP: dict[str, Callable[[torch.Tensor, torch.Tensor], torch.Tensor]] = {
     "kl_div": eager.kl_div_loss,
     "rkl": eager.reverse_kl_div_loss,
@@ -244,6 +249,11 @@ def compound_loss(
     result is ``sum(weight * loss_function(logits, targets, ..., loss_fn))``
     over all entries.
 
+    When every term is a fused loss, all terms come from one kernel call
+    (``fused_compound_losses``): the draft/target softmax statistics are
+    computed once and backward writes a single combined logits gradient.
+    A config that mixes fused and eager terms runs each term on its own.
+
     Returns the total loss and a dict of per-term (unweighted) scalar losses
     keyed as ``"{name}_loss"``.  When the config contains a single term the
     dict is empty (the overall loss already captures it).
@@ -251,15 +261,16 @@ def compound_loss(
     total = torch.zeros((), device=logits.device, dtype=torch.float32)
     term_losses: dict[str, torch.Tensor] = {}
     multi = len(loss_config) > 1
-    for name, (fn, weight) in loss_config.items():
-        term = loss_function(
-            logits,
-            targets,
-            loss_mask,
-            pos_idx,
-            loss_fn=fn,
-            decay_fn=decay_fn,
-        )
+    fused_names = [_FUSED_NAME_BY_FN.get(fn) for fn, _ in loss_config.values()]
+    if fused_names and all(name is not None for name in fused_names):
+        fused = _fused_kernel("fused_compound_losses")(logits, targets, fused_names)
+        elementwise = [fused[name] for name in fused_names]
+    else:
+        elementwise = [fn(logits, targets) for fn, _ in loss_config.values()]
+    for (name, (_, weight)), term_elementwise in zip(
+        loss_config.items(), elementwise, strict=True
+    ):
+        term = _reduce_elementwise_loss(term_elementwise, loss_mask, pos_idx, decay_fn)
         if multi:
             term_losses[f"{name}_loss"] = term.detach()
         total = total + weight * term
@@ -287,8 +298,20 @@ def loss_function(
     Returns:
         Scalar mean loss across the batch.
     """
-    elementwise_loss = loss_fn(logits, targets)  # shape: [1, seq_len]
+    return _reduce_elementwise_loss(
+        loss_fn(logits, targets), loss_mask, pos_idx, decay_fn
+    )
 
+
+def _reduce_elementwise_loss(
+    elementwise_loss: torch.Tensor,  # shape: [1, seq_len]
+    loss_mask: torch.Tensor,  # shape: [1, seq_len]
+    pos_idx: torch.Tensor,  # shape: [1, seq_len]
+    decay_fn: Callable[..., torch.Tensor] | None,
+) -> torch.Tensor:
+    """Mask, optionally decay, and average a per-position loss (see
+    ``loss_function``).
+    """
     loss_mask = loss_mask.to(elementwise_loss.dtype)
     elementwise_loss = elementwise_loss * loss_mask
 
