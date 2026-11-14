@@ -1,5 +1,5 @@
 import logging
-from typing import ClassVar
+from typing import Any, ClassVar
 
 import torch
 from torch import nn
@@ -378,6 +378,18 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
 
         return full_attn_mask, sliding_window_attn_mask, anchor_positions, anchor_valid
 
+    def _forward_backbone_layer(
+        self,
+        layer_idx: int,
+        hidden_states: torch.Tensor,
+        input_ids: torch.Tensor,  # noqa: ARG002 - used by subclass hooks
+        anchored_block_indices: torch.Tensor,  # noqa: ARG002 - used by subclass hooks
+        layer_context: dict[str, Any] | None,  # noqa: ARG002 - used by subclass hooks
+        **kwargs,
+    ) -> torch.Tensor:
+        """Run one decoder layer; variants may condition its output per block."""
+        return self.layers[layer_idx](hidden_states=hidden_states, **kwargs)
+
     def _backbone_forward(
         self,
         hidden_states: torch.Tensor,  # [1, total_seq_len, num_hidden*hidden_size]
@@ -386,6 +398,7 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
         verifier_last_hidden_states: torch.Tensor,  # [1, total_seq_len, hidden_size]
         document_ids: torch.Tensor,  # [1, total_seq_len]
         position_ids: torch.Tensor | None = None,  # [1, total_seq_len]
+        layer_context: dict[str, Any] | None = None,
         **kwargs,
     ):
         """Run the anchored-block draft transformer up to the draft logits.
@@ -456,8 +469,12 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
                 targets = verifier_logits[:, anchored_block_indices]
             # shape: [1, num_anchors*block_size, draft_vocab_size]
 
-        for layer_idx, layer in enumerate(self.layers):
-            noise_embedding = layer(
+        for layer_idx in range(len(self.layers)):
+            noise_embedding = self._forward_backbone_layer(
+                layer_idx=layer_idx,
+                input_ids=input_ids,
+                anchored_block_indices=anchored_block_indices,
+                layer_context=layer_context,
                 hidden_states=noise_embedding,
                 target_hidden=fc_output,
                 attention_mask=sliding_window_attn_mask

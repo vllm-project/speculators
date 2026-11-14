@@ -255,6 +255,7 @@ class Trainer:
         self.local_rank = get_local_rank()
         self.rank = get_rank()
         self.train_loader = train_loader
+        self._train_loader_len = len(train_loader)
         self.val_loader = val_loader
         self.is_distributed = is_distributed()
         self.resume_from_checkpoint = config.resume_from_checkpoint
@@ -469,8 +470,18 @@ class Trainer:
                 dist.broadcast(param.data, src=0)
             dist.barrier()
 
-        # DDP constructor broadcasts rank 0's params to all ranks
-        self.model = DistributedDataParallel(self.model)  # type: ignore[assignment]
+        broadcast_buffers = not getattr(
+            self.model, "disable_ddp_buffer_broadcast", False
+        )
+        if not broadcast_buffers:
+            # Share initialized/restored buffers once, without mutating them per step.
+            for buffer in self.model.buffers():
+                dist.broadcast(buffer, src=0)
+
+        # DDP constructor broadcasts rank 0's params to all ranks.
+        self.model = DistributedDataParallel(  # type: ignore[assignment]
+            self.model, broadcast_buffers=broadcast_buffers
+        )
 
     def setup_optimizer(self):
         # Setup optimizer(s). The "muon" option returns two optimizers (Muon for the
@@ -525,6 +536,26 @@ class Trainer:
     def _schedulers_step(self):
         for scheduler in self.schedulers:
             scheduler.step()
+
+    def _model_call_kwargs(self, *, training: bool) -> dict:
+        """Add step context only for models whose objective schedules need it."""
+        configured = (
+            self.config.train_call_kwargs if training else self.config.val_call_kwargs
+        )
+        kwargs = dict(configured or {})
+        unwrapped = getattr(self.model, "module", self.model)
+        if getattr(unwrapped, "requires_global_step", False):
+            default_total = self.config.num_epochs * self._train_loader_len
+            total_training_steps = (
+                self.config.max_steps
+                or self.config.scheduler_total_steps
+                or default_total
+            )
+            kwargs.update(
+                global_step=self.global_step,
+                total_training_steps=total_training_steps,
+            )
+        return kwargs
 
     def _prepare_resume_skip(self, epoch: int) -> int:
         """Prepare fast-skip state for mid-epoch resume and return skipped steps."""
@@ -621,7 +652,7 @@ class Trainer:
             ):
                 timer.mark("fetch")
                 _draft_tokens, loss, metrics = self.model(
-                    **gpu_batch, **(self.config.train_call_kwargs or {})
+                    **gpu_batch, **self._model_call_kwargs(training=True)
                 )
 
             timer.mark("fwd")
@@ -731,7 +762,7 @@ class Trainer:
                 self.device_type, dtype=self.config.hidden_states_dtype
             ):
                 _draft_tokens, _loss, metrics = self.model(
-                    **gpu_batch, **(self.config.val_call_kwargs or {})
+                    **gpu_batch, **self._model_call_kwargs(training=False)
                 )
 
             for k, v in metrics.items():

@@ -29,6 +29,7 @@ from speculators.data_generation.vllm_client import (
     DEFAULT_REQUEST_TIMEOUT,
 )
 from speculators.losses import resolve_loss_config
+from speculators.models.dspine.config import DSpineSettings
 
 # A bool that must render as an argparse ``--x/--no-x`` (``BooleanOptionalAction``)
 # even though it defaults to False. Bools defaulting to True or None get that form
@@ -93,7 +94,7 @@ class DraftArgs(_Group):
     num_layers: int | None = Field(
         default=None,
         description="Number of draft decoder layers to synthesize. "
-        "(default: 5 for dflash/dspark/dflash2, 1 otherwise).",
+        "(default: 5 for dflash/dflash2/dspark/dspine, 1 otherwise).",
     )
     draft_arch: Literal["llama", "qwen3"] | None = Field(
         default=None,
@@ -490,10 +491,12 @@ class DFlashArgs(_Group):
     sample_from_anchor: bool | None = Field(
         default=None,
         description="Sample from the anchor position (all positions predict). "
-        "Default: False for dflash/dflash2, True for dspark.",
+        "Default: False for dflash/dflash2/dspine, True for dspark.",
     )
-    dflash_decay_gamma: float = Field(
-        default=4.0, description="Decay gamma for DFlash-family loss weighting."
+    dflash_decay_gamma: float | None = Field(
+        default=None,
+        description="Decay gamma for DFlash-family loss weighting "
+        "(default: 7 for dspine, 4 otherwise).",
     )
     per_position_loss_weight: Literal["fixed-exp-decay", "dpace"] | None = Field(
         default=None,
@@ -616,6 +619,10 @@ class XPressArgs(_Group):
     )
 
 
+class DSpineArgs(DSpineSettings, _Group):
+    """DSpine-exclusive injection, refinement, and supervision knobs."""
+
+
 class PEagleArgs(_Group):
     num_depths: int = Field(
         default=8,
@@ -655,6 +662,7 @@ _GROUPS: dict[str, type[_Group]] = {
     "dflash": DFlashArgs,
     "dflash2": DFlash2Args,
     "dspark": DSparkArgs,
+    "dspine": DSpineArgs,
     "xpress": XPressArgs,
     "peagle": PEagleArgs,
     "mtp": MTPArgs,
@@ -668,7 +676,7 @@ _DEFAULT_LOSS_FN: dict[str, str] = {
     "dflash": "ce",
     "xpress": '{"ce": 0.1, "tv": 0.9}',
 }
-_DEFAULT_BLOCK_SIZE: dict[str, int] = {"dflash": 16, "xpress": 16}
+_DEFAULT_BLOCK_SIZE: dict[str, int] = {"dflash": 16, "dspine": 16, "xpress": 16}
 
 # Default block size of torch flex attention block masks. Kept here rather than
 # imported, so this module does not import torch.
@@ -753,7 +761,7 @@ class TrainConfig(BaseSettings):
     speculator_type: str = Field(
         default="eagle3",
         description="Type of speculator model to train "
-        "(eagle3, dflash, dflash2, dspark, xpress, peagle, mtp).",
+        "(eagle3, dflash, dflash2, dspark, dspine, xpress, peagle, mtp).",
     )
     dry_run: bool = Field(
         default=False,
@@ -780,21 +788,22 @@ class TrainConfig(BaseSettings):
     dflash: DFlashArgs = Field(default_factory=DFlashArgs)
     dflash2: DFlash2Args = Field(default_factory=DFlash2Args)
     dspark: DSparkArgs = Field(default_factory=DSparkArgs)
+    dspine: DSpineArgs = Field(default_factory=DSpineArgs)
     xpress: XPressArgs = Field(default_factory=XPressArgs)
     peagle: PEagleArgs = Field(default_factory=PEagleArgs)
     mtp: MTPArgs = Field(default_factory=MTPArgs)
 
     @model_validator(mode="after")
-    def _resolve_derived_defaults(self) -> "TrainConfig":
+    def _resolve_derived_defaults(self) -> "TrainConfig":  # noqa: C901
         """Fill defaults that derive from other fields, mirroring the tail of the
         pre-refactor ``parse_args``: unset ``draft_arch`` -> ``llama`` for eagle3 else
         ``qwen3``; unset ``norm_before_fc`` / ``norm_output`` -> ``True`` for eagle3
         else ``False``; unset ``muon_lr`` -> ``lr``; unset ``num_layers`` -> ``5``
-        for dflash/dspark/dflash2/xpress else ``1``; unset
+        for dflash/dspark/dflash2/dspine/xpress else ``1``; unset
         ``per_position_loss_weight`` -> ``dpace`` for dflash else
         ``fixed-exp-decay``; unset ``loss_fn`` -> ``ce`` for dflash,
         ``{"ce": 0.1, "tv": 0.9}`` for xpress, else ``kl_div``; unset
-        ``block_size`` -> ``16`` for dflash and xpress else ``8``.
+        ``block_size`` -> ``16`` for dflash, dspine, and xpress else ``8``.
 
         The dflash-conditional defaults reflect the recipe from
         https://github.com/vllm-project/speculators/issues/979: this combination
@@ -817,11 +826,13 @@ class TrainConfig(BaseSettings):
         """
         is_eagle3 = self.speculator_type == "eagle3"
         is_dflash = self.speculator_type == "dflash"
+        is_dspine = self.speculator_type == "dspine"
         is_dflash_family = self.speculator_type in {
             "dflash",
             "dspark",
             "dflash2",
             "xpress",
+            "dspine",
         }
         if self.draft.draft_arch is None:
             self.draft.draft_arch = "llama" if is_eagle3 else "qwen3"
@@ -843,14 +854,21 @@ class TrainConfig(BaseSettings):
             self.loss.loss_fn = _DEFAULT_LOSS_FN.get(self.speculator_type, "kl_div")
         if self.dflash.block_size is None:
             self.dflash.block_size = _DEFAULT_BLOCK_SIZE.get(self.speculator_type, 8)
+        if self.dflash.sample_from_anchor is None:
+            self.dflash.sample_from_anchor = self.speculator_type == "dspark"
+        if self.dflash.dflash_decay_gamma is None:
+            self.dflash.dflash_decay_gamma = 7.0 if is_dspine else 4.0
         return self
 
     @model_validator(mode="after")
     def _validate_dpace(self) -> "TrainConfig":
-        """D-PACE per-position loss weighting requires CE loss and a smoothing constant
-        in ``(0, 1]``. Only enforced when actually selected, so it never fires on a
-        default (``fixed-exp-decay``) run."""
+        """Validate D-PACE support, CE loss, and the smoothing constant."""
         if self.dflash.per_position_loss_weight == "dpace":
+            if self.speculator_type == "dspine":
+                raise ValueError(
+                    "DSpine does not support --per-position-loss-weight=dpace; "
+                    "use fixed-exp-decay."
+                )
             if self.loss.loss_fn != "ce":
                 raise ValueError(
                     "--per-position-loss-weight=dpace requires --loss-fn=ce"
