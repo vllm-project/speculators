@@ -956,8 +956,16 @@ def test_regenerate_long_prompt_does_not_truncate_when_completion_under_max_toke
     assert len(sent) == 2
 
 
-def test_regenerate_truncates_when_completion_hits_length_limit():
-    # When completion hits max_tokens (finish_reason="length"), it is truncated.
+@pytest.mark.parametrize(
+    ("token_count", "finish_reason"),
+    [
+        (10, "length"),  # truncated by engine with finish_reason="length"
+        (64, "stop"),  # truncated by reaching the completion token budget
+    ],
+)
+def test_regenerate_truncates_when_completion_hits_length_limit(
+    token_count, finish_reason
+):
     item = {
         "idx": 5,
         "primary_id": "u",
@@ -969,9 +977,9 @@ def test_regenerate_truncates_when_completion_hits_length_limit():
     responses = [
         _response(
             prompt_token_ids=[1, 2],
-            token_ids=list(range(64)),
+            token_ids=list(range(token_count)),
             content="partial ans",
-            finish="length",
+            finish=finish_reason,
         ),
     ]
     samples, truncated, sent = _regen(item, responses, max_tokens=64)
