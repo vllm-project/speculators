@@ -862,10 +862,13 @@ class TrainConfig(BaseSettings):
 
     @model_validator(mode="after")
     def _validate_dpace(self) -> "TrainConfig":
-        """D-PACE per-position loss weighting requires CE loss and a smoothing constant
-        in ``(0, 1]``. Only enforced when actually selected, so it never fires on a
-        default (``fixed-exp-decay``) run."""
+        """Validate D-PACE support, CE loss, and the smoothing constant."""
         if self.dflash.per_position_loss_weight == "dpace":
+            if self.speculator_type == "dspine":
+                raise ValueError(
+                    "DSpine does not support --per-position-loss-weight=dpace; "
+                    "use fixed-exp-decay."
+                )
             if self.loss.loss_fn != "ce":
                 raise ValueError(
                     "--per-position-loss-weight=dpace requires --loss-fn=ce"
