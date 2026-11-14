@@ -28,8 +28,8 @@ from speculators.data_generation.vllm_client import (
     DEFAULT_MAX_RETRIES,
     DEFAULT_REQUEST_TIMEOUT,
 )
-from speculators.dspine_settings import DSpineSettings
 from speculators.losses import resolve_loss_config
+from speculators.models.dspine.settings import DSpineSettings
 
 # A bool that must render as an argparse ``--x/--no-x`` (``BooleanOptionalAction``)
 # even though it defaults to False. Bools defaulting to True or None get that form

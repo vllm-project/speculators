@@ -3,8 +3,8 @@ from typing import Literal, Self
 from pydantic import Field, model_validator
 
 from speculators import SpeculatorModelConfig
-from speculators.dspine_settings import DSpineSettings
 from speculators.models.dflash.config import DFlashSpeculatorConfig
+from speculators.models.dspine.settings import DSpineSettings
 
 __all__ = [
     "DSpineSpeculatorConfig",
