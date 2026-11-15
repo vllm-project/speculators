@@ -162,10 +162,14 @@ class MTPDraftModel(DraftVocabMixin, SpeculatorModel):
         "verifier_norm.weight",
         "t2d",
         "d2t",
+        "masked_embedding.centroids.weight",
+        "masked_embedding.token_ordering",
+        "masked_embedding.token_ordering_inv",
     ]
 
     t2d: torch.Tensor | None
     d2t: torch.Tensor | None
+    masked_embedding: nn.Module | None
 
     def __init__(self, config: MTPSpeculatorConfig) -> None:
         # Same attention backends as Eagle3: flex by default, sdpa / eager (dense
@@ -209,6 +213,17 @@ class MTPDraftModel(DraftVocabMixin, SpeculatorModel):
         self.mtp_layers[0]._can_checkpoint_with_cache = True  # type: ignore[assignment]  # noqa: SLF001
 
         self.post_init()
+
+        if getattr(self.config, "num_centroids", None) is not None:
+            from speculators.models.mtp.head import MultiLevelLMHead  # noqa: PLC0415
+
+            self.masked_embedding = MultiLevelLMHead(
+                hidden_size=tc.hidden_size,
+                vocab_size=tc.vocab_size,
+                num_centroids=self.config.num_centroids,
+            )
+        else:
+            self.masked_embedding = None
 
     @property
     def layers(self) -> nn.ModuleList:
@@ -282,7 +297,7 @@ class MTPDraftModel(DraftVocabMixin, SpeculatorModel):
         self,
         input_ids: torch.Tensor,
         hidden_states: torch.Tensor,
-        document_ids: torch.Tensor,
+        document_ids: torch.Tensor | None = None,
         loss_mask: torch.Tensor | None = None,
         position_ids: torch.Tensor | None = None,
         step_weights: list[float] | None = None,
@@ -336,6 +351,8 @@ class MTPDraftModel(DraftVocabMixin, SpeculatorModel):
             metrics["loss_total"] = torch.tensor(1.0, device=device)
             return (draft_tokens, total_loss, metrics)
 
+        if document_ids is None:
+            document_ids = torch.zeros_like(input_ids)
         doc = document_ids.reshape(-1).to(device=device, dtype=torch.long)
         supervised = (
             torch.ones(seq_len, dtype=torch.bool, device=device)
@@ -394,9 +411,13 @@ class MTPDraftModel(DraftVocabMixin, SpeculatorModel):
                 & (doc != -1)
             )
             sel_targets = step_targets[step_mask]
-            unreduced, sel_pred = self._head_ce_chunked(
-                mtp_output[0][step_mask], sel_targets
-            )
+            sel_hidden = mtp_output[0][step_mask]
+            unreduced, sel_pred = self._head_ce_chunked(sel_hidden, sel_targets)
+            if self.masked_embedding is not None and sel_hidden.shape[0] > 0:
+                unreduced = unreduced + self.masked_embedding.compute_centroid_loss(
+                    hidden_states=sel_hidden,
+                    targets=sel_targets,
+                )
             draft_tokens.append(sel_pred)
 
             weight = step_weights[step] if step_weights is not None else 1.0
