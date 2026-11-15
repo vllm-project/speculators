@@ -77,6 +77,18 @@ def _shift_left(x: torch.Tensor, k: int, fill: int | bool) -> torch.Tensor:
     return torch.cat([x[..., k:], x.new_full((*x.shape[:-1], k), fill)], dim=-1)
 
 
+def _slice_verifier_kv(
+    kv: torch.Tensor | None, pad: int, total_len: int
+) -> torch.Tensor | None:
+    """Pad or slice optional verifier KV tensors to ``total_len``."""
+    if kv is None:
+        return None
+    if pad and kv.shape[1] < total_len:
+        pad_shape = (0, 0) * (kv.ndim - 2) + (0, total_len - kv.shape[1])
+        kv = nn.functional.pad(kv, pad_shape)
+    return kv[:, :total_len]
+
+
 def _prepare_mtp_position_ids(
     position_ids: torch.Tensor,
     valid_len: int,
@@ -301,7 +313,7 @@ class MTPDraftModel(DraftVocabMixin, SpeculatorModel):
         loss_mask: torch.Tensor | None = None,
         position_ids: torch.Tensor | None = None,
         step_weights: list[float] | None = None,
-        **kwargs: Any,  # noqa: ARG002
+        **kwargs: Any,
     ) -> tuple:
         """Multi-step MTP training forward, matching vLLM's MTP proposer.
 
@@ -391,6 +403,14 @@ class MTPDraftModel(DraftVocabMixin, SpeculatorModel):
         anchors: torch.Tensor | None = None
         run_correct: torch.Tensor | None = None
         current_hidden = self.verifier_norm(hidden_states)
+
+        step_kv_local = _slice_verifier_kv(
+            kwargs.get("verifier_kv_last_local"), pad, total_len
+        )
+        step_kv_global = _slice_verifier_kv(
+            kwargs.get("verifier_kv_last_global"), pad, total_len
+        )
+
         for step in range(effective_steps):
             cache = _TTTCache(kv_k, kv_v)
             mtp_output = layer(
@@ -400,6 +420,8 @@ class MTPDraftModel(DraftVocabMixin, SpeculatorModel):
                 position_ids=text_pos + step,
                 position_embeddings=self.rotary_emb(current_hidden, rotary_pos + step),
                 past_key_values=cache,
+                verifier_kv_last_local=step_kv_local,
+                verifier_kv_last_global=step_kv_global,
             )
             kv_k = [*kv_k, cache.new_k]
             kv_v = [*kv_v, cache.new_v]

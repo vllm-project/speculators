@@ -203,3 +203,133 @@ if "qwen3_5_moe_text" in base_components.model_classes:
     mtp_model_classes["qwen3_5_moe_text"] = base_components.override_components(
         "qwen3_5_moe_text", first_layer_class=Qwen35MoeMTPLayer
     )
+
+if "gemma2" in base_components.model_classes:
+    from transformers.models.gemma2.modeling_gemma2 import (
+        ALL_ATTENTION_FUNCTIONS,
+        Gemma2Attention,
+        Gemma2DecoderLayer,
+        Gemma2RMSNorm,
+        apply_rotary_pos_emb,
+        eager_attention_forward,
+    )
+
+    _FLATTENED_KV_RANK = 3
+
+    class QueryOnlyGemma2Attention(Gemma2Attention):
+        def __init__(self, config: PretrainedConfig, layer_idx: int | None = None):
+            super().__init__(config, layer_idx)  # type: ignore[arg-type]
+            # Strip out K/V projections since we use verifier's KV cache
+            self.k_proj = None  # type: ignore[assignment]
+            self.v_proj = None  # type: ignore[assignment]
+
+        def forward(
+            self,
+            hidden_states: torch.Tensor,
+            position_embeddings: tuple[torch.Tensor, torch.Tensor],
+            attention_mask: torch.Tensor | None,
+            past_key_value: Any | None = None,
+            cache_position: torch.LongTensor | None = None,  # noqa: ARG002
+            verifier_kv_last_local: torch.Tensor | None = None,
+            verifier_kv_last_global: torch.Tensor | None = None,
+            **kwargs: Any,
+        ) -> tuple[torch.Tensor, torch.Tensor | None]:
+            past_key_values = kwargs.pop("past_key_values", past_key_value)
+            input_shape = hidden_states.shape[:-1]
+            batch_sz, q_len = input_shape
+            hidden_shape = (*input_shape, -1, self.head_dim)
+
+            query_states = self.q_proj(hidden_states).view(hidden_shape).transpose(1, 2)
+
+            is_local = self.sliding_window is not None and self.sliding_window > 0
+            kv_tensor = verifier_kv_last_local if is_local else verifier_kv_last_global
+
+            if kv_tensor is None:
+                kv_tensor = torch.zeros(
+                    (
+                        batch_sz,
+                        q_len,
+                        2,
+                        self.config.num_key_value_heads,
+                        self.head_dim,
+                    ),
+                    dtype=query_states.dtype,
+                    device=query_states.device,
+                )
+            else:
+                if kv_tensor.dim() == _FLATTENED_KV_RANK:
+                    kv_tensor = kv_tensor.view(
+                        batch_sz,
+                        -1,
+                        2,
+                        self.config.num_key_value_heads,
+                        self.head_dim,
+                    )
+                if kv_tensor.shape[1] > q_len:
+                    kv_tensor = kv_tensor[:, :q_len]
+
+            key_states = kv_tensor[..., 0, :, :].transpose(1, 2)
+            value_states = kv_tensor[..., 1, :, :].transpose(1, 2)
+
+            cos, sin = position_embeddings
+            # Only apply RoPE to queries; verifier's KV cache already has RoPE applied
+            query_states, _ = apply_rotary_pos_emb(query_states, key_states, cos, sin)
+
+            if past_key_values is not None:
+                key_states, value_states = past_key_values.update(
+                    key_states, value_states, self.layer_idx
+                )
+
+            attention_interface = eager_attention_forward
+            attn_impl = getattr(self.config, "_attn_implementation", "eager")
+            if attn_impl != "eager":
+                attention_interface = ALL_ATTENTION_FUNCTIONS[attn_impl]
+
+            if (
+                self.sliding_window is not None
+                and self.sliding_window > 0
+                and attention_mask is not None
+            ):
+                q_seq_len = attention_mask.shape[-2]
+                window_mask = torch.tril(
+                    torch.ones(
+                        q_seq_len,
+                        q_seq_len,
+                        dtype=torch.bool,
+                        device=attention_mask.device,
+                    )
+                )
+                window_mask = torch.triu(window_mask, diagonal=-self.sliding_window + 1)
+                attention_mask = attention_mask.clone()
+                attention_mask[..., :q_seq_len] = attention_mask[
+                    ..., :q_seq_len
+                ].masked_fill(
+                    ~window_mask.view(1, 1, q_seq_len, q_seq_len),
+                    torch.finfo(attention_mask.dtype).min,
+                )
+
+            attn_output, attn_weights = attention_interface(
+                self,
+                query_states,
+                key_states,
+                value_states,
+                attention_mask,
+                dropout=self.attention_dropout if self.training else 0.0,
+                scaling=self.scaling,
+                softcap=self.attn_logit_softcapping,
+                **kwargs,
+            )
+
+            attn_output = attn_output.reshape(*input_shape, -1).contiguous()
+            attn_output = self.o_proj(attn_output)
+            return attn_output, attn_weights
+
+    class Gemma2MTPLayer(MTPLayerMixin, Gemma2DecoderLayer):
+        def __init__(self, config: PretrainedConfig, layer_idx: int = 0) -> None:
+            super().__init__(config, layer_idx)  # type: ignore[arg-type]
+            self._setup_mtp_modules(config, Gemma2RMSNorm)
+            self.self_attn = QueryOnlyGemma2Attention(config, layer_idx)
+
+    mtp_model_classes["gemma2"] = base_components.override_components(
+        "gemma2", first_layer_class=Gemma2MTPLayer
+    )
