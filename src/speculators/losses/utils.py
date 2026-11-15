@@ -168,9 +168,10 @@ _FUSED_LOSS_FN_MAP: dict[str, Callable[[torch.Tensor, torch.Tensor], torch.Tenso
 }
 
 
-# Fused map functions back to their names: compound_loss routes a config whose
-# terms are all fused through a single kernel call.
-_FUSED_NAME_BY_FN = {fn: name for name, fn in _FUSED_LOSS_FN_MAP.items()}
+def _fused_name(fn: Callable) -> str | None:
+    """Name of ``fn`` if it is a registered fused loss (by identity: custom
+    losses may be unhashable callables)."""
+    return next((n for n, f in _FUSED_LOSS_FN_MAP.items() if f is fn), None)
 
 
 _EAGER_LOSS_FN_MAP: dict[str, Callable[[torch.Tensor, torch.Tensor], torch.Tensor]] = {
@@ -331,7 +332,7 @@ def _compound_loss(
     total = torch.zeros((), device=logits.device, dtype=torch.float32)
     term_losses: dict[str, torch.Tensor] = {}
     multi = len(loss_config) > 1
-    fused_names = [_FUSED_NAME_BY_FN.get(fn) for fn, _ in loss_config.values()]
+    fused_names = [_fused_name(fn) for fn, _ in loss_config.values()]
     metrics: dict[str, torch.Tensor] = {}
     if fused_names and all(name is not None for name in fused_names):
         fused = _fused_kernel("fused_compound")(
