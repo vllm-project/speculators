@@ -8,9 +8,14 @@ from speculators.losses import LossConfig, kl_div_loss, resolve_loss_config, tv_
 from speculators.model import SpeculatorModel
 from speculators.models.dflash.config import DFlashSpeculatorConfig
 from speculators.models.dflash.core import DFlashDraftModel
+from speculators.models.dflash2.chunked_selector import (
+    chunked_gather_values,
+    chunked_topk_ids,
+)
 from speculators.models.dflash2.config import DFlash2SpeculatorConfig
 from speculators.models.dflash2.metrics import (
     compute_metrics,
+    compute_metrics_from_hidden,
     selector_training_candidates,
 )
 from speculators.models.dflash2.model_definitions import (
@@ -106,8 +111,16 @@ class DFlash2DraftModel(DFlashDraftModel):
     def get_trainer_kwargs(**kwargs) -> tuple[dict, dict]:
         """Resolve the unary and selector objectives used during training."""
         implementation = kwargs.get("loss_implementation", "fused")
-        loss_config = resolve_loss_config(kwargs["loss_fn"], implementation)
-        tv_loss_fn = resolve_loss_config("tv", implementation)["tv"][0]
+        # fused_linear computes the same unary objective from hidden states;
+        # the config is resolved as "fused" and forward takes the hidden-state
+        # path (see DFlashDraftModel.get_trainer_kwargs, same convention).
+        fused_linear = implementation == "fused_linear"
+        loss_config = resolve_loss_config(
+            kwargs["loss_fn"], "fused" if fused_linear else implementation
+        )
+        tv_loss_fn = resolve_loss_config(
+            "tv", "fused" if fused_linear else implementation
+        )["tv"][0]
         shared = {
             "loss_config": loss_config,
             "tv_loss_fn": tv_loss_fn,
@@ -119,6 +132,9 @@ class DFlash2DraftModel(DFlashDraftModel):
             "dpace_alpha": kwargs.get("dpace_alpha", 0.5),
             "selector_loss_alpha": kwargs.get("selector_loss_alpha", 1.0),
             "selector_miss_policy": kwargs.get("selector_miss_policy", "replace"),
+            "fused_linear": fused_linear,
+            "fused_linear_targets": kwargs.get("fused_linear_targets", "recompute"),
+            "fused_linear_logits": kwargs.get("fused_linear_logits", "input"),
         }
         return dict(shared), dict(shared)
 
@@ -152,8 +168,12 @@ class DFlash2DraftModel(DFlashDraftModel):
         per_position_loss_weight: str = "fixed-exp-decay",
         dpace_alpha: float = 0.5,
         selector_miss_policy: str = "replace",
+        fused_linear: bool = False,
+        fused_linear_targets: str = "recompute",
+        fused_linear_logits: str = "input",
         **kwargs,
     ) -> tuple[None, torch.Tensor, dict[str, Any]]:
+        recompute_targets = fused_linear and fused_linear_targets == "recompute"
         hidden, unary_logits, targets, aligned_loss_mask, block_indices = (
             self._backbone_forward(
                 hidden_states,
@@ -162,15 +182,83 @@ class DFlash2DraftModel(DFlashDraftModel):
                 verifier_last_hidden_states,
                 document_ids,
                 position_ids,
+                materialize_logits=not fused_linear,
+                materialize_targets=not recompute_targets,
                 max_anchors=max_anchors,
                 **kwargs,
             )
         )
         predecessor_ids = self._predecessor_ids(input_ids, block_indices)
+        top_k = self.candidate_selector.top_k
+
+        if fused_linear:
+            # loss_implementation="fused_linear": no [1, T, V] unary logits,
+            # and with recomputed targets no [1, T, V] target logits either.
+            # See chunked_selector for why this needs more than the scalar
+            # losses/argmax fused_linear_compound already returns: the
+            # candidate selector gathers real logit VALUES at a given
+            # (post-injection) id set, not just the top-1 argmax.
+            hidden_flat = hidden.reshape(-1, hidden.shape[-1])
+            targets_flat = targets.reshape(-1, targets.shape[-1])
+            target_weight = self.verifier_lm_head.weight if recompute_targets else None
+
+            # Cheap top-1 pass ahead of the real (full) unary loss below,
+            # which recomputes target_ids as a harmless side effect -- see
+            # the RFC notes on this tradeoff (duplicates the target
+            # projection, not the full loss math).
+            target_ids = (
+                chunked_topk_ids(targets_flat, target_weight, top_k=1).squeeze(-1)
+                if target_weight is not None
+                else targets_flat.argmax(dim=-1)
+            ).unsqueeze(0)
+
+            candidate_ids = chunked_topk_ids(
+                hidden_flat, self.lm_head.weight, top_k
+            ).unsqueeze(0)
+            training_candidate_ids, target_positions, contains_target = (
+                selector_training_candidates(
+                    candidate_ids, target_ids, miss_policy=selector_miss_policy
+                )
+            )
+
+            unary_scores = chunked_gather_values(
+                hidden_flat,
+                self.lm_head.weight,
+                training_candidate_ids.reshape(-1, top_k),
+            ).reshape(1, -1, top_k)
+            candidate_logits = self.candidate_selector.score_candidates_from_values(
+                unary_scores,
+                hidden,
+                predecessor_ids.reshape(1, -1),
+                training_candidate_ids,
+            )
+
+            loss, metrics = compute_metrics_from_hidden(
+                hidden=hidden,
+                lm_head_weight=self.lm_head.weight,
+                targets=targets,
+                training_candidate_ids=training_candidate_ids,
+                candidate_logits=candidate_logits,
+                target_positions=target_positions,
+                contains_target=contains_target,
+                loss_mask=aligned_loss_mask,
+                block_size=self.block_size,
+                top_k=top_k,
+                sample_from_anchor=self.config.sample_from_anchor,
+                loss_config=loss_config or _DEFAULT_LOSS_CONFIG,
+                gamma=gamma,
+                selector_loss_alpha=selector_loss_alpha,
+                per_position_loss_weight=per_position_loss_weight,
+                dpace_alpha=dpace_alpha,
+                selector_miss_policy=selector_miss_policy,
+                target_weight=target_weight,
+                logits_dtype=fused_linear_logits,
+            )
+            return None, loss, metrics
 
         target_ids = targets.argmax(dim=-1)
         # shape: [1, num_anchors*block_size]
-        candidate_ids = unary_logits.topk(self.candidate_selector.top_k, dim=-1).indices
+        candidate_ids = unary_logits.topk(top_k, dim=-1).indices
         # shape: [1, num_anchors*block_size, top_k]
         training_candidate_ids, target_positions, contains_target = (
             selector_training_candidates(
@@ -193,7 +281,7 @@ class DFlash2DraftModel(DFlashDraftModel):
             contains_target=contains_target,
             loss_mask=aligned_loss_mask,
             block_size=self.block_size,
-            top_k=self.candidate_selector.top_k,
+            top_k=top_k,
             sample_from_anchor=self.config.sample_from_anchor,
             loss_config=loss_config or _DEFAULT_LOSS_CONFIG,
             tv_loss_fn=tv_loss_fn,
