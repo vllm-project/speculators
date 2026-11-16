@@ -486,12 +486,17 @@ def test_mismatched_dtypes_without_autocast_raise():
 
 
 def test_cpu_half_precision_inputs():
-    """CPU has no out_dtype GEMM: bf16 operands are projected as fp32 copies,
-    so the losses match the fp32 run on the same values."""
+    """CPU has no out_dtype GEMM: with fp32 logit tiles, bf16 operands are
+    projected (and ``jac`` contracted) as fp32 copies, so the losses match the
+    fp32 run on the same values."""
     h, w, t = _inputs(32, 16, 100, torch.bfloat16, "cpu", seed=16)
     names = ("kl_div", "ce")
     out, grad = _run(
-        lambda x: fl.fused_linear_compound(x, w, t, names, chunk_rows=8), h, names
+        lambda x: fl.fused_linear_compound(
+            x, w, t, names, chunk_rows=8, logits_dtype="float32"
+        ),
+        h,
+        names,
     )
     ref, ref_grad = _run(
         lambda x: fl.fused_linear_compound(

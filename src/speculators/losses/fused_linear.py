@@ -90,6 +90,14 @@ def _out_dtype(hidden: torch.Tensor) -> torch.dtype:
     return torch.promote_types(torch.float32, hidden.dtype)
 
 
+def _mm_fp32(a: torch.Tensor, b: torch.Tensor) -> torch.Tensor:
+    """``a @ b`` of half-precision operands with an fp32 result, unrounded."""
+    if a.device.type == "cpu":
+        # out_dtype GEMMs are not implemented on CPU
+        return a.float() @ b.float()
+    return torch.mm(a, b, out_dtype=torch.float32)
+
+
 def _project(hidden: torch.Tensor, weight: torch.Tensor, fp32: bool) -> torch.Tensor:
     """``hidden @ weight.T``; fp32 straight from the accumulator if ``fp32``.
 
@@ -99,10 +107,7 @@ def _project(hidden: torch.Tensor, weight: torch.Tensor, fp32: bool) -> torch.Te
     """
     with torch.autocast(hidden.device.type, enabled=False):
         if fp32 and hidden.dtype in (torch.float16, torch.bfloat16):
-            if hidden.device.type == "cpu":
-                # out_dtype GEMMs are not implemented on CPU
-                return hidden.float() @ weight.float().t()
-            return torch.mm(hidden, weight.t(), out_dtype=torch.float32)
+            return _mm_fp32(hidden, weight.t())
         return hidden @ weight.t()
 
 
@@ -112,7 +117,7 @@ def _contract(dz: torch.Tensor, weight: torch.Tensor) -> torch.Tensor:
     GEMM time)."""
     with torch.autocast(dz.device.type, enabled=False):
         if dz.dtype in (torch.float16, torch.bfloat16):
-            return torch.mm(dz, weight, out_dtype=torch.float32)
+            return _mm_fp32(dz, weight)
         return dz @ weight
 
 
