@@ -208,6 +208,8 @@ git rebase --signoff master
 
 6. **Open a Pull Request**: From the fork repository, use the contribute button to open a pull request to the original repository's main branch. Provide a clear description of your changes and link any related issues.
 
+PR reviews follow the criteria in [`.claude/skills/pr-review/references/rubric.md`](.claude/skills/pr-review/references/rubric.md). To run the same review on your own PR before asking for one, use `/pr-review <number>` in Claude Code; it drafts the review without posting anything.
+
 ## Reporting Issues
 
 If you encounter a bug or have a feature request, please open an issue on GitHub. Include as much detail as possible, such as:
