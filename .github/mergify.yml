@@ -13,6 +13,25 @@ pull_request_rules:
         add:
           - documentation
 
+  - name: close PRs without the human-review checkbox after a week of inactivity
+    description: >-
+      Close non-draft PRs whose "I (a human) have written or reviewed the code"
+      checklist item is still unticked after 7 days without an update.
+    conditions:
+      - -closed
+      - -draft
+      - label != keep-open
+      - '-body ~= (?mi)^\s*[-*]\s*\[x\]\s*I \(a human\) have written or reviewed'
+      - updated-at < 7 days ago
+    actions:
+      close:
+        message: |
+          Closing this pull request because the "I (a human) have written or reviewed
+          the code in this pr to the best of my ability." checklist item is unticked
+          and there has been no activity for 7 days. Pull requests are reviewed only
+          once a human has written or reviewed the code: tick the box and reopen it
+          to continue.
+
   - name: ping author on conflicts and add 'needs-rebase' label
     conditions:
       - label != stale
