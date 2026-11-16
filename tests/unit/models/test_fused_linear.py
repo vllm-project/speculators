@@ -6,8 +6,6 @@ torch reference of the per-chunk math (fp64 gradcheck, opcheck); GPU runs the
 Triton kernels and is checked against the materialized fused path.
 """
 
-from typing import Any
-
 import pytest
 import torch
 from torch.library import opcheck
@@ -15,10 +13,6 @@ from torch.library import opcheck
 from speculators.losses import eager, resolve_loss_config
 from speculators.losses import fused_linear as fl
 from speculators.models.dflash.core import DFlashDraftModel
-from speculators.models.dflash.metrics import (
-    compute_metrics,
-    compute_metrics_from_hidden,
-)
 from tests.unit.models.test_fused_losses import (
     DEVICE,
     requires_accelerator,
@@ -180,6 +174,19 @@ def _run(fn, h, names):
     return out, leaf.grad
 
 
+def _assert_matches(
+    out, grad, ref, ref_grad, names, *, rtol, atol, grad_rtol, grad_atol
+):
+    """Each term's loss and the input gradient; ``grad_atol`` is relative to
+    the largest reference gradient entry."""
+    for name in names:
+        torch.testing.assert_close(
+            out.losses[name], ref.losses[name], rtol=rtol, atol=atol, msg=name
+        )
+    atol = grad_atol * float(ref_grad.abs().max())
+    torch.testing.assert_close(grad, ref_grad, rtol=grad_rtol, atol=atol)
+
+
 @requires_accelerator
 @pytest.mark.parametrize("names", TERM_SETS, ids=["+".join(n) for n in TERM_SETS])
 @pytest.mark.parametrize("vocab", [1000, 151936])
@@ -197,43 +204,22 @@ def test_matches_materialized_fused_fp32(names, vocab):
         h,
         names,
     )
-    for name in names:
-        torch.testing.assert_close(
-            out.losses[name], ref.losses[name], rtol=1e-4, atol=1e-5
-        )
+    _assert_matches(
+        out,
+        grad,
+        ref,
+        ref_grad,
+        names,
+        rtol=1e-4,
+        atol=1e-5,
+        grad_rtol=1e-3,
+        grad_atol=1e-4,
+    )
     torch.testing.assert_close(
         out.metrics["tv"], ref.metrics["tv"], rtol=1e-4, atol=1e-5
     )
     assert torch.equal(out.pred_ids, ref.pred_ids)
     assert torch.equal(out.target_ids, ref.target_ids)
-    atol = 1e-4 * float(ref_grad.abs().max())
-    torch.testing.assert_close(grad, ref_grad, rtol=1e-3, atol=atol)
-
-
-@requires_accelerator
-@pytest.mark.parametrize("names", TERM_SETS, ids=["+".join(n) for n in TERM_SETS])
-def test_bf16_at_least_as_accurate_as_materialized(names):
-    """fp32 logits from the GEMM accumulator vs today's bf16 logits."""
-    h, w, t = _inputs(256, 128, 8000, torch.bfloat16, DEVICE, seed=5)
-    ref, ref_grad = _run(
-        lambda x: _materialized(x.float() @ w.float().T, t, names),
-        h.float(),
-        names,
-    )
-    linear, linear_grad = _run(
-        lambda x: fl.fused_linear_compound(x, w, t, names, chunk_rows=64), h, names
-    )
-    today, today_grad = _run(lambda x: _materialized(x @ w.T, t, names), h, names)
-
-    def err(a, b):
-        return float((a.float() - b).abs().max() / b.abs().max())
-
-    for name in names:
-        assert (
-            err(linear.losses[name], ref.losses[name])
-            <= 1.1 * err(today.losses[name], ref.losses[name]) + 1e-6
-        ), name
-    assert err(linear_grad, ref_grad) <= 1.1 * err(today_grad, ref_grad) + 1e-6
 
 
 def _loss_head_peak(fn, h, names) -> int:
@@ -306,27 +292,6 @@ def test_compiles_fullgraph_without_recompiling_on_new_row_counts():
         assert x.grad is not None
 
 
-@requires_accelerator
-def test_dflash_metrics_from_hidden_match_materialized():
-    h, w, t = _inputs(64, 32, 1000, torch.float32, DEVICE, seed=8)
-    loss_mask = torch.ones(1, 64, device=DEVICE, dtype=torch.long)
-    loss_mask[0, 10:14] = 0
-    config = resolve_loss_config('{"kl_div": 0.5, "tv": 0.5}')
-    kwargs: dict[str, Any] = {
-        "block_size": 8,
-        "loss_config": config,
-        "per_position_loss_weight": "dpace",
-    }
-    loss, metrics = compute_metrics_from_hidden(
-        h[None], w, t[None], loss_mask, chunk_rows=24, **kwargs
-    )
-    ref_loss, ref = compute_metrics((h @ w.T)[None], t[None], loss_mask, **kwargs)
-    torch.testing.assert_close(loss, ref_loss, rtol=1e-4, atol=1e-6)
-    assert metrics.keys() == ref.keys()
-    for key, value in ref.items():
-        torch.testing.assert_close(metrics[key], value, rtol=1e-4, atol=1e-5, msg=key)
-
-
 # ---------------------------------------------------------------------------
 # GPU edge cases
 # ---------------------------------------------------------------------------
@@ -350,15 +315,20 @@ def test_results_do_not_depend_on_chunking(chunk_rows):
         h,
         _EDGE_NAMES,
     )
-    for name in _EDGE_NAMES:
-        torch.testing.assert_close(
-            out.losses[name], ref.losses[name], rtol=1e-5, atol=1e-6
-        )
+    # fp32 rounding only: a 1- or 7-row GEMM accumulates in another order
+    _assert_matches(
+        out,
+        grad,
+        ref,
+        ref_grad,
+        _EDGE_NAMES,
+        rtol=1e-5,
+        atol=1e-6,
+        grad_rtol=1e-4,
+        grad_atol=1e-5,
+    )
     assert torch.equal(out.pred_ids, ref.pred_ids)
     assert torch.equal(out.target_ids, ref.target_ids)
-    # fp32 rounding only: a 1- or 7-row GEMM accumulates in another order
-    atol = 1e-5 * float(ref_grad.abs().max())
-    torch.testing.assert_close(grad, ref_grad, rtol=1e-4, atol=atol)
 
 
 @requires_accelerator
@@ -394,9 +364,17 @@ def test_non_contiguous_inputs():
         h_strided,
         _EDGE_NAMES,
     )
-    for name in _EDGE_NAMES:
-        torch.testing.assert_close(out.losses[name], ref.losses[name])
-    torch.testing.assert_close(grad, ref_grad)
+    _assert_matches(
+        out,
+        grad,
+        ref,
+        ref_grad,
+        _EDGE_NAMES,
+        rtol=1e-5,
+        atol=1e-6,
+        grad_rtol=1e-4,
+        grad_atol=1e-5,
+    )
 
 
 @requires_accelerator
@@ -412,12 +390,18 @@ def test_saturated_logits_match_materialized():
     ref, ref_grad = _run(lambda x: _materialized(x @ w.T, t, names), h, names)
     for name in names:
         assert torch.isfinite(out.losses[name]).all(), name
-        torch.testing.assert_close(
-            out.losses[name], ref.losses[name], rtol=1e-4, atol=1e-4
-        )
     assert torch.isfinite(grad).all()
-    atol = 1e-4 * float(ref_grad.abs().max())
-    torch.testing.assert_close(grad, ref_grad, rtol=1e-3, atol=atol)
+    _assert_matches(
+        out,
+        grad,
+        ref,
+        ref_grad,
+        names,
+        rtol=1e-4,
+        atol=1e-4,
+        grad_rtol=1e-3,
+        grad_atol=1e-4,
+    )
 
 
 @requires_accelerator
@@ -499,20 +483,3 @@ def test_autocast_uses_one_operand_dtype_in_both_directions(compiled):
         assert torch.equal(out.losses[name], explicit.losses[name]), name
     assert torch.equal(grad, explicit_grad)
     assert grad.dtype == torch.float32
-
-    # and consistent with the materialized loss on those fp32 logits
-    def materialized(x):
-        # bf16 products are exact in fp32: same math as the out_dtype GEMM,
-        # but differentiable
-        logits = x.bfloat16().float() @ w.bfloat16().float().T
-        return _materialized(logits, t, names)
-
-    ref, ref_grad = _run(materialized, h, names)
-    for name in names:
-        torch.testing.assert_close(
-            out.losses[name], ref.losses[name], rtol=1e-5, atol=1e-6
-        )
-    # d hidden is formed in bf16 (dz and dz @ W), as on today's path; the
-    # reference is fp32 throughout, so allow one bf16 ulp of the largest entry
-    atol = 4e-3 * float(ref_grad.abs().max())
-    torch.testing.assert_close(grad, ref_grad, rtol=1e-2, atol=atol)

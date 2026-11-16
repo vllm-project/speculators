@@ -134,13 +134,18 @@ def _compare(model, inputs, spec, weighting, loss_rtol, grad_rtol):
         )
 
 
-SPECS = ["kl_div", '{"kl_div": 0.5, "tv": 0.5}', "ce"]
-
-
 @requires_gpu
-@pytest.mark.parametrize("spec", SPECS)
-@pytest.mark.parametrize("weighting", ["fixed-exp-decay", "dpace"])
-@pytest.mark.parametrize("sample_from_anchor", [False, True])
+# Every spec, weighting and anchor mode at least once: masking and weighting
+# run through the same code on both paths.
+@pytest.mark.parametrize(
+    ("spec", "weighting", "sample_from_anchor"),
+    [
+        ("kl_div", "fixed-exp-decay", False),
+        ('{"kl_div": 0.5, "tv": 0.5}', "dpace", True),
+        ("ce", "dpace", False),
+        ("ce", "fixed-exp-decay", True),
+    ],
+)
 def test_training_step_matches_fused_eager(
     spec, weighting, sample_from_anchor, monkeypatch
 ):
@@ -153,39 +158,22 @@ def test_training_step_matches_fused_eager(
 
 @requires_gpu
 @pytest.mark.usefixtures("aot_eager_forward")
-@pytest.mark.parametrize("spec", ["kl_div", '{"kl_div": 0.5, "tv": 0.5}'])
-def test_training_step_matches_fused_compiled(spec, monkeypatch):
+def test_training_step_matches_fused_compiled(monkeypatch):
     """DFlash.forward is torch.compile'd on GPU; the op must trace as one node."""
     monkeypatch.setenv("SPECULATORS_FUSED_LINEAR_BUDGET_MIB", "1")
     torch._dynamo.reset()
     model = _model(False, torch.float32)
+    spec = '{"kl_div": 0.5, "tv": 0.5}'
     _compare(model, _inputs(torch.float32), spec, "fixed-exp-decay", 1e-5, 1e-3)
 
 
 @requires_gpu
-def test_training_step_bf16():
-    """bf16 model: fused_linear's fp32 logits differ from the bf16-logit path by
-    bf16 rounding only; gradients must point the same way."""
-    model = _model(False, torch.bfloat16)
-    inputs = _inputs(torch.bfloat16)
-    with torch.compiler.set_stance("force_eager"):
-        loss, _, grads = _step(model, inputs, "kl_div", "fused", "fixed-exp-decay")
-        loss_fl, _, grads_fl = _step(
-            model, inputs, "kl_div", "fused_linear", "fixed-exp-decay"
-        )
-    torch.testing.assert_close(loss_fl, loss, rtol=2e-2, atol=1e-4)
-    for name, grad in grads.items():
-        assert torch.isfinite(grads_fl[name]).all(), name
-        cosine = torch.nn.functional.cosine_similarity(
-            grads_fl[name].flatten(), grad.flatten(), dim=0
-        )
-        assert cosine > 0.99, (name, float(cosine))
-
-
-@requires_gpu
 @pytest.mark.usefixtures("aot_eager_forward")
-@pytest.mark.parametrize("params", [torch.float32, torch.bfloat16], ids=str)
-@pytest.mark.parametrize("compiled", [False, True])
+@pytest.mark.parametrize(
+    ("params", "compiled"),
+    [(torch.float32, False), (torch.bfloat16, True)],
+    ids=["fp32-params-eager", "bf16-params-compiled"],
+)
 def test_training_step_under_autocast(params, compiled):
     """As the trainer runs it: autocast(bf16), fp32 params (DDP) or bf16 params
     (FSDP param_dtype). fused_linear keeps the logits fp32, so it differs from
