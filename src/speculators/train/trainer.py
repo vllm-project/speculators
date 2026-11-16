@@ -544,7 +544,7 @@ class Trainer:
         )
         kwargs = dict(configured or {})
         unwrapped = getattr(self.model, "module", self.model)
-        if getattr(unwrapped, "requires_global_step", False):
+        if getattr(unwrapped, "requires_global_step", False) is True:
             default_total = self.config.num_epochs * self._train_loader_len
             total_training_steps = (
                 self.config.max_steps
