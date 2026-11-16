@@ -409,7 +409,9 @@ def _lane_online_update(m, s, v, mask):
     """Per-lane online max / sum-exp update; lanes still at -inf stay at 0."""
     m_new = tl.maximum(m, v)
     scale = tl.exp(tl.where(m_new == float("-inf"), 0.0, m - m_new))
-    s = s * scale + tl.where(mask, tl.exp(v - m_new), 0.0)
+    # exp(-inf - -inf) is NaN: skip lanes whose running max is still -inf
+    live = mask & (m_new != float("-inf"))
+    s = s * scale + tl.where(live, tl.exp(v - m_new), 0.0)
     return m_new, s
 
 
