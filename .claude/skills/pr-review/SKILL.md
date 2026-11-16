@@ -101,16 +101,27 @@ Check the PR against the project's contribution guidelines (`CONTRIBUTING.md`):
 2. **DCO sign-off**: All commits must have a `Signed-off-by` line. Check with `gh pr view -R vllm-project/speculators <number> --json commits --jq '.commits[].messageBody'` — if any commit lacks the sign-off, flag it (CI will also catch this, but noting it saves a round-trip).
 3. **Documentation updates**: If the PR changes user-facing behavior (CLI flags, config options, APIs), check whether docs were updated. Missing doc updates for behavior changes should be flagged.
 
+### Phase 3.8: AGENTS.md compliance
+
+`AGENTS.md` sets the bar for the PR description. Check the description, not the code:
+
+1. **Purpose and Tests filled in**: The template's **Purpose** says why (with the issue link if there is one), not a restatement of the diff. **Tests** names a command a reviewer can run and whether it passed. Flag an empty or placeholder section.
+2. **No unbacked claims**: Flag a description that reports a test run, benchmark, or number with no command or result behind it, or states a hypothesis as fact.
+3. **Proportional**: Flag a description much longer than the change it describes, or pasted CI output in place of a result.
+
+Raise these in the review summary, not as inline comments. Wording and style preferences (emoji, filler adjectives, line wrapping) are below the confidence bar unless they hide what the PR does.
+
 ### Phase 4: Line-level review
 
 Apply path-specific focus based on which files changed:
 
-- **`src/speculators/train/**`**: Distributed training correctness (barriers, device placement, FSDP), LR scheduler logic, checkpoint save/resume, loss computation with padding masks, multi-step loss aggregation and decay, bfloat16 safety.
+- **`src/speculators/train/**`**: Distributed training correctness (barriers, device placement, FSDP), LR scheduler logic, checkpoint save/resume, loss computation with padding masks, multi-step loss aggregation and decay, bfloat16 safety. Changes to `train/utils.py` must keep `save_train_command()` writing `train_command.txt` and `speculators.patch` (see `AGENTS.md`, Provenance).
 - **`src/speculators/models/**`**: Architecture correctness, attention mask construction for speculative positions, vocabulary mapping (draft→target) in forward/loss, KL divergence alignment, Pydantic config serialization.
 - **`src/speculators/data_generation/**`**: Hidden state extraction correctness, shift-based alignment (off-by-one), loss mask application before storage, vLLM client error handling.
 - **`src/speculators/convert/**`**: Weight mapping completeness, shape compatibility, key renaming correctness, legacy format assumptions.
 - **`src/speculators/config.py`**: Pydantic validators, serialization roundtrip, backward compat with saved checkpoints, registry auto-discovery.
-- **`scripts/launch_vllm.py`**: This script runs inside the vLLM virtualenv (`VLLM_PYTHON`), which does **not** have `speculators` installed. Make sure there's no `speculators` dependency and flag any such import with confidence 95+.
+- **`scripts/launch_vllm.py`**: This script runs inside the vLLM virtualenv (`VLLM_PYTHON`), which does **not** have `speculators` installed. Make sure there's no `speculators` dependency and flag any such import with confidence 95+. Changes must also keep `_save_vllm_provenance()` writing its artifacts when `--provenance-dir` is passed.
+- **`scripts/evaluate/**`**: Changes must keep `save_eval_provenance()` writing `eval_command.txt` into the output directory.
 - **`tests/**`**: Coverage of new code paths, edge cases for speculative decoding (vocab boundaries, multi-step loss), proper mocking of vLLM/GPU.
 
 Ignore: `**/*.pyc`, `**/build/**`, `**/.pytest_cache/**`, `**/.ruff_cache/**`, `**/__pycache__/**`, `**/*.egg-info/**`.
