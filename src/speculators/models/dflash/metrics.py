@@ -72,19 +72,16 @@ def compute_metrics_from_hidden(
     targets: torch.Tensor,  # shape: [1, num_anchors*block_size, draft_vocab_size]
     loss_mask: torch.Tensor,  # shape: [1, num_anchors*block_size]
     block_size: int = 1,
-    gamma: float = 4.0,
-    loss_config: LossConfig | None = None,
-    per_position_loss_weight: str = "fixed-exp-decay",
-    dpace_alpha: float = 0.5,
-    sample_from_anchor: bool = False,
     chunk_rows: int | None = None,
+    **kwargs: Any,
 ) -> tuple[torch.Tensor, dict]:
     """``compute_metrics`` without materializing the draft logits.
 
     The loss, both argmaxes and the metrics come from the final hidden states
     and the frozen ``lm_head`` weight in row chunks
     (``loss_implementation="fused_linear"``); ``loss_config`` must be
-    resolved with the ``"fused"`` implementation.
+    resolved with the ``"fused"`` implementation. The remaining keyword
+    arguments are those of ``compute_metrics``.
     """
     return _compute_metrics(
         partial(
@@ -96,23 +93,19 @@ def compute_metrics_from_hidden(
         ),
         loss_mask,
         block_size=block_size,
-        gamma=gamma,
-        loss_config=loss_config,
-        per_position_loss_weight=per_position_loss_weight,
-        dpace_alpha=dpace_alpha,
-        sample_from_anchor=sample_from_anchor,
+        **kwargs,
     )
 
 
 def _compute_metrics(
     loss_fn: Callable[..., CompoundLossOutput],
     loss_mask: torch.Tensor,
-    block_size: int,
-    gamma: float,
-    loss_config: LossConfig | None,
-    per_position_loss_weight: str,
-    dpace_alpha: float,
-    sample_from_anchor: bool,
+    block_size: int = 1,
+    gamma: float = 4.0,
+    loss_config: LossConfig | None = None,
+    per_position_loss_weight: str = "fixed-exp-decay",
+    dpace_alpha: float = 0.5,
+    sample_from_anchor: bool = False,
 ) -> tuple[torch.Tensor, dict]:
     """Shared body: ``loss_fn(loss_mask, pos_idx, loss_config=..., decay_fn=...)``
     returns the loss and both argmaxes; the rest is per-position accuracy."""
