@@ -25,7 +25,7 @@ pull_request_rules:
       - updated-at < 7 days ago
     actions:
       close:
-        message: |
+        message: >-
           Closing this pull request because the "I (a human) have written or reviewed
           the code in this pr to the best of my ability." checklist item is unticked
           and there has been no activity for 7 days. Pull requests are reviewed only
@@ -41,7 +41,7 @@ pull_request_rules:
         add:
           - needs-rebase
       comment:
-        message: |
+        message: >-
           This pull request has merge conflicts that must be resolved before it can be
           merged. Please rebase the PR, @{{author}}.
 
@@ -79,7 +79,7 @@ pull_request_rules:
         add:
           - quality-failed
       comment:
-        message: |
+        message: >-
           The quality checks have failed. Please run `make style` and `make quality` under
           the root directory to address the lint failures. You will need to install the
           dev optional install to get the required linting packages:
@@ -108,8 +108,7 @@ pull_request_rules:
           - dco-failed
       comment:
         message: |
-          The DCO check has failed. Every commit must include a valid
-          `Signed-off-by` trailer matching the commit author.
+          The DCO check has failed. Every commit must include a valid `Signed-off-by` trailer matching the commit author.
 
           To sign off the latest commit, run:
 
