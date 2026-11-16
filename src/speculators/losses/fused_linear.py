@@ -66,6 +66,9 @@ def _project(hidden: torch.Tensor, weight: torch.Tensor) -> torch.Tensor:
     """
     with torch.autocast(hidden.device.type, enabled=False):
         if hidden.dtype in (torch.float16, torch.bfloat16):
+            if hidden.device.type == "cpu":
+                # out_dtype GEMMs are not implemented on CPU
+                return hidden.float() @ weight.float().t()
             return torch.mm(hidden, weight.t(), out_dtype=torch.float32)
         return hidden @ weight.t()
 
@@ -346,6 +349,8 @@ def fused_linear_compound(
         )
     if chunk_rows is None:
         chunk_rows = chunk_rows_for(vocab, flat_hidden.dtype, rows)
+    elif chunk_rows < 1:
+        raise ValueError(f"chunk_rows must be positive, got {chunk_rows}")
 
     loss_terms = sorted(
         {t for name in names for t in fused.LOSS_TERMS[name]},
