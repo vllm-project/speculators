@@ -131,10 +131,12 @@ pull_request_rules:
 merge_protections:
   - name: Require approval from approved reviewers list
     description: >-
-      All pull requests must have at least one approving review from a
-      member of the approved reviewers list before merging.
+      All pull requests must have the human-review checklist item checked and
+      at least one approving review from a member of the approved reviewers
+      list before merging.
     if: []
     success_conditions:
+      - 'body ~= (?i)[-*]\s*\[x\]\s*I \(a human\) have written or reviewed'
       - &approved_reviewer_check
         or:
           - approved-reviews-by = fynnsu
