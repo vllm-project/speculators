@@ -108,12 +108,14 @@ def test_opcheck_cpu():
     opcheck(torch.ops.speculators.fused_linear_loss_bwd.default, bwd)
 
 
-def test_rejects_trainable_weight_and_misaligned_targets():
+def test_rejects_invalid_arguments():
     h, w, t = _inputs(8, 4, 10, torch.float32, "cpu")
     with pytest.raises(ValueError, match="frozen"):
         fl.fused_linear_compound(h, w.requires_grad_(True), t, ("kl_div",))
     with pytest.raises(ValueError, match="do not match"):
         fl.fused_linear_compound(h, w.detach(), t[:-1], ("kl_div",))
+    with pytest.raises(ValueError, match="chunk_rows must be positive"):
+        fl.fused_linear_compound(h, w.detach(), t, ("kl_div",), chunk_rows=0)
 
 
 def test_chunk_rows_for(monkeypatch):
@@ -450,6 +452,35 @@ def test_mismatched_dtypes_without_autocast_raise():
     h, w, t = _inputs(8, 4, 10, torch.float32, "cpu")
     with pytest.raises(ValueError, match="dtypes differ"):
         fl.fused_linear_compound(h, w.double(), t, ("kl_div",))
+
+
+def test_cpu_half_precision_inputs():
+    """CPU has no out_dtype GEMM: bf16 operands are projected as fp32 copies,
+    so the losses match the fp32 run on the same values."""
+    h, w, t = _inputs(32, 16, 100, torch.bfloat16, "cpu", seed=16)
+    names = ("kl_div", "ce")
+    out, grad = _run(
+        lambda x: fl.fused_linear_compound(x, w, t, names, chunk_rows=8), h, names
+    )
+    ref, ref_grad = _run(
+        lambda x: fl.fused_linear_compound(
+            x, w.float(), t.float(), names, chunk_rows=8
+        ),
+        h.float(),
+        names,
+    )
+    # d hidden is formed in bf16 (dz and dz @ W)
+    _assert_matches(
+        out,
+        grad.float(),
+        ref,
+        ref_grad,
+        names,
+        rtol=1e-6,
+        atol=1e-6,
+        grad_rtol=2e-2,
+        grad_atol=1e-2,
+    )
 
 
 @requires_accelerator
