@@ -309,6 +309,25 @@ def test_deferred_matches_recompute_gpu(dtype, names, recompute_targets):
 
 
 @requires_accelerator
+def test_minus_inf_leading_a_lane_stays_finite():
+    """A lane whose first value is -inf (here vocab index 0) must not turn the
+    row's sum-exp into NaN; deferred mode matches recompute."""
+    h, w, vh, tw = _inputs(16, 32, 24, 1000, torch.float32, DEVICE, seed=17)
+    targets = vh @ tw.T
+    targets[:, 0] = float("-inf")
+    names = ("tv", "ce")
+    (out, grad), (ref, ref_grad) = _both_modes(h, w, targets, names, chunk_rows=8)
+    for name in names:
+        assert torch.isfinite(out.losses[name]).all(), name
+        torch.testing.assert_close(
+            out.losses[name], ref.losses[name], rtol=1e-5, atol=1e-5
+        )
+    assert torch.isfinite(grad).all()
+    atol = 1e-4 * float(ref_grad.abs().max())
+    torch.testing.assert_close(grad, ref_grad, rtol=1e-3, atol=atol)
+
+
+@requires_accelerator
 def test_dflash_dpace_metrics_deferred_equal_recompute():
     h, w, vh, tw = _inputs(64, 32, 24, 1000, torch.float32, DEVICE, seed=7)
     loss_mask = torch.ones(1, 64, device=DEVICE, dtype=torch.long)
