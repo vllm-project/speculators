@@ -18,7 +18,6 @@ Fill in the PR template's **Purpose** and **Tests** sections (see [PULL_REQUEST_
 - No emoji headings, no "comprehensive"/"robust"/"production-ready", no per-file summary tables.
 - Do not hard-wrap the description at a fixed column. GitHub reflows it, so manual line breaks only make the diff of a later edit noisy.
 - Leave the "I (a human) have written or reviewed the code" checkbox unchecked.
-- Until a human ticks that box, speculatorsbot does not review the PR, and Mergify closes it after 7 days without activity (drafts and PRs labelled `keep-open` are exempt). Only a human ticks it, after reviewing the code.
 
 ## Provenance
 
