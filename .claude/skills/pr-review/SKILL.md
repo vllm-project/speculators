@@ -93,23 +93,9 @@ If the PR description, commit messages, or code comments reference a paper (arXi
 
 Only flag mismatches you can concretely demonstrate by quoting both the paper and the code. Do not flag stylistic differences in how math is expressed if the computation is equivalent.
 
-### Phase 3.7: CONTRIBUTING.md compliance
+### Phase 3.7: Contribution rules
 
-Check the PR against the project's contribution guidelines (`CONTRIBUTING.md`):
-
-1. **Issue linkage for significant changes**: If the PR adds new training algorithms/model support, modifies the data pipeline or CLI/API, is a large refactor, or touches 3+ files — verify it references an assigned issue. Small fixes (typos, docs, bug fixes < 20 lines, type annotations, minor deps) are exempt.
-2. **DCO sign-off**: All commits must have a `Signed-off-by` line. Check with `gh pr view -R vllm-project/speculators <number> --json commits --jq '.commits[].messageBody'` — if any commit lacks the sign-off, flag it (CI will also catch this, but noting it saves a round-trip).
-3. **Documentation updates**: If the PR changes user-facing behavior (CLI flags, config options, APIs), check whether docs were updated. Missing doc updates for behavior changes should be flagged.
-
-### Phase 3.8: AGENTS.md compliance
-
-`AGENTS.md` sets the bar for the PR description. Check the description, not the code:
-
-1. **Purpose and Tests filled in**: The template's **Purpose** says why (with the issue link if there is one), not a restatement of the diff. **Tests** names a command a reviewer can run and whether it passed. Flag an empty or placeholder section.
-2. **No unbacked claims**: Flag a description that reports a test run, benchmark, or number with no command or result behind it, or states a hypothesis as fact.
-3. **Proportional**: Flag a description much longer than the change it describes, or pasted CI output in place of a result.
-
-Raise these in the review summary, not as inline comments. Wording and style preferences (emoji, filler adjectives, line wrapping) are below the confidence bar unless they hide what the PR does.
+`CONTRIBUTING.md` and `AGENTS.md` are the source of truth for what a PR must carry: issue linkage, DCO sign-off, doc updates, and the PR description. Read both and flag what the PR misses, citing the rule. Raise these in the review summary, not as inline comments; style preferences stay below the confidence bar unless they hide what the PR does.
 
 ### Phase 4: Line-level review
 
