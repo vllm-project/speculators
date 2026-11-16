@@ -21,7 +21,7 @@ pull_request_rules:
       - -closed
       - -draft
       - label != keep-open
-      - '-body ~= (?mi)^\s*[-*]\s*\[x\]\s*I \(a human\) have written or reviewed'
+      - '-body ~= (?i)[-*]\s*\[x\]\s*I \(a human\) have written or reviewed'
       - updated-at < 7 days ago
     actions:
       close:
