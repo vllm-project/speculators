@@ -115,13 +115,12 @@ Raise these in the review summary, not as inline comments. Wording and style pre
 
 Apply path-specific focus based on which files changed:
 
-- **`src/speculators/train/**`**: Distributed training correctness (barriers, device placement, FSDP), LR scheduler logic, checkpoint save/resume, loss computation with padding masks, multi-step loss aggregation and decay, bfloat16 safety. Changes to `train/utils.py` must keep `save_train_command()` writing `train_command.txt` and `speculators.patch` (see `AGENTS.md`, Provenance).
+- **`src/speculators/train/**`**: Distributed training correctness (barriers, device placement, FSDP), LR scheduler logic, checkpoint save/resume, loss computation with padding masks, multi-step loss aggregation and decay, bfloat16 safety.
 - **`src/speculators/models/**`**: Architecture correctness, attention mask construction for speculative positions, vocabulary mapping (draft→target) in forward/loss, KL divergence alignment, Pydantic config serialization.
 - **`src/speculators/data_generation/**`**: Hidden state extraction correctness, shift-based alignment (off-by-one), loss mask application before storage, vLLM client error handling.
 - **`src/speculators/convert/**`**: Weight mapping completeness, shape compatibility, key renaming correctness, legacy format assumptions.
 - **`src/speculators/config.py`**: Pydantic validators, serialization roundtrip, backward compat with saved checkpoints, registry auto-discovery.
-- **`scripts/launch_vllm.py`**: This script runs inside the vLLM virtualenv (`VLLM_PYTHON`), which does **not** have `speculators` installed. Make sure there's no `speculators` dependency and flag any such import with confidence 95+. Changes must also keep `_save_vllm_provenance()` writing its artifacts when `--provenance-dir` is passed.
-- **`scripts/evaluate/**`**: Changes must keep `save_eval_provenance()` writing `eval_command.txt` into the output directory.
+- **`scripts/launch_vllm.py`**: This script runs inside the vLLM virtualenv (`VLLM_PYTHON`), which does **not** have `speculators` installed. Make sure there's no `speculators` dependency and flag any such import with confidence 95+.
 - **`tests/**`**: Coverage of new code paths, edge cases for speculative decoding (vocab boundaries, multi-step loss), proper mocking of vLLM/GPU.
 
 Ignore: `**/*.pyc`, `**/build/**`, `**/.pytest_cache/**`, `**/.ruff_cache/**`, `**/__pycache__/**`, `**/*.egg-info/**`.
