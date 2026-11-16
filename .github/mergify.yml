@@ -29,8 +29,7 @@ pull_request_rules:
           Closing this pull request because the "I (a human) have written or reviewed
           the code in this pr to the best of my ability." checklist item is unticked
           and there has been no activity for 7 days. Pull requests are reviewed only
-          once a human has written or reviewed the code: tick the box and reopen it
-          to continue.
+          once a human has written or reviewed the code.
 
   - name: ping author on conflicts and add 'needs-rebase' label
     conditions:
