@@ -93,6 +93,10 @@ If the PR description, commit messages, or code comments reference a paper (arXi
 
 Only flag mismatches you can concretely demonstrate by quoting both the paper and the code. Do not flag stylistic differences in how math is expressed if the computation is equivalent.
 
+### Phase 3.7: Contribution rules
+
+`CONTRIBUTING.md` and `AGENTS.md` are the source of truth for what a PR must carry: issue linkage, DCO sign-off, doc updates, and the PR description. Read both and flag what the PR misses, citing the rule. Raise these in the review summary, not as inline comments; style preferences stay below the confidence bar unless they hide what the PR does.
+
 ### Phase 4: Line-level review
 
 Apply path-specific focus based on which files changed:
