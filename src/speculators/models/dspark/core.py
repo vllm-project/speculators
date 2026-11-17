@@ -4,18 +4,13 @@ import torch
 from transformers import PretrainedConfig
 
 from speculators.losses import (
-    LossConfig,
-    kl_div_loss,
     resolve_loss_config,
 )
 from speculators.model import SpeculatorModel
 from speculators.models.dflash.core import DFlashDraftModel
 from speculators.models.dspark.config import DSparkSpeculatorConfig
-from speculators.models.dspark.metrics import compute_metrics
 from speculators.models.dspark.model_definitions import ConfidenceHead, MarkovHead
-from speculators.models.utils import conditional_torch_compile
-
-_DEFAULT_LOSS_CONFIG: LossConfig = {"kl_div": (kl_div_loss, 1.0)}
+from speculators.models.dspark.objective import dspark_objective
 
 __all__ = [
     "DSparkDraftModel",
@@ -31,16 +26,19 @@ class DSparkDraftModel(DFlashDraftModel):
     position's acceptance probability. Everything else is inherited from DFlash.
     """
 
+    objective = staticmethod(dspark_objective)
+    legacy_correction_name = "markov_head"
+
     config_class: ClassVar[type[DSparkSpeculatorConfig]] = DSparkSpeculatorConfig  # type: ignore[misc,assignment]
 
     def __init__(self, config: DSparkSpeculatorConfig) -> None:
         super().__init__(config=config)
 
         hidden_size = config.transformer_layer_config.hidden_size
+        self.confidence_with_correction = config.confidence_head_with_markov
 
-        self.markov_head: MarkovHead | None = None
         if config.markov_rank > 0:
-            self.markov_head = MarkovHead(
+            self.correction = MarkovHead(
                 verifier_vocab_size=self.verifier_vocab_size,
                 draft_vocab_size=self.draft_vocab_size,
                 markov_rank=config.markov_rank,
@@ -58,6 +56,11 @@ class DSparkDraftModel(DFlashDraftModel):
                 config.markov_rank if config.confidence_head_with_markov else 0
             )
             self.confidence_head = ConfidenceHead(input_dim)
+
+    @property
+    def markov_head(self) -> MarkovHead | None:
+        """Compatibility accessor; the module is registered only as correction."""
+        return self.correction if isinstance(self.correction, MarkovHead) else None
 
     @classmethod
     def from_training_args(
@@ -112,98 +115,3 @@ class DSparkDraftModel(DFlashDraftModel):
             "dpace_alpha": dpace_alpha,
         }
         return dict(shared), dict(shared)
-
-    @conditional_torch_compile
-    def forward(
-        self,
-        hidden_states: torch.Tensor,  # [1, total_seq_len, num_hidden*hidden_size]
-        input_ids: torch.Tensor,  # [1, total_seq_len]
-        loss_mask: torch.Tensor,  # [1, total_seq_len]
-        verifier_last_hidden_states: torch.Tensor,  # [1, total_seq_len, hidden_size]
-        document_ids: torch.Tensor,  # [1, total_seq_len]
-        position_ids: torch.Tensor | None = None,  # [1, total_seq_len]
-        loss_config: LossConfig | None = None,
-        gamma: float = 4.0,
-        max_anchors: int = 3072,
-        confidence_head_alpha: float = 1.0,
-        per_position_loss_weight: str = "fixed-exp-decay",
-        dpace_alpha: float = 0.5,
-        **kwargs,
-    ):
-        features = self.draft_features(
-            hidden_states,
-            input_ids,
-            loss_mask,
-            document_ids,
-            position_ids,
-            max_anchors=max_anchors,
-            **kwargs,
-        )
-        hidden, logits, layout = features
-        aligned_loss_mask = layout.loss_mask
-        anchored_block_indices = layout.block_positions
-        targets = self._build_targets(
-            verifier_last_hidden_states, anchored_block_indices
-        )
-
-        # DSpark: add the Markov logit bias and predict per-position confidence.
-        num_blocks = max_anchors
-        block = self.block_size
-        mask_tokens_size = num_blocks * block
-        # Ground-truth block tokens (verifier vocab); position 0 is the anchor.
-        block_tokens = input_ids[0, anchored_block_indices].view(num_blocks, block)
-        if self.config.sample_from_anchor:
-            # With sample_from_anchor=True (DSpark default), slot k predicts
-            # token p+k+1 and the inference Markov chain conditions slot k's
-            # bias on the token at the previous position p+k.
-            prev_token_ids = block_tokens
-        else:
-            # With sample_from_anchor=False (Dflash default), slot k predicts
-            # token p+k, so the previous token within the block is
-            # block_tokens[:, k-1] (shifted).
-            prev_token_ids = torch.cat(
-                [block_tokens[:, :1], block_tokens[:, :-1]], dim=1
-            )  # [num_blocks, block]
-        hidden_blocks = hidden.view(num_blocks, block, -1)
-
-        confidence_logits = None
-        prev_emb = None
-        if self.markov_head is not None:
-            prev_emb = self.markov_head.prev_embeddings(prev_token_ids)
-            markov_bias = self.markov_head.block_bias(
-                prev_token_ids=prev_token_ids,
-                hidden_states=hidden_blocks,
-                prev_emb=prev_emb,
-            )
-            logits = (logits.view(num_blocks, block, -1) + markov_bias).view(
-                1, mask_tokens_size, -1
-            )
-
-        if self.confidence_head is not None:
-            # confidence_head_with_markov requires markov_rank > 0 (enforced in
-            # __init__), so prev_emb is always set when the flag is on.
-            if self.config.confidence_head_with_markov and prev_emb is not None:
-                conf_features = torch.cat(
-                    [hidden_blocks, prev_emb.to(hidden_blocks.dtype)],
-                    dim=-1,
-                )
-            else:
-                conf_features = hidden_blocks
-            confidence_logits = self.confidence_head(conf_features).reshape(
-                1, mask_tokens_size
-            )
-
-        loss, metrics = compute_metrics(
-            logits,
-            targets,
-            confidence_logits,
-            aligned_loss_mask,
-            self.block_size,
-            loss_config=loss_config or _DEFAULT_LOSS_CONFIG,
-            gamma=gamma,
-            confidence_head_alpha=confidence_head_alpha,
-            per_position_loss_weight=per_position_loss_weight,
-            dpace_alpha=dpace_alpha,
-            sample_from_anchor=self.config.sample_from_anchor,
-        )
-        return None, loss, metrics

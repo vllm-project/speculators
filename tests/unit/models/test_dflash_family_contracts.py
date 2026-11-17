@@ -38,8 +38,15 @@ RECIPES = {
 }
 
 
-def legacy_name(name):
+def legacy_name(name, recipe):
     """Compare physical tensors independently of their new owning module."""
+    if name.startswith("correction."):
+        prefix = {
+            "dspark": "markov_head",
+            "dflash2": "candidate_selector",
+            "xpress": "refiner_head",
+        }[recipe]
+        return prefix + name.removeprefix("correction")
     return name.removeprefix("backbone.")
 
 
@@ -73,7 +80,9 @@ def make_contract_model(recipe, sample_from_anchor):
     # Depend on tensor identity, not construction order or RNG consumption.
     with torch.no_grad():
         for name, parameter in model.named_parameters():
-            offset = int(hashlib.sha256(legacy_name(name).encode()).hexdigest()[:4], 16)
+            offset = int(
+                hashlib.sha256(legacy_name(name, recipe).encode()).hexdigest()[:4], 16
+            )
             values = torch.sin(torch.arange(parameter.numel()).float() + offset)
             values = values.reshape(parameter.shape)
             parameter.copy_(1 + 0.02 * values if "norm" in name else 0.1 * values)
@@ -94,7 +103,10 @@ def contract_report(recipe, sample_from_anchor):
         captured["base_logits"] = summarize(output)
 
     handle = model.lm_head.register_forward_hook(capture_projection)
-    module = importlib.import_module(type(model).__module__)
+    objective = getattr(model, "objective", None)
+    module = importlib.import_module(
+        objective.__module__ if objective is not None else type(model).__module__
+    )
     original_metrics = module.compute_metrics
 
     def capture_metrics(*args, **kwargs):
@@ -128,15 +140,15 @@ def contract_report(recipe, sample_from_anchor):
     loss.backward()
     muon, adamw = split_named_params_for_muon(model)
     return {
-        "keys": sorted(legacy_name(name) for name in model.state_dict()),
+        "keys": sorted(legacy_name(name, recipe) for name in model.state_dict()),
         "trainable": sorted(
-            legacy_name(name)
+            legacy_name(name, recipe)
             for name, parameter in model.named_parameters()
             if parameter.requires_grad
         ),
         "omitted": sorted(model._keys_to_ignore_on_save),
-        "muon": sorted(legacy_name(name) for name, _ in muon),
-        "adamw": sorted(legacy_name(name) for name, _ in adamw),
+        "muon": sorted(legacy_name(name, recipe) for name, _ in muon),
+        "adamw": sorted(legacy_name(name, recipe) for name, _ in adamw),
         "outputs": captured,
         "loss": loss.item(),
         "metrics": {
@@ -145,7 +157,7 @@ def contract_report(recipe, sample_from_anchor):
             if key in {"eal_sum", "eal_total", "full_acc_sum", "full_acc_total"}
         },
         "gradients": {
-            legacy_name(name): summarize(parameter.grad)
+            legacy_name(name, recipe): summarize(parameter.grad)
             for name, parameter in model.named_parameters()
             if parameter.grad is not None
         },

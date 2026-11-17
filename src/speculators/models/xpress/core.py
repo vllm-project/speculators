@@ -3,17 +3,12 @@ from typing import ClassVar
 import torch
 from transformers import PretrainedConfig
 
-from speculators.losses import LossConfig, resolve_loss_config
+from speculators.losses import resolve_loss_config
 from speculators.model import SpeculatorModel
 from speculators.models.dflash.core import DFlashDraftModel
-from speculators.models.utils import conditional_torch_compile
 from speculators.models.xpress.config import XPressSpeculatorConfig
-from speculators.models.xpress.metrics import (
-    compute_metrics,
-)
 from speculators.models.xpress.model_definitions import XPressRefinerHead
-
-_DEFAULT_LOSS_CONFIG: LossConfig | None = None
+from speculators.models.xpress.objective import xpress_objective
 
 __all__ = [
     "XPressDraftModel",
@@ -31,11 +26,14 @@ class XPressDraftModel(DFlashDraftModel):
     Everything else is inherited from DFlash.
     """
 
+    objective = staticmethod(xpress_objective)
+    legacy_correction_name = "refiner_head"
+
     config_class: ClassVar[type[XPressSpeculatorConfig]] = XPressSpeculatorConfig  # type: ignore[misc]
 
     def __init__(self, config: XPressSpeculatorConfig) -> None:
         super().__init__(config=config)
-        self.refiner_head = XPressRefinerHead(
+        self.correction = XPressRefinerHead(
             verifier_vocab_size=self.verifier_vocab_size,
             draft_vocab_size=self.draft_vocab_size,
             hidden_size=config.transformer_layer_config.hidden_size,
@@ -44,6 +42,12 @@ class XPressDraftModel(DFlashDraftModel):
             mlp_ratio=config.xpress_mlp_ratio,
         )
         self.post_init()
+
+    @property
+    def refiner_head(self) -> XPressRefinerHead:
+        """Compatibility accessor; the module is registered only as correction."""
+        assert isinstance(self.correction, XPressRefinerHead)  # noqa: S101
+        return self.correction
 
     @classmethod
     def from_training_args(
@@ -94,138 +98,3 @@ class XPressDraftModel(DFlashDraftModel):
         if self.d2t is not None:
             return draft_ids + self.d2t[draft_ids]
         return draft_ids
-
-    @conditional_torch_compile
-    def forward(
-        self,
-        hidden_states: torch.Tensor,
-        input_ids: torch.Tensor,
-        loss_mask: torch.Tensor,
-        verifier_last_hidden_states: torch.Tensor,
-        document_ids: torch.Tensor,
-        position_ids: torch.Tensor | None = None,
-        loss_config: LossConfig | None = None,
-        gamma: float = 4.0,
-        max_anchors: int = 3072,
-        per_position_loss_weight: str = "fixed-exp-decay",
-        dpace_alpha: float = 0.5,
-        consistency_weight: float = 0.3,
-        consistency_passes: int = 3,
-        base_anchor_weight: float | torch.Tensor = 0.6,
-        base_anchor_full_weight: bool = False,
-        ce_from_data: bool = False,
-        **kwargs,
-    ):
-        features = self.draft_features(
-            hidden_states,
-            input_ids,
-            loss_mask,
-            document_ids,
-            position_ids,
-            max_anchors=max_anchors,
-            **kwargs,
-        )
-        hidden, logits, layout = features
-        aligned_loss_mask = layout.loss_mask
-        anchored_block_indices = layout.block_positions
-        targets = self._build_targets(
-            verifier_last_hidden_states, anchored_block_indices
-        )
-
-        num_blocks = max_anchors
-        block = self.block_size
-        mask_tokens_size = num_blocks * block
-        block_tokens = input_ids[0, anchored_block_indices].view(num_blocks, block)
-        anchor_tokens = block_tokens[:, :1]
-        anchor_pos = anchored_block_indices.view(num_blocks, block)[:, 0]
-        am1_pos = (anchor_pos - 1).clamp(min=0)
-        am1_ok = (anchor_pos > 0) & (
-            document_ids[0, am1_pos] == document_ids[0, anchor_pos]
-        )
-        am1_tokens = torch.where(
-            am1_ok, input_ids[0, am1_pos], anchor_tokens[:, 0]
-        ).unsqueeze(1)
-
-        data_labels = None
-        if self.d2t is None:
-            if self.config.sample_from_anchor:
-                nxt = (anchored_block_indices + 1).clamp(max=input_ids.shape[1] - 1)
-                data_labels = input_ids[0, nxt].view(1, mask_tokens_size)
-            else:
-                data_labels = block_tokens.reshape(1, mask_tokens_size)
-
-        # ce_from_data: CE labels = the DATA tokens, not the teacher
-        # argmax. Requires the full verifier vocab.
-        ce_data_labels = None
-        if ce_from_data:
-            if data_labels is None:
-                raise ValueError(
-                    "ce_from_data requires draft_vocab == verifier_vocab "
-                    "(XPress recipes are full-vocab)"
-                )
-            ce_data_labels = data_labels
-        if self.config.sample_from_anchor:
-            # Slot k predicts token p+k+1; teacher prev for slot k = token p+k.
-            prev_tf = block_tokens
-        else:
-            # Fill-in: slot k predicts token p+k (slot 0 = anchor); teacher prev
-            # for slot k = token p+k-1 (shifted).
-            prev_tf = torch.cat([am1_tokens, block_tokens[:, :-1]], dim=1)
-
-        hidden_blocks = hidden.view(num_blocks, block, -1)
-        base_block_logits = logits.view(num_blocks, block, -1)
-        hcache = self.refiner_head.hidden_cache(
-            hidden_blocks.to(self.refiner_head.down_h.weight.dtype)
-        )
-
-        # Teacher-forced refine pass.
-        bias_tf = self.refiner_head.block_bias(prev_tf, hcache=hcache)
-        logits_tf = (base_block_logits + bias_tf).view(1, mask_tokens_size, -1)
-
-        round_logits: list[torch.Tensor] = []
-        if consistency_weight > 0.0 and consistency_passes > 0:
-            pred = self._draft_to_verifier_ids(
-                base_block_logits.detach().argmax(dim=-1)
-            )
-            for _ in range(int(consistency_passes)):
-                if self.config.sample_from_anchor:
-                    prev_j = torch.cat([anchor_tokens, pred[:, :-1]], dim=1)
-                else:
-                    pred[:, :1] = anchor_tokens  # slot 0 is the anchor, not predicted
-                    prev_j = torch.cat([am1_tokens, pred[:, :-1]], dim=1)
-                bias_j = self.refiner_head.block_bias(prev_j, hcache=hcache)
-                refined_j = base_block_logits + bias_j
-                round_logits.append(refined_j.view(1, mask_tokens_size, -1))
-                pred = self._draft_to_verifier_ids(refined_j.detach().argmax(dim=-1))
-
-        # The trainer's annealing schedule passes a 0-dim tensor so its value stays
-        # out of Dynamo's guards (a per-step float would recompile this frame until it
-        # hit recompile_limit and fell back to eager). Comparing a tensor here would
-        # make the branch data-dependent, so a tensor simply means "enabled" -- which
-        # holds by construction, and if the schedule's floor were 0 the anchor term
-        # would contribute exactly 0 anyway.
-        base_anchor_on = (
-            True
-            if isinstance(base_anchor_weight, torch.Tensor)
-            else base_anchor_weight > 0.0
-        )
-
-        loss, metrics = compute_metrics(
-            logits_tf,
-            round_logits,
-            logits if base_anchor_on else None,
-            targets,
-            aligned_loss_mask,
-            self.block_size,
-            loss_config=loss_config or resolve_loss_config('{"ce": 0.1, "tv": 0.9}'),
-            gamma=gamma,
-            consistency_weight=consistency_weight,
-            base_anchor_weight=base_anchor_weight,
-            base_anchor_full_weight=base_anchor_full_weight,
-            per_position_loss_weight=per_position_loss_weight,
-            dpace_alpha=dpace_alpha,
-            sample_from_anchor=self.config.sample_from_anchor,
-            ce_data_labels=ce_data_labels,
-            data_labels=data_labels,
-        )
-        return None, loss, metrics

@@ -271,10 +271,10 @@ def test_model_uses_canonical_checkpoint_keys():
     assert "backbone.layers.0.attention_conv.kernel_projection.weight" in state_keys
     assert "backbone.layers.0.mlp_conv.base_kernel" in state_keys
     assert "backbone.layers.0.mlp_conv.kernel_projection.weight" in state_keys
-    assert "candidate_selector.predecessor_codebook" in state_keys
-    assert "candidate_selector.successor_codebook" in state_keys
-    assert "candidate_selector.hidden_projection.weight" in state_keys
-    assert "candidate_selector.predecessor_codebook.weight" not in state_keys
+    assert "correction.predecessor_codebook" in state_keys
+    assert "correction.successor_codebook" in state_keys
+    assert "correction.hidden_projection.weight" in state_keys
+    assert "correction.predecessor_codebook.weight" not in state_keys
 
 
 def test_config_round_trip_preserves_dflash2_contract(tmp_path):

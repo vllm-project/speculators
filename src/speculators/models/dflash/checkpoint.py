@@ -6,16 +6,22 @@ from collections.abc import Iterable, Mapping
 import torch
 
 BACKBONE_NAMES = frozenset({"layers", "fc", "hidden_norm", "norm", "rotary_emb"})
+CORRECTION_NAMES = frozenset({"markov_head", "candidate_selector", "refiner_head"})
 LEGACY_KEY_MAPPING = {
     r"^(layers|fc|hidden_norm|norm|rotary_emb)\.": r"backbone.\1.",
+    r"^(markov_head|candidate_selector|refiner_head)\.": "correction.",
 }
 
 
 def native_key(key: str) -> str:
+    if key.split(".", 1)[0] in CORRECTION_NAMES:
+        return "correction" + key[key.index(".") :] if "." in key else "correction"
     return f"backbone.{key}" if key.split(".", 1)[0] in BACKBONE_NAMES else key
 
 
-def legacy_key(key: str) -> str:
+def legacy_key(key: str, correction_name: str | None = None) -> str:
+    if key.startswith("correction.") and correction_name is not None:
+        return correction_name + key.removeprefix("correction")
     if key.startswith("backbone."):
         candidate = key.removeprefix("backbone.")
         if candidate.split(".", 1)[0] in BACKBONE_NAMES:
@@ -34,7 +40,7 @@ def checkpoint_key_map(keys: Iterable[str]) -> dict[str, str]:
             raise ValueError(f"Checkpoint keys collide at {destination!r}")
         destinations.add(destination)
         result[key] = destination
-        if key != destination:
+        if key.split(".", 1)[0] in BACKBONE_NAMES:
             layouts.add("legacy")
         elif legacy_key(key) != key:
             layouts.add("native")
@@ -55,8 +61,19 @@ def import_state_dict(state_dict: Mapping[str, torch.Tensor]):
     return renamed
 
 
-def export_state_dict(state_dict: Mapping[str, torch.Tensor], *, native: bool):
+def export_state_dict(
+    state_dict: Mapping[str, torch.Tensor],
+    *,
+    native: bool,
+    correction_name: str | None = None,
+):
     renamed = import_state_dict(state_dict)
     if native:
         return renamed
-    return OrderedDict((legacy_key(key), value) for key, value in renamed.items())
+    if correction_name is None and any(
+        key.startswith("correction.") for key in renamed
+    ):
+        raise ValueError("A correction recipe is required for legacy export")
+    return OrderedDict(
+        (legacy_key(key, correction_name), value) for key, value in renamed.items()
+    )

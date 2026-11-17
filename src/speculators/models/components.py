@@ -63,3 +63,18 @@ class DraftFeatures(NamedTuple):
     hidden: torch.Tensor  # [1, num_blocks * block_size, hidden_size]
     logits: torch.Tensor  # [1, num_blocks * block_size, draft_vocab_size]
     layout: BlockLayout
+
+
+class CorrectionOutput(NamedTuple):
+    """Corrected draft-vocabulary logits and optional confidence features."""
+
+    logits: torch.Tensor  # [1, num_blocks * block_size, draft_vocab_size]
+    # [num_blocks, block_size, markov_rank] when present
+    confidence_features: torch.Tensor | None = None
+
+
+class CandidateScores(NamedTuple):
+    """Scores for supplied draft-vocabulary candidates, without dense expansion."""
+
+    candidate_ids: torch.Tensor  # [1, num_blocks * block_size, top_k]
+    scores: torch.Tensor  # [1, num_blocks * block_size, top_k]

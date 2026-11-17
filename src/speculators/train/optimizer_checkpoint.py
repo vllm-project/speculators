@@ -64,7 +64,16 @@ def prepare_optimizer_state(path: Path, model, optimizers, state, *, distributed
         return state
     expected = optimizer_metadata(model, optimizers, distributed=distributed)
     if path.exists():
-        if json.loads(path.read_text()) != expected:
+        recorded = json.loads(path.read_text())
+        # Previously versioned states may still use named correction modules.
+        recorded["parameter_groups"] = [
+            [
+                [model.checkpoint_parameter_name(name) for name in group]
+                for group in groups
+            ]
+            for groups in recorded.get("parameter_groups", [])
+        ]
+        if recorded != expected:
             raise ValueError(
                 "Optimizer checkpoint metadata does not match the model, optimizer "
                 "types, or parameter group ordering. Initialize weights with "

@@ -1,35 +1,32 @@
 from functools import partial
-from typing import Any, ClassVar
+from typing import ClassVar
 
 import torch
 from transformers import PretrainedConfig
 
-from speculators.losses import LossConfig, kl_div_loss, resolve_loss_config
+from speculators.losses import resolve_loss_config
 from speculators.model import SpeculatorModel
 from speculators.models.dflash.backbone import DFlashBackbone
 from speculators.models.dflash.config import DFlashSpeculatorConfig
 from speculators.models.dflash.core import DFlashDraftModel
 from speculators.models.dflash2.config import DFlash2SpeculatorConfig
-from speculators.models.dflash2.metrics import (
-    compute_metrics,
-    selector_training_candidates,
-)
 from speculators.models.dflash2.model_definitions import (
     CandidateSelector,
     Qwen3DFlash2DecoderLayer,
 )
-from speculators.models.utils import conditional_torch_compile
+from speculators.models.dflash2.objective import dflash2_objective
 
 __all__ = [
     "DFlash2DraftModel",
 ]
 
-_DEFAULT_LOSS_CONFIG: LossConfig = {"kl_div": (kl_div_loss, 1.0)}
-
 
 @SpeculatorModel.register("dflash2")
 class DFlash2DraftModel(DFlashDraftModel):
     """DFlash with local convolution and bilinear candidate reranking."""
+
+    objective = staticmethod(dflash2_objective)
+    legacy_correction_name = "candidate_selector"
 
     config_class: ClassVar[type[DFlash2SpeculatorConfig]] = DFlash2SpeculatorConfig  # type: ignore[misc,assignment]
     _no_split_modules = ["Qwen3DFlash2DecoderLayer"]
@@ -62,7 +59,7 @@ class DFlash2DraftModel(DFlashDraftModel):
         initializer_range = getattr(
             config.transformer_layer_config, "initializer_range", 0.02
         )
-        self.candidate_selector = CandidateSelector(
+        self.correction = CandidateSelector(
             vocab_size=target_vocab_size,
             hidden_size=config.transformer_layer_config.hidden_size,
             rank=config.selector_rank,
@@ -82,6 +79,12 @@ class DFlash2DraftModel(DFlashDraftModel):
                 conv_group_size=config.conv_group_size,
             ),
         )
+
+    @property
+    def candidate_selector(self) -> CandidateSelector:
+        """Compatibility accessor; the module is registered only as correction."""
+        assert isinstance(self.correction, CandidateSelector)  # noqa: S101
+        return self.correction
 
     @classmethod
     def from_training_args(
@@ -134,72 +137,3 @@ class DFlash2DraftModel(DFlashDraftModel):
             return block_tokens
         # For token sequence 0 1 2 3 return previous token ids 0 0 1 2
         return torch.cat([block_tokens[:, :1], block_tokens[:, :-1]], dim=1)
-
-    @conditional_torch_compile
-    def forward(
-        self,
-        hidden_states: torch.Tensor,  # shape: [1, total_seq_len,num_hidden*hidden_size]
-        input_ids: torch.Tensor,  # shape: [1, total_seq_len]
-        loss_mask: torch.Tensor,  # shape: [1, total_seq_len]
-        verifier_last_hidden_states: torch.Tensor,  # shape: [1, total_seq_len, hidden_size] # noqa: E501
-        document_ids: torch.Tensor,  # shape: [1, total_seq_len]
-        position_ids: torch.Tensor | None = None,  # shape: [1, total_seq_len]
-        loss_config: LossConfig | None = None,
-        gamma: float = 4.0,
-        max_anchors: int = 512,
-        selector_loss_alpha: float = 1.0,
-        per_position_loss_weight: str = "fixed-exp-decay",
-        dpace_alpha: float = 0.5,
-        selector_miss_policy: str = "replace",
-        **kwargs,
-    ) -> tuple[None, torch.Tensor, dict[str, Any]]:
-        features = self.draft_features(
-            hidden_states,
-            input_ids,
-            loss_mask,
-            document_ids,
-            position_ids,
-            max_anchors=max_anchors,
-            **kwargs,
-        )
-        hidden, unary_logits, layout = features
-        aligned_loss_mask = layout.loss_mask
-        block_indices = layout.block_positions
-        targets = self._build_targets(verifier_last_hidden_states, block_indices)
-        predecessor_ids = self._predecessor_ids(input_ids, block_indices)
-
-        target_ids = targets.argmax(dim=-1)
-        # shape: [1, num_anchors*block_size]
-        candidate_ids = unary_logits.topk(self.candidate_selector.top_k, dim=-1).indices
-        # shape: [1, num_anchors*block_size, top_k]
-        training_candidate_ids, target_positions, contains_target = (
-            selector_training_candidates(
-                candidate_ids, target_ids, miss_policy=selector_miss_policy
-            )
-        )
-        candidate_logits = self.candidate_selector.score_candidates(
-            unary_logits,
-            hidden,
-            predecessor_ids.reshape(1, -1),
-            training_candidate_ids,
-        )
-
-        loss, metrics = compute_metrics(
-            unary_logits=unary_logits,
-            targets=targets,
-            training_candidate_ids=training_candidate_ids,
-            candidate_logits=candidate_logits,
-            target_positions=target_positions,
-            contains_target=contains_target,
-            loss_mask=aligned_loss_mask,
-            block_size=self.block_size,
-            top_k=self.candidate_selector.top_k,
-            sample_from_anchor=self.config.sample_from_anchor,
-            loss_config=loss_config or _DEFAULT_LOSS_CONFIG,
-            gamma=gamma,
-            selector_loss_alpha=selector_loss_alpha,
-            per_position_loss_weight=per_position_loss_weight,
-            dpace_alpha=dpace_alpha,
-            selector_miss_policy=selector_miss_policy,
-        )
-        return None, loss, metrics

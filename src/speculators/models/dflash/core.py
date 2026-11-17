@@ -1,4 +1,5 @@
 import logging
+from collections.abc import Callable
 from copy import copy, deepcopy
 from typing import ClassVar, Literal
 
@@ -13,10 +14,11 @@ from transformers.core_model_loading import (
     rename_source_key,
 )
 
-from speculators.losses import LossConfig, resolve_loss_config
+from speculators.losses import resolve_loss_config
 from speculators.model import DraftVocabMixin, SpeculatorModel
 from speculators.models.attention import create_float_mask
 from speculators.models.components import BackboneInputs, BlockLayout, DraftFeatures
+from speculators.models.corrections import correct_logits, score_candidates
 from speculators.models.dflash import DFlashSpeculatorConfig
 from speculators.models.dflash.attention import create_anchor_block_mask_mod
 from speculators.models.dflash.backbone import DFlashBackbone
@@ -27,7 +29,7 @@ from speculators.models.dflash.checkpoint import (
     import_state_dict,
     native_key,
 )
-from speculators.models.dflash.metrics import compute_metrics
+from speculators.models.dflash.objective import dflash_objective
 from speculators.models.dflash.utils import (
     extend_position_ids_with_mask_tokens,
     select_anchors,
@@ -47,6 +49,8 @@ _compiled_create_block_mask = torch.compile(create_block_mask)
 
 @SpeculatorModel.register("dflash")
 class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
+    objective: ClassVar[Callable] = staticmethod(dflash_objective)
+    legacy_correction_name: ClassVar[str | None] = None
     config_class: ClassVar[type[DFlashSpeculatorConfig]] = DFlashSpeculatorConfig  # type: ignore[misc]
     supports_gradient_checkpointing = True  # noqa: D003  # Qwen3DFlashDecoderLayer inherits GradientCheckpointingLayer
     requires_optimizer_metadata: ClassVar[bool] = True
@@ -142,6 +146,7 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
         self.__dict__["_keys_to_ignore_on_load_missing"] = (
             keys_to_ignore_on_load_missing
         )
+        self.correction: nn.Module = nn.Identity()
 
     def _create_backbone(self, config: DFlashSpeculatorConfig) -> DFlashBackbone:
         return DFlashBackbone(
@@ -151,6 +156,14 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
     def get_decoder_layers(self) -> nn.ModuleList:
         """Expose decoder layers without imposing their registration path."""
         return self.backbone.layers
+
+    def correct(self, features: DraftFeatures, predecessor_ids: torch.Tensor):
+        return correct_logits(self.correction, features, predecessor_ids)
+
+    def score_candidates(self, features, predecessor_ids, candidate_ids):
+        return score_candidates(
+            self.correction, features, predecessor_ids, candidate_ids
+        )
 
     @classmethod
     def from_pretrained(cls, *args, **kwargs):
@@ -249,7 +262,9 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
             else checkpoint_format == "native"
         )
         exported = export_state_dict(
-            self.state_dict() if state_dict is None else state_dict, native=native
+            self.state_dict() if state_dict is None else state_dict,
+            native=native,
+            correction_name=self.legacy_correction_name,
         )
         view = copy(self)
         view.config = deepcopy(self.config)
@@ -609,44 +624,5 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
         )
 
     @conditional_torch_compile
-    def forward(
-        self,
-        hidden_states: torch.Tensor,  # shape: [1,total_seq_len,num_hidden*hidden_size]
-        input_ids: torch.Tensor,  # shape: [1, total_seq_len]
-        loss_mask: torch.Tensor,  # shape: [1, total_seq_len]
-        verifier_last_hidden_states: torch.Tensor,  # shape: [1, total_seq_len, hidden_size] # noqa: E501
-        document_ids: torch.Tensor,  # shape: [1, total_seq_len]
-        position_ids: torch.Tensor | None = None,  # shape: [1, total_seq_len]
-        loss_config: LossConfig | None = None,
-        gamma: float = 4.0,
-        max_anchors: int = 512,
-        per_position_loss_weight: str = "fixed-exp-decay",
-        dpace_alpha: float = 0.5,
-        **kwargs,
-    ):
-        features = self.draft_features(
-            hidden_states,
-            input_ids,
-            loss_mask,
-            document_ids,
-            position_ids,
-            max_anchors=max_anchors,
-            **kwargs,
-        )
-        logits = features.logits
-        aligned_loss_mask = features.layout.loss_mask
-        targets = self._build_targets(
-            verifier_last_hidden_states, features.layout.block_positions
-        )
-        loss, metrics = compute_metrics(
-            logits,
-            targets,
-            aligned_loss_mask,
-            self.block_size,
-            gamma=gamma,
-            loss_config=loss_config,
-            per_position_loss_weight=per_position_loss_weight,
-            dpace_alpha=dpace_alpha,
-            sample_from_anchor=self.config.sample_from_anchor,
-        )
-        return None, loss, metrics
+    def forward(self, *args, **kwargs):
+        return self.objective(self, *args, **kwargs)
