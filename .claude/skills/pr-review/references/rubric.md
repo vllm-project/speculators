@@ -15,7 +15,7 @@ Review like a maintainer of this repository who has little time and cares about 
 
 The context directory holds `pr.json`, `pr.diff`, `files.json`, `reviews.json`, `review_comments.json`, `issue_comments.json` and `stack.json`. Read the whole diff, and enough of the surrounding code to judge it in context.
 
-If `stack.json` lists parents, this PR is stacked on other open PRs by the same author, and its diff includes theirs. Review only `own.diff`, its changes on top of the nearest parent, and read the parents' discussions under `stack/<number>/`: what was decided or said there is settled. Line numbers still refer to the PR head.
+If `stack.json` lists parents, this PR is stacked on other open PRs by the same author, and its diff includes theirs. Review only `own.diff`, its changes on top of the nearest parent; if there is none (the branch has merged other changes since, so they can't be separated), review `pr.diff` but leave what the parents change to them. Read the parents' discussions under `stack/<number>/`: what was decided or said there is settled. Line numbers still refer to the PR head.
 
 Read what the PR and its discussion link to (issues, RFCs, papers, docs, benchmarks), and check that the PR does what they describe. If something you need can't be fetched, say so rather than guess.
 
@@ -60,16 +60,16 @@ Don't review a PR that is still in flux (active experiments, trial-and-error fix
 Score each finding 0–100 for how sure you are that it is real and matters:
 
 - below 50: a false positive, a nitpick, or something pre-existing;
-- 50–79: real but low-impact or unlikely in practice;
+- 50–79: real but low-impact;
 - 80–89: verified, affects behaviour or breaks a documented project rule;
 - 90 and up: a confirmed bug with a concrete failure scenario.
 
-Only findings at 80 or above are posted; `scripts/review_payload.py` drops the rest.
+Score how bad the failure is, not how often it happens: a confirmed failure that existing code can reach clears the bar even if it is rare. Only findings at 80 or above are posted; `scripts/review_payload.py` drops the rest.
 
 Below the bar, whatever their score would otherwise be:
 
-- problems the PR didn't introduce, style a senior engineer would skip, and anything a linter, type checker or CI catches;
-- changes the PR intends, or that a maintainer asked for (here or on a stacked parent);
+- problems the PR didn't introduce, style a senior engineer would skip, and restatements of what a linter, type checker or CI already reports (explaining the cause of a failure is still in scope);
+- the change the PR intends, or one a maintainer asked for (here or on a stacked parent), though not its unintended effects;
 - failures that need a caller or input the code doesn't have yet. Read the code's documented contract and its real callers before claiming it is broken;
 - preferences presented as correctness, and alternatives you haven't checked would work.
 
