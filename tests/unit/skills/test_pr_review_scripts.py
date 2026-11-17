@@ -285,8 +285,8 @@ def test_review_schema_accepts_the_documented_example():
 
 def _fake_pr(*heads):
     """A `get` that returns the PR at each head in turn."""
-    heads = iter(heads)
-    return lambda path: {"path": path, "head": {"sha": next(heads)}}
+    remaining = iter(heads)
+    return lambda path: {"path": path, "head": {"sha": next(remaining)}}
 
 
 def test_gather_writes_every_context_file(tmp_path, monkeypatch):
