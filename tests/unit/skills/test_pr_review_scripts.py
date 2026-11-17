@@ -244,12 +244,28 @@ def test_footer_links_the_skill_at_its_commit():
             "summary": "s",
             "findings": [{"confidence": 90, "body": " "}],
         },
+        {"version": 1, "pr": 8, "summary": "s", "findings": []},
+        {"version": 1, "summary": "s", "findings": []},
     ],
-    ids=["no-version", "no-summary", "non-int-confidence", "empty-body"],
+    ids=[
+        "no-version",
+        "no-summary",
+        "non-int-confidence",
+        "empty-body",
+        "other-pr",
+        "no-pr",
+    ],
 )
 def test_malformed_review_is_refused(review):
     with pytest.raises(SystemExit):
         _build(review)
+
+
+def test_pr_number_may_be_a_string():
+    review = _review({"confidence": 90, "body": "b"})
+    review["pr"] = "7"
+    payload, _ = _build(review)
+    assert payload is not None
 
 
 def test_review_schema_accepts_the_documented_example():
@@ -267,13 +283,20 @@ def test_review_schema_accepts_the_documented_example():
 # gather_context ---------------------------------------------------------------
 
 
+def _fake_pr(*heads):
+    """A `get` that returns the PR at each head in turn."""
+    heads = iter(heads)
+    return lambda path: {"path": path, "head": {"sha": next(heads)}}
+
+
 def test_gather_writes_every_context_file(tmp_path, monkeypatch):
-    monkeypatch.setattr(gather_context, "get", lambda path: {"path": path})
+    monkeypatch.setattr(gather_context, "get", _fake_pr(HEAD, HEAD))
     monkeypatch.setattr(gather_context, "get_raw", lambda path, accept: b"diff")
     monkeypatch.setattr(gather_context, "paginate", lambda path: [path])
     gather_context.gather("o/r", "7", tmp_path)
     assert json.loads((tmp_path / "pr.json").read_text()) == {
-        "path": "/repos/o/r/pulls/7"
+        "path": "/repos/o/r/pulls/7",
+        "head": {"sha": HEAD},
     }
     assert (tmp_path / "pr.diff").read_bytes() == b"diff"
     assert json.loads((tmp_path / "issue_comments.json").read_text()) == [
@@ -281,3 +304,12 @@ def test_gather_writes_every_context_file(tmp_path, monkeypatch):
     ]
     for name in ("files.json", "reviews.json", "review_comments.json"):
         assert (tmp_path / name).exists()
+
+
+def test_gather_refuses_a_push_between_metadata_and_diff(tmp_path, monkeypatch):
+    monkeypatch.setattr(gather_context, "get", _fake_pr(HEAD, "b" * 40))
+    monkeypatch.setattr(gather_context, "get_raw", lambda path, accept: b"diff")
+    monkeypatch.setattr(gather_context, "paginate", lambda path: [path])
+    with pytest.raises(SystemExit, match="pushed to during the fetch"):
+        gather_context.gather("o/r", "7", tmp_path)
+    assert not (tmp_path / "pr.json").exists()

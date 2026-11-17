@@ -7,7 +7,7 @@
   "properties": {
     "version": {"const": 1},
     "pr": {"type": ["integer", "string"]},
-    "summary": {"type": "string"},
+    "summary": {"type": "string", "description": "Overall assessment; posted only alongside a surviving finding."},
     "findings": {
       "type": "array",
       "items": {
@@ -16,7 +16,7 @@
         "properties": {
           "confidence": {"type": "integer", "minimum": 0, "maximum": 100},
           "body": {"type": "string", "minLength": 1},
-          "file": {"type": "string"},
+          "file": {"type": "string", "description": "Omit, with line, for a finding about the PR as a whole."},
           "line": {"type": "integer", "minimum": 1},
           "start_line": {"type": "integer", "minimum": 1}
         }

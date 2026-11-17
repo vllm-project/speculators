@@ -21,7 +21,7 @@ Before forming any opinions, catalog:
 - What has the author responded to?
 - What is unresolved?
 
-**Do NOT echo points already raised by other reviewers.** If you agree with an existing comment, do not post your own version of it — even with additional detail or a different explanation. The only exception is if the author asked a clarifying question on the existing comment and the original reviewer hasn't answered; in that case, answer it in the review summary and point to that thread. Drop any finding that overlaps with an existing review comment.
+**Do NOT echo points already raised by other reviewers.** If you agree with an existing comment, do not post your own version of it — even with additional detail or a different explanation. The only exception is if the author asked a clarifying question on the existing comment and the original reviewer hasn't answered; in that case, answer it as a PR-wide finding (no `file`) that points to that thread. Drop any finding that overlaps with an existing review comment.
 
 If reviewers or the author linked to sources (docs, issues, code snippets, benchmarks, papers) in their comments, fetch and read them — they often contain context that informs whether a concern is valid or already resolved.
 
@@ -72,7 +72,7 @@ Only flag mismatches you can concretely demonstrate by quoting both the paper an
 
 ## Phase 3.7: Contribution rules
 
-`CONTRIBUTING.md` and `AGENTS.md` are the source of truth for what a PR must carry: issue linkage, DCO sign-off, doc updates, and the PR description. Read both and flag what the PR misses, citing the rule. Raise these in the review summary, not as inline comments; style preferences stay below the confidence bar unless they hide what the PR does.
+`CONTRIBUTING.md` and `AGENTS.md` are the source of truth for what a PR must carry: issue linkage, DCO sign-off, doc updates, and the PR description. Read both and flag what the PR misses, citing the rule. Raise these as PR-wide findings (no `file`), not as inline comments; style preferences stay below the confidence bar unless they hide what the PR does.
 
 ## Phase 4: Line-level review
 
@@ -127,12 +127,12 @@ Structure (see [output.md](output.md) for the file format):
 **Summary** (high-level):
 
 - 1–3 sentences on the overall design assessment.
-- Note any high-level concerns or open questions.
 - If everything looks good at the design level, say so briefly.
 
-**Findings** (line-level):
+**Findings**:
 
-- Each non-high-level finding must reference a specific file and line (or line range) from the diff.
+- Each line-level finding references a specific file and line (or line range) from the diff.
+- High-level concerns and open questions about the PR as a whole are findings without `file` and `line`. They are scored and filtered like any other finding; the summary alone never makes a review worth posting.
 - Order: correctness issues → design concerns → suggestions → questions.
 - When linking to code, use full-SHA permalink format for proper rendering: `https://github.com/vllm-project/speculators/blob/{full_sha}/{path}#L{start}-L{end}`, with the PR head SHA (`head.sha` in `pr.json`), and include ≥1 line of context above and below.
 
