@@ -251,9 +251,8 @@ class CompoundLossOutput:
     target_ids: torch.Tensor
     """``[1, T]`` ``argmax(targets, -1)``, as ``pred_ids``."""
     metric_terms: dict[str, torch.Tensor]
-    """Requested per-position ``[1, T]`` primitive terms, detached. Only
-    present when they came from the fused pass; callers compute them
-    otherwise."""
+    """Requested per-position ``[1, T]`` primitive terms, detached: from the
+    fused pass, or the eager functions on a non-fused config."""
 
 
 def compound_loss(
@@ -278,8 +277,8 @@ def compound_loss(
     The same pass returns both argmaxes and ``metric_terms`` (primitive terms
     such as ``"tv"``, never differentiated), so no extra read of the
     ``[1, T, V]`` tensors happens. A config that mixes fused and eager terms
-    runs each term on its own; there ``with_ids`` computes the argmaxes with
-    ``torch.argmax``.
+    runs each term on its own; there ``metric_terms`` come from the eager
+    functions and ``with_ids`` computes the argmaxes with ``torch.argmax``.
 
     ``term_losses`` holds the per-term (unweighted) scalar losses keyed as
     ``"{name}_loss"``. When the config contains a single term it is empty
@@ -299,6 +298,8 @@ def compound_loss(
         metrics = fused.metrics
     else:
         elementwise = [fn(logits, targets) for fn, _ in loss_config.values()]
+        with torch.no_grad():
+            metrics = {t: _EAGER_LOSS_FN_MAP[t](logits, targets) for t in metric_terms}
         if with_ids:
             pred_ids = torch.argmax(logits, dim=-1)
             target_ids = torch.argmax(targets, dim=-1)

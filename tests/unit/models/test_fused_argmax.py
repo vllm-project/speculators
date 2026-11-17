@@ -4,7 +4,7 @@ The fused forward also returns the first-index argmax of the draft and target
 rows, and can compute primitive terms that are never differentiated (DSpark's
 TV for ``accept_rate``). Models take both from ``compound_loss``
 instead of separate full-vocab passes; non-fused configs fall back to
-``torch.argmax`` and the caller's own term function.
+``torch.argmax`` and the eager term functions.
 """
 
 from functools import partial
@@ -12,7 +12,8 @@ from functools import partial
 import pytest
 import torch
 
-from speculators.losses import compound_loss, resolve_loss_config
+from speculators.losses import compound_loss, eager, resolve_loss_config
+from speculators.losses import utils as loss_utils
 from speculators.models.dflash.metrics import compute_metrics as dflash_metrics
 from speculators.models.dspark.metrics import compute_metrics as dspark_metrics
 from tests.unit.models.test_fused_losses import (
@@ -124,7 +125,9 @@ def test_compound_loss_ids_fall_back_for_eager():
     )
     assert torch.equal(out.pred_ids, torch.argmax(logits, dim=-1))
     assert torch.equal(out.target_ids, torch.argmax(targets, dim=-1))
-    assert out.metric_terms == {}
+    torch.testing.assert_close(
+        out.metric_terms["tv"], eager.tv_loss(logits, targets), rtol=0, atol=0
+    )
     assert sorted(out.term_losses) == ["kl_div_loss", "tv_loss"]
 
 
@@ -147,18 +150,18 @@ def test_compound_loss_outputs_from_the_fused_pass():
 
 
 def _raise(*_args):
-    raise AssertionError("tv_loss_fn must not run when the loss pass provides TV")
+    raise AssertionError("eager TV must not run when the loss pass provides it")
 
 
 @requires_accelerator
 @pytest.mark.parametrize("spec", ["kl_div", '{"ce": 0.1, "tv": 0.9}'])
-def test_dspark_takes_accept_rate_and_ids_from_the_loss_pass(spec):
-    fused = _fused()
+def test_dspark_takes_accept_rate_and_ids_from_the_loss_pass(spec, monkeypatch):
     logits, targets, loss_mask, _ = _loss_inputs(32, 512, DEVICE)
     call = partial(dspark_metrics, logits, targets, None, loss_mask, 8)
-    _, metrics = call(resolve_loss_config(spec), tv_loss_fn=_raise)
-    # eager config: separate tv_loss_fn and torch.argmax (the fallback path)
-    _, ref = call(resolve_loss_config(spec, "eager"), tv_loss_fn=fused.fused_tv_loss)
+    # eager config: eager TV and torch.argmax (the fallback path)
+    _, ref = call(resolve_loss_config(spec, "eager"))
+    monkeypatch.setitem(loss_utils._EAGER_LOSS_FN_MAP, "tv", _raise)
+    _, metrics = call(resolve_loss_config(spec))
     for key in ("accept_rate_sum", "accept_len_sum", "full_acc_sum", "eal_sum"):
         torch.testing.assert_close(metrics[key], ref[key], rtol=1e-5, atol=1e-5)
 
