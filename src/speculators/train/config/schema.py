@@ -854,8 +854,6 @@ class TrainConfig(BaseSettings):
             self.loss.loss_fn = _DEFAULT_LOSS_FN.get(self.speculator_type, "kl_div")
         if self.dflash.block_size is None:
             self.dflash.block_size = _DEFAULT_BLOCK_SIZE.get(self.speculator_type, 8)
-        if self.dflash.sample_from_anchor is None:
-            self.dflash.sample_from_anchor = self.speculator_type == "dspark"
         if self.dflash.dflash_decay_gamma is None:
             self.dflash.dflash_decay_gamma = 7.0 if is_dspine else 4.0
         return self
