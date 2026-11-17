@@ -24,10 +24,16 @@ from github_api import get, get_raw, paginate
 def gather(repo: str, number: str, out_dir: Path) -> None:
     out_dir.mkdir(parents=True, exist_ok=True)
     pr_path = f"/repos/{repo}/pulls/{number}"
-    (out_dir / "pr.json").write_text(json.dumps(get(pr_path), indent=1))
-    (out_dir / "pr.diff").write_bytes(
-        get_raw(pr_path, accept="application/vnd.github.diff")
-    )
+    pr = get(pr_path)
+    diff = get_raw(pr_path, accept="application/vnd.github.diff")
+    # review_payload anchors comments on the diff and posts them against
+    # pr.json's head, so both must describe the same commit.
+    if get(pr_path)["head"]["sha"] != pr["head"]["sha"]:
+        raise SystemExit(
+            f"gather_context: #{number} was pushed to during the fetch; rerun"
+        )
+    (out_dir / "pr.json").write_text(json.dumps(pr, indent=1))
+    (out_dir / "pr.diff").write_bytes(diff)
     lists = {
         "files.json": f"{pr_path}/files",
         "reviews.json": f"{pr_path}/reviews",

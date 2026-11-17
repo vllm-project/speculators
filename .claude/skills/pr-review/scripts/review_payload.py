@@ -9,6 +9,7 @@ read). Prints the payload JSON on stdout, ready for
 `gh api repos/<owner>/<repo>/pulls/<n>/reviews -X POST --input -`.
 
 Enforced here so every caller gets the same rules:
+- the draft must be for the PR in the context directory;
 - findings below MIN_CONFIDENCE are dropped;
 - the event is always COMMENT (never APPROVE or REQUEST_CHANGES);
 - a finding becomes an inline comment only if its lines are commentable
@@ -96,6 +97,11 @@ def build_payload(
 ) -> tuple[dict | None, dict]:
     """Return (payload or None when nothing survives, counts)."""
     _validate(review)
+    if str(review.get("pr")) != str(pr.get("number")):
+        raise SystemExit(
+            f"review_payload: review.json is for PR {review.get('pr')!r}, "
+            f"the context is PR {pr.get('number')!r}"
+        )
     findings = review.get("findings", [])
     kept = [f for f in findings if f["confidence"] >= MIN_CONFIDENCE]
     counts = {"dropped": len(findings) - len(kept), "inline": 0, "in_body": 0}
