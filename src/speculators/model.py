@@ -451,6 +451,10 @@ class SpeculatorModel(ClassRegistryMixin, PreTrainedModel):  # type: ignore[misc
             f"Available registered model classes: {list(cls.registry.keys())}."
         )
 
+    def prepare_checkpoint_state_dict(self, state_dict):
+        """Adapt checkpoint weights before loading, including FSDP state dicts."""
+        return state_dict
+
     def get_decoder_layers(self) -> nn.ModuleList:
         """Return registered decoder layers used for FSDP wrapping.
 

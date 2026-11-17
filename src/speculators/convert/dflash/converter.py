@@ -3,8 +3,8 @@
 Converts an external DFlash checkpoint (e.g. ``z-lab/*-DFlash``) to a Speculators
 checkpoint that loads with ``DFlashDraftModel.from_pretrained(path)``.
 
-The draft transformer body (``layers.*``, ``fc``, ``hidden_norm``, ``norm``) already
-matches ``DFlashDraftModel`` so weights are copied as-is. The external checkpoint
+The draft transformer body (``layers.*``, ``fc``, ``hidden_norm``, ``norm``) is
+mapped into ``DFlashDraftModel.backbone`` on load. The external checkpoint
 borrows the verifier's embedding and LM head at runtime, so ``embed_tokens`` /
 ``lm_head`` / ``verifier_lm_head`` / ``verifier_norm`` are loaded from the verifier
 before saving.
@@ -194,7 +194,7 @@ class DFlashConverter:
             elif ".g_proj." in key or key.startswith("aux_hidden_norms."):
                 dropped.append(key)
             elif key == "fc.weight":
-                model_fc_dim = model.fc.in_features
+                model_fc_dim = model.backbone.fc.in_features
                 if tensor.shape[1] > model_fc_dim:
                     logger.info(
                         f"Slicing fc.weight from {tensor.shape[1]} to {model_fc_dim}"
@@ -249,7 +249,7 @@ class DFlashConverter:
         except (OSError, ValueError, RuntimeError) as exc:
             logger.error(f"Validation failed: {exc}")
             raise
-        for name in ("fc.weight", "lm_head.weight", "embed_tokens.weight"):
+        for name in ("backbone.fc.weight", "lm_head.weight", "embed_tokens.weight"):
             if torch.isnan(model.state_dict()[name]).any():
                 raise ValueError(f"Converted checkpoint has NaN in {name}")
         logger.success("Validation succeeded")

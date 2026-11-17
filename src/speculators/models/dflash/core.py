@@ -1,7 +1,9 @@
 import logging
-from typing import ClassVar
+from copy import copy, deepcopy
+from typing import ClassVar, Literal
 
 import torch
+from safetensors import safe_open
 from torch import nn
 from torch.nn.attention.flex_attention import create_block_mask, create_mask
 from transformers import PretrainedConfig
@@ -13,6 +15,12 @@ from speculators.models.components import BackboneInputs, BlockLayout, DraftFeat
 from speculators.models.dflash import DFlashSpeculatorConfig
 from speculators.models.dflash.attention import create_anchor_block_mask_mod
 from speculators.models.dflash.backbone import DFlashBackbone
+from speculators.models.dflash.checkpoint import (
+    LEGACY_KEY_MAPPING,
+    checkpoint_key_map,
+    export_state_dict,
+    import_state_dict,
+)
 from speculators.models.dflash.metrics import compute_metrics
 from speculators.models.dflash.utils import (
     extend_position_ids_with_mask_tokens,
@@ -136,6 +144,106 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
     def get_decoder_layers(self) -> nn.ModuleList:
         """Expose decoder layers without imposing their registration path."""
         return self.backbone.layers
+
+    @classmethod
+    def from_pretrained(cls, *args, **kwargs):
+        # Transformers loads sharded/meta weights outside nn.load_state_dict().
+        # Its key mapping applies lazily while loading each checkpoint tensor.
+        mapping = dict(LEGACY_KEY_MAPPING)
+        mapping.update(kwargs.pop("key_mapping", {}) or {})
+        return super().from_pretrained(*args, key_mapping=mapping, **kwargs)
+
+    def _validate_checkpoint_keys(self, keys) -> None:
+        mapped = set(checkpoint_key_map(keys).values())
+        expected = set(self.state_dict())
+        allowed_missing = set(self._keys_to_ignore_on_load_missing)
+        missing = expected - mapped - allowed_missing
+        unexpected = mapped - expected
+        if missing or unexpected:
+            raise ValueError(
+                f"Invalid draft checkpoint: missing learned weights {sorted(missing)}; "
+                f"unexpected weights {sorted(unexpected)}"
+            )
+
+    @staticmethod
+    def _load_pretrained_model(
+        model, state_dict, checkpoint_files, load_config, *args, **kwargs
+    ):
+        if state_dict is not None:
+            keys = list(state_dict)
+        else:
+            keys = []
+            for path in checkpoint_files or []:
+                if path.endswith(".safetensors"):
+                    with safe_open(path, framework="pt", device="cpu") as checkpoint:
+                        keys.extend(checkpoint.keys())
+                else:
+                    keys.extend(
+                        torch.load(path, map_location="meta", weights_only=True)
+                    )
+        model._validate_checkpoint_keys(keys)  # noqa: SLF001
+        return SpeculatorModel._load_pretrained_model(  # noqa: SLF001
+            model, state_dict, checkpoint_files, load_config, *args, **kwargs
+        )
+
+    def prepare_checkpoint_state_dict(self, state_dict):
+        """Adapt and validate weights before single-device or FSDP resume."""
+        self._validate_checkpoint_keys(state_dict)
+        return import_state_dict(state_dict)
+
+    def load_state_dict(self, state_dict, strict=True, assign=False):
+        return super().load_state_dict(
+            import_state_dict(state_dict), strict=strict, assign=assign
+        )
+
+    def save_pretrained(
+        self,
+        save_directory,
+        is_main_process=True,
+        state_dict=None,
+        push_to_hub=False,
+        max_shard_size="50GB",
+        variant=None,
+        token=None,
+        save_peft_format=True,
+        save_original_format=True,  # noqa: ARG002 - explicit format owns conversion
+        distributed_checkpoint=False,
+        *,
+        checkpoint_format: Literal["legacy", "native"] | None = None,
+        **kwargs,
+    ):
+        """Save legacy serving names or an explicitly versioned native layout.
+
+        A shallow serialization view shares tensors but owns its configuration,
+        so export cannot change the live training model or duplicate weights.
+        """
+        if checkpoint_format not in (None, "legacy", "native"):
+            raise ValueError(f"Unknown checkpoint format: {checkpoint_format!r}")
+        native = (
+            self.config.checkpoint_format_version == 1
+            if checkpoint_format is None
+            else checkpoint_format == "native"
+        )
+        exported = export_state_dict(
+            self.state_dict() if state_dict is None else state_dict, native=native
+        )
+        view = copy(self)
+        view.config = deepcopy(self.config)
+        view.config.checkpoint_format_version = 1 if native else None
+        # Use our explicit format, regardless of how Transformers loaded weights.
+        return super(DFlashDraftModel, view).save_pretrained(
+            save_directory,
+            is_main_process=is_main_process,
+            state_dict=exported,
+            push_to_hub=push_to_hub,
+            max_shard_size=max_shard_size,
+            variant=variant,
+            token=token,
+            save_peft_format=save_peft_format,
+            save_original_format=False,
+            distributed_checkpoint=distributed_checkpoint,
+            **kwargs,
+        )
 
     @property
     def target_layer_ids(self) -> list[int]:

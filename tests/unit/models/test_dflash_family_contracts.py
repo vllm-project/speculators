@@ -15,11 +15,13 @@ import pytest
 import torch
 from transformers import Qwen3Config
 
+from speculators.config import SpeculatorsConfig, VerifierConfig
 from speculators.losses import resolve_loss_config
 from speculators.models.dflash import DFlashDraftModel, DFlashSpeculatorConfig
 from speculators.models.dflash2 import DFlash2DraftModel, DFlash2SpeculatorConfig
 from speculators.models.dspark import DSparkDraftModel, DSparkSpeculatorConfig
 from speculators.models.xpress import XPressDraftModel, XPressSpeculatorConfig
+from speculators.proposals.greedy import GreedyTokenProposalConfig
 from speculators.train.optimizers import split_named_params_for_muon
 
 REFERENCE_REVISION = "988ed16b1f91315942049da3093d88dba70c45d9"
@@ -52,13 +54,19 @@ def make_contract_model(recipe, sample_from_anchor):
             num_key_value_heads=1,
             head_dim=8,
             vocab_size=32,
-            _attn_implementation="eager",
+            _attn_implementation="eager",  # type: ignore[call-arg]
         ),
         draft_vocab_size=32,
         block_size=4,
         aux_hidden_state_layer_ids=[0, 1],
         mask_token_id=0,
         sample_from_anchor=sample_from_anchor,
+        speculators_config=SpeculatorsConfig(
+            algorithm=recipe,
+            proposal_methods=[GreedyTokenProposalConfig(speculative_tokens=3)],
+            default_proposal_method="greedy",
+            verifier=VerifierConfig(name_or_path=None, architectures=[]),
+        ),
         **extra,
     )
     model = model_class(config).float()

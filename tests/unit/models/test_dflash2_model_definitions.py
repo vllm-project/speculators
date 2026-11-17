@@ -263,14 +263,14 @@ def _tiny_config(**overrides) -> DFlash2SpeculatorConfig:
 
 
 def test_model_uses_canonical_checkpoint_keys():
-    """Saved parameter names must load directly in the public vLLM implementation."""
+    """Internal modules own nested names; serving exports are tested separately."""
     model = DFlash2DraftModel(_tiny_config())
     state_keys = set(model.state_dict())
 
-    assert "layers.0.attention_conv.base_kernel" in state_keys
-    assert "layers.0.attention_conv.kernel_projection.weight" in state_keys
-    assert "layers.0.mlp_conv.base_kernel" in state_keys
-    assert "layers.0.mlp_conv.kernel_projection.weight" in state_keys
+    assert "backbone.layers.0.attention_conv.base_kernel" in state_keys
+    assert "backbone.layers.0.attention_conv.kernel_projection.weight" in state_keys
+    assert "backbone.layers.0.mlp_conv.base_kernel" in state_keys
+    assert "backbone.layers.0.mlp_conv.kernel_projection.weight" in state_keys
     assert "candidate_selector.predecessor_codebook" in state_keys
     assert "candidate_selector.successor_codebook" in state_keys
     assert "candidate_selector.hidden_projection.weight" in state_keys

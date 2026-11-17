@@ -316,8 +316,13 @@ class SingleGPUCheckpointer(BaseCheckpointer):
         full_state_dict = convert_float_dtype(
             full_state_dict, float_dtype or model.dtype
         )
+        raw_model = (
+            model.module if isinstance(model, DistributedDataParallel) else model
+        )
+        if hasattr(raw_model, "prepare_checkpoint_state_dict"):
+            full_state_dict = raw_model.prepare_checkpoint_state_dict(full_state_dict)
         # Note: `strict=False` because we don't load the verifier weights
-        model.load_state_dict(full_state_dict, strict=False)
+        raw_model.load_state_dict(full_state_dict, strict=False)
 
     def load_optimizer_state_dict(
         self,
@@ -375,6 +380,9 @@ class DistributedCheckpointer(BaseCheckpointer):
         full_state_dict = convert_float_dtype(
             full_state_dict, float_dtype or model.dtype
         )
+
+        if hasattr(model, "prepare_checkpoint_state_dict"):
+            full_state_dict = model.prepare_checkpoint_state_dict(full_state_dict)
 
         # Note: `strict=False` because we don't load the verifier weights
         set_model_state_dict(

@@ -7,6 +7,7 @@ from transformers import PretrainedConfig
 from speculators.losses import LossConfig, kl_div_loss, resolve_loss_config
 from speculators.model import SpeculatorModel
 from speculators.models.dflash.backbone import DFlashBackbone
+from speculators.models.dflash.config import DFlashSpeculatorConfig
 from speculators.models.dflash.core import DFlashDraftModel
 from speculators.models.dflash2.config import DFlash2SpeculatorConfig
 from speculators.models.dflash2.metrics import (
@@ -69,7 +70,8 @@ class DFlash2DraftModel(DFlashDraftModel):
             initializer_range=initializer_range,
         )
 
-    def _create_backbone(self, config: DFlash2SpeculatorConfig) -> DFlashBackbone:
+    def _create_backbone(self, config: DFlashSpeculatorConfig) -> DFlashBackbone:
+        assert isinstance(config, DFlash2SpeculatorConfig)  # noqa: S101
         return DFlashBackbone(
             config.transformer_layer_config,
             len(self.target_layer_ids),

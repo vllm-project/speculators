@@ -17,9 +17,7 @@ class DFlashBackbone(nn.Module):
         self,
         tl_config: PretrainedConfig,
         num_target_layers: int,
-        decoder_layer_factory: Callable[
-            [PretrainedConfig, int], nn.Module
-        ] = Qwen3DFlashDecoderLayer,
+        decoder_layer_factory: Callable[..., nn.Module] = Qwen3DFlashDecoderLayer,
     ) -> None:
         super().__init__()
         self.layers = nn.ModuleList(
