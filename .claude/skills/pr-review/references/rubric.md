@@ -2,151 +2,85 @@
 
 How to review a pull request on `vllm-project/speculators`, a library for training and serving speculative decoding models (Eagle3, DFlash, MTP) with vLLM integration. This rubric is independent of the tool running it: it reads the context files written by `scripts/gather_context.py` and produces a `review.json` as described in [output.md](output.md).
 
+## What a review is for
+
+Review like a maintainer of this repository who has little time and cares about its long-term health. Say only what should change the PR or the author's next step; every comment costs the author time to read and answer.
+
+- **Be right.** Every claim is checked against the code, its documentation, or the source it cites. When you're not sure something is a bug, ask instead of asserting.
+- **Be new.** Don't repeat what a reviewer, the author or an earlier review already said, here or on a PR this one is stacked on, even with more detail. A question the author asked in a thread that nobody answered is the exception: answer it, pointing to the thread.
+- **Weigh it.** Design problems matter more than line-level ones, and a few findings that matter beat many that don't.
+- **Be readable.** The author should get each finding in one read.
+
 ## Context
 
-The context directory holds `pr.json`, `pr.diff`, `files.json`, `reviews.json`, `review_comments.json`, `issue_comments.json` and `stack.json`. Read the full diff. For changed files larger than 300 lines, also read the full file at the PR head (`head.sha` in `pr.json`) for surrounding context.
+The context directory holds `pr.json`, `pr.diff`, `files.json`, `reviews.json`, `review_comments.json`, `issue_comments.json` and `stack.json`. Read the whole diff, and enough of the surrounding code to judge it in context.
 
-**Stacked PRs.** If `stack.json` lists parents, this PR is stacked on other open PRs by the same author, and its diff includes theirs. Review only `own.diff`, this PR's changes on top of the nearest parent; code that comes from a parent belongs to that parent's review. Read each parent's discussion under `stack/<number>/` as part of Phase 2: a decision made there (a maintainer asking for an API change, say) is settled, and a point already raised there, by anyone including this reviewer, is not raised again here. Line numbers still refer to the PR head, so inline findings anchor as usual.
+If `stack.json` lists parents, this PR is stacked on other open PRs by the same author, and its diff includes theirs. Review only `own.diff`, its changes on top of the nearest parent, and read the parents' discussions under `stack/<number>/`: what was decided or said there is settled. Line numbers still refer to the PR head.
 
-If the PR description contains links (issues, discussions, external docs, benchmarks, etc.), fetch them and incorporate the context. Verify that the PR actually addresses what the linked resources describe — flag mismatches between linked context and the implementation.
+Read what the PR and its discussion link to (issues, RFCs, papers, docs, benchmarks), and check that the PR does what they describe. If something you need can't be fetched, say so rather than guess.
 
 ## Is the PR ready for review?
 
-- If the discussion thread shows the PR is effectively still in progress — active experiments, trial-and-error debugging, the author saying "still working on this", or unresolved back-and-forth about the approach — treat it as a draft and do not review. Report that the PR appears to still be in flux.
-- If the reviewer already reviewed an earlier head and the review would say substantially the same thing (same outstanding items), do not review again. Report that nothing has materially changed.
+Don't review a PR that is still in flux (active experiments, trial-and-error fixes, the author saying it isn't done, unresolved debate about the approach), or one where your review would say substantially what an earlier review of yours already said. Report which of the two it is instead.
 
-## Phase 2: Understand existing discussion
+## What to look at
 
-Before forming any opinions, catalog:
+**Design.** These matter more than anything line-level:
 
-- What has each reviewer already said?
-- What has the author responded to?
-- What is unresolved?
+- **Worth it?** Every new module, abstraction, config option or flag is something someone has to understand and maintain. Flag complexity out of proportion to the value, code that reimplements what the codebase or a dependency already has (point to it), vendored files that should be dependencies, and editor files.
+- **Does what it says.** The description says why the change is needed, and the diff does what the description claims. Missing or vague motivation is a finding.
+- **Fits the codebase.** Read the surrounding module and follow its conventions; flag abstractions nothing needs yet and parameters the PR's goal doesn't call for. If there is a clearly simpler or better approach, name it and the tradeoff.
+- **One thing per PR.** Unrelated fixes alongside a feature, refactors mixed with new behaviour, or "while I was here" cleanup should be split. Only ask when the parts are truly independent.
+- **Generated noise.** Docstrings that restate the signature, comments explaining the obvious, error handling that only re-raises, wrappers around a single call: ask the author to trim it.
+- **Compatibility.** Could it break existing checkpoints, configs or CLI invocations?
 
-**Do NOT echo points already raised by other reviewers.** If you agree with an existing comment, do not post your own version of it — even with additional detail or a different explanation. The only exception is if the author asked a clarifying question on the existing comment and the original reviewer hasn't answered; in that case, answer it as a PR-wide finding (no `file`) that points to that thread. Drop any finding that overlaps with an existing review comment.
+**Tests.** New logic needs tests in proportion to the change; changes to training, data generation or forward passes that affect end-to-end behaviour need integration tests or a reason why not; a bug fix needs a regression test that fails without it. When asking for tests, say which scenarios they should cover.
 
-If reviewers or the author linked to sources (docs, issues, code snippets, benchmarks, papers) in their comments, fetch and read them — they often contain context that informs whether a concern is valid or already resolved.
+**Numerical code** anywhere: shapes, dtype promotion, masking, and off-by-one errors in shift-based alignment.
 
-## Phase 3: Design & big-picture review
+**Where this repo breaks.** Look hardest at what the touched code is responsible for:
 
-Evaluate these first — they matter more than line-level nits:
+- `src/speculators/train/`: distributed correctness (barriers, devices, FSDP), LR schedules, checkpoint save and resume, masked and multi-step losses, bfloat16 safety.
+- `src/speculators/models/`: attention masks for speculative positions, draft-to-target vocabulary mapping, loss alignment, config serialization.
+- `src/speculators/data_generation/`: hidden-state extraction, shift-based alignment (off-by-one), loss masks before storage, vLLM client errors.
+- `src/speculators/convert/`: completeness of weight mappings, shapes, key renames, legacy formats.
+- `src/speculators/config.py`: validators, serialization round trips, compatibility with saved checkpoints, registry discovery.
+- `scripts/launch_vllm.py`: runs in the vLLM virtualenv, which doesn't have `speculators` installed, so any `speculators` import there is a bug.
+- `tests/`: whether the new paths and the speculative-decoding edge cases (vocab boundaries, multi-step loss) are covered, with vLLM and GPUs mocked where needed.
+- `.claude/skills/`, `AGENTS.md` and other instructions for agents: guidance should give principles and the repository knowledge a model can't infer, not micromanage. Flag step-by-step rules for judgment calls, restatements of what a capable model already knows, arbitrary thresholds, and shouting. Scripts, commands and machine-checked formats are the exception: those should be exact.
 
-- **Bloat check**: Does the value this PR adds justify the maintenance burden it introduces? Every new file, abstraction, and code path has an ongoing cost — someone has to understand it, update it, and debug it. Flag PRs that add significant complexity (new modules, abstractions, config options, CLI flags) without proportional value. Also flag: vendored files that should be dependencies, IDE/editor files (`.idea/`, `.vscode/`), or code that reimplements something already available in a dependency.
-- **AI slop check**: Does the code read like unedited LLM output? Signs: excessive docstrings on every function (especially multi-paragraph ones restating the function signature), over-commented code explaining the obvious, cargo-culted error handling that catches exceptions only to re-raise them, unnecessary abstractions wrapping single calls, verbose variable names that read like natural language sentences, or boilerplate patterns copy-pasted without adaptation to the context. If you spot these patterns, flag it directly — ask the author to trim the noise.
-- **Splittability**: Does the PR bundle independent changes that could be reviewed separately? Look for: unrelated bug fixes alongside a feature, refactors mixed with new functionality, changes to multiple subsystems with no dependency between them, or "while I was here" cleanup. If the PR contains independently reviewable units, ask the author to split it — smaller PRs get better reviews and merge faster. Only flag this when the pieces are truly independent; don't ask to split tightly coupled changes.
-- **Motivation**: Is the PR description clear about *why* this change is needed? If the motivation is missing or vague, ask the author to clarify. A PR that doesn't explain the problem it solves is hard to review properly.
-- **Purpose & scope**: Does the PR do what the description claims? Is the scope appropriate or should it be split?
-- **Architectural fit**: Does this fit the existing patterns in `speculators`? Does it introduce unnecessary abstractions or bypass existing ones? Read surrounding code in the same module to understand local conventions (naming, error handling, structure) and flag deviations.
-- **Correctness of approach**: For the problem being solved, is this the right approach? Have alternatives been considered? If you see a clearly better alternative, name it concretely and explain the tradeoff.
-- **Design principles**:
-  - *DRY*: Does this duplicate logic that already exists elsewhere in the codebase? If so, point to the existing code.
-  - *YAGNI*: Does this add abstractions, parameters, or code paths not justified by the PR's stated goal? Premature generalization is a flag.
-  - *KISS*: Is there a simpler way to achieve the same result? Complexity should be proportional to the problem.
-- **Backward compatibility**: Could this break existing checkpoints, configs, or CLI invocations?
-- **Test coverage**: Does the PR include tests proportional to the change? New logic should have unit tests. Changes to training, data generation, or model forward passes that affect end-to-end behavior should have integration tests (or the author should explain why they're impractical). For bug fixes specifically, there should be a regression test that fails without the fix and passes with it — if missing, ask for one. If tests are missing, ask for them — specify what scenarios should be covered.
-- **Distributed training correctness** (if applicable): barrier placement, device consistency, FSDP wrapping, gradient handling.
-- **Tensor/numerical correctness** (if applicable): shape mismatches, dtype promotions, masking, off-by-one in shift-based alignment.
+**Contribution rules.** `CONTRIBUTING.md` and `AGENTS.md` say what a PR must carry (issue link, DCO sign-off, doc updates, the description). Flag what's missing as a finding about the PR as a whole, citing the rule.
 
-## Phase 3.5: RFC compliance
+**RFCs.** If the PR implements an RFC (issues labelled `rfc`), check it against the discussion's final consensus, not just the original proposal, and against objections still open. A deviation should be stated and justified in the PR.
 
-If the PR description or linked issues reference an RFC (issues labeled `rfc` in this repo), fetch the RFC issue and its comments and verify:
+**Papers.** If the PR implements a paper, or a known algorithm (Eagle, EAGLE-2, Eagle3, DFlash, MTP, Medusa), read the paper's full text and compare the specific equations or algorithm with the code: operator order, normalization, index conventions, and hyperparameter defaults. Flag only mismatches you can show by quoting both, e.g. "Eq. 5 defines the loss as `L = …`, but `file:line` computes `…`; is that intentional?". Equivalent math written differently is not a finding. Logic taken from a paper or spec should say where it comes from.
 
-1. Does the implementation match what was agreed in the RFC discussion? Check the final consensus, not just the original proposal — decisions often evolve in comments.
-2. Are there open objections or unresolved questions in the RFC that this PR should not proceed without addressing?
-3. If the implementation deviates from the RFC, is the deviation documented and justified in the PR description?
+## Calibration
 
-Flag any discrepancy between the RFC and the implementation, quoting the relevant part of the RFC discussion.
+Score each finding 0–100 for how sure you are that it is real and matters:
 
-## Phase 3.6: Paper validation
+- below 50: a false positive, a nitpick, or something pre-existing;
+- 50–79: real but low-impact or unlikely in practice;
+- 80–89: verified, affects behaviour or breaks a documented project rule;
+- 90 and up: a confirmed bug with a concrete failure scenario.
 
-If the PR description, commit messages, or code comments reference a paper (arXiv, conference proceedings, etc.):
+Only findings at 80 or above are posted; `scripts/review_payload.py` drops the rest.
 
-1. Fetch the paper (the arXiv abstract page or PDF).
-2. Identify the specific equations, algorithms, or architectural details the PR claims to implement.
-3. Compare the implementation against the paper:
-   - Do the equations match? Check operator ordering, normalization, index conventions.
-   - Are any simplifications or deviations from the paper intentional and documented, or silent divergences?
-   - Are hyperparameter defaults consistent with what the paper recommends?
-4. In your review, **quote the relevant section/equation from the paper** and compare it to the code. For example: "Paper Eq. 5 defines the loss as `L = ...`, but the implementation at `file:line` computes `...` instead — is this intentional?"
-5. If no paper is referenced but the PR implements a known algorithm (Eagle, EAGLE-2, Eagle3, DFlash, MTP, Medusa, etc.), check whether the implementation aligns with the canonical paper. If you cannot fetch or verify the paper, state that explicitly rather than guessing.
+Below the bar, whatever their score would otherwise be:
 
-Only flag mismatches you can concretely demonstrate by quoting both the paper and the code. Do not flag stylistic differences in how math is expressed if the computation is equivalent.
+- problems the PR didn't introduce, style a senior engineer would skip, and anything a linter, type checker or CI catches;
+- changes the PR intends, or that a maintainer asked for (here or on a stacked parent);
+- failures that need a caller or input the code doesn't have yet. Read the code's documented contract and its real callers before claiming it is broken;
+- preferences presented as correctness, and alternatives you haven't checked would work.
 
-## Phase 3.7: Contribution rules
+Before writing, go over each finding once more against the code: is it true, does a later hunk already handle it, has someone already said it, and does it still clear the bar?
 
-`CONTRIBUTING.md` and `AGENTS.md` are the source of truth for what a PR must carry: issue linkage, DCO sign-off, doc updates, and the PR description. Read both and flag what the PR misses, citing the rule. Raise these as PR-wide findings (no `file`), not as inline comments; style preferences stay below the confidence bar unless they hide what the PR does.
+## Writing the review
 
-## Phase 4: Line-level review
+The format is in [output.md](output.md).
 
-Apply path-specific focus based on which files changed:
+The **summary** is your verdict on the design and anything the findings don't cover, in a sentence or two. Don't describe the PR to its author or list what it does well. When the design is fine and the findings speak for themselves, one line is enough: "Design looks good; one gap below."
 
-- **`src/speculators/train/**`**: Distributed training correctness (barriers, device placement, FSDP), LR scheduler logic, checkpoint save/resume, loss computation with padding masks, multi-step loss aggregation and decay, bfloat16 safety.
-- **`src/speculators/models/**`**: Architecture correctness, attention mask construction for speculative positions, vocabulary mapping (draft→target) in forward/loss, KL divergence alignment, Pydantic config serialization.
-- **`src/speculators/data_generation/**`**: Hidden state extraction correctness, shift-based alignment (off-by-one), loss mask application before storage, vLLM client error handling.
-- **`src/speculators/convert/**`**: Weight mapping completeness, shape compatibility, key renaming correctness, legacy format assumptions.
-- **`src/speculators/config.py`**: Pydantic validators, serialization roundtrip, backward compat with saved checkpoints, registry auto-discovery.
-- **`scripts/launch_vllm.py`**: This script runs inside the vLLM virtualenv (`VLLM_PYTHON`), which does **not** have `speculators` installed. Make sure there's no `speculators` dependency and flag any such import with confidence 95+.
-- **`tests/**`**: Coverage of new code paths, edge cases for speculative decoding (vocab boundaries, multi-step loss), proper mocking of vLLM/GPU.
+Each **finding** says what is wrong, why it matters and what to do, in plain sentences and short paragraphs rather than one packed block. When you propose a change, show it as code, in a code block, and make sure it works in context. If the author's intent is unclear, ask. A finding about the PR as a whole has no `file`.
 
-Ignore: `**/*.pyc`, `**/build/**`, `**/.pytest_cache/**`, `**/.ruff_cache/**`, `**/__pycache__/**`, `**/*.egg-info/**`.
-
-## Phase 5: Confidence scoring & filtering
-
-Rate each finding 0–100:
-
-- **0–25**: False positive, pre-existing issue, or something a linter/typechecker would catch.
-- **26–50**: Minor nitpick not tied to a project convention or concrete bug.
-- **51–75**: Real but low-impact or unlikely in practice.
-- **76–90**: Verified issue that will impact functionality, or violates a documented project convention.
-- **91–100**: Confirmed critical bug with concrete failure scenario.
-
-**Only keep findings with confidence ≥ 80.** `scripts/review_payload.py` drops anything below that, so a lower score never reaches the PR.
-
-False positives to actively filter out:
-
-- Pre-existing issues not introduced by this PR.
-- Pedantic style nitpicks a senior engineer would skip.
-- Issues a linter, typechecker, or CI would catch — do not run these yourself.
-- General quality concerns (documentation, naming style) that are purely cosmetic and not tied to correctness.
-- Issues silenced in code (e.g., lint ignore comments).
-- Intentional functionality changes that align with the PR's stated purpose, or that a maintainer asked for (here or on a stacked parent).
-
-## Phase 6: Draft the review
-
-For each surviving finding:
-
-- State the problem in one sentence.
-- If the issue involves an external API, library behavior, or spec, **link to the source or quote the relevant documentation**. Do not make unverified claims about external behavior.
-- If you propose an alternative, show a concrete code suggestion and confirm the alternative works in context.
-- If the author's intent is unclear, **ask a question** instead of assuming.
-
-**Do NOT speculate.** Only flag issues you can validate from the diff, surrounding code, or linked documentation. If you're unsure whether something is a bug, phrase it as a question to the author.
-
-**Source attribution**: If the PR implements logic derived from a paper, spec, or external reference and the code doesn't link to it (in comments, docstrings, or the PR description), ask the author to add a reference. Future readers shouldn't have to reverse-engineer which paper or doc a piece of logic came from.
-
-Structure (see [output.md](output.md) for the file format):
-
-**Summary** (high-level):
-
-- 1–3 sentences on the overall design assessment.
-- If everything looks good at the design level, say so briefly.
-
-**Findings**:
-
-- Each line-level finding references a specific file and line (or line range) from the diff.
-- High-level concerns and open questions about the PR as a whole are findings without `file` and `line`. They are scored and filtered like any other finding; the summary alone never makes a review worth posting.
-- Order: correctness issues → design concerns → suggestions → questions.
-- When linking to code, use full-SHA permalink format for proper rendering: `https://github.com/vllm-project/speculators/blob/{full_sha}/{path}#L{start}-L{end}`, with the PR head SHA (`head.sha` in `pr.json`), and include ≥1 line of context above and below.
-
-## Phase 7: Verify before posting
-
-Re-check **every** finding against this checklist:
-
-1. **Is the claim actually true?** Re-read the relevant code. If you reference external behavior (PyTorch, HuggingFace, vLLM), verify it via docs or source — or remove the claim.
-2. **Is this already addressed in the PR?** Check if a later hunk in the diff fixes the issue.
-3. **Was this already raised by another reviewer?** Drop if so.
-4. **Is this preference disguised as correctness?** If yes, either drop it or explicitly mark as suggestion.
-5. **For alternatives you propose**: have you verified the alternative actually works in this context?
-6. **Does this pass the confidence ≥ 80 bar after re-examination?**
-
-Drop any finding that fails any check.
+**Sources.** When a finding rests on external behaviour (PyTorch, Transformers, vLLM), link or quote the documentation or source. Link the repository files you cite at the commit you read: code at the PR head, as `https://github.com/vllm-project/speculators/blob/{head.sha}/{path}#L{start}-L{end}` with a line of context either side, and repository rules at the base commit, down to the section, e.g. `[CONTRIBUTING.md › Code Style and Guidelines](https://github.com/vllm-project/speculators/blob/{base.sha}/CONTRIBUTING.md#code-style-and-guidelines)`.

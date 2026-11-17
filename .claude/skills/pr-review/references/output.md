@@ -6,9 +6,9 @@ A review is one `review.json` file. `scripts/review_payload.py` turns it into a 
 {
   "version": 1,
   "pr": 1234,
-  "summary": "1–3 sentences on the overall design assessment.",
+  "summary": "Your verdict on the design in one or two short sentences.",
   "findings": [
-    {"confidence": 90, "file": "src/speculators/x.py", "line": 42, "body": "The problem in one sentence, then the fix."},
+    {"confidence": 90, "file": "src/speculators/x.py", "line": 42, "body": "What is wrong and why it matters, then the fix."},
     {"confidence": 85, "file": "src/speculators/x.py", "start_line": 40, "line": 44, "body": "A finding about a range of lines."},
     {"confidence": 80, "body": "A finding about the PR as a whole, such as a missing Tests section."}
   ]
@@ -16,7 +16,7 @@ A review is one `review.json` file. `scripts/review_payload.py` turns it into a 
 ```
 
 - `pr` is the number of the PR in the context directory; a review for any other PR is refused.
-- `summary` is markdown: the overall assessment only. It is posted only when at least one finding survives.
+- `summary` is markdown: your verdict only, not a description of the PR (see the rubric). It is posted only when at least one finding survives.
 - A finding about the PR as a whole (description, contribution rules, splitting) has no `file` or `line`. It goes into the review body.
 - `confidence` is the 0–100 score from the rubric. Findings below 80 are dropped, PR-wide ones included.
 - `file` is the path as it appears after `+++ b/` in the diff.
