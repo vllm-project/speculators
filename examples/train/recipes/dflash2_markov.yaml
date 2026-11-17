@@ -1,0 +1,11 @@
+backbone:
+  kind: dflash2
+  conv_kernel_size: 2
+  conv_group_size: 16
+correction:
+  kind: markov
+  rank: 128
+  markov_head_type: vanilla
+confidence:
+  enabled: true
+  with_correction_features: true

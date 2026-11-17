@@ -33,8 +33,15 @@ def save_optimizer_metadata(path: Path, model, optimizers, *, distributed):
         )
 
 
-def _verify_groups(groups, expected_names, name_field, normalize):
+def _verify_groups(
+    groups, expected_names, name_field, normalize, *, allow_unnamed=False
+):
     actual_names = [group.get(name_field) for group in groups]
+    if allow_unnamed:
+        actual_names = [
+            expected if names is None else names
+            for names, expected in zip(actual_names, expected_names, strict=True)
+        ]
     if any(
         names is None or any(not isinstance(name, str) for name in names)
         for names in actual_names
@@ -63,7 +70,8 @@ def prepare_optimizer_state(path: Path, model, optimizers, state, *, distributed
     if not getattr(model, "requires_optimizer_metadata", False):
         return state
     expected = optimizer_metadata(model, optimizers, distributed=distributed)
-    if path.exists():
+    has_metadata = path.exists()
+    if has_metadata:
         recorded = json.loads(path.read_text())
         # Previously versioned states may still use named correction modules.
         recorded["parameter_groups"] = [
@@ -79,7 +87,6 @@ def prepare_optimizer_state(path: Path, model, optimizers, state, *, distributed
                 "types, or parameter group ordering. Initialize weights with "
                 "--from-pretrained instead of resuming this training state."
             )
-        return state
 
     normalize = model.checkpoint_parameter_name
     expected_groups = expected["parameter_groups"]
@@ -111,7 +118,11 @@ def prepare_optimizer_state(path: Path, model, optimizers, state, *, distributed
         dict(
             item,
             param_groups=_verify_groups(
-                item["param_groups"], groups, "param_names", normalize
+                item["param_groups"],
+                groups,
+                "param_names",
+                normalize,
+                allow_unnamed=has_metadata,
             ),
         )
         for item, groups in zip(states, expected_groups, strict=True)

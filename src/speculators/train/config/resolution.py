@@ -93,10 +93,10 @@ REQUIRED_FLAGS: dict[str, str] = _required_flags()
 # warns. DFlash2, DSpark and XPress share the DFlash backbone group; their exclusive
 # architecture knobs remain in their own groups. eagle3 uses no group.
 _ALGORITHM_GROUP_USERS: dict[str, frozenset[str]] = {
-    "dflash": frozenset({"dflash", "dflash2", "dspark", "xpress"}),
-    "dflash2": frozenset({"dflash2"}),
-    "dspark": frozenset({"dspark"}),
-    "xpress": frozenset({"xpress"}),
+    "dflash": frozenset({"dflash", "dflash2", "dspark", "xpress", "modular"}),
+    "dflash2": frozenset({"dflash2", "modular"}),
+    "dspark": frozenset({"dspark", "modular"}),
+    "xpress": frozenset({"xpress", "modular"}),
     "peagle": frozenset({"peagle"}),
     "mtp": frozenset({"mtp"}),
 }
@@ -327,6 +327,44 @@ def _validate_draft_init(cfg: TrainConfig, provided: set[str]) -> None:
     """
     shaping = [flag for dest, flag in DECODER_SHAPING_FLAGS.items() if dest in provided]
     with_draft_config = shaping + (["--draft-config"] if cfg.draft.draft_config else [])
+    if cfg.draft.composition_config:
+        if cfg.speculator_type != "modular":
+            raise ConfigError("--composition-config requires --speculator-type modular")
+        if cfg.draft.from_pretrained:
+            raise ConfigError("--composition-config cannot override --from-pretrained")
+    if cfg.speculator_type == "modular":
+        legacy_architecture = {
+            "conv_kernel_size",
+            "conv_group_size",
+            "selector_rank",
+            "selector_top_k",
+            "markov_rank",
+            "markov_head_type",
+            "enable_confidence_head",
+            "confidence_head_with_markov",
+            "xpress_rank",
+            "xpress_mlp_ratio",
+            "num_jacobi_passes",
+        }
+        _reject_conflicts(
+            sorted(_dest_to_flag(dest) for dest in provided & legacy_architecture),
+            "Modular architecture choices belong in --composition-config "
+            "or the saved model configuration",
+        )
+        if cfg.draft.from_pretrained:
+            saved_layout = {
+                "block_size",
+                "sample_from_anchor",
+                "mask_token_id",
+                "target_layer_ids",
+                "causal_attention",
+                "sliding_window_non_causal",
+                "draft_vocab_size",
+            }
+            _reject_conflicts(
+                sorted(_dest_to_flag(dest) for dest in provided & saved_layout),
+                "--from-pretrained fixes the modular prediction layout and vocabulary",
+            )
     if cfg.draft.from_pretrained:
         _reject_conflicts(
             with_draft_config,

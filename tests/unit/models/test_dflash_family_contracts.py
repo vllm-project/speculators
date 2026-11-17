@@ -94,8 +94,9 @@ def summarize(tensor):
     return {"probe": values[:8].tolist(), "norm": values.norm().item()}
 
 
-def contract_report(recipe, sample_from_anchor):
-    model = make_contract_model(recipe, sample_from_anchor)
+def contract_report(recipe, sample_from_anchor, model=None):
+    if model is None:
+        model = make_contract_model(recipe, sample_from_anchor)
     captured = {}
 
     def capture_projection(module, args, output):

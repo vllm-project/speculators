@@ -30,6 +30,10 @@ Extends DFlash with a causal refiner resolved by Jacobi iteration, giving each d
 
 Finetunes the model's native multi-token prediction head on domain-specific data. Available for models with built-in MTP support (e.g. Qwen3-Next, Qwen3.5).
 
+## [Modular Block Models](modular.md)
+
+Compose a DFlash or DFlash2 backbone with identity, Markov, selector, or XPress correction. Native mixtures currently support training; configurations matching existing named algorithms can export their legacy checkpoint formats.
+
 ## Choosing an Algorithm
 
 Most algorithms can be paired with any supported verifier model. DFlash2 currently requires the verifier's full vocabulary and an unquantized language-model head; MTP requires a model with native MTP layers. For help choosing between them, see the [Decision Guide](decision_guide.md).

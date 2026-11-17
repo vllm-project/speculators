@@ -1,6 +1,6 @@
 # Modular speculative decoding: implementation plan
 
-Status: implementation in progress. The first implementation checkpoint covers numerical references, backbone composition, checkpoint weight formats, and optimizer identity validation. Unchecked items remain future work; see the progress section below.
+Status: implementation in progress. The block-family composition milestone is implemented, including numerical references, nested component ownership, checkpoint compatibility, configurable recipes, and optimizer identity validation. GPU execution and serving integration remain follow-on validation/work. Unchecked items remain future work; see the progress section below.
 
 ## Implementation progress
 
@@ -10,6 +10,8 @@ Implemented in separate Jujutsu changes:
 - `refactor(models): compose DFlash backbones and expose decoder layers`: typed block layouts and backbone inputs/features, a target-free `draft_features()` path, explicit DFlash2 decoder construction, migration of all four forward callers, and a `get_decoder_layers()` training interface. Invalid short-input padding indices are now safe, and zero requested anchors are explicitly rejected.
 - `fix(checkpoints): map composed DFlash weights at serialization boundaries`: flat serving exports remain the default for named recipes; `save_pretrained(..., checkpoint_format="native")` writes nested names with `checkpoint_format_version=1`. Legacy/native imports, sharded pretrained loads, converters, and direct checkpointer weight loading share the mapping and validate learned weights. Export does not mutate the live model config or consume the caller's tensor dictionary.
 - `fix(train): validate optimizer identities when resuming composed models`: new checkpoints write `optimizer_metadata.json`. Named legacy single-device/DDP and distributed states can map old parameter names when group ordering matches. Unnamed legacy optimizer files without metadata fail explicitly; use `--from-pretrained` for weights-only initialization. Model-weight compatibility does not imply arbitrary legacy optimizer-state compatibility.
+- `refactor(models): separate correction modules from training objectives`: correction weights have a single `correction.*` owner, confidence remains independent, and each algorithm delegates to a parameter-free objective callable. Dense correction and candidate scoring have explicit target-free interfaces. Legacy correction names import/export through the same adapters.
+- `feat(models): configure block backbones and corrections independently`: `ModularDraftModel` and typed recipes select either backbone with any of the four corrections. Component YAML, training configuration integration, native checkpoint dispatch, matching legacy exports, and resolved architecture artifacts are included. The DFlash2 + Markov + confidence example uses this shared model without a pairing-specific subclass.
 
 The current recipes remain:
 
@@ -20,7 +22,7 @@ The current recipes remain:
 | DSpark  | DFlash                                   | Markov correction; optional confidence head | Corrected distillation plus optional confidence supervision                |
 | XPress  | DFlash                                   | Iterative refiner                           | Teacher forcing, free-running consistency rounds, and base-logit anchoring |
 
-Both anchor conventions remain configurable. Existing defaults, full/reduced vocabulary ownership, and attention/position alignment are retained. Correction modules and training objectives still live in the named algorithms; extracting them and enabling the first configurable mixed recipe is the next implementation stage. The interfaces currently cover the anchored-block family, not autoregressive inference state or arbitrary cross-family composition.
+Both anchor conventions remain configurable. Existing defaults, full/reduced vocabulary ownership, and attention/position alignment are retained. Correction implementations are owned under `.correction`; objective callables live in the algorithm packages and are selected independently of the backbone. Both backbones work with identity, Markov, selector, and XPress correction in CPU training tests. The native mixed format is explicitly training-only until a serving implementation supports its recipe and proposal behavior. The interfaces currently cover the anchored-block family, not autoregressive inference state or arbitrary cross-family composition.
 
 Validation includes CPU numerical parity, Dynamo tracing with the eager backend under changing valid-anchor counts, gradient-checkpointing discovery, FSDP wrapping wiring, flat/native sharded checkpoint round trips, malformed checkpoint rejection, and identical next optimizer updates after single-device save/resume. Actual GPU execution, multi-GPU FSDP resume, and serving-engine loading are still required before claiming those execution paths are validated. Preserving exported keys alone is not a serving integration test.
 
@@ -29,6 +31,14 @@ Validation includes CPU numerical parity, Dynamo tracing with the eager backend 
 - The affected model, conversion, training/checkpointer, optimizer, and public model/config test selection passed with 295 passed and 10 GPU skips. The serialization/optimizer subset passed with 40 tests, including custom pretrained key mapping validation.
 - The expanded selection initially produced 763 passed, 10 skipped, and 8 failures. One was the pre-existing `test_minimax_outer_model_type` assertion (also reproduced against the reference implementation); three required an uncached Hugging Face configuration in offline mode; three validation-loop tests attempted CUDA transfers without an available GPU; and one local Gloo test was blocked by sandbox socket restrictions. The Gloo test passed when rerun outside the sandbox. No production behavior was changed to accommodate those unrelated failures.
 - `make quality` passed with `MDFILES` restricted to the 63 tracked Markdown files. The default Makefile file discovery also includes ignored nested workspaces/environments and failed formatting an unrelated `.workspaces/pr-1388/.pytest_cache/README.md`; those ignored files were left untouched.
+
+### Validation recorded for configurable composition
+
+- The final affected selection passed with 542 tests passed and 10 skipped, covering the original algorithms, modular recipes, converters, model/config dispatch, training configuration, optimizer/checkpointer behavior, and decoder/FSDP wiring.
+- Both backbones were trained through forward/backward with each of the four corrections on tiny CPU models. Additional cases cover vanilla/gated/RNN Markov correction with disabled, hidden-only, and correction-feature confidence modes.
+- All four presets reproduce the pre-refactor numerical contracts under both anchor conventions. Native mixtures round-trip through sharded checkpoints, known recipes export matching legacy configurations in FP32 and BF16, and unknown mixed serving exports fail before writing output.
+- A mixed objective was traced with the eager Dynamo backend under changing anchor validity; this is not GPU Inductor validation. A mixed model also restores the same next optimizer update after single-device save/resume.
+- Repository quality checks pass with Markdown discovery restricted to tracked files (64 Markdown files), avoiding the unrelated ignored workspace/cache files described above.
 
 ## 1. Goal and scope
 
@@ -102,14 +112,14 @@ Completion: reference cases can be reproduced locally and the legacy contracts a
 - [x] Document which tensors use verifier vocabulary IDs and which use draft vocabulary IDs. Preserve the existing `d2t` offset semantics rather than treating it as a direct lookup table.
 - [ ] Define backbone inputs: prepared draft embeddings, captured verifier features, position information, attention masks, and optional inference state. Specify shapes and whether outputs are already normalized.
 - [ ] Define backbone output as hidden states aligned to prediction slots, with optional explicitly typed inference state. Keep targets, logits, and losses out of the backbone output.
-- [ ] Define correction inputs: normalized hidden states, base logits, conditioning token IDs, and block layout. Add an explicit entry point for candidate scoring so selector implementations need not materialize a corrected full-vocabulary tensor.
-- [ ] Define correction outputs that distinguish corrected vocabulary logits from candidate IDs and scores. Define optional features consumed by confidence prediction without exposing Markov implementation internals to the wrapper.
-- [ ] Keep correction evaluation free of implicit ground-truth access. The objective supplies teacher-forced predecessors during training; a proposal policy supplies generated predecessors during inference.
-- [ ] Define the confidence input contract for hidden-only and hidden-plus-Markov-feature modes. Reject the latter when its required feature provider is absent.
-- [ ] Define a training-objective interface that receives the assembled model and prepared batch and returns the existing trainer-compatible result (`None`, loss, metrics). Preserve current loss reduction and metric semantics during extraction.
+- [x] Define correction inputs: normalized hidden states, base logits, conditioning token IDs, and block layout. Add an explicit entry point for candidate scoring so selector implementations need not materialize a corrected full-vocabulary tensor.
+- [x] Define correction outputs that distinguish corrected vocabulary logits from candidate IDs and scores. Define optional features consumed by confidence prediction without exposing Markov implementation internals to the wrapper.
+- [x] Keep correction evaluation free of implicit ground-truth access. The objective supplies teacher-forced predecessors during training; a proposal policy supplies generated predecessors during inference.
+- [x] Define the confidence input contract for hidden-only and hidden-plus-Markov-feature modes. Reject the latter when its required feature provider is absent.
+- [x] Define a training-objective interface that receives the assembled model and batch tensors and returns the existing trainer-compatible result (`None`, loss, metrics). Preserve current loss reduction and metric semantics during extraction.
 - [x] Define `get_decoder_layers()` on the model wrapper for training infrastructure. Legacy models may initially implement it by returning their existing `layers`; modular models delegate to their backbone. Document that all returned layers are registered exactly once.
 - [ ] Specify compatibility validation for hidden dimensions, vocabulary mappings, block size, slot alignment, candidate count, required correction features, and proposal policy. Validate combinations at construction, before training begins.
-- [ ] Keep configuration validation outside the compiled tensor path. Avoid component-specific string dispatch or mutable Python configuration in per-token execution.
+- [x] Keep configuration validation outside the compiled tensor path. Avoid component-specific string dispatch or mutable Python configuration in per-token execution.
 
 Completion: interfaces can express all four existing recipes and the first mixed recipe without algorithm-specific branches in the backbone.
 
@@ -127,7 +137,7 @@ Primary files: `models/dflash/core.py`, `models/dflash/utils.py`, `models/dflash
 - [x] Audit gradient checkpointing discovery and FSDP no-split declarations for both decoder types. Preserve frozen-parameter replication and mixed-precision handling.
 - [x] Migrate existing subclass callers to a shared prepared-feature method or the new assembly flow. If a temporary `_backbone_forward` compatibility wrapper is used, keep exactly one implementation of preparation and remove the wrapper after its internal callers migrate.
 - [x] Preserve required attention kwargs explicitly; do not silently discard previously supported execution options during extraction.
-- [ ] Verify dynamic anchor selection and attention-mask construction under `torch.compile`. Preserve intentional compiler-disabled boundaries or replace them only with measured evidence.
+- [x] Verify dynamic anchor selection and attention-mask construction under `torch.compile`. Preserve intentional compiler-disabled boundaries or replace them only with measured evidence.
 
 Completion: existing DFlash-family training forwards and trainer setup work with nested backbones before adding user-configurable combinations.
 
@@ -136,17 +146,17 @@ Completion: existing DFlash-family training forwards and trainer setup work with
 Primary files: `config.py`, `model.py`, `train/checkpointer.py`, `train/trainer.py`, and `convert/dflash/converter.py` under `src/speculators/`.
 
 - [x] Add a checkpoint format version to native modular model configuration. Keep training-state format metadata distinct from model-weight format metadata.
-- [ ] Implement named adapters for each legacy recipe and external source format. Use anchored prefix mappings, not unrestricted substring replacement.
+- [x] Implement named adapters for each legacy recipe and external source format. Use anchored prefix mappings, not unrestricted substring replacement.
 - [x] Centralize mapping and validation so all entry points share the same rules. Keep ordinary internal `state_dict()` names native and predictable.
 - [x] Cover all entry points: `SpeculatorModel.from_pretrained()`, concrete model loading, explicit `state_dict` loading, converter loads, single-GPU/DDP resume, distributed state-dict loading, and best-checkpoint reloads.
 - [x] Inspect the installed Transformers loading implementation before selecting its key-mapping integration. Verify the chosen mechanism actually applies to pretrained loading; do not assume ordinary `load_state_dict` hooks cover it.
 - [x] Support sharded safetensors and their index files. Translate key metadata consistently and avoid collecting a second full model copy just to rename keys.
-- [ ] Implement explicit import/export mappings for `layers.*`, `fc.*`, `hidden_norm.*`, `norm.*`, and each correction module's legacy keys. Map persistent buffers too; do not invent checkpoint entries for nonpersistent rotary buffers.
+- [x] Implement explicit import/export mappings for `layers.*`, `fc.*`, `hidden_norm.*`, `norm.*`, and each correction module's legacy keys. Map persistent buffers too; do not invent checkpoint entries for nonpersistent rotary buffers.
 - [x] Reject duplicate source keys mapping to one destination, mixed ambiguous formats, unknown versions, shape mismatches, and missing learned backbone/correction weights. Restrict missing-key exceptions to documented verifier-owned or optional tensors.
 - [x] Update save omission lists after renaming. Preserve full-vocabulary frozen LM-head reconstruction, reduced-vocabulary LM-head saving, vocabulary mappings, and verifier norm reconstruction.
 - [x] Update DFlash converter accesses to `model.backbone.fc` and its validation keys. Map both ordinary and fused-QKV source weights, preserving projection conflict checks, FC slicing, and dropped-key reporting.
 - [x] Ensure native save and legacy export work when supplied an already gathered state dict by the checkpointer. Keep serialized configuration, weight names, architecture identifier, and dtype consistent.
-- [ ] Reject legacy exports of unsupported mixtures before writing partial output. Never label an arbitrary mixture as a known serving architecture just because shapes match.
+- [x] Reject legacy exports of unsupported mixtures before writing partial output. Never label an arbitrary mixture as a known serving architecture just because shapes match.
 - [ ] Add a deliberate one-time loader for this branch's intermediate nested layout only if an inventory finds checkpoints worth preserving; otherwise document that development-only layout as unsupported.
 
 ### Training-state migration
@@ -163,16 +173,16 @@ Completion: legacy model weights load correctly, current recipes export correctl
 
 ## 7. Phase E: extract correction modules and training objectives
 
-- [ ] Add identity correction for plain DFlash, with no learned parameters and no unnecessary full-logit copy.
-- [ ] Adapt DSpark `MarkovHead` behind the correction interface, preserving vanilla, gated, and RNN modes. Keep predecessor lookup, recurrent state, and train/inference conditioning semantics explicit.
-- [ ] Keep confidence prediction independently selectable. Preserve the existing shared Markov embedding path when configured, without recomputing features or detaching required gradients.
-- [ ] Adapt DFlash2 `CandidateSelector` behind candidate scoring. Preserve top-k selection, strict versus replace miss policy, target injection during training, and candidate-only normalization/loss behavior.
-- [ ] Adapt `XPressRefinerHead` behind an explicit refinement operation. Keep the objective responsible for teacher forcing, free-running consistency rounds, stop-gradient boundaries, and base-logit anchoring.
-- [ ] Move existing per-algorithm forward orchestration into objective strategies using the shared preparation and backbone paths. Reuse existing metric implementations before attempting loss-code consolidation.
-- [ ] Preserve `sample_from_anchor` behavior across correction conditioning, targets, valid-slot masking, per-position weighting, acceptance metrics, and speculative-token counts.
-- [ ] Verify each extracted component's trainable parameters receive the intended gradients and frozen verifier-owned parameters remain frozen.
-- [ ] Make component construction own initialization rules. Verify identity/no-op initializations and explicitly identify any intentional numerical behavior changes in separate work.
-- [ ] Keep ordinary inference correction separate from training-only target injection and loss calculation.
+- [x] Add identity correction for plain DFlash, with no learned parameters and no unnecessary full-logit copy.
+- [x] Adapt DSpark `MarkovHead` behind the correction interface, preserving vanilla, gated, and RNN modes. Keep predecessor lookup, recurrent state, and train/inference conditioning semantics explicit.
+- [x] Keep confidence prediction independently selectable. Preserve the existing shared Markov embedding path when configured, without recomputing features or detaching required gradients.
+- [x] Adapt DFlash2 `CandidateSelector` behind candidate scoring. Preserve top-k selection, strict versus replace miss policy, target injection during training, and candidate-only normalization/loss behavior.
+- [x] Adapt `XPressRefinerHead` behind an explicit refinement operation. Keep the objective responsible for teacher forcing, free-running consistency rounds, stop-gradient boundaries, and base-logit anchoring.
+- [x] Move existing per-algorithm forward orchestration into objective strategies using the shared preparation and backbone paths. Reuse existing metric implementations before attempting loss-code consolidation.
+- [x] Preserve `sample_from_anchor` behavior across correction conditioning, targets, valid-slot masking, per-position weighting, acceptance metrics, and speculative-token counts.
+- [x] Verify each extracted component's trainable parameters receive the intended gradients and frozen verifier-owned parameters remain frozen.
+- [x] Make component construction own initialization rules. Verify identity/no-op initializations and explicitly identify any intentional numerical behavior changes in separate work.
+- [x] Keep ordinary inference correction separate from training-only target injection and loss calculation.
 
 Completion: each original named algorithm is expressed as a recipe over shared components and reproduces its numerical reference cases.
 
@@ -180,18 +190,18 @@ Completion: each original named algorithm is expressed as a recipe over shared c
 
 Primary files: `config.py`, model config/core modules, and `train/config/{schema,resolution,artifacts}.py` plus `train/cli.py` under `src/speculators/`.
 
-- [ ] Add serializable typed configuration for backbone, correction, confidence, and objective. Reuse the existing class-registry conventions rather than introducing another discovery system without need.
-- [ ] Add one modular model/config registration that can assemble supported components from configuration. Preserve existing registered model/config classes as compatibility entry points delegating to shared assembly.
-- [ ] Define existing algorithm names as presets with explicit component settings. Preserve current defaults; distinguish omitted values from explicit user overrides.
-- [ ] Add YAML-first component selection for mixed recipes. Preserve existing CLI flags and translate them to component configuration at the boundary.
-- [ ] Specify precedence and conflicts among preset selection, explicit component overrides, `--draft-config`, and `--from-pretrained`. Reject conflicting architecture changes when resuming weights or training state.
-- [ ] Separate architecture configuration from training-only objective hyperparameters. Save every setting necessary for inference in model config and resolved training settings in the run configuration.
-- [ ] Preserve `SpeculatorsConfig.algorithm` for legacy serving exports. Give native mixed recipes an honest architecture identity and explicit proposal requirements.
-- [ ] Ensure generic `SpeculatorModel.from_pretrained()` dispatches native and legacy configurations without ambiguity and external-checkpoint detection still works.
-- [ ] Update `get_trainer_kwargs()` or replace its internal implementation with objective-derived kwargs while preserving its public compatibility until callers migrate.
-- [ ] Update optimizer classification where renamed correction parameters affect AdamW/Muon routing. Verify every trainable parameter belongs to exactly one intended group.
-- [ ] Write resolved component selections, versions, objective settings, and source checkpoint identities into run artifacts. Preserve training command, code patch, and existing provenance behavior.
-- [ ] Add one example configuration for DFlash2 backbone plus Markov correction and confidence prediction, using the matching DSpark-style objective. Reject feature-incompatible combinations with actionable errors.
+- [x] Add serializable typed configuration for backbone, correction, confidence, and objective. Reuse the existing class-registry conventions rather than introducing another discovery system without need.
+- [x] Add one modular model/config registration that can assemble supported components from configuration. Preserve existing registered model/config classes as compatibility entry points delegating to shared assembly.
+- [x] Define existing algorithm names as presets with explicit component settings. Preserve current defaults; distinguish omitted values from explicit user overrides.
+- [x] Add YAML-first component selection for mixed recipes. Preserve existing CLI flags and translate them to component configuration at the boundary.
+- [x] Specify precedence and conflicts among preset selection, explicit component overrides, `--draft-config`, and `--from-pretrained`. Reject conflicting architecture changes when resuming weights or training state.
+- [x] Separate architecture configuration from training-only objective hyperparameters. Save every setting necessary for inference in model config and resolved training settings in the run configuration.
+- [x] Preserve `SpeculatorsConfig.algorithm` for legacy serving exports. Give native mixed recipes an honest architecture identity and explicit proposal requirements.
+- [x] Ensure generic `SpeculatorModel.from_pretrained()` dispatches native and legacy configurations without ambiguity and external-checkpoint detection still works.
+- [x] Update `get_trainer_kwargs()` or replace its internal implementation with objective-derived kwargs while preserving its public compatibility until callers migrate.
+- [x] Update optimizer classification where renamed correction parameters affect AdamW/Muon routing. Verify every trainable parameter belongs to exactly one intended group.
+- [x] Write resolved component selections, versions, objective settings, and source checkpoint identities into run artifacts. Preserve training command, code patch, and existing provenance behavior.
+- [x] Add one example configuration for DFlash2 backbone plus Markov correction and confidence prediction, using the matching DSpark-style objective. Reject feature-incompatible combinations with actionable errors.
 
 Completion: the mixed recipe constructs and trains through configuration without introducing a subclass for that combination.
 
@@ -200,7 +210,7 @@ Completion: the mixed recipe constructs and trains through configuration without
 - [ ] Audit each currently supported serving loader's expected parameter keys, architecture names, config fields, and proposal semantics. Record supported versions before implementing runtime-specific export.
 - [ ] Keep legacy serving exports numerically equivalent for existing recipes. Extend current attention parity tests, but do not treat them as proof that an exported checkpoint loads in a real serving engine.
 - [ ] Add an actual load-and-draft integration test against the supported serving implementation for each export path being claimed.
-- [ ] For the first mixed recipe, implement matching serving composition or explicitly mark it training-only until that support exists. Correct serialized weights alone are insufficient for sequential Markov conditioning or iterative XPress decoding.
+- [x] For the first mixed recipe, implement matching serving composition or explicitly mark it training-only until that support exists. Correct serialized weights alone are insufficient for sequential Markov conditioning or iterative XPress decoding.
 - [ ] Validate masks, cache updates, predecessor alignment, candidate scoring, and refinement iteration behavior in the runtime that will execute them.
 - [ ] Run a small serving smoke test and record acceptance/throughput measurements only when actually measured. Include provenance with any published model or evaluation artifacts.
 - [ ] Always pass `--provenance-dir` when using `scripts/launch_vllm.py`; retain associated training/eval commands, launch commands, checkpoint hashes, and patches.
@@ -263,11 +273,11 @@ Keep each delivery step reviewable and preserve working named recipes at integra
 
 ## 12. Definition of done
 
-- [ ] Existing DFlash, DFlash2, DSpark, and XPress behavior is preserved by numerical and training regression checks.
-- [ ] Backbones, correction, and confidence modules have single ownership and explicit contracts.
-- [ ] The first mixed recipe works through configuration without another algorithm subclass.
-- [ ] Legacy weights and native modular weights load through public APIs and checkpointer paths.
+- [x] Existing DFlash, DFlash2, DSpark, and XPress behavior is preserved by numerical and training regression checks.
+- [x] Backbones, correction, and confidence modules have single ownership and explicit contracts.
+- [x] The first mixed recipe works through configuration without another algorithm subclass.
+- [x] Legacy weights and native modular weights load through public APIs and checkpointer paths.
 - [ ] Existing supported serving recipes retain a validated export path; new mixtures have an explicit serving support status.
-- [ ] Supported full-resume paths restore the intended optimizer state; unsupported legacy states fail explicitly with a documented weights-only alternative.
-- [ ] Configuration, provenance, examples, migration notes, and developer guidance describe the implemented support rather than the intended future scope.
+- [x] Supported full-resume paths restore the intended optimizer state; unsupported legacy states fail explicitly with a documented weights-only alternative.
+- [x] Configuration, provenance, examples, migration notes, and developer guidance describe the implemented support rather than the intended future scope.
 - [ ] Required checks pass, or remaining environment-dependent checks and their effect on release readiness are recorded explicitly.

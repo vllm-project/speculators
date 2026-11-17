@@ -250,6 +250,7 @@ class BaseCheckpointer:
             self.TRAIN_COMMAND_FILENAME,
             "run.yaml",
             "speculators.patch",
+            "resolved_model_config.json",
         }
 
         for child in self.path.iterdir():

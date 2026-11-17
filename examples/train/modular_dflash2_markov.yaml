@@ -1,0 +1,19 @@
+train:
+  speculator_type: modular
+  verifier:
+    verifier_name_or_path: Qwen/Qwen3-0.6B
+  draft:
+    composition_config: examples/train/recipes/dflash2_markov.yaml
+    num_layers: 2
+    target_layer_ids: [1]
+  data:
+    data_path: ./output/data
+    max_anchors: 512
+  dflash:
+    block_size: 8
+    sample_from_anchor: true
+    per_position_loss_weight: fixed-exp-decay
+  loss:
+    loss_fn: kl_div
+  trainer:
+    save_path: ./output/modular_dflash2_markov/checkpoints

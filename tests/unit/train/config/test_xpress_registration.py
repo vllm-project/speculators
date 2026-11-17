@@ -32,7 +32,7 @@ def test_xpress_reads_the_dflash_group_and_owns_its_own():
     on an xpress run.
     """
     assert "xpress" in _ALGORITHM_GROUP_USERS["dflash"]
-    assert _ALGORITHM_GROUP_USERS["xpress"] == frozenset({"xpress"})
+    assert _ALGORITHM_GROUP_USERS["xpress"] == frozenset({"xpress", "modular"})
     assert "xpress" not in _ALGORITHM_GROUP_USERS["dspark"]
 
 

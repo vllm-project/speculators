@@ -4,12 +4,15 @@ These containers do not own modules, parameters, targets, or training losses.
 Token IDs refer to the verifier vocabulary unless explicitly named otherwise.
 """
 
-from typing import NamedTuple
+from collections.abc import Callable
+from typing import Any, NamedTuple
 
 import torch
 from torch.nn.attention.flex_attention import BlockMask
 
 AttentionMask = torch.Tensor | BlockMask | None
+TrainingResult = tuple[None, torch.Tensor, dict[str, Any]]
+TrainingObjective = Callable[..., TrainingResult]
 
 
 class BlockLayout(NamedTuple):

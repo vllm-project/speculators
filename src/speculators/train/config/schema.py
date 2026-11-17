@@ -72,6 +72,12 @@ class DraftArgs(_Group):
     """The draft model definition: init source, decoder shape, shared
     normalization hyperparameters, and vocabulary mapping."""
 
+    composition_config: str | None = Field(
+        default=None,
+        description="YAML component recipe for --speculator-type modular. "
+        "Cannot override the architecture of --from-pretrained.",
+    )
+
     from_pretrained: str = Field(
         default="",
         description="Path or HF id of a pretrained draft. May also point to a local "
@@ -753,7 +759,7 @@ class TrainConfig(BaseSettings):
     speculator_type: str = Field(
         default="eagle3",
         description="Type of speculator model to train "
-        "(eagle3, dflash, dflash2, dspark, xpress, peagle, mtp).",
+        "(eagle3, dflash, dflash2, dspark, xpress, modular, peagle, mtp).",
     )
     dry_run: bool = Field(
         default=False,
@@ -822,6 +828,7 @@ class TrainConfig(BaseSettings):
             "dspark",
             "dflash2",
             "xpress",
+            "modular",
         }
         if self.draft.draft_arch is None:
             self.draft.draft_arch = "llama" if is_eagle3 else "qwen3"

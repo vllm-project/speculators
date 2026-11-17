@@ -1,5 +1,4 @@
 import logging
-from collections.abc import Callable
 from copy import copy, deepcopy
 from typing import ClassVar, Literal
 
@@ -17,7 +16,15 @@ from transformers.core_model_loading import (
 from speculators.losses import resolve_loss_config
 from speculators.model import DraftVocabMixin, SpeculatorModel
 from speculators.models.attention import create_float_mask
-from speculators.models.components import BackboneInputs, BlockLayout, DraftFeatures
+from speculators.models.components import (
+    BackboneInputs,
+    BlockLayout,
+    CandidateScores,
+    CorrectionOutput,
+    DraftFeatures,
+    TrainingObjective,
+    TrainingResult,
+)
 from speculators.models.corrections import correct_logits, score_candidates
 from speculators.models.dflash import DFlashSpeculatorConfig
 from speculators.models.dflash.attention import create_anchor_block_mask_mod
@@ -49,7 +56,7 @@ _compiled_create_block_mask = torch.compile(create_block_mask)
 
 @SpeculatorModel.register("dflash")
 class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
-    objective: ClassVar[Callable] = staticmethod(dflash_objective)
+    objective: TrainingObjective = staticmethod(dflash_objective)
     legacy_correction_name: ClassVar[str | None] = None
     config_class: ClassVar[type[DFlashSpeculatorConfig]] = DFlashSpeculatorConfig  # type: ignore[misc]
     supports_gradient_checkpointing = True  # noqa: D003  # Qwen3DFlashDecoderLayer inherits GradientCheckpointingLayer
@@ -157,13 +164,24 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
         """Expose decoder layers without imposing their registration path."""
         return self.backbone.layers
 
-    def correct(self, features: DraftFeatures, predecessor_ids: torch.Tensor):
-        return correct_logits(self.correction, features, predecessor_ids)
+    def correct(
+        self,
+        features: DraftFeatures,  # hidden/logits: [1, num_blocks * block_size, ...]
+        predecessor_ids: torch.Tensor,  # [num_blocks, block_size]
+    ) -> CorrectionOutput:
+        return correct_logits(
+            self.correction, features, predecessor_ids
+        )  # logits: [1, num_blocks * block_size, draft_vocab_size]
 
-    def score_candidates(self, features, predecessor_ids, candidate_ids):
+    def score_candidates(
+        self,
+        features: DraftFeatures,  # hidden/logits: [1, num_blocks * block_size, ...]
+        predecessor_ids: torch.Tensor,  # [num_blocks, block_size]
+        candidate_ids: torch.Tensor,  # [1, num_blocks * block_size, top_k]
+    ) -> CandidateScores:
         return score_candidates(
             self.correction, features, predecessor_ids, candidate_ids
-        )
+        )  # ids/scores: [1, num_blocks * block_size, top_k]
 
     @classmethod
     def from_pretrained(cls, *args, **kwargs):
@@ -624,5 +642,5 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
         )
 
     @conditional_torch_compile
-    def forward(self, *args, **kwargs):
-        return self.objective(self, *args, **kwargs)
+    def forward(self, *args, **kwargs) -> TrainingResult:
+        return self.objective(self, *args, **kwargs)  # loss: []

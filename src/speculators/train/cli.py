@@ -696,6 +696,12 @@ def main(cfg: TrainConfig):  # noqa: C901
 
     draft_model = build_draft_model(args, model_class, t2d, d2t, draft_vocab_size)
 
+    if cfg.speculator_type == "modular" and get_rank() == 0:
+        # Preserve the resolved recipe independently of its mutable source file.
+        draft_model.config.to_json_file(
+            str(Path(cfg.trainer.save_path) / "resolved_model_config.json")
+        )
+
     # Get target layer IDs from the model (resolved at model level)
     num_target_layers = len(draft_model.target_layer_ids)  # type: ignore[arg-type]
 
@@ -766,7 +772,9 @@ def main(cfg: TrainConfig):  # noqa: C901
     )
 
     # Get trainer kwargs from model class
-    train_call_kwargs, val_call_kwargs = model_class.get_trainer_kwargs(**vars(args))
+    train_call_kwargs, val_call_kwargs = model_class.get_trainer_kwargs(
+        model_config=draft_model.config, **vars(args)
+    )
 
     trainer_config = TrainerConfig(
         num_epochs=args.epochs,

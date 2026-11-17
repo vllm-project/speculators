@@ -12,6 +12,7 @@ from torch.distributed.checkpoint.state_dict import (
 )
 
 from speculators.models.dflash.checkpoint import legacy_key
+from speculators.models.modular import ModularDraftModel
 from speculators.train import checkpointer as checkpointer_module
 from speculators.train.checkpointer import SingleGPUCheckpointer
 from speculators.train.optimizer_checkpoint import (
@@ -20,6 +21,7 @@ from speculators.train.optimizer_checkpoint import (
     save_optimizer_metadata,
 )
 from tests.unit.models.test_dflash_family_contracts import make_contract_model
+from tests.unit.models.test_modular_model import modular_config
 
 
 def _step(model, optimizers):
@@ -63,14 +65,16 @@ def test_resume_next_step_matches_uninterrupted(named, multiple, tmp_path, monke
         torch.testing.assert_close(parameter, other, atol=0, rtol=0)
 
 
-def test_named_legacy_optimizer_is_mapped_without_tensor_copy(tmp_path):
-    model = make_contract_model("dflash", False)
+@pytest.mark.parametrize("recipe", ["dflash", "dspark"])
+def test_named_legacy_optimizer_is_mapped_without_tensor_copy(recipe, tmp_path):
+    model = make_contract_model(recipe, False)
     optimizer = torch.optim.AdamW(model.named_parameters())
     _step(model, [optimizer])
     state = optimizer.state_dict()
     for group in state["param_groups"]:
         group["param_names"] = [
-            "module." + legacy_key(name) for name in group["param_names"]
+            "module." + legacy_key(name, model.legacy_correction_name)
+            for name in group["param_names"]
         ]
     prepared = prepare_optimizer_state(
         tmp_path / "missing.json", model, [optimizer], state, distributed=False
@@ -82,8 +86,9 @@ def test_named_legacy_optimizer_is_mapped_without_tensor_copy(tmp_path):
         assert prepared["state"][key]["exp_avg"] is state["state"][key]["exp_avg"]
 
 
-def test_legacy_distributed_optimizer_names_are_mapped(tmp_path):
-    model = make_contract_model("dflash", False)
+@pytest.mark.parametrize("recipe", ["dflash", "dspark"])
+def test_legacy_distributed_optimizer_names_are_mapped(recipe, tmp_path):
+    model = make_contract_model(recipe, False)
     optimizer = torch.optim.AdamW(model.named_parameters())
     _step(model, [optimizer])
     state = cast(
@@ -94,9 +99,18 @@ def test_legacy_distributed_optimizer_names_are_mapped(tmp_path):
     )
     legacy = dict(
         state,
-        state={legacy_key(name): value for name, value in state["state"].items()},
+        state={
+            legacy_key(name, model.legacy_correction_name): value
+            for name, value in state["state"].items()
+        },
         param_groups=[
-            dict(group, params=[legacy_key(name) for name in group["params"]])
+            dict(
+                group,
+                params=[
+                    legacy_key(name, model.legacy_correction_name)
+                    for name in group["params"]
+                ],
+            )
             for group in state["param_groups"]
         ],
     )
@@ -159,3 +173,60 @@ def test_metadata_validates_distributed_optimizer_topology(tmp_path):
         prepare_optimizer_state(
             path, model, [optimizer], optimizer.state_dict(), distributed=False
         )
+
+
+def test_versioned_distributed_state_can_migrate_correction_paths(tmp_path):
+    model = make_contract_model("dspark", False)
+    optimizer = torch.optim.AdamW(model.named_parameters())
+    _step(model, [optimizer])
+    state = cast(
+        "dict[str, Any]",
+        get_optimizer_state_dict(
+            model, optimizer, options=StateDictOptions(full_state_dict=True)
+        ),
+    )
+
+    def legacy(name):
+        return legacy_key(name, "markov_head")
+
+    metadata = optimizer_metadata(model, [optimizer], distributed=True)
+    metadata["parameter_groups"] = [
+        [[legacy(name) for name in group] for group in groups]
+        for groups in metadata["parameter_groups"]
+    ]
+    path = tmp_path / "optimizer_metadata.json"
+    path.write_text(json.dumps(metadata))
+    old_state = dict(
+        state,
+        state={legacy(name): value for name, value in state["state"].items()},
+        param_groups=[
+            dict(group, params=[legacy(name) for name in group["params"]])
+            for group in state["param_groups"]
+        ],
+    )
+    prepared = prepare_optimizer_state(
+        path, model, [optimizer], old_state, distributed=True
+    )
+    assert prepared["state"].keys() == state["state"].keys()
+
+
+def test_mixed_model_checkpoint_resumes_next_update(tmp_path, monkeypatch):
+    monkeypatch.setattr(checkpointer_module, "get_current_device", lambda: "cpu")
+    model = ModularDraftModel(modular_config(confidence=True))
+    optimizer = torch.optim.AdamW(model.parameters())
+    _step(model, [optimizer])
+    SingleGPUCheckpointer(tmp_path).save_checkpoint(
+        model, optimizer, epoch=0, float_dtype=torch.float32
+    )
+    restored = ModularDraftModel(modular_config(confidence=True))
+    restored_optimizer = torch.optim.AdamW(restored.parameters())
+    checkpointer = SingleGPUCheckpointer(tmp_path)
+    checkpointer.load_model_state_dict(restored)
+    checkpointer.load_optimizer_state_dict(restored, restored_optimizer)
+    _step(model, [optimizer])
+    _step(restored, [restored_optimizer])
+    for (name, parameter), (other_name, other) in zip(
+        model.named_parameters(), restored.named_parameters(), strict=True
+    ):
+        assert name == other_name
+        torch.testing.assert_close(parameter, other, atol=0, rtol=0, equal_nan=True)
