@@ -135,7 +135,7 @@ Column names such as `instruction`, `question`, and `text` are not inferred. Con
 
 - **`--outfile`** (str, default: auto-generated) Output JSONL path. If not specified, auto-generated as `{dataset-or-file-stem}_{model}.jsonl`.
 
-- **`--resume`** (flag) Skip conversations already present in the output file (matched by `primary_id`: the row's `id`/`uuid` if it has one, otherwise a content hash).
+- **`--resume`** (flag) Append to the outfile and skip conversations already present (matched by `primary_id`: the row's `id`/`uuid` if it has one, otherwise a content hash). Required when that file already exists and is not empty; without it the command errors and tells you to pass `--resume` or delete the file. A missing or empty outfile does not need the flag.
 
 ### Full Example
 
