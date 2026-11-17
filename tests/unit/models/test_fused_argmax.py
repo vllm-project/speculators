@@ -2,7 +2,7 @@
 
 The fused forward also returns the first-index argmax of the draft and target
 rows, and can compute primitive terms that are never differentiated (DSpark's
-TV for ``accept_rate``). Models take both from ``compound_loss_with_outputs``
+TV for ``accept_rate``). Models take both from ``compound_loss``
 instead of separate full-vocab passes; non-fused configs fall back to
 ``torch.argmax`` and the caller's own term function.
 """
@@ -12,7 +12,7 @@ from functools import partial
 import pytest
 import torch
 
-from speculators.losses import compound_loss_with_outputs, resolve_loss_config
+from speculators.losses import compound_loss, resolve_loss_config
 from speculators.models.dflash.metrics import compute_metrics as dflash_metrics
 from speculators.models.dspark.metrics import compute_metrics as dspark_metrics
 from tests.unit.models.test_fused_losses import (
@@ -116,11 +116,11 @@ def _loss_inputs(rows: int, vocab: int, device):
     return logits, targets, loss_mask, pos_idx
 
 
-def test_compound_loss_with_outputs_falls_back_for_eager():
+def test_compound_loss_ids_fall_back_for_eager():
     logits, targets, loss_mask, pos_idx = _loss_inputs(16, 64, "cpu")
     config = resolve_loss_config('{"kl_div": 0.5, "tv": 0.5}', "eager")
-    out = compound_loss_with_outputs(
-        logits, targets, loss_mask, pos_idx, config, metric_terms=("tv",)
+    out = compound_loss(
+        logits, targets, loss_mask, pos_idx, config, metric_terms=("tv",), with_ids=True
     )
     assert torch.equal(out.pred_ids, torch.argmax(logits, dim=-1))
     assert torch.equal(out.target_ids, torch.argmax(targets, dim=-1))
@@ -129,11 +129,11 @@ def test_compound_loss_with_outputs_falls_back_for_eager():
 
 
 @requires_accelerator
-def test_compound_loss_with_outputs_fused():
+def test_compound_loss_outputs_from_the_fused_pass():
     fused = _fused()
     logits, targets, loss_mask, pos_idx = _loss_inputs(16, 512, DEVICE)
     config = resolve_loss_config("kl_div")
-    out = compound_loss_with_outputs(
+    out = compound_loss(
         logits, targets, loss_mask, pos_idx, config, metric_terms=("tv",)
     )
     assert torch.equal(out.pred_ids, torch.argmax(logits, dim=-1))

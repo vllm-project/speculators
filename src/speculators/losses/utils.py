@@ -237,42 +237,6 @@ def resolve_loss_config(spec: str, implementation: str = "fused") -> LossConfig:
     return config
 
 
-def compound_loss(
-    logits: torch.Tensor,
-    targets: torch.Tensor,
-    loss_mask: torch.Tensor,
-    pos_idx: torch.Tensor,
-    loss_config: LossConfig,
-    decay_fn: Callable[..., torch.Tensor] | None = None,
-) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
-    """Compute a weighted sum of loss terms.
-
-    Each entry in *loss_config* maps a name to ``(loss_fn, weight)``; the
-    result is ``sum(weight * loss_function(logits, targets, ..., loss_fn))``
-    over all entries.
-
-    When every term is a fused loss, all terms come from one kernel call
-    (``fused_compound_losses``): the draft/target softmax statistics are
-    computed once and backward writes a single combined logits gradient.
-    A config that mixes fused and eager terms runs each term on its own.
-
-    Returns the total loss and a dict of per-term (unweighted) scalar losses
-    keyed as ``"{name}_loss"``.  When the config contains a single term the
-    dict is empty (the overall loss already captures it).
-    """
-    out = _compound_loss(
-        logits,
-        targets,
-        loss_mask,
-        pos_idx,
-        loss_config,
-        decay_fn,
-        metric_terms=(),
-        with_ids=False,
-    )
-    return out.loss, out.term_losses
-
-
 @dataclass
 class CompoundLossOutput:
     """``compound_loss`` results plus what the same logits pass can provide."""
@@ -282,16 +246,17 @@ class CompoundLossOutput:
     term_losses: dict[str, torch.Tensor]
     """Per-term scalar losses ``"{name}_loss"`` (empty for a single term)."""
     pred_ids: torch.Tensor
-    """``[1, T]`` ``argmax(logits, -1)``, first index on ties."""
+    """``[1, T]`` ``argmax(logits, -1)``, first index on ties; empty unless
+    the fused pass provided it or ``with_ids`` was set."""
     target_ids: torch.Tensor
-    """``[1, T]`` ``argmax(targets, -1)``, first index on ties."""
+    """``[1, T]`` ``argmax(targets, -1)``, as ``pred_ids``."""
     metric_terms: dict[str, torch.Tensor]
     """Requested per-position ``[1, T]`` primitive terms, detached. Only
     present when they came from the fused pass; callers compute them
     otherwise."""
 
 
-def compound_loss_with_outputs(
+def compound_loss(
     logits: torch.Tensor,
     targets: torch.Tensor,
     loss_mask: torch.Tensor,
@@ -299,36 +264,27 @@ def compound_loss_with_outputs(
     loss_config: LossConfig,
     decay_fn: Callable[..., torch.Tensor] | None = None,
     metric_terms: Sequence[str] = (),
+    with_ids: bool = False,
 ) -> CompoundLossOutput:
-    """``compound_loss`` plus both argmaxes and metric-only terms.
+    """Compute a weighted sum of loss terms.
 
-    With an all-fused config the argmaxes and ``metric_terms`` (primitive
-    terms such as ``"tv"``) come from the same kernel pass as the loss, so no
-    extra read of the ``[1, T, V]`` tensors happens. Otherwise the argmaxes
-    fall back to ``torch.argmax`` and ``metric_terms`` is left empty.
+    Each entry in *loss_config* maps a name to ``(loss_fn, weight)``; the
+    result is ``sum(weight * loss_function(logits, targets, ..., loss_fn))``
+    over all entries.
+
+    When every term is a fused loss, all terms come from one kernel call
+    (``fused_compound_losses``): the draft/target softmax statistics are
+    computed once and backward writes a single combined logits gradient.
+    The same pass returns both argmaxes and ``metric_terms`` (primitive terms
+    such as ``"tv"``, never differentiated), so no extra read of the
+    ``[1, T, V]`` tensors happens. A config that mixes fused and eager terms
+    runs each term on its own; there ``with_ids`` computes the argmaxes with
+    ``torch.argmax``.
+
+    ``term_losses`` holds the per-term (unweighted) scalar losses keyed as
+    ``"{name}_loss"``. When the config contains a single term it is empty
+    (the overall loss already captures it).
     """
-    return _compound_loss(
-        logits,
-        targets,
-        loss_mask,
-        pos_idx,
-        loss_config,
-        decay_fn,
-        metric_terms=metric_terms,
-        with_ids=True,
-    )
-
-
-def _compound_loss(
-    logits: torch.Tensor,
-    targets: torch.Tensor,
-    loss_mask: torch.Tensor,
-    pos_idx: torch.Tensor,
-    loss_config: LossConfig,
-    decay_fn: Callable[..., torch.Tensor] | None,
-    metric_terms: Sequence[str],
-    with_ids: bool,
-) -> CompoundLossOutput:
     total = torch.zeros((), device=logits.device, dtype=torch.float32)
     term_losses: dict[str, torch.Tensor] = {}
     multi = len(loss_config) > 1

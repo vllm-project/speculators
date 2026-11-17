@@ -7,7 +7,7 @@ import torch
 
 from speculators.losses import (
     LossConfig,
-    compound_loss_with_outputs,
+    compound_loss,
     dflash_loss_decay,
     dpace_loss_decay,
     kl_div_loss,
@@ -70,13 +70,14 @@ def compute_metrics(
         )
 
     # The argmaxes come from the fused loss pass when the config is all fused.
-    out = compound_loss_with_outputs(
+    out = compound_loss(
         logits,
         targets,
         loss_mask,
         pos_idx,
         loss_config=loss_config,
         decay_fn=decay_fn,
+        with_ids=True,
     )
     loss, term_losses = out.loss, out.term_losses
     pred_ids, target_ids = out.pred_ids, out.target_ids

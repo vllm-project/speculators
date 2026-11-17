@@ -20,7 +20,7 @@ from torch.nn.functional import binary_cross_entropy_with_logits
 
 from speculators.losses import (
     LossConfig,
-    compound_loss_with_outputs,
+    compound_loss,
     dflash_loss_decay,
     dpace_loss_decay,
     tv_loss,
@@ -89,7 +89,7 @@ def compute_metrics(
     # With an all-fused config the TV behind accept_rate and both argmaxes
     # come from the loss's own kernel pass (TV as a metric-only term when the
     # loss does not use it); otherwise they are computed separately below.
-    out = compound_loss_with_outputs(
+    out = compound_loss(
         logits,
         targets,
         loss_mask,
@@ -97,6 +97,7 @@ def compute_metrics(
         loss_config=loss_config,
         decay_fn=decay_fn,
         metric_terms=("tv",),
+        with_ids=True,
     )
     loss, term_losses = out.loss, out.term_losses
 
