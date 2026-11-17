@@ -11,9 +11,11 @@ Writes into out_dir:
   review_comments.json  inline review comments
   issue_comments.json   the conversation thread
   stack.json            open PRs by the same author whose head is in this PR's
-                        history, nearest first ({"parents": []} when none)
+                        history, nearest first, and whether own.diff was
+                        written ({"parents": [], "own_diff": false} when none)
 and, for a stacked PR only:
-  own.diff              this PR's changes on top of its nearest parent
+  own.diff              this PR's changes on top of its nearest parent, when
+                        every commit in between is one of this PR's own
   stack/<n>/            each parent's reviews.json, review_comments.json
                         and issue_comments.json
 """
@@ -27,8 +29,6 @@ from pathlib import Path
 from github_api import get, get_raw, paginate
 
 DIFF = "application/vnd.github.diff"
-# Parents whose discussion is staged; the nearest ones decide what's settled.
-MAX_PARENTS = 5
 
 
 def find_parents(repo: str, pr: dict) -> list[dict]:
@@ -55,6 +55,19 @@ def find_parents(repo: str, pr: dict) -> list[dict]:
     return sorted(parents, key=lambda p: p["commits_on_top"])
 
 
+def _commits_between(repo: str, base: str, head: str, count: int) -> list[str]:
+    shas: list[str] = []
+    page = 1
+    while len(shas) < count:
+        cmp = get(f"/repos/{repo}/compare/{base}...{head}?per_page=100&page={page}")
+        batch = [c["sha"] for c in cmp.get("commits", [])]
+        if not batch:
+            break
+        shas += batch
+        page += 1
+    return shas
+
+
 def gather(repo: str, number: str, out_dir: Path) -> None:
     out_dir.mkdir(parents=True, exist_ok=True)
     pr_path = f"/repos/{repo}/pulls/{number}"
@@ -74,18 +87,31 @@ def gather(repo: str, number: str, out_dir: Path) -> None:
     _discussion(repo, number, out_dir)
 
     parents = find_parents(repo, pr)
-    (out_dir / "stack.json").write_text(json.dumps({"parents": parents}, indent=1))
+    head = pr["head"]["sha"]
+    own_diff = False
     if parents:
-        nearest = parents[0]["head_sha"]
-        (out_dir / "own.diff").write_bytes(
-            get_raw(
-                f"/repos/{repo}/compare/{nearest}...{pr['head']['sha']}", accept=DIFF
-            )
+        nearest = parents[0]
+        # The comparison from the parent also holds anything merged into this
+        # branch since, e.g. from main. Only when every commit in between is
+        # one of this PR's own is it this PR's change alone.
+        between = _commits_between(
+            repo, nearest["head_sha"], head, nearest["commits_on_top"]
         )
-        for parent in parents[:MAX_PARENTS]:
+        own = {c["sha"] for c in paginate(f"{pr_path}/commits")}
+        if between and set(between) <= own:
+            (out_dir / "own.diff").write_bytes(
+                get_raw(
+                    f"/repos/{repo}/compare/{nearest['head_sha']}...{head}", accept=DIFF
+                )
+            )
+            own_diff = True
+        for parent in parents:
             _discussion(
                 repo, str(parent["number"]), out_dir / "stack" / str(parent["number"])
             )
+    (out_dir / "stack.json").write_text(
+        json.dumps({"parents": parents, "own_diff": own_diff}, indent=1)
+    )
 
 
 def _discussion(repo: str, number: str, out_dir: Path) -> None:
