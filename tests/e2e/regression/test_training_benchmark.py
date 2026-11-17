@@ -34,5 +34,6 @@ def test_bench_mtp_adamw(tmp_path: Path):
     run_benchmark(
         tmp_path,
         speculator_type="mtp",
+        verifier="Qwen/Qwen3.5-4B",
         extra_train_args=["--optimizer", "adamw"],
     )
