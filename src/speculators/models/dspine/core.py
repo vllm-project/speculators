@@ -133,10 +133,6 @@ class DSpineDraftModel(DFlashDraftModel):
     ) -> torch.Tensor:
         assert layer_context is not None  # noqa: S101
         if layer_idx == 0:
-            if torch.is_autocast_enabled(hidden_states.device.type):
-                hidden_states = hidden_states.to(
-                    torch.get_autocast_dtype(hidden_states.device.type)
-                )
             block_tokens = input_ids[0, anchored_block_indices].view(
                 -1, self.block_size
             )
