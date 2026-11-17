@@ -213,48 +213,41 @@ def loss_forward_kernel(  # noqa: C901 -- constexpr TERMS branches
     z_t = 0.0
     s_kl = 0.0
     s_rkl = 0.0
-    best_val_d = float("-inf")
     best_idx_d = 0
-    best_val_t = float("-inf")
     best_idx_t = 0
     for i in range(0, n_cols, BLOCK_SIZE):
         offsets = i + tl.arange(0, BLOCK_SIZE)
         mask = offsets < n_cols
         # Masked lanes load as -inf, so they never win a max or an argmax.
+        # The running max doubles as the argmax's best value: ties keep the
+        # first index within a block and strict > the earliest block, as
+        # torch.argmax does.
         x = tl.load(logits_ptr + offsets, mask=mask, other=float("-inf")).cast(
             tl.float32
         )
-        block_max_d = tl.max(tl.where(mask, x, float("-inf")))
+        block_max_d, block_arg_d = tl.max(x, axis=0, return_indices=True)
+        best_idx_d = tl.where(block_max_d > m_d, i + block_arg_d, best_idx_d)
         m_new = tl.maximum(m_d, block_max_d)
         scale_d = tl.exp(m_d - m_new)
         ex = tl.where(mask, tl.exp(x - m_new), 0.0)
         z_d = z_d * scale_d + tl.sum(ex)
         m_d = m_new
-        # tl.argmax keeps the first maximum within a block and strict > keeps
-        # the earliest block: torch.argmax's first-index convention.
-        block_arg_d = tl.argmax(x, axis=0)
-        update_d = block_max_d > best_val_d
-        best_idx_d = tl.where(update_d, i + block_arg_d, best_idx_d)
-        best_val_d = tl.where(update_d, block_max_d, best_val_d)
         y = tl.load(targets_ptr + offsets, mask=mask, other=float("-inf")).cast(
             tl.float32
         )
+        block_max_t, block_arg_t = tl.max(y, axis=0, return_indices=True)
+        best_idx_t = tl.where(block_max_t > m_t, i + block_arg_t, best_idx_t)
+        m_new_t = tl.maximum(m_t, block_max_t)
         if TERMS & _DIST:
-            m_new_t = tl.maximum(m_t, tl.max(tl.where(mask, y, float("-inf"))))
             scale_t = tl.exp(m_t - m_new_t)
             ey = tl.where(mask, tl.exp(y - m_new_t), 0.0)
             z_t = z_t * scale_t + tl.sum(ey)
-            m_t = m_new_t
             # Masked lanes: ey / ex are 0 but (y - x) is nan; where drops them.
             if TERMS & _KL:
                 s_kl = s_kl * scale_t + tl.sum(tl.where(mask, ey * (y - x), 0.0))
             if TERMS & _RKL:
                 s_rkl = s_rkl * scale_d + tl.sum(tl.where(mask, ex * (x - y), 0.0))
-        block_max_t = tl.max(y)
-        block_arg_t = tl.argmax(y, axis=0)
-        update_t = block_max_t > best_val_t
-        best_idx_t = tl.where(update_t, i + block_arg_t, best_idx_t)
-        best_val_t = tl.where(update_t, block_max_t, best_val_t)
+        m_t = m_new_t
 
     lse_d = m_d + tl.log(z_d)
     tl.store(stats_ptr + 0 * stats_row + pid, m_d)
