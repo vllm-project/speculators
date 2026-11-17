@@ -705,8 +705,10 @@ class Trainer:
         if self.val_loader is None:
             return None
         self.model.eval()
-        if hasattr(self.val_loader.batch_sampler, "set_epoch"):
-            self.val_loader.batch_sampler.set_epoch(epoch)  # type: ignore[union-attr]
+        # Leave the validation sampler on its initial epoch. Re-packing the val
+        # split every epoch changes the per-batch averaging, so loss_epoch would
+        # move for an unchanged model and checkpoint_best would compare epochs on
+        # different batches.
         val_loader = self.val_loader
         if self.rank == 0:
             val_loader = tqdm(val_loader, desc=f"Epoch {epoch}")  # type: ignore[assignment]

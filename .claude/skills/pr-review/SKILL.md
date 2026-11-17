@@ -18,7 +18,7 @@ You are reviewing a PR on the `speculators` repo — a library for training and 
 ### Phase 0: Eligibility check
 
 1. Resolve the PR number from `$ARGUMENTS` (or current branch via `gh pr view -R vllm-project/speculators --json number`).
-2. Check `gh pr view -R vllm-project/speculators <number> --json state,isDraft`. **Do not proceed** if the PR is closed, merged, or a draft.
+2. Check `gh pr view -R vllm-project/speculators <number> --json state,isDraft,body`. **Do not proceed** if the PR is closed, merged, or a draft, or if the body has no ticked (`[x]` or `[X]`) "I (a human) have written or reviewed the code" checklist item.
 3. Check if you (the current `gh` user) already posted a review on this PR. If so, compare the latest commit SHA on the PR against the commit SHA at the time of your last review. **Do not post again** if there are no new commits since your last review — report to the user that the PR hasn't changed since the last review. Even with new commits, if your review would say substantially the same thing as your previous one (same verdict, same outstanding items), do not post — report to the user that nothing has materially changed.
 4. After gathering context (Phase 1–2), reassess: if the discussion thread shows the PR is effectively still in progress — active experiments, trial-and-error debugging, the author saying "still working on this", or unresolved back-and-forth about the approach — treat it as a draft and do not review. Report to the user that the PR appears to still be in flux.
 
@@ -92,6 +92,10 @@ If the PR description, commit messages, or code comments reference a paper (arXi
 5. If no paper is referenced but the PR implements a known algorithm (Eagle, EAGLE-2, Eagle3, DFlash, MTP, Medusa, etc.), check whether the implementation aligns with the canonical paper. If you cannot fetch or verify the paper, state that explicitly rather than guessing.
 
 Only flag mismatches you can concretely demonstrate by quoting both the paper and the code. Do not flag stylistic differences in how math is expressed if the computation is equivalent.
+
+### Phase 3.7: Contribution rules
+
+`CONTRIBUTING.md` and `AGENTS.md` are the source of truth for what a PR must carry: issue linkage, DCO sign-off, doc updates, and the PR description. Read both and flag what the PR misses, citing the rule. Raise these in the review summary, not as inline comments; style preferences stay below the confidence bar unless they hide what the PR does.
 
 ### Phase 4: Line-level review
 
