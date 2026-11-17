@@ -70,8 +70,12 @@ class _FastSkipBatchSamplerProtocol(Protocol):
     def _generate_batches(self, epoch: int) -> list[list[int]]: ...
 
 
+class _DummyModel(nn.Identity):
+    requires_global_step = False
+
+
 def _dummy_model() -> SpeculatorModel:
-    return cast("SpeculatorModel", nn.Identity())
+    return cast("SpeculatorModel", _DummyModel())
 
 
 class _MockTrainer(Trainer):

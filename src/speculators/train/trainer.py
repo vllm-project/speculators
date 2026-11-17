@@ -255,7 +255,13 @@ class Trainer:
         self.local_rank = get_local_rank()
         self.rank = get_rank()
         self.train_loader = train_loader
-        self._train_loader_len = len(train_loader)
+        self._total_training_steps: int | None = None
+        if model.requires_global_step:
+            self._total_training_steps = (
+                config.max_steps
+                or config.scheduler_total_steps
+                or config.num_epochs * len(train_loader)
+            )
         self.val_loader = val_loader
         self.is_distributed = is_distributed()
         self.resume_from_checkpoint = config.resume_from_checkpoint
@@ -537,25 +543,15 @@ class Trainer:
         for scheduler in self.schedulers:
             scheduler.step()
 
-    def _model_call_kwargs(self, *, training: bool) -> dict:
-        """Add step context only for models whose objective schedules need it."""
-        configured = (
-            self.config.train_call_kwargs if training else self.config.val_call_kwargs
+    def _model_call_kwargs(self, configured: dict | None) -> dict:
+        kwargs = configured or {}
+        if self._total_training_steps is None:
+            return kwargs
+        return dict(
+            kwargs,
+            global_step=self.global_step,
+            total_training_steps=self._total_training_steps,
         )
-        kwargs = dict(configured or {})
-        unwrapped = getattr(self.model, "module", self.model)
-        if getattr(unwrapped, "requires_global_step", False) is True:
-            default_total = self.config.num_epochs * self._train_loader_len
-            total_training_steps = (
-                self.config.max_steps
-                or self.config.scheduler_total_steps
-                or default_total
-            )
-            kwargs.update(
-                global_step=self.global_step,
-                total_training_steps=total_training_steps,
-            )
-        return kwargs
 
     def _prepare_resume_skip(self, epoch: int) -> int:
         """Prepare fast-skip state for mid-epoch resume and return skipped steps."""
@@ -652,7 +648,8 @@ class Trainer:
             ):
                 timer.mark("fetch")
                 _draft_tokens, loss, metrics = self.model(
-                    **gpu_batch, **self._model_call_kwargs(training=True)
+                    **gpu_batch,
+                    **self._model_call_kwargs(self.config.train_call_kwargs),
                 )
 
             timer.mark("fwd")
@@ -762,7 +759,7 @@ class Trainer:
                 self.device_type, dtype=self.config.hidden_states_dtype
             ):
                 _draft_tokens, _loss, metrics = self.model(
-                    **gpu_batch, **self._model_call_kwargs(training=False)
+                    **gpu_batch, **self._model_call_kwargs(self.config.val_call_kwargs)
                 )
 
             for k, v in metrics.items():
