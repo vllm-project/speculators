@@ -116,21 +116,20 @@ class XPressDraftModel(DFlashDraftModel):
         ce_from_data: bool = False,
         **kwargs,
     ):
-        (
-            hidden,
-            logits,
-            targets,
-            aligned_loss_mask,
-            anchored_block_indices,
-        ) = self._backbone_forward(
+        features = self.draft_features(
             hidden_states,
             input_ids,
             loss_mask,
-            verifier_last_hidden_states,
             document_ids,
             position_ids,
             max_anchors=max_anchors,
             **kwargs,
+        )
+        hidden, logits, layout = features
+        aligned_loss_mask = layout.loss_mask
+        anchored_block_indices = layout.block_positions
+        targets = self._build_targets(
+            verifier_last_hidden_states, anchored_block_indices
         )
 
         num_blocks = max_anchors

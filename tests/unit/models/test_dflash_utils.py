@@ -1,5 +1,6 @@
 """Unit tests for DFlash anchor and position-ID utilities."""
 
+import pytest
 import torch
 
 from speculators.models.dflash.utils import (
@@ -33,6 +34,24 @@ class TestExtendPositionIdsWithMaskTokens:
 
 
 class TestSelectAnchors:
+    @pytest.mark.parametrize("seq_len", [1, 2, 4, 8])
+    def test_no_valid_anchors_have_safe_indices(self, seq_len):
+        anchors, positions, mask = select_anchors(
+            torch.zeros(1, seq_len), 3, 4, train_anchor=True
+        )
+        assert torch.all(anchors == 0)
+        assert torch.all((positions >= 0) & (positions < seq_len))
+        assert not mask.any()
+
+    @pytest.mark.parametrize("shape", [(0,), (2, 8), (1, 0)])
+    def test_rejects_unsupported_packed_shapes(self, shape):
+        with pytest.raises(ValueError):
+            select_anchors(torch.ones(shape), 2, 4, train_anchor=False)
+
+    def test_rejects_zero_anchors(self):
+        with pytest.raises(ValueError, match="num_anchors"):
+            select_anchors(torch.ones(1, 8), 0, 4, train_anchor=False)
+
     def test_sampled_anchors_are_sorted(self):
         # Anchors are returned sorted by position so the draft blocks form
         # contiguous flex-attention blocks (fast path) instead of scattered ones.

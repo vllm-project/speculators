@@ -1,3 +1,4 @@
+from functools import partial
 from typing import Any, ClassVar
 
 import torch
@@ -5,7 +6,7 @@ from transformers import PretrainedConfig
 
 from speculators.losses import LossConfig, kl_div_loss, resolve_loss_config
 from speculators.model import SpeculatorModel
-from speculators.models.dflash.config import DFlashSpeculatorConfig
+from speculators.models.dflash.backbone import DFlashBackbone
 from speculators.models.dflash.core import DFlashDraftModel
 from speculators.models.dflash2.config import DFlash2SpeculatorConfig
 from speculators.models.dflash2.metrics import (
@@ -47,8 +48,8 @@ class DFlash2DraftModel(DFlashDraftModel):
             )
         super().__init__(config=config)
 
-        for layer_ in self.layers:
-            # By capability, so a _make_decoder_layer override still works.
+        for layer_ in self.get_decoder_layers():
+            # Reset after the wrapper has initialized the backbone parameters.
             reset_convolutions = getattr(layer_, "reset_convolutions", None)
             if not callable(reset_convolutions):
                 raise TypeError(
@@ -68,16 +69,16 @@ class DFlash2DraftModel(DFlashDraftModel):
             initializer_range=initializer_range,
         )
 
-    def _make_decoder_layer(
-        self, config: DFlashSpeculatorConfig, layer_idx: int
-    ) -> Qwen3DFlash2DecoderLayer:
-        assert isinstance(config, DFlash2SpeculatorConfig)  # noqa: S101
-        return Qwen3DFlash2DecoderLayer(
-            config.transformer_layer_config,  # type: ignore[arg-type]
-            layer_idx,
-            block_size=config.block_size,
-            conv_kernel_size=config.conv_kernel_size,
-            conv_group_size=config.conv_group_size,
+    def _create_backbone(self, config: DFlash2SpeculatorConfig) -> DFlashBackbone:
+        return DFlashBackbone(
+            config.transformer_layer_config,
+            len(self.target_layer_ids),
+            decoder_layer_factory=partial(
+                Qwen3DFlash2DecoderLayer,
+                block_size=config.block_size,
+                conv_kernel_size=config.conv_kernel_size,
+                conv_group_size=config.conv_group_size,
+            ),
         )
 
     @classmethod
@@ -150,18 +151,19 @@ class DFlash2DraftModel(DFlashDraftModel):
         selector_miss_policy: str = "replace",
         **kwargs,
     ) -> tuple[None, torch.Tensor, dict[str, Any]]:
-        hidden, unary_logits, targets, aligned_loss_mask, block_indices = (
-            self._backbone_forward(
-                hidden_states,
-                input_ids,
-                loss_mask,
-                verifier_last_hidden_states,
-                document_ids,
-                position_ids,
-                max_anchors=max_anchors,
-                **kwargs,
-            )
+        features = self.draft_features(
+            hidden_states,
+            input_ids,
+            loss_mask,
+            document_ids,
+            position_ids,
+            max_anchors=max_anchors,
+            **kwargs,
         )
+        hidden, unary_logits, layout = features
+        aligned_loss_mask = layout.loss_mask
+        block_indices = layout.block_positions
+        targets = self._build_targets(verifier_last_hidden_states, block_indices)
         predecessor_ids = self._predecessor_ids(input_ids, block_indices)
 
         target_ids = targets.argmax(dim=-1)

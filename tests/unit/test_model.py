@@ -323,3 +323,42 @@ def test_save_ignore_keys_are_ignored_on_load_missing(model_class):
         "checkpoints but does not list them in _keys_to_ignore_on_load_missing; "
         "loading a checkpoint will raise on the absent key(s)."
     )
+
+
+@pytest.mark.parametrize("override", [False, True])
+@pytest.mark.parametrize("layers", [None, [], [nn.Identity()], torch.ones(1)])
+def test_training_validation_rejects_invalid_decoder_return(
+    speculator_model_test_config, monkeypatch, override, layers
+):
+    model = SpeculatorTestModel(speculator_model_test_config)
+    if override:
+        monkeypatch.setattr(model, "get_decoder_layers", lambda: layers)
+    else:
+        model.layers = layers
+    with pytest.raises(TypeError, match=r"get_decoder_layers\(\).*nn.ModuleList"):
+        SpeculatorModel.verify_training_compatible(model)
+
+
+def test_training_validation_rejects_nonmodule_decoder_entry(
+    speculator_model_test_config, monkeypatch
+):
+    model = SpeculatorTestModel(speculator_model_test_config)
+    layers = nn.ModuleList()
+    layers.add_module("0", None)
+    monkeypatch.setattr(model, "get_decoder_layers", lambda: layers)
+    with pytest.raises(TypeError, match="entry 0.*nn.Module.*NoneType"):
+        SpeculatorModel.verify_training_compatible(model)
+
+
+@pytest.mark.parametrize("override", [False, True])
+def test_training_validation_accepts_flat_and_composed_decoders(
+    speculator_model_test_config, monkeypatch, override
+):
+    model = SpeculatorTestModel(speculator_model_test_config)
+    layers = nn.ModuleList([nn.Linear(10, 10)])
+    if override:
+        model.backbone = layers
+        monkeypatch.setattr(model, "get_decoder_layers", lambda: model.backbone)
+    else:
+        model.layers = layers
+    SpeculatorModel.verify_training_compatible(model)

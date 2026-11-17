@@ -7,7 +7,7 @@ in the Speculators library.
 
 import os
 from abc import abstractmethod
-from typing import ClassVar
+from typing import ClassVar, cast
 
 import torch
 from torch import nn
@@ -451,6 +451,14 @@ class SpeculatorModel(ClassRegistryMixin, PreTrainedModel):  # type: ignore[misc
             f"Available registered model classes: {list(cls.registry.keys())}."
         )
 
+    def get_decoder_layers(self) -> nn.ModuleList:
+        """Return registered decoder layers used for FSDP wrapping.
+
+        Existing flat models keep their layout; composed models override this
+        accessor to delegate to their backbone without aliasing modules.
+        """
+        return cast("nn.ModuleList", self.layers)
+
     @classmethod
     def verify_training_compatible(cls, model: "SpeculatorModel") -> None:
         """Verify that a model instance is compatible with training infrastructure.
@@ -458,15 +466,16 @@ class SpeculatorModel(ClassRegistryMixin, PreTrainedModel):  # type: ignore[misc
         This method validates that the given model is:
         1. An instance of SpeculatorModel
         2. Registered in the SpeculatorModel registry
-        3. Has a `layers` attribute (required for FSDP wrapping)
+        3. Returns a ModuleList of modules from `get_decoder_layers()` for FSDP
 
         Args:
             model: The model instance to verify
 
         Raises:
-            TypeError: If model is not a SpeculatorModel instance
+            TypeError: If model is not a SpeculatorModel instance, or its decoder
+                accessor does not return a ModuleList containing only modules
             ValueError: If model's class is not in the registry
-            AttributeError: If model doesn't have a `layers` attribute
+            AttributeError: If model does not expose decoder layers
         """
         if not isinstance(model, SpeculatorModel):
             raise TypeError(
@@ -482,11 +491,18 @@ class SpeculatorModel(ClassRegistryMixin, PreTrainedModel):  # type: ignore[misc
                 f"Available models: {list(registry.keys()) if registry else []}"
             )
 
-        if not hasattr(model, "layers"):
-            raise AttributeError(
-                f"Model {model_class.__name__} must have a 'layers' attribute "
-                f"containing decoder layers for FSDP wrapping"
+        layers = model.get_decoder_layers()
+        if not isinstance(layers, nn.ModuleList):
+            raise TypeError(
+                f"{model_class.__name__}.get_decoder_layers() must return an "
+                f"nn.ModuleList, got {type(layers).__name__}"
             )
+        for index, layer in enumerate(layers):
+            if not isinstance(layer, nn.Module):
+                raise TypeError(
+                    f"{model_class.__name__}.get_decoder_layers() entry {index} "
+                    f"must be an nn.Module, got {type(layer).__name__}"
+                )
 
     @classmethod
     @abstractmethod

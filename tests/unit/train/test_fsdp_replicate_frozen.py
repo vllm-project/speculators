@@ -17,6 +17,9 @@ class MixedModel(nn.Module):
         self.layers = nn.ModuleList([nn.Linear(4, 4)])
         self.frozen_head = nn.Linear(4, 8).requires_grad_(False)
 
+    def get_decoder_layers(self):
+        return self.layers
+
 
 def test_frozen_params_selects_only_frozen():
     """Select frozen head parameters while excluding trainable layer weights."""

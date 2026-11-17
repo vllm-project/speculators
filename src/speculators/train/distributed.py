@@ -206,7 +206,7 @@ def apply_fully_sharded(
 ):
     """Applies torch FSDP fully_shard to the model, wrapping layers in FSDPModule.
 
-    Assumes the model has a `layers` attribute containing the decoder layers.
+    Uses the model's `get_decoder_layers()` accessor for decoder layers.
     Model should be validated with SpeculatorModel.verify_training_compatible()
     before calling this function. With replicate_frozen=True, frozen parameters
     stay replicated on each rank instead of being sharded and all-gathered.
@@ -225,7 +225,7 @@ def apply_fully_sharded(
             len(ignored_params),
         )
 
-    for layer in model.layers:  # type: ignore[union-attr]
+    for layer in model.get_decoder_layers():  # type: ignore[operator]
         fully_shard(layer, mp_policy=mp_policy, ignored_params=ignored_params)
 
     fully_shard(model, mp_policy=mp_policy, ignored_params=ignored_params)

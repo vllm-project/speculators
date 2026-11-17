@@ -130,17 +130,20 @@ class DSparkDraftModel(DFlashDraftModel):
         dpace_alpha: float = 0.5,
         **kwargs,
     ):
-        hidden, logits, targets, aligned_loss_mask, anchored_block_indices = (
-            self._backbone_forward(
-                hidden_states,
-                input_ids,
-                loss_mask,
-                verifier_last_hidden_states,
-                document_ids,
-                position_ids,
-                max_anchors=max_anchors,
-                **kwargs,
-            )
+        features = self.draft_features(
+            hidden_states,
+            input_ids,
+            loss_mask,
+            document_ids,
+            position_ids,
+            max_anchors=max_anchors,
+            **kwargs,
+        )
+        hidden, logits, layout = features
+        aligned_loss_mask = layout.loss_mask
+        anchored_block_indices = layout.block_positions
+        targets = self._build_targets(
+            verifier_last_hidden_states, anchored_block_indices
         )
 
         # DSpark: add the Markov logit bias and predict per-position confidence.

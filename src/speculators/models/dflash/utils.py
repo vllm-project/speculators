@@ -7,7 +7,8 @@ def extend_position_ids_with_mask_tokens(
     position_ids: torch.Tensor,  # shape: [1, total_seq_len]
     anchor_positions: torch.Tensor,  # shape: [num_anchors]
     block_size: int,
-) -> torch.Tensor:  # shape: [num_anchors*block_size]
+) -> torch.Tensor:  # [1, total_seq_len + num_anchors * block_size]
+    """Append each synthetic block's rotary positions to the source positions."""
 
     anchor_position_ids = (
         position_ids[0, anchor_positions].to(dtype=torch.long).view(-1)
@@ -17,35 +18,35 @@ def extend_position_ids_with_mask_tokens(
     offsets = torch.arange(
         block_size, device=anchor_position_ids.device, dtype=torch.long
     )
-    block_position_ids = (
-        anchor_position_ids[:, None] + offsets[None, :]
-    ).reshape(1, -1)
+    block_position_ids = (anchor_position_ids[:, None] + offsets[None, :]).reshape(
+        1, -1
+    )
     # shape: [1, num_anchors*block_size]
 
     return torch.cat([position_ids, block_position_ids], dim=1)
     # shape: [1, total_seq_len + num_anchors*block_size]
 
 
+@torch.compiler.disable
 def select_anchors(
     loss_mask: torch.Tensor,  # shape: [1, total_seq_len]
     num_anchors: int,
     block_size: int,
     train_anchor: bool,
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-    """Randomly select anchor positions from valid tokens in sequence.
+    """Return anchors, safe source indices, and the aligned prediction mask.
 
-    Args:
-        loss_mask: Binary mask indicating valid positions [1, total_seq_len]
-        n: Number of anchors to select per batch item
-        block_size: Block size (last block_size positions excluded)
-
-    Returns:
-        tuple: (anchors, anchor_valid)
-            - anchors: Selected anchor indices [num_anchors]
-            - anchor_valid: Boolean mask for valid anchors [num_anchors]
+    Inputs are a single packed sequence [1, T], with positive T and anchor
+    count. The final block_size source positions cannot be sampled as anchors.
+    Padded blocks have zero loss; their source indices remain in range even
+    when T is shorter than block_size.
     """
-    if loss_mask.ndim != 2:  # noqa: PLR2004
-        raise ValueError(f"Expected [B, T], got {loss_mask.shape}")
+    if loss_mask.ndim != 2 or loss_mask.shape[0] != 1:  # noqa: PLR2004
+        raise ValueError(f"Expected a packed sequence [1, T], got {loss_mask.shape}")
+    if loss_mask.shape[1] == 0:
+        raise ValueError("Expected a nonempty packed sequence")
+    if num_anchors <= 0:
+        raise ValueError(f"Expected num_anchors > 0, got {num_anchors}")
 
     if block_size <= 0:
         raise ValueError(f"Expected block size > 0, got {block_size}")
@@ -73,6 +74,7 @@ def select_anchors(
 
     offsets = torch.arange(block_size, device=anchors.device, dtype=torch.long)
     block_positions = (anchors[:, None] + offsets[None, :]).reshape(-1)
+    block_positions = block_positions.clamp(max=loss_mask.shape[1] - 1)
     # shape: [num_anchors*block_size]
 
     aligned_loss_mask = loss_mask.clone()[:, block_positions]
@@ -85,5 +87,9 @@ def select_anchors(
     if not train_anchor:
         aligned_loss_mask[:, ::block_size] = False
 
-    return anchors, block_positions, aligned_loss_mask
+    return (
+        anchors,  # [num_anchors]
+        block_positions,  # [num_anchors * block_size]
+        aligned_loss_mask,  # [1, num_anchors * block_size]
+    )
     # shape: [num_anchors], [num_anchors*block_size], [1, num_anchors*block_size]
