@@ -203,22 +203,32 @@ class Eagle3Converter:
         )
 
         # Remap midlayer.* to layers.0.*
-        remapped_weights = {}
+        remapped_weights: dict[str, torch.Tensor] = {}
         for key, value in weights.items():
             if key.startswith("midlayer."):
-                new_key = key.replace("midlayer.", "layers.0.")
-                remapped_weights[new_key] = value
+                new_key = key.replace("midlayer.", "layers.0.", 1)
                 logger.debug(f"Remapped weight key: {key} -> {new_key}")
             else:
-                remapped_weights[key] = value
+                new_key = key
+            if new_key in remapped_weights:
+                raise ValueError(
+                    f"Key collision during Eagle-3 weight remapping: "
+                    f"'{key}' maps to '{new_key}', which is already present."
+                )
+            remapped_weights[new_key] = value
 
         missing_keys, unexpected_keys = model.load_state_dict(
             remapped_weights, strict=False
         )  # type: ignore[attr-defined]
 
         if missing_keys:
-            logger.warning(f"Missing keys in checkpoint: {missing_keys}")
+            raise ValueError(
+                "Missing required keys in Eagle-3 checkpoint — refusing to save "
+                f"randomly initialized weights: {missing_keys}"
+            )
 
+        # Keep unexpected_keys as a warning: 2-layer Eagle-3 checkpoints include
+        # layers.1.* keys that the 1-layer Eagle3Speculator intentionally ignores.
         if unexpected_keys:
             logger.warning(f"Unexpected keys in checkpoint: {unexpected_keys}")
 
