@@ -9,12 +9,14 @@ Run commands from the repository root. Create separate Python 3.12 environments 
 ```bash
 uv venv -p3.12 vllm_venv && \
 source vllm_venv/bin/activate && \
-uv pip install vllm==0.33.0
+uv pip install "vllm @ git+https://github.com/vllm-project/vllm.git@refs/pull/68190/head"
 
 uv venv -p3.12 .venv-quant && \
 source .venv-quant/bin/activate && \
 uv pip install -r examples/quantization/requirements.txt
 ```
+
+Quantized DSpark serving requires the fix in [vLLM PR #68190](https://github.com/vllm-project/vllm/pull/68190), so the PR-head install above is required until that fix is included in a release.
 
 The quantization environment installs Speculators and its matching `hs-connectors` dependency through `requirements.txt`. The file-based hidden-state extraction path uses vLLM's built-in connector, so the vLLM environment does not require Speculators or `hs-connectors`. The quantization environment pins llm-compressor because the NVFP4 example uses its 0.15.0 interfaces.
 
