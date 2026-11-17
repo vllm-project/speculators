@@ -60,16 +60,16 @@ Don't review a PR that is still in flux (active experiments, trial-and-error fix
 Score each finding 0–100 for how sure you are that it is real and matters:
 
 - below 50: a false positive, a nitpick, or something pre-existing;
-- 50–79: real but low-impact or unlikely in practice;
+- 50–79: real but low-impact;
 - 80–89: verified, affects behaviour or breaks a documented project rule;
 - 90 and up: a confirmed bug with a concrete failure scenario.
 
-Only findings at 80 or above are posted; `scripts/review_payload.py` drops the rest.
+Score how bad the failure is, not how often it happens: a confirmed failure that existing code can reach clears the bar even if it is rare. Only findings at 80 or above are posted; `scripts/review_payload.py` drops the rest.
 
 Below the bar, whatever their score would otherwise be:
 
-- problems the PR didn't introduce, style a senior engineer would skip, and anything a linter, type checker or CI catches;
-- changes the PR intends, or that a maintainer asked for (here or on a stacked parent);
+- problems the PR didn't introduce, style a senior engineer would skip, and restatements of what a linter, type checker or CI already reports (explaining the cause of a failure is still in scope);
+- the change the PR intends, or one a maintainer asked for (here or on a stacked parent), though not its unintended effects;
 - failures that need a caller or input the code doesn't have yet. Read the code's documented contract and its real callers before claiming it is broken;
 - preferences presented as correctness, and alternatives you haven't checked would work.
 
