@@ -109,6 +109,27 @@ def test_pretrained_rejects_missing_body_weights(tmp_path):
         DFlashDraftModel.from_pretrained(tmp_path, local_files_only=True)
 
 
+def test_custom_pretrained_key_mapping_is_validated(tmp_path, monkeypatch):
+    model = make_contract_model("dflash", False)
+    model.save_pretrained(tmp_path)
+    state = load_file(tmp_path / "model.safetensors")
+    state["projection.weight"] = state.pop("fc.weight")
+    save_file(state, tmp_path / "model.safetensors")
+    monkeypatch.setattr(DFlashDraftModel, "load_verifier_weights", lambda self: None)
+    loaded = DFlashDraftModel.from_pretrained(
+        tmp_path,
+        local_files_only=True,
+        key_mapping={r"^projection\.": "backbone.fc."},
+    )
+    torch.testing.assert_close(loaded.backbone.fc.weight, model.backbone.fc.weight)
+    with pytest.raises(ValueError, match="missing learned weights"):
+        DFlashDraftModel.from_pretrained(
+            tmp_path,
+            local_files_only=True,
+            key_mapping={r"^projection\.": "unknown."},
+        )
+
+
 def test_pretrained_rejects_collision_across_shards(tmp_path):
     model = make_contract_model("dflash", False)
     model.save_pretrained(tmp_path, max_shard_size="1KB")

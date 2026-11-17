@@ -7,6 +7,11 @@ from safetensors import safe_open
 from torch import nn
 from torch.nn.attention.flex_attention import create_block_mask, create_mask
 from transformers import PretrainedConfig
+from transformers.core_model_loading import (
+    WeightConverter,
+    WeightRenaming,
+    rename_source_key,
+)
 
 from speculators.losses import LossConfig, resolve_loss_config
 from speculators.model import DraftVocabMixin, SpeculatorModel
@@ -20,6 +25,7 @@ from speculators.models.dflash.checkpoint import (
     checkpoint_key_map,
     export_state_dict,
     import_state_dict,
+    native_key,
 )
 from speculators.models.dflash.metrics import compute_metrics
 from speculators.models.dflash.utils import (
@@ -43,6 +49,7 @@ _compiled_create_block_mask = torch.compile(create_block_mask)
 class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
     config_class: ClassVar[type[DFlashSpeculatorConfig]] = DFlashSpeculatorConfig  # type: ignore[misc]
     supports_gradient_checkpointing = True  # noqa: D003  # Qwen3DFlashDecoderLayer inherits GradientCheckpointingLayer
+    requires_optimizer_metadata: ClassVar[bool] = True
     _no_split_modules = ["Qwen3DFlashDecoderLayer"]
     _keys_to_ignore_on_load_missing: ClassVar[list[str]] = [  # type: ignore[misc]
         "embed_tokens.weight",
@@ -181,7 +188,19 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
                     keys.extend(
                         torch.load(path, map_location="meta", weights_only=True)
                     )
-        model._validate_checkpoint_keys(keys)  # noqa: SLF001
+        checkpoint_key_map(keys)
+        renamings = [
+            mapping
+            for mapping in load_config.weight_mapping
+            if isinstance(mapping, WeightRenaming)
+        ]
+        converters = [
+            mapping
+            for mapping in load_config.weight_mapping
+            if isinstance(mapping, WeightConverter)
+        ]
+        mapped_keys = [rename_source_key(key, renamings, converters)[0] for key in keys]
+        model._validate_checkpoint_keys(mapped_keys)  # noqa: SLF001
         return SpeculatorModel._load_pretrained_model(  # noqa: SLF001
             model, state_dict, checkpoint_files, load_config, *args, **kwargs
         )
@@ -190,6 +209,11 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
         """Adapt and validate weights before single-device or FSDP resume."""
         self._validate_checkpoint_keys(state_dict)
         return import_state_dict(state_dict)
+
+    @staticmethod
+    def checkpoint_parameter_name(name: str) -> str:
+        """Resolve parameter identities from a legacy optimizer checkpoint."""
+        return native_key(name.removeprefix("module."))
 
     def load_state_dict(self, state_dict, strict=True, assign=False):
         return super().load_state_dict(

@@ -49,6 +49,24 @@ def test_nested_layers_support_gradient_checkpointing(recipe):
     assert all(layer.gradient_checkpointing for layer in model.get_decoder_layers())
 
 
+@pytest.mark.parametrize("recipe", ["dflash", "dflash2"])
+def test_compiled_features_match_eager_with_dynamic_anchor_counts(recipe):
+    model = make_contract_model(recipe, False)
+    compiled = torch.compile(model.draft_features, backend="eager")
+    hidden = torch.randn(1, 12, 32)
+    tokens = torch.arange(12).view(1, -1)
+    documents = torch.zeros(1, 12, dtype=torch.long)
+    for valid_count in (8, 1, 0):
+        mask = (torch.arange(12) < valid_count).float().unsqueeze(0)
+        torch.manual_seed(42)
+        expected = model.draft_features(hidden, tokens, mask, documents, max_anchors=3)
+        torch.manual_seed(42)
+        actual = compiled(hidden, tokens, mask, documents, max_anchors=3)
+        torch.testing.assert_close(actual.hidden, expected.hidden)
+        torch.testing.assert_close(actual.logits, expected.logits)
+        torch.testing.assert_close(actual.layout.loss_mask, expected.layout.loss_mask)
+
+
 @pytest.mark.parametrize("seq_len", [1, 2, 4])
 def test_short_sequence_padding_has_zero_finite_loss(seq_len):
     model = make_contract_model("dflash", False)
