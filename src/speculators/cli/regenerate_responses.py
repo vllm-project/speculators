@@ -1014,6 +1014,9 @@ def regenerate_responses(
     if dataset not in REGEN_DATASETS and (split is not None or subset is not None):
         raise typer.BadParameter("--split and --subset only apply to dataset presets")
 
+    if concurrency < 1:
+        raise typer.BadParameter("--concurrency must be >= 1")
+
     if max_retries < 0:
         raise typer.BadParameter("--max-retries must be >= 0")
 
