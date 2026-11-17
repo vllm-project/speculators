@@ -1,6 +1,6 @@
 # PR review rubric
 
-How to review a pull request on `vllm-project/speculators`, a library for training and serving speculative decoding models (Eagle3, DFlash, MTP) with vLLM integration. This rubric is independent of the tool running it: it reads the context files written by `scripts/gather_context.py` and produces a `review.json` as described in [output.md](output.md).
+How to review a pull request on `vllm-project/speculators`, a library for training and serving speculative decoding models with vLLM integration. This rubric is independent of the tool running it: it reads the context files written by `scripts/gather_context.py` and produces a `review.json` as described in [output.md](output.md).
 
 ## What a review is for
 
