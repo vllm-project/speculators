@@ -217,6 +217,32 @@ def test_candidate_selector_selects_only_from_unary_top_k():
     assert scores.shape == (1, 1, 2)
 
 
+def test_score_candidates_from_values_matches_score_candidates():
+    """The chunked-selector entry point must agree with the materialized one
+    once given the same already-gathered unary scores."""
+    torch.manual_seed(0)
+    selector = CandidateSelector(
+        vocab_size=11,
+        hidden_size=6,
+        rank=4,
+        top_k=3,
+    )
+    unary_logits = torch.randn(2, 3, 11)
+    hidden = torch.randn(2, 3, 6)
+    predecessor_ids = torch.randint(0, 11, (2, 3))
+    candidate_ids = unary_logits.topk(3, dim=-1).indices
+
+    expected = selector.score_candidates(
+        unary_logits, hidden, predecessor_ids, candidate_ids
+    )
+    unary_scores = unary_logits.gather(-1, candidate_ids)
+    actual = selector.score_candidates_from_values(
+        unary_scores, hidden, predecessor_ids, candidate_ids
+    )
+
+    torch.testing.assert_close(actual, expected)
+
+
 def test_candidate_codebooks_use_adamw_under_muon_optimizer():
     selector = CandidateSelector(
         vocab_size=11,

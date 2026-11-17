@@ -8,6 +8,7 @@ and that ``compound_loss`` routes an all-fused config through one call with
 the same result as the per-term path, D-PACE weighting included.
 """
 
+from dataclasses import dataclass
 from functools import partial
 
 import pytest
@@ -50,16 +51,6 @@ SUBSETS = [
 
 def _fused():
     return pytest.importorskip("speculators.losses.fused")
-
-
-@pytest.fixture
-def narrowest_tile(monkeypatch):
-    """Pin both kernels to their narrowest tile: one compile per term set."""
-    fused = _fused()
-    for kernel in (fused.loss_forward_kernel, fused.loss_backward_kernel):
-        floor = min(config.kwargs["BLOCK_SIZE"] for config in kernel.configs)
-        narrow = [c for c in kernel.configs if c.kwargs["BLOCK_SIZE"] == floor]
-        monkeypatch.setattr(kernel, "configs", narrow[:1])
 
 
 def _inputs(rows: int, vocab: int, dtype: torch.dtype, seed: int):
@@ -273,3 +264,21 @@ def test_compound_loss_with_an_empty_config_is_zero():
     total, term_losses = compound_loss(logits, targets, loss_mask, pos_idx, {})
     assert float(total) == 0.0
     assert term_losses == {}
+
+
+@dataclass
+class _ScaledKL:  # eq without frozen: instances are unhashable
+    scale: float = 1.0
+
+    def __call__(self, logits, targets):
+        return self.scale * eager.kl_div_loss(logits, targets)
+
+
+def test_compound_loss_accepts_an_unhashable_callable_term():
+    logits, targets, _ = _inputs(4, 32, torch.float32, seed=6)
+    loss_mask = torch.ones(1, 4, device=DEVICE, dtype=torch.long)
+    pos_idx = torch.zeros(1, 4, device=DEVICE, dtype=torch.long)
+    args = (logits, targets, loss_mask, pos_idx)
+    total, _ = compound_loss(*args, {"custom": (_ScaledKL(), 1.0)})
+    ref, _ = compound_loss(*args, {"kl_div": (eager.kl_div_loss, 1.0)})
+    torch.testing.assert_close(total, ref)

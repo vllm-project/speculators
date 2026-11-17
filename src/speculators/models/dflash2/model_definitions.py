@@ -284,6 +284,26 @@ class CandidateSelector(nn.Module):
         successors = self.successor_codebook[candidate_ids.long()]
         return (context.unsqueeze(-2) * successors).sum(dim=-1)
 
+    def score_candidates_from_values(
+        self,
+        unary_scores: torch.Tensor,
+        hidden_states: torch.Tensor,
+        predecessor_ids: torch.Tensor,
+        candidate_ids: torch.Tensor,
+    ) -> torch.Tensor:
+        """Add transition scores to already-gathered unary scores.
+
+        Same as ``score_candidates``, but for callers that already have the
+        unary logit values at ``candidate_ids`` (e.g.
+        ``dflash2.chunked_selector.chunked_topk``, which never materializes
+        ``unary_logits`` in the first place, so there is nothing left to
+        gather from).
+        """
+        transition_scores = self.transition_scores(
+            hidden_states, predecessor_ids, candidate_ids
+        )
+        return unary_scores + transition_scores.to(unary_scores.dtype)
+
     def score_candidates(
         self,
         unary_logits: torch.Tensor,
@@ -293,10 +313,9 @@ class CandidateSelector(nn.Module):
     ) -> torch.Tensor:
         """Add transition scores to a selected subset of unary logits."""
         unary_scores = unary_logits.gather(-1, candidate_ids)
-        transition_scores = self.transition_scores(
-            hidden_states, predecessor_ids, candidate_ids
+        return self.score_candidates_from_values(
+            unary_scores, hidden_states, predecessor_ids, candidate_ids
         )
-        return unary_scores + transition_scores.to(unary_scores.dtype)
 
     def select(
         self,

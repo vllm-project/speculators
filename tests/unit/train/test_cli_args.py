@@ -275,3 +275,31 @@ def test_eagle3_flex_rejects_unaligned_total_seq_len(monkeypatch, total_seq_len)
 def test_unaligned_total_seq_len_allowed_elsewhere(monkeypatch, extra):
     args = _parse(monkeypatch, extra)
     assert args.total_seq_len == int(extra[1])
+
+
+def test_dflash_fused_linear_target_mode(monkeypatch):
+    args = _parse(monkeypatch, ["--loss-implementation", "fused_linear"])
+    train_kw, val_kw = DFlashDraftModel.get_trainer_kwargs(**vars(args))
+    assert train_kw["fused_linear"]
+    assert train_kw["fused_linear_targets"] == "recompute"
+    assert val_kw["fused_linear_targets"] == "recompute"
+
+    args = _parse(
+        monkeypatch,
+        [
+            "--loss-implementation",
+            "fused_linear",
+            "--fused-linear-targets",
+            "materialize",
+        ],
+    )
+    train_kw, _ = DFlashDraftModel.get_trainer_kwargs(**vars(args))
+    assert train_kw["fused_linear_targets"] == "materialize"
+    assert train_kw["fused_linear_logits"] == "input"
+
+    args = _parse(
+        monkeypatch,
+        ["--loss-implementation", "fused_linear", "--fused-linear-logits", "float32"],
+    )
+    train_kw, _ = DFlashDraftModel.get_trainer_kwargs(**vars(args))
+    assert train_kw["fused_linear_logits"] == "float32"
