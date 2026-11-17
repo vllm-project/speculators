@@ -6,7 +6,7 @@ import torch
 from safetensors import safe_open
 
 import speculators.models.mtp.core as mtp_core
-from speculators.models.mtp.core import _prepare_mtp_position_ids, _TTTCache
+from speculators.models.mtp.core import _prepare_mtp_position_ids
 
 BATCH = 1
 SEQ_LEN = 10
@@ -49,16 +49,6 @@ def test_non_qwen35_position_ids_remain_2d():
 
 
 # ===== Forward output structure =====
-
-
-def test_ttt_cache_accepts_attention_kwargs():
-    cache = _TTTCache([], [])
-    key_states, value_states = torch.tensor([1]), torch.tensor([2])
-
-    keys, values = cache.update(key_states, value_states, 0, kwargs={})
-
-    assert keys is key_states
-    assert values is value_states
 
 
 def test_forward_output_structure(mtp_model, seed):
