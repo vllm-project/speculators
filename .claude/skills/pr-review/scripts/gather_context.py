@@ -10,6 +10,12 @@ Writes into out_dir:
   reviews.json          submitted reviews
   review_comments.json  inline review comments
   issue_comments.json   the conversation thread
+  stack.json            open PRs by the same author whose head is in this PR's
+                        history, nearest first ({"parents": []} when none)
+and, for a stacked PR only:
+  own.diff              this PR's changes on top of its nearest parent
+  stack/<n>/            each parent's reviews.json, review_comments.json
+                        and issue_comments.json
 """
 
 from __future__ import annotations
@@ -20,12 +26,40 @@ from pathlib import Path
 
 from github_api import get, get_raw, paginate
 
+DIFF = "application/vnd.github.diff"
+# Parents whose discussion is staged; the nearest ones decide what's settled.
+MAX_PARENTS = 5
+
+
+def find_parents(repo: str, pr: dict) -> list[dict]:
+    """Open PRs by the PR's author whose head commit is an ancestor of its head.
+
+    Each has its own branch on main, so this PR's diff includes theirs. Nearest
+    (fewest commits between it and this head) first.
+    """
+    head, author = pr["head"]["sha"], pr["user"]["login"]
+    parents = []
+    for other in paginate(f"/repos/{repo}/pulls?state=open"):
+        if other["number"] == pr["number"] or other["user"]["login"] != author:
+            continue
+        cmp = get(f"/repos/{repo}/compare/{other['head']['sha']}...{head}?per_page=1")
+        if cmp.get("status") == "ahead":
+            parents.append(
+                {
+                    "number": other["number"],
+                    "title": other["title"],
+                    "head_sha": other["head"]["sha"],
+                    "commits_on_top": cmp["ahead_by"],
+                }
+            )
+    return sorted(parents, key=lambda p: p["commits_on_top"])
+
 
 def gather(repo: str, number: str, out_dir: Path) -> None:
     out_dir.mkdir(parents=True, exist_ok=True)
     pr_path = f"/repos/{repo}/pulls/{number}"
     pr = get(pr_path)
-    diff = get_raw(pr_path, accept="application/vnd.github.diff")
+    diff = get_raw(pr_path, accept=DIFF)
     # review_payload anchors comments on the diff and posts them against
     # pr.json's head, so both must describe the same commit.
     if get(pr_path)["head"]["sha"] != pr["head"]["sha"]:
@@ -34,8 +68,30 @@ def gather(repo: str, number: str, out_dir: Path) -> None:
         )
     (out_dir / "pr.json").write_text(json.dumps(pr, indent=1))
     (out_dir / "pr.diff").write_bytes(diff)
+    (out_dir / "files.json").write_text(
+        json.dumps(paginate(f"{pr_path}/files"), indent=1)
+    )
+    _discussion(repo, number, out_dir)
+
+    parents = find_parents(repo, pr)
+    (out_dir / "stack.json").write_text(json.dumps({"parents": parents}, indent=1))
+    if parents:
+        nearest = parents[0]["head_sha"]
+        (out_dir / "own.diff").write_bytes(
+            get_raw(
+                f"/repos/{repo}/compare/{nearest}...{pr['head']['sha']}", accept=DIFF
+            )
+        )
+        for parent in parents[:MAX_PARENTS]:
+            _discussion(
+                repo, str(parent["number"]), out_dir / "stack" / str(parent["number"])
+            )
+
+
+def _discussion(repo: str, number: str, out_dir: Path) -> None:
+    out_dir.mkdir(parents=True, exist_ok=True)
+    pr_path = f"/repos/{repo}/pulls/{number}"
     lists = {
-        "files.json": f"{pr_path}/files",
         "reviews.json": f"{pr_path}/reviews",
         "review_comments.json": f"{pr_path}/comments",
         "issue_comments.json": f"/repos/{repo}/issues/{number}/comments",
