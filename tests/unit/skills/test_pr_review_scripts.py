@@ -217,11 +217,57 @@ def test_anchoring():
     assert single == {"path": "pkg/a.py", "line": 3, "side": "RIGHT", "body": "single"}
     assert ranged["start_line"] == 2
     assert ranged["start_side"] == "RIGHT"
-    assert "- cross-hunk (`pkg/a.py:21`)" in payload["body"]
-    assert "- outside-diff (`pkg/a.py:10`)" in payload["body"]
+    link = f"https://github.com/vllm-project/speculators/blob/{HEAD}/pkg/a.py#"
+    assert f"- cross-hunk ([`pkg/a.py:21`]({link}L21))" in payload["body"]
+    assert f"- outside-diff ([`pkg/a.py:10`]({link}L10))" in payload["body"]
     assert "- pr-wide" in payload["body"].splitlines()
     assert "dropped" not in payload["body"]
     assert counts == {"dropped": 1, "inline": 2, "in_body": 3}
+
+
+LINK = "https://github.com/o/r/blob/" + HEAD + "/src/pkg/fused.py#"
+PATHS = ["src/pkg/fused.py", "src/pkg/core.py", "src/other/core.py"]
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        ("see `src/pkg/fused.py:12`", f"see [`src/pkg/fused.py:12`]({LINK}L12)"),
+        ("in fused.py:611-615 here", f"in [`fused.py:611-615`]({LINK}L611-L615) here"),
+        ("(`fused.py:3`)", f"([`fused.py:3`]({LINK}L3))"),
+        ("core.py:540 is ambiguous", "core.py:540 is ambiguous"),
+        ("unknown.py:7 is not changed", "unknown.py:7 is not changed"),
+        ("`x = f(fused.py:3)` stays code", "`x = f(fused.py:3)` stays code"),
+        ("```\nfused.py:3\n```", "```\nfused.py:3\n```"),
+        ("[fused.py:3](https://x)", "[fused.py:3](https://x)"),
+    ],
+    ids=[
+        "full-path",
+        "suffix-range",
+        "code-span",
+        "ambiguous",
+        "unchanged-file",
+        "longer-code-span",
+        "fenced",
+        "already-linked",
+    ],
+)
+def test_link_refs(text, expected):
+    assert review_payload.link_refs(text, PATHS, "o/r", HEAD) == expected
+
+
+def test_payload_links_references_in_every_part():
+    payload, _ = _build(
+        _review(
+            {"confidence": 90, "body": "see a.py:2", "file": "pkg/a.py", "line": 3},
+            {"confidence": 90, "body": "and a.py:21"},
+            summary="Gap at a.py:1.",
+        )
+    )
+    link = f"https://github.com/vllm-project/speculators/blob/{HEAD}/pkg/a.py#"
+    assert payload["comments"][0]["body"] == f"see [`a.py:2`]({link}L2)"
+    assert payload["body"].startswith(f"Gap at [`a.py:1`]({link}L1).")
+    assert f"and [`a.py:21`]({link}L21)" in payload["body"]
 
 
 def test_footer_links_the_skill_at_its_commit():
