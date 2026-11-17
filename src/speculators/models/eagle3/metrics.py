@@ -93,7 +93,7 @@ def compute_metrics(
         (1, seq_len), ttt_step, device=s_logits.device, dtype=torch.long
     )
 
-    s_loss, term_losses = compound_loss(
+    out = compound_loss(
         s_logits,
         s_targets,
         s_loss_mask,
@@ -101,6 +101,7 @@ def compute_metrics(
         loss_config=loss_config,
         decay_fn=partial(exp_loss_decay, gamma=ttt_step_loss_decay),
     )
+    s_loss, term_losses = out.loss, out.term_losses
 
     # The ids arrive unaligned, so apply the same slicing align_for_step
     # applies to the tensors they came from.

@@ -1,7 +1,8 @@
 """Shared loss selection, weighting, and reduction utilities."""
 
 import json
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
+from dataclasses import dataclass
 
 import torch
 
@@ -167,9 +168,10 @@ _FUSED_LOSS_FN_MAP: dict[str, Callable[[torch.Tensor, torch.Tensor], torch.Tenso
 }
 
 
-# Fused map functions back to their names: compound_loss routes a config whose
-# terms are all fused through a single kernel call.
-_FUSED_NAME_BY_FN = {fn: name for name, fn in _FUSED_LOSS_FN_MAP.items()}
+def _fused_name(fn: Callable) -> str | None:
+    """Name of ``fn`` if it is a registered fused loss (by identity: custom
+    losses may be unhashable callables)."""
+    return next((n for n, f in _FUSED_LOSS_FN_MAP.items() if f is fn), None)
 
 
 _EAGER_LOSS_FN_MAP: dict[str, Callable[[torch.Tensor, torch.Tensor], torch.Tensor]] = {
@@ -235,6 +237,24 @@ def resolve_loss_config(spec: str, implementation: str = "fused") -> LossConfig:
     return config
 
 
+@dataclass
+class CompoundLossOutput:
+    """``compound_loss`` results plus what the same logits pass can provide."""
+
+    loss: torch.Tensor
+    """Weighted total loss (scalar)."""
+    term_losses: dict[str, torch.Tensor]
+    """Per-term scalar losses ``"{name}_loss"`` (empty for a single term)."""
+    pred_ids: torch.Tensor
+    """``[1, T]`` ``argmax(logits, -1)``, first index on ties; empty unless
+    the fused pass provided it or ``with_ids`` was set."""
+    target_ids: torch.Tensor
+    """``[1, T]`` ``argmax(targets, -1)``, as ``pred_ids``."""
+    metric_terms: dict[str, torch.Tensor]
+    """Requested per-position ``[1, T]`` primitive terms, detached: from the
+    fused pass, or the eager functions on a non-fused config."""
+
+
 def compound_loss(
     logits: torch.Tensor,
     targets: torch.Tensor,
@@ -242,7 +262,9 @@ def compound_loss(
     pos_idx: torch.Tensor,
     loss_config: LossConfig,
     decay_fn: Callable[..., torch.Tensor] | None = None,
-) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
+    metric_terms: Sequence[str] = (),
+    with_ids: bool = False,
+) -> CompoundLossOutput:
     """Compute a weighted sum of loss terms.
 
     Each entry in *loss_config* maps a name to ``(loss_fn, weight)``; the
@@ -252,21 +274,37 @@ def compound_loss(
     When every term is a fused loss, all terms come from one kernel call
     (``fused_compound_losses``): the draft/target softmax statistics are
     computed once and backward writes a single combined logits gradient.
-    A config that mixes fused and eager terms runs each term on its own.
+    The same pass returns both argmaxes and ``metric_terms`` (primitive terms
+    such as ``"tv"``, never differentiated), so no extra read of the
+    ``[1, T, V]`` tensors happens. A config that mixes fused and eager terms
+    runs each term on its own; there ``metric_terms`` come from the eager
+    functions and ``with_ids`` computes the argmaxes with ``torch.argmax``.
 
-    Returns the total loss and a dict of per-term (unweighted) scalar losses
-    keyed as ``"{name}_loss"``.  When the config contains a single term the
-    dict is empty (the overall loss already captures it).
+    ``term_losses`` holds the per-term (unweighted) scalar losses keyed as
+    ``"{name}_loss"``. When the config contains a single term it is empty
+    (the overall loss already captures it).
     """
     total = torch.zeros((), device=logits.device, dtype=torch.float32)
     term_losses: dict[str, torch.Tensor] = {}
     multi = len(loss_config) > 1
-    fused_names = [_FUSED_NAME_BY_FN.get(fn) for fn, _ in loss_config.values()]
+    fused_names = [_fused_name(fn) for fn, _ in loss_config.values()]
+    metrics: dict[str, torch.Tensor] = {}
     if fused_names and all(name is not None for name in fused_names):
-        fused = _fused_kernel("fused_compound_losses")(logits, targets, fused_names)
-        elementwise = [fused[name] for name in fused_names]
+        fused = _fused_kernel("fused_compound")(
+            logits, targets, fused_names, metric_terms
+        )
+        elementwise = [fused.losses[name] for name in fused_names]
+        pred_ids, target_ids = fused.pred_ids, fused.target_ids
+        metrics = fused.metrics
     else:
         elementwise = [fn(logits, targets) for fn, _ in loss_config.values()]
+        with torch.no_grad():
+            metrics = {t: _EAGER_LOSS_FN_MAP[t](logits, targets) for t in metric_terms}
+        if with_ids:
+            pred_ids = torch.argmax(logits, dim=-1)
+            target_ids = torch.argmax(targets, dim=-1)
+        else:
+            pred_ids = target_ids = torch.empty(0, dtype=torch.long)
     for (name, (_, weight)), term_elementwise in zip(
         loss_config.items(), elementwise, strict=True
     ):
@@ -274,7 +312,7 @@ def compound_loss(
         if multi:
             term_losses[f"{name}_loss"] = term.detach()
         total = total + weight * term
-    return total, term_losses
+    return CompoundLossOutput(total, term_losses, pred_ids, target_ids, metrics)
 
 
 def loss_function(

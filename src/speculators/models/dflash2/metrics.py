@@ -4,7 +4,6 @@
 analytical TV-overlap estimate over the unary logits.
 """
 
-from collections.abc import Callable
 from functools import partial
 from typing import Any
 
@@ -16,7 +15,6 @@ from speculators.losses import (
     dflash_loss_decay,
     dpace_loss_decay,
     loss_function,
-    tv_loss,
 )
 from speculators.models.dspark.metrics import compute_metrics as compute_unary_metrics
 from speculators.models.metrics import compute_accepted_length_counts
@@ -153,7 +151,6 @@ def compute_metrics(
     sample_from_anchor: bool = False,
     *,
     loss_config: LossConfig,
-    tv_loss_fn: Callable[[torch.Tensor, torch.Tensor], torch.Tensor] = tv_loss,
     gamma: float = 4.0,
     selector_loss_alpha: float = 1.0,
     per_position_loss_weight: str = "fixed-exp-decay",
@@ -174,7 +171,6 @@ def compute_metrics(
         loss_mask,
         block_size,
         loss_config=loss_config,
-        tv_loss_fn=tv_loss_fn,
         gamma=gamma,
         confidence_head_alpha=0.0,
         per_position_loss_weight=per_position_loss_weight,
