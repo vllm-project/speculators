@@ -28,7 +28,7 @@ Run the commands below from the repository root. Note the time when you start.
      vllm-project/speculators <number> "$(gh api user --jq .login)"
    ```
 
-   If `eligible` is false, stop and tell the user the `reason`.
+   Add `--force` when the user asks to review the PR again: an earlier review of yours at the current head then no longer stops it. If `eligible` is false, stop and tell the user the `reason`.
 
 2. **Context.** Fetch everything the rubric reads into a fresh directory:
 
