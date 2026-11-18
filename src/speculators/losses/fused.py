@@ -85,28 +85,23 @@ _LOG2 = tl.constexpr(0.6931471805599453)
 # a constexpr object as an autograd.Function argument and would graph-break;
 # the ``TERMS: tl.constexpr`` parameter re-wraps it in the kernel.
 TERM_SLOTS = {"kl_div": 0, "rkl": 1, "jsd": 2, "ce": 3, "tv": 4}
-_N_TERMS = len(TERM_SLOTS)
-_BITS = {name: 1 << slot for name, slot in TERM_SLOTS.items()}
-_KL = tl.constexpr(_BITS["kl_div"])
-_RKL = tl.constexpr(_BITS["rkl"])
-_JSD = tl.constexpr(_BITS["jsd"])
-_CE = tl.constexpr(_BITS["ce"])
-_TV = tl.constexpr(_BITS["tv"])
+N_TERMS = len(TERM_SLOTS)
+TERM_BITS = {name: 1 << slot for name, slot in TERM_SLOTS.items()}
+_KL = tl.constexpr(TERM_BITS["kl_div"])
+_RKL = tl.constexpr(TERM_BITS["rkl"])
+_JSD = tl.constexpr(TERM_BITS["jsd"])
+_CE = tl.constexpr(TERM_BITS["ce"])
+_TV = tl.constexpr(TERM_BITS["tv"])
 # Terms that need the target softmax; CE needs only the target argmax.
-_DIST_MASK = _BITS["kl_div"] | _BITS["rkl"] | _BITS["jsd"] | _BITS["tv"]
-_DIST = tl.constexpr(_DIST_MASK)
+DIST_MASK = TERM_BITS["kl_div"] | TERM_BITS["rkl"] | TERM_BITS["jsd"] | TERM_BITS["tv"]
+_DIST = tl.constexpr(DIST_MASK)
 
-# stats [_N_STATS, n_rows], fp32: [0]/[1] draft row max / sum-exp, [2]/[3]
+# stats [N_STATS, n_rows], fp32: [0]/[1] draft row max / sum-exp, [2]/[3]
 # the same for targets (distribution terms only), [4] rkl row loss L, [5] jsd
 # KL(dp || mix), [6] ce target argmax as float32 (exact: vocab < 2**24),
 # [7] tv s_s. Rows of terms not in TERMS are left unwritten.
-_N_STATS = 8
+N_STATS = 8
 
-# Shared with losses.fused_linear, which drives the same kernels on chunks.
-TERM_BITS = _BITS
-DIST_MASK = _DIST_MASK
-N_TERMS = _N_TERMS
-N_STATS = _N_STATS
 
 # Named losses and the primitive terms each is composed from.
 LOSS_TERMS: dict[str, tuple[str, ...]] = {
@@ -407,7 +402,7 @@ class _FusedLoss(torch.autograd.Function):
     selects what backward differentiates. Terms outside ``grad_terms`` are
     metric-only: computed in the same pass, never differentiated.
 
-    Returns ``[_N_TERMS, B, T]`` fp32 per-position losses indexed by
+    Returns ``[N_TERMS, B, T]`` fp32 per-position losses indexed by
     ``TERM_SLOTS`` (slots outside ``terms`` are uninitialized and must not be
     read) and ``[2, B, T]`` int64 first-index argmax of logits and targets
     (non-differentiable). Targets intentionally receive no gradient; use the
@@ -419,9 +414,9 @@ class _FusedLoss(torch.autograd.Function):
         B, T, V = logits.shape
         logits_flat = logits.contiguous().view(B * T, V)
         targets_flat = targets.contiguous().view(B * T, V)
-        losses = torch.empty(_N_TERMS, B * T, device=logits.device, dtype=torch.float32)
+        losses = torch.empty(N_TERMS, B * T, device=logits.device, dtype=torch.float32)
         argmax = torch.empty(2, B * T, device=logits.device, dtype=torch.int64)
-        stats = torch.empty(_N_STATS, B * T, device=logits.device, dtype=torch.float32)
+        stats = torch.empty(N_STATS, B * T, device=logits.device, dtype=torch.float32)
         loss_forward_kernel[(B * T,)](
             logits_flat,
             targets_flat,
@@ -438,12 +433,12 @@ class _FusedLoss(torch.autograd.Function):
         # is the only differentiated term the targets are released after
         # forward.
         ctx.save_for_backward(
-            logits_flat, targets_flat if grad_terms & _DIST_MASK else None, stats
+            logits_flat, targets_flat if grad_terms & DIST_MASK else None, stats
         )
         ctx.mark_non_differentiable(argmax)
         ctx.grad_terms = grad_terms
         ctx.shape = (B, T, V)
-        return losses.view(_N_TERMS, B, T), argmax.view(2, B, T)
+        return losses.view(N_TERMS, B, T), argmax.view(2, B, T)
 
     @staticmethod
     def backward(ctx, grad_output, _grad_argmax):
@@ -451,7 +446,7 @@ class _FusedLoss(torch.autograd.Function):
         if ctx.grad_terms == 0:
             return None, None, None, None
         B, T, V = ctx.shape
-        grad_out = grad_output.contiguous().view(_N_TERMS, B * T)
+        grad_out = grad_output.contiguous().view(N_TERMS, B * T)
         grad_in = torch.empty_like(logits_flat)
         loss_backward_kernel[(B * T,)](
             logits_flat,
@@ -473,7 +468,7 @@ _NLA_EPS = 1e-5
 def terms_mask(terms: Sequence[str]) -> int:
     mask = 0
     for term in terms:
-        mask |= _BITS[term]
+        mask |= TERM_BITS[term]
     return mask
 
 
@@ -533,7 +528,7 @@ def fused_compound(
     is also a loss term reuses that output.
     """
     loss_terms = sorted(
-        {t for name in names for t in LOSS_TERMS[name]}, key=lambda t: _BITS[t]
+        {t for name in names for t in LOSS_TERMS[name]}, key=lambda t: TERM_BITS[t]
     )
     grad_mask = terms_mask(loss_terms)
     losses, argmax = _FusedLoss.apply(
