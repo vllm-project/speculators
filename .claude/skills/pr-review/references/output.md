@@ -6,11 +6,11 @@ A review is one `review.json` file. `scripts/review_payload.py` checks it and tu
 {
   "version": 1,
   "pr": 1234,
-  "summary": "Your verdict on the design in one or two short sentences.",
+  "summary": "Design looks good; two gaps below.",
   "findings": [
-    {"confidence": 90, "file": "src/speculators/x.py", "line": 42, "body": "What is wrong and what to do, in a sentence or two."},
-    {"confidence": 85, "file": "src/speculators/x.py", "start_line": 40, "line": 44, "body": "A finding about a range of lines."},
-    {"confidence": 80, "body": "A finding about the PR as a whole, such as a missing Tests section."}
+    {"confidence": 90, "file": "src/speculators/models/peagle/metrics.py", "line": 56, "body": "This still runs its own `argmax`; pass `with_ids=True` and use `out.pred_ids`, as DFlash does."},
+    {"confidence": 85, "file": "src/speculators/train/trainer.py", "start_line": 40, "line": 44, "body": "A NaN validation loss never compares lower, so `checkpoint_best` stays on the first epoch. Skip non-finite losses here."},
+    {"confidence": 80, "body": "The description has no Tests section, which AGENTS.md asks for."}
   ]
 }
 ```
