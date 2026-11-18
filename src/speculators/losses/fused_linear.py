@@ -159,7 +159,7 @@ def _fused_linear_fwd(
     grad_terms: int,
     chunk_rows: int,
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-    """Per-term losses ``[_N_TERMS, N]``, argmax ``[2, N]`` and stats ``[_N_STATS, N]``.
+    """Per-term losses ``[N_TERMS, N]``, argmax ``[2, N]`` and stats ``[N_STATS, N]``.
 
     ``grad_terms`` (a subset of ``terms``) is only consumed by the autograd
     registration; slots of terms outside ``terms`` are zero.
