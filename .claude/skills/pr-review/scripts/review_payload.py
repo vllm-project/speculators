@@ -123,16 +123,20 @@ def _inline_comment(finding: dict, anchors: dict[str, dict[int, int]]) -> dict |
 _REF = r"((?:[\w.-]+/)*[\w.-]+\.\w+):(\d+)(?:-(\d+))?"
 _BARE_REF = re.compile(r"(?<![\w\[(/`.-])" + _REF + r"(?![\w\]`])")
 _CODE_REF = re.compile("`" + _REF + "`")
-_FENCE = re.compile(r"(```.*?```)", re.S)
-_CODE_SPAN = re.compile(r"(`[^`\n]+`)")
+_FENCE = re.compile(r"(```.*?```|~~~.*?~~~)", re.S)
+# An existing Markdown link, whose text may itself be a code span.
+_LINK = re.compile(r"(\[[^\]\n]*\]\([^)\s]*\))")
+# A double-backtick span first, so its inner backticks don't start a single one.
+_CODE_SPAN = re.compile(r"(``.+?``|`[^`\n]+`)")
 
 
 def link_refs(text: str, paths: list[str], repo: str, sha: str) -> str:
     """Turn `path:line` references to changed files into permalinks at `sha`.
 
     A reference resolves when it names exactly one changed file, by its full
-    path or a path suffix; anything else is left as written. Fenced blocks and
-    longer code spans are not touched.
+    path or a path suffix; anything else is left as written. Fenced blocks,
+    existing links and code spans other than a bare reference are not
+    touched.
     """
 
     def resolve(match: re.Match) -> str:
@@ -149,12 +153,16 @@ def link_refs(text: str, paths: list[str], repo: str, sha: str) -> str:
         if i % 2:  # a fenced block
             out.append(block)
             continue
-        for j, piece in enumerate(_CODE_SPAN.split(block)):
-            if j % 2:  # an inline code span
-                full = _CODE_REF.fullmatch(piece)
-                out.append(resolve(full) if full else piece)
-            else:
-                out.append(_BARE_REF.sub(resolve, piece))
+        for k, chunk in enumerate(_LINK.split(block)):
+            if k % 2:  # an existing link
+                out.append(chunk)
+                continue
+            for j, piece in enumerate(_CODE_SPAN.split(chunk)):
+                if j % 2:  # an inline code span
+                    full = _CODE_REF.fullmatch(piece)
+                    out.append(resolve(full) if full else piece)
+                else:
+                    out.append(_BARE_REF.sub(resolve, piece))
     return "".join(out)
 
 

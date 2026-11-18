@@ -259,6 +259,10 @@ PATHS = ["src/pkg/fused.py", "src/pkg/core.py", "src/other/core.py"]
         ("`x = f(fused.py:3)` stays code", "`x = f(fused.py:3)` stays code"),
         ("```\nfused.py:3\n```", "```\nfused.py:3\n```"),
         ("[fused.py:3](https://x)", "[fused.py:3](https://x)"),
+        ("[`fused.py:3`](https://x#L3)", "[`fused.py:3`](https://x#L3)"),
+        ("[see fused.py:3 here](https://x)", "[see fused.py:3 here](https://x)"),
+        ("see ``fused.py:3``", "see ``fused.py:3``"),
+        ("~~~\nfused.py:3\n~~~", "~~~\nfused.py:3\n~~~"),
     ],
     ids=[
         "full-path",
@@ -269,6 +273,10 @@ PATHS = ["src/pkg/fused.py", "src/pkg/core.py", "src/other/core.py"]
         "longer-code-span",
         "fenced",
         "already-linked",
+        "linked-code-span",
+        "inside-link-text",
+        "double-backtick",
+        "tilde-fence",
     ],
 )
 def test_link_refs(text, expected):
