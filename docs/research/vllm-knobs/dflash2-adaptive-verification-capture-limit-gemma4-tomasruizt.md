@@ -19,7 +19,7 @@ tags:
 
 Adaptive verification (AV, [vllm#60229](https://github.com/vllm-project/vllm/pull/60229)) beats the best fixed draft budget from c32 to c64 (+4.3% to +6.9%), but at c128 it only ties fixed K=3 with the default CUDA graph capture limit of 512 rows. Raising the limit to 1,024 rows lets AV beat every fixed K at c128 (+3.2% over K=3, +10% over K=7), because AV's startup cost table overprices steps above the limit. This follows up on [the earlier Gemma4 note](adaptive-verification-dflash-dflash2-dspark-gemma4-shubhra.md).
 
-![Throughput versus interactivity, c1 to c128](../assets/research/dflash2-av-gemma4-pareto.png)
+![Throughput versus interactivity, c1 to c128](../../assets/research/dflash2-av-gemma4-pareto.png)
 
 ## Setup
 
