@@ -2,7 +2,7 @@
 
 The training loss controls what the draft model is optimized for. Select it with `--loss-fn` in [`speculators train`](../cli/train.md), which accepts either a single loss name or a JSON dict for a weighted combination. It applies to Eagle-3, P-EAGLE, DFlash, and DSpark. MTP uses its own multi-step cross-entropy loss and ignores this flag.
 
-The fused Triton implementation is the default. Use `--loss-implementation eager` for compatibility or numerical validation; eager losses may OOM with DFlash or DSpark.
+The fused Triton implementation is the default. Use `--loss-implementation eager` for compatibility or numerical validation; eager losses may OOM with DFlash or DSpark. DFlash can also use `--loss-implementation fused_linear`, which never materializes the draft logits (see [Memory-Efficient DFlash Loss](#memory-efficient-dflash-loss)).
 
 ```bash
 speculators train ... --loss-fn kl_div
@@ -37,6 +37,12 @@ Pass a JSON dict to train on a weighted sum of several losses. Weights are used 
 ```bash
 speculators train ... --loss-fn '{"ce": 0.1, "tv": 0.9}'
 ```
+
+## Memory-Efficient DFlash Loss
+
+`--loss-implementation fused_linear` computes the loss from DFlash's final hidden states and its frozen `lm_head` in row chunks, so the `[N, V]` draft logits and their gradient never exist (`N` loss rows, `V` vocabulary). It supports every loss above with the same per-row semantics, including D-PACE and weighted combinations, and its logits are fp32 from the GEMM accumulator. Backward recomputes each chunk's logits: at 16k rows and a 152k vocabulary (bf16, KL, MI350P) the loss head's peak memory drops from 13.9 GB to 6.5 GB, at about 1.4x its forward + backward time. The target logits are still materialized.
+
+Chunks are sized from a scratch budget set by `SPECULATORS_FUSED_LINEAR_BUDGET_MIB` (default 2048). Only DFlash supports `fused_linear`; other models raise an error.
 
 ## References
 
