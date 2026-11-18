@@ -129,6 +129,8 @@ torchrun --standalone --nproc_per_node=4 -m speculators.train \
 
 - **`--loss-fn`** (str, default: `"ce"` for dflash, `"kl_div"` otherwise) Loss function specification. Pass a name for a single loss (`kl_div`, `rkl`, `jsd`, `ce`, `tv`, `nla`, `lk_hybrid`) or a JSON dict for a weighted combination, e.g. `'{"ce": 0.1, "tv": 0.9}'`. Required to be `ce` when `--per-position-loss-weight dpace` is used.
 
+- **`--loss-implementation`** (str, default: `"fused"`) Loss implementation: `fused` (Triton kernels), `eager` (for compatibility and numerical validation; may OOM with DFlash-family models), or `fused_linear` (DFlash only; computes the loss from hidden states without materializing the draft logits, see [Loss Functions](../user_guide/loss_functions.md#memory-efficient-dflash-loss)).
+
 ### Optimizer Arguments
 
 - **`--optimizer`** (str, default: `"muon"`) Optimizer to use. Options: `adamw`, `muon`. The `muon` option applies the Muon optimizer to 2D weight matrices and AdamW to the remaining parameters (norms, biases, embeddings, lm_head).
