@@ -38,11 +38,15 @@ from speculators.train.distributed import (
 )
 from speculators.train.graceful_shutdown import with_graceful_shutdown
 from speculators.train.optimizers import build_optimizers
-from speculators.train.recovery import BatchRecoveryCoordinator
+from speculators.train.recovery import RECOVERY_METADATA_KEY, BatchRecoveryCoordinator
 from speculators.train.utils import normalize_counted_metrics
 
 root_logger = logging.getLogger("speculators")
 metric_logger = logging.getLogger("speculators.metrics")
+
+
+# Reduced alongside the validation metrics, then removed before logging.
+_COUNTED_BATCHES_KEY = "__counted_batches"
 
 
 def _all_reduce_metrics(metrics: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
@@ -858,9 +862,12 @@ class Trainer:
 
         accumulated: dict[str, torch.Tensor] = {}
         num_batches = len(val_loader)
+        counted_batches = 0
         recovery = BatchRecoveryCoordinator("validation")
         for i, batch in enumerate(val_loader):
             self._maybe_val_sync(i)
+            metadata = batch.get(RECOVERY_METADATA_KEY)
+            locally_empty = metadata is not None and metadata.locally_empty
             recovery.consume(
                 batch,
                 synchronize=_should_sync_recovery(i, num_batches - 1),
@@ -879,17 +886,41 @@ class Trainer:
                     **gpu_batch, **(self.config.val_call_kwargs or {})
                 )
 
+            # A batch whose samples all failed hidden-state generation is padding
+            # only. Models still report loss_total=1 for it, so counting it would
+            # pull loss_epoch toward 0. Its forward still runs to keep ranks in
+            # step, and zeroing keeps the reduced keys identical on every rank.
+            if locally_empty:
+                metrics = {k: torch.zeros_like(v) for k, v in metrics.items()}
+            else:
+                counted_batches += 1
+
             _accumulate_metrics(accumulated, metrics)
 
         val_metrics: dict[str, float] = {}
+        total_counted = counted_batches
         if accumulated:
+            device = next(iter(accumulated.values())).device
+            accumulated[_COUNTED_BATCHES_KEY] = torch.tensor(
+                float(counted_batches), device=device
+            )
             if self.is_distributed:
                 accumulated = _all_reduce_metrics(accumulated)
             val_metrics = {k: v.item() for k, v in accumulated.items()}
+            total_counted = int(val_metrics.pop(_COUNTED_BATCHES_KEY))
 
-        world_size = dist.get_world_size() if self.is_distributed else 1
-        val_metrics = {k: v / num_batches for k, v in val_metrics.items()}
-        val_metrics = normalize_counted_metrics(val_metrics, world_size)
+        if num_batches and not total_counted:
+            # No validation data reached the model on any rank; a 0.0 loss here
+            # would become checkpoint_best.
+            root_logger.warning(
+                f"Validation epoch {epoch} had no data on any rank (every batch "
+                "lost all its samples); skipping its metrics and checkpoint_best."
+            )
+            return None
+
+        # Sums are over every rank's non-empty batches, so divide by that count.
+        val_metrics = {k: v / max(total_counted, 1) for k, v in val_metrics.items()}
+        val_metrics = normalize_counted_metrics(val_metrics)
         val_metrics = {f"{k}_epoch": v for k, v in val_metrics.items()}
 
         metric_logger.info(
