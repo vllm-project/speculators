@@ -154,6 +154,25 @@ deleted file mode 100644
 """
 
 
+def test_an_added_line_that_looks_like_a_file_header_stays_in_its_file():
+    diff = (
+        "diff --git a/docs/x.md b/docs/x.md\n--- a/docs/x.md\n+++ b/docs/x.md\n"
+        "@@ -1,2 +1,4 @@\n a\n+++ b/example\n+b\n c\n"
+    )
+    assert review_payload.commentable_lines(diff) == {
+        "docs/x.md": {1: 1, 2: 1, 3: 1, 4: 1}
+    }
+
+
+def test_quoted_paths_and_form_feeds():
+    diff = (
+        'diff --git "a/d\\303\\251j\\303\\240.md" "b/d\\303\\251j\\303\\240.md"\n'
+        '--- "a/d\\303\\251j\\303\\240.md"\n+++ "b/d\\303\\251j\\303\\240.md"\n'
+        "@@ -1 +1,3 @@\n a\n+page\x0cbreak\n+c\n"
+    )
+    assert review_payload.commentable_lines(diff) == {"déjà.md": {1: 1, 2: 1, 3: 1}}
+
+
 def test_commentable_lines():
     lines = review_payload.commentable_lines(DIFF)
     assert set(lines) == {"pkg/a.py"}
@@ -268,16 +287,15 @@ def test_pr_number_may_be_a_string():
     assert payload is not None
 
 
-def test_review_schema_accepts_the_documented_example():
-    schema = json.loads(
-        (
-            REPO_ROOT / ".claude/skills/pr-review/references/review.schema.json"
-        ).read_text()
-    )
-    assert set(schema["required"]) == {"version", "pr", "summary", "findings"}
-    assert (
-        schema["properties"]["version"]["const"] == review_payload.REVIEW_FORMAT_VERSION
-    )
+def test_the_documented_example_builds_a_review():
+    doc = (REPO_ROOT / ".claude/skills/pr-review/references/output.md").read_text()
+    example = json.loads(doc.split("```json\n", 1)[1].split("```", 1)[0])
+    assert example["version"] == review_payload.REVIEW_FORMAT_VERSION
+    pr = _pr(number=example["pr"])
+    payload, counts = review_payload.build_payload(example, pr, DIFF, HEAD)
+    assert payload is not None
+    assert counts["dropped"] == 0
+    assert counts["inline"] + counts["in_body"] == len(example["findings"])
 
 
 # gather_context ---------------------------------------------------------------
