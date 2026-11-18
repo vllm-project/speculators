@@ -36,7 +36,6 @@ __all__ = ["chunk_rows_for", "fused_linear_compound"]
 _BUDGET_ENV = "SPECULATORS_FUSED_LINEAR_BUDGET_MIB"
 _DEFAULT_BUDGET_MIB = 2048
 _MIN_CHUNK_ROWS = 64
-_LOG2 = 0.6931471805599453
 
 
 def chunk_rows_for(vocab: int, dtype: torch.dtype, rows: int) -> int:
@@ -52,13 +51,8 @@ def chunk_rows_for(vocab: int, dtype: torch.dtype, rows: int) -> int:
     return min(chunk, max(rows, 1))
 
 
-def _out_dtype(hidden: torch.Tensor) -> torch.dtype:
-    """Loss / stats dtype: fp32, or fp64 for fp64 inputs (CPU gradcheck)."""
-    return torch.promote_types(torch.float32, hidden.dtype)
-
-
 def _project(hidden: torch.Tensor, weight: torch.Tensor) -> torch.Tensor:
-    """``hidden @ weight.T`` with an fp32 (or wider) result from the accumulator.
+    """``hidden @ weight.T`` with an fp32 result from the accumulator.
 
     Autocast is disabled: forward and backward must compute bit-identical
     logits from the operands as given (the wrapper casts them for autocast),
@@ -66,9 +60,6 @@ def _project(hidden: torch.Tensor, weight: torch.Tensor) -> torch.Tensor:
     """
     with torch.autocast(hidden.device.type, enabled=False):
         if hidden.dtype in (torch.float16, torch.bfloat16):
-            if hidden.device.type == "cpu":
-                # out_dtype GEMMs are not implemented on CPU
-                return hidden.float() @ weight.float().t()
             return torch.mm(hidden, weight.t(), out_dtype=torch.float32)
         return hidden @ weight.t()
 
@@ -76,73 +67,6 @@ def _project(hidden: torch.Tensor, weight: torch.Tensor) -> torch.Tensor:
 def _chunks(rows: int, chunk_rows: int):
     for start in range(0, rows, chunk_rows):
         yield start, min(start + chunk_rows, rows)
-
-
-# ---------------------------------------------------------------------------
-# Torch reference of one chunk (CPU / fp64): same math and stats layout as the
-# Triton kernels in losses.fused.
-# ---------------------------------------------------------------------------
-
-
-def _ref_softmax_stats(z: torch.Tensor):
-    m = z.max(dim=-1).values
-    s = torch.exp(z - m[:, None]).sum(dim=-1)
-    lse = m + torch.log(s)
-    return m, s, z - lse[:, None]
-
-
-def _ref_forward_chunk(z, targets, terms, losses, argmax, stats):
-    t = targets.to(z.dtype)
-    m_d, s_d, ldp = _ref_softmax_stats(z)
-    dp = torch.exp(ldp)
-    stats[0], stats[1] = m_d, s_d
-    argmax[0] = z.argmax(dim=-1)
-    argmax[1] = t.argmax(dim=-1)
-    if terms & fused.TERM_BITS["ce"]:
-        idx = argmax[1]
-        losses[3] = m_d + torch.log(s_d) - z.gather(-1, idx[:, None])[:, 0]
-        stats[6] = idx.to(stats.dtype)
-    if not terms & fused.DIST_MASK:
-        return
-    m_t, s_t, ltp = _ref_softmax_stats(t)
-    tp = torch.exp(ltp)
-    stats[2], stats[3] = m_t, s_t
-    if terms & fused.TERM_BITS["kl_div"]:
-        losses[0] = (tp * (ltp - ldp)).sum(dim=-1)
-    if terms & fused.TERM_BITS["rkl"]:
-        losses[1] = stats[4] = (dp * (ldp - ltp)).sum(dim=-1)
-    if terms & fused.TERM_BITS["jsd"]:
-        lmp = torch.logaddexp(ldp, ltp) - _LOG2
-        jsd_draft = (dp * (ldp - lmp)).sum(dim=-1)
-        losses[2] = 0.5 * (jsd_draft + (tp * (ltp - lmp)).sum(dim=-1))
-        stats[5] = jsd_draft
-    if terms & fused.TERM_BITS["tv"]:
-        losses[4] = 1.0 - torch.minimum(dp, tp).sum(dim=-1)
-        stats[7] = torch.where(dp <= tp, dp, 0.0).sum(dim=-1)
-
-
-def _ref_backward_chunk(z, targets, grad_out, stats, terms) -> torch.Tensor:
-    ldp = z - (stats[0] + torch.log(stats[1]))[:, None]
-    dp = torch.exp(ldp)
-    grad = torch.zeros_like(z)
-    if terms & fused.TERM_BITS["ce"]:
-        onehot = torch.zeros_like(z).scatter_(-1, stats[6].long()[:, None], 1.0)
-        grad += grad_out[3][:, None] * (dp - onehot)
-    if terms & fused.DIST_MASK:
-        ltp = targets.to(z.dtype) - (stats[2] + torch.log(stats[3]))[:, None]
-        tp = torch.exp(ltp)
-        if terms & fused.TERM_BITS["kl_div"]:
-            grad += grad_out[0][:, None] * (dp - tp)
-        if terms & fused.TERM_BITS["rkl"]:
-            grad += grad_out[1][:, None] * (dp * (ldp - ltp - stats[4][:, None]))
-        if terms & fused.TERM_BITS["jsd"]:
-            lmp = torch.logaddexp(ldp, ltp) - _LOG2
-            grad += grad_out[2][:, None] * (0.5 * dp * (ldp - lmp - stats[5][:, None]))
-        if terms & fused.TERM_BITS["tv"]:
-            grad += grad_out[4][:, None] * (
-                -dp * ((dp <= tp).to(z.dtype) - stats[7][:, None])
-            )
-    return grad
 
 
 # ---------------------------------------------------------------------------
@@ -166,23 +90,13 @@ def _fused_linear_fwd(
     """
     del grad_terms
     rows, vocab = hidden.shape[0], weight.shape[0]
-    dtype = _out_dtype(hidden)
+    dtype = torch.float32
     losses = hidden.new_zeros((fused.N_TERMS, rows), dtype=dtype)
     argmax = hidden.new_zeros((2, rows), dtype=torch.int64)
     stats = hidden.new_zeros((fused.N_STATS, rows), dtype=dtype)
     for start, end in _chunks(rows, chunk_rows):
         z = _project(hidden[start:end], weight)
         chunk_targets = targets[start:end]
-        if hidden.device.type == "cpu":
-            _ref_forward_chunk(
-                z,
-                chunk_targets,
-                terms,
-                losses[:, start:end],
-                argmax[:, start:end],
-                stats[:, start:end],
-            )
-            continue
         fused.loss_forward_kernel[(end - start,)](
             z,
             chunk_targets,
@@ -203,7 +117,7 @@ def _fused_linear_fwd(
 @_fused_linear_fwd.register_fake
 def _(hidden, weight, targets, terms, grad_terms, chunk_rows):  # noqa: ARG001
     rows = hidden.shape[0]
-    dtype = _out_dtype(hidden)
+    dtype = torch.float32
     return (
         hidden.new_empty((fused.N_TERMS, rows), dtype=dtype),
         hidden.new_empty((2, rows), dtype=torch.int64),
@@ -227,27 +141,18 @@ def _fused_linear_bwd(
     for start, end in _chunks(rows, chunk_rows):
         z = _project(hidden[start:end], weight)
         chunk_targets = targets[start:end]
-        if hidden.device.type == "cpu":
-            dz = _ref_backward_chunk(
-                z,
-                chunk_targets,
-                grad_losses[:, start:end],
-                stats[:, start:end],
-                grad_terms,
-            ).to(hidden.dtype)
-        else:
-            dz = torch.empty((end - start, vocab), device=z.device, dtype=hidden.dtype)
-            fused.loss_backward_kernel[(end - start,)](
-                z,
-                chunk_targets,
-                dz,
-                grad_losses[:, start:],
-                grad_losses.stride(0),
-                stats[:, start:],
-                stats.stride(0),
-                vocab,
-                TERMS=grad_terms,
-            )
+        dz = torch.empty((end - start, vocab), device=z.device, dtype=hidden.dtype)
+        fused.loss_backward_kernel[(end - start,)](
+            z,
+            chunk_targets,
+            dz,
+            grad_losses[:, start:],
+            grad_losses.stride(0),
+            stats[:, start:],
+            stats.stride(0),
+            vocab,
+            TERMS=grad_terms,
+        )
         with torch.autocast(hidden.device.type, enabled=False):
             torch.mm(dz, weight, out=d_hidden[start:end])
         del z, dz
@@ -351,6 +256,8 @@ def fused_linear_compound(
         chunk_rows = chunk_rows_for(vocab, flat_hidden.dtype, rows)
     elif chunk_rows < 1:
         raise ValueError(f"chunk_rows must be positive, got {chunk_rows}")
+    if flat_hidden.device.type == "cpu":
+        raise ValueError("fused_linear runs Triton kernels and needs a GPU")
 
     loss_terms = sorted(
         {t for name in names for t in fused.LOSS_TERMS[name]},
