@@ -416,6 +416,9 @@ def test_a_stacked_pr_gets_its_own_diff_and_its_parents_discussion(
         assert json.loads(
             (tmp_path / "stack" / n / "issue_comments.json").read_text()
         ) == [f"/repos/o/r/issues/{n}/comments"]
+        assert (tmp_path / "stack" / n / "pr.diff").read_bytes() == (
+            f"diff /repos/o/r/pulls/{n}".encode()
+        )
 
 
 def test_no_own_diff_when_the_branch_merged_other_changes_since_its_parent(
