@@ -317,9 +317,8 @@ class LossArgs(_Group):
         default="recompute",
         description="With loss_implementation=fused_linear: recompute the target "
         "logits per chunk from the verifier hidden states (no [T, V] tensor; one "
-        "extra verifier GEMM per chunk in backward), or materialize them once "
-        "(no target recompute; keeps one [T, V] tensor). Ignored by the other "
-        "implementations.",
+        "verifier GEMM per chunk, in forward), or materialize them once (keeps "
+        "one [T, V] tensor). Ignored by the other implementations.",
     )
     fused_linear_logits: Literal["input", "float32"] = Field(
         default="input",

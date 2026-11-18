@@ -537,6 +537,11 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
         fused_linear_logits: str = "input",
         **kwargs,
     ):
+        if fused_linear_targets not in ("recompute", "materialize"):
+            raise ValueError(
+                "fused_linear_targets must be 'recompute' or 'materialize', "
+                f"got {fused_linear_targets!r}"
+            )
         recompute_targets = fused_linear and fused_linear_targets == "recompute"
         hidden, logits, targets, aligned_loss_mask, _ = self._backbone_forward(
             hidden_states,
