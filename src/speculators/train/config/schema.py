@@ -202,6 +202,7 @@ class DraftArgs(_Group):
     )
     kv_lora_rank: int | None = Field(
         default=None,
+        ge=1,
         description="Override glm5 draft KV LoRA rank (default: copy verifier "
         "kv_lora_rank).",
     )

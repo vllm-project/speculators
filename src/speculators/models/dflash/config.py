@@ -15,10 +15,9 @@ __all__ = [
 
 GLM5_DSPARK_MODEL_TYPE = "glm5_dspark"
 
-# DeepseekV3Config defaults describe a 256-expert MoE with an MTP head. The draft
-# is a dense-MLP MLA stack, so these defaults are rewritten to "no MoE, no MTP"
-# before they are serialized into ``transformer_layer_config``. Loaders that key
-# on them (``n_routed_experts``, ``first_k_dense_replace``) then build dense layers.
+# External draft loaders (vLLM/vLLM-Ascend) key on ``n_routed_experts`` /
+# ``first_k_dense_replace`` to build dense layers; upstream DeepseekV3Config
+# MoE/MTP defaults must be zeroed out before serialization.
 _DENSE_DRAFT_DEFAULTS: dict[str, object] = {
     "n_routed_experts": 0,
     "n_shared_experts": 0,
@@ -53,6 +52,9 @@ class Glm5DSparkDecoderConfig(DeepseekV3Config):
         if "first_k_dense_replace" not in kwargs:
             # Every draft layer is dense: no layer index reaches the MoE range.
             self.first_k_dense_replace = self.num_hidden_layers
+        # Point head_dim at the rotary slice (upstream DeepseekV3Config does
+        # the same), so the shared rotary init reads the right width.
+        self.head_dim = self.qk_rope_head_dim
 
 
 # Lets AutoConfig.for_model("glm5_dspark") (shared transformer_layer_config

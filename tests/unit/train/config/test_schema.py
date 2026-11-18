@@ -223,3 +223,11 @@ def test_q_lora_rank_rejects_negative():
             speculator_type="dspark",
             draft=DraftArgs(draft_arch="glm5", q_lora_rank=-1),
         )
+
+
+def test_kv_lora_rank_rejects_non_positive():
+    with pytest.raises(ValidationError):
+        TrainConfig(
+            speculator_type="dspark",
+            draft=DraftArgs(draft_arch="glm5", kv_lora_rank=0),
+        )

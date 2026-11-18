@@ -78,10 +78,8 @@ def test_dflash_model_classes_table():
     glm5 = dflash_model_classes[GLM5_DSPARK_MODEL_TYPE]
     assert glm5.decoder_layer_class is DFlashMLADecoderLayer
     assert issubclass(glm5.decoder_layer_class.attention_class, DeepseekV3Attention)
-    assert glm5.rotary_head_dim_attr == "qk_rope_head_dim"
     qwen3 = dflash_model_classes["qwen3"]
     assert qwen3.decoder_layer_class is Qwen3DFlashDecoderLayer
-    assert qwen3.rotary_head_dim_attr is None
 
 
 def test_qwen3_dflash_keeps_fc_and_hidden_norm():
@@ -122,6 +120,7 @@ def test_glm5_config_defaults_lock_576d_page_spec():
     assert cfg.kv_lora_rank + cfg.qk_rope_head_dim == 576
     assert cfg.rope_interleave is True
     assert cfg.qk_head_dim == cfg.qk_nope_head_dim + cfg.qk_rope_head_dim
+    assert cfg.head_dim == cfg.qk_rope_head_dim
 
 
 def test_glm5_config_defaults_are_dense_only():
@@ -268,16 +267,8 @@ def test_apply_glm5_lora_rank_overrides():
     assert config.q_lora_rank is None
     assert config.kv_lora_rank == 8
 
-    with pytest.raises(ValueError, match="must be > 0"):
-        _apply_glm5_lora_rank_overrides(
-            _tiny_glm5_config(), argparse.Namespace(q_lora_rank=None, kv_lora_rank=0)
-        )
-
-    with pytest.raises(ValueError, match="must be >= 0"):
-        _apply_glm5_lora_rank_overrides(
-            _tiny_glm5_config(), argparse.Namespace(q_lora_rank=-1, kv_lora_rank=None)
-        )
-
+    # Rank bounds (q_lora_rank >= 0, kv_lora_rank >= 1) are enforced by the
+    # DraftArgs schema (see test_schema.py), not here.
     with pytest.raises(ValueError, match="require --draft-arch glm5"):
         _apply_glm5_lora_rank_overrides(
             Qwen3Config(),
@@ -412,9 +403,11 @@ def test_glm5_dflash_uses_mla_projections():
     assert "layers.0.self_attn.q_a_proj.weight" in keys
     assert "layers.0.self_attn.kv_a_proj_with_mqa.weight" in keys
     assert "layers.0.self_attn.fused_qkv_a_proj.weight" not in keys
-    # Rotary cache is built at qk_rope_head_dim, not the MLA v/nope dim.
+    # Rotary cache is built at qk_rope_head_dim, not the MLA v/nope dim;
+    # the config points head_dim at the rope slice (upstream convention).
     assert model.rotary_emb.config.head_dim == 4
-    assert model.config.transformer_layer_config.head_dim == 8
+    tl_config = model.config.transformer_layer_config
+    assert tl_config.head_dim == tl_config.qk_rope_head_dim
 
 
 def test_glm5_dflash_forward_finite_loss():

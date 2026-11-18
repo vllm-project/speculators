@@ -208,8 +208,7 @@ def create_transformer_layer_config(  # noqa: C901
     num_attention_heads = verifier_config.num_attention_heads
     num_key_value_heads = verifier_config.num_key_value_heads
     resolved_hidden_size = verifier_config.hidden_size
-    # Dense MLA drafts keep the verifier head count (KV is compressed by lora
-    # rank, not grouped), and their RoPE only spans qk_rope_head_dim.
+
     is_mla = draft_arch == "glm5"
 
     # GQA drafts sometimes rewrite n_heads from hidden_size / head_dim when the
@@ -340,8 +339,8 @@ def _apply_glm5_lora_rank_overrides(
 ) -> None:
     """Apply ``--q-lora-rank`` / ``--kv-lora-rank`` onto a glm5 draft decoder.
 
-    ``q_lora_rank=0`` disables Q LoRA (full ``q_proj``). Negative ranks are
-    rejected; ``kv_lora_rank`` must be strictly positive.
+    ``q_lora_rank=0`` disables Q LoRA (full ``q_proj``); the schema enforces
+    ``q_lora_rank >= 0`` and ``kv_lora_rank >= 1``.
     """
     if not isinstance(transformer_layer_config, Glm5DSparkDecoderConfig):
         if args.q_lora_rank is not None or args.kv_lora_rank is not None:
@@ -351,8 +350,6 @@ def _apply_glm5_lora_rank_overrides(
             )
         return
     if args.q_lora_rank is not None:
-        if args.q_lora_rank < 0:
-            raise ValueError("--q-lora-rank must be >= 0")
         # 0 disables Q LoRA (full q_proj), matching DeepseekV3Attention.
         transformer_layer_config.q_lora_rank = (
             None if args.q_lora_rank == 0 else int(args.q_lora_rank)
@@ -361,8 +358,6 @@ def _apply_glm5_lora_rank_overrides(
             "Overriding glm5 q_lora_rank=%s", transformer_layer_config.q_lora_rank
         )
     if args.kv_lora_rank is not None:
-        if args.kv_lora_rank <= 0:
-            raise ValueError("--kv-lora-rank must be > 0")
         transformer_layer_config.kv_lora_rank = int(args.kv_lora_rank)
         logger.info(
             "Overriding glm5 kv_lora_rank=%s", transformer_layer_config.kv_lora_rank
@@ -378,7 +373,7 @@ def load_draft_transformer_layer_config(
 
     ``draft_config`` may be a HF hub id, a local directory containing a
     ``config.json``, or a path to a config JSON file. It is expected to hold a
-    plain decoder config (``LlamaConfig`` for eagle3/peagle, ``Qwen3Config`` or
+    plain decoder config (``LlamaConfig`` for eagle3, ``Qwen3Config`` or
     ``Glm5DSparkDecoderConfig`` for dflash/dspark). If a full speculator config
     is given instead, its nested ``transformer_layer_config`` is extracted as a
     convenience.
@@ -397,10 +392,9 @@ def load_draft_transformer_layer_config(
     if not model_type:
         raise ValueError(
             "--draft-config must define a 'model_type' (e.g. 'llama' for "
-            "eagle3/peagle, 'qwen3' or 'glm5' for dflash/dspark); none was found "
+            "eagle3, 'qwen3' or 'glm5' for dflash/dspark); none was found "
             f"in the config loaded from '{draft_config}'."
         )
-    # glm5_dspark resolves here too: speculators.models.dflash.config registers it.
     config_class: type[PretrainedConfig] = type(AutoConfig.for_model(model_type))
     draft_config_obj = config_class.from_dict(config_dict)
 

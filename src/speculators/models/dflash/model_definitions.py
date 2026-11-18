@@ -364,25 +364,20 @@ class DFlashModelComponents(NamedTuple):
 
     Attributes:
         decoder_layer_class: Draft decoder layer class.
-        rotary_head_dim_attr: Config attribute holding the RoPE width, or
-            ``None`` to use ``config.head_dim`` (full-head GQA RoPE). MLA
-            drafts rotate only ``qk_rope_head_dim``.
     """
 
     decoder_layer_class: type
-    rotary_head_dim_attr: str | None
 
 
 dflash_model_classes: dict[str, DFlashModelComponents] = {
     "qwen3": DFlashModelComponents(
         decoder_layer_class=Qwen3DFlashDecoderLayer,
-        rotary_head_dim_attr=None,
     ),
-    # GLM-5.x drafts: dense MLA. RoPE spans only qk_rope_head_dim.
+    # GLM-5.x drafts: dense MLA. RoPE spans only qk_rope_head_dim
+    # (the config points ``head_dim`` at it).
     # Aux-hidden projection stays ``fc`` / ``hidden_norm`` (same checkpoint
     # keys as Qwen3); serving loaders remap those names if they need to.
     "glm5_dspark": DFlashModelComponents(
         decoder_layer_class=DFlashMLADecoderLayer,
-        rotary_head_dim_attr="qk_rope_head_dim",
     ),
 }
