@@ -21,17 +21,20 @@ _metrics_fn = partial(
     block_size=2,
     loss_config=resolve_loss_config('{"ce": 0.1, "tv": 0.9}', "eager"),
 )
-torch.manual_seed(0)
-_LOGITS = torch.randn(1, SEQ_LEN, VOCAB)
-_TARGETS = torch.randn(1, SEQ_LEN, VOCAB)
-_CONFIDENCE = torch.randn(1, SEQ_LEN)
+# A private generator keeps the global RNG untouched for other tests.
+_gen = torch.Generator().manual_seed(0)
+_LOGITS = torch.randn(1, SEQ_LEN, VOCAB, generator=_gen)
+_TARGETS = torch.randn(1, SEQ_LEN, VOCAB, generator=_gen)
+_CONFIDENCE = torch.randn(1, SEQ_LEN, generator=_gen)
 
 
 class _Model:
     def __init__(self, forward: Callable):
         self.forward = forward
+        self.calls = 0
 
     def __call__(self, loss_mask, **_kwargs):
+        self.calls += 1
         return self.forward(loss_mask)
 
     def eval(self):
@@ -109,13 +112,20 @@ def test_unpaired_metric_is_averaged_over_non_empty_batches():
 def test_no_data_on_every_rank_returns_none_on_each(monkeypatch):
     # The decision uses the reduced count, so every rank returns the same thing
     # and nobody skips a collective. Simulate two ranks with no data each.
+    reduce_calls = []
+
     def all_reduce(tensor, op):
+        reduce_calls.append(tensor.clone())
         tensor.mul_(2)
 
     monkeypatch.setattr(trainer_module.dist, "all_reduce", all_reduce)
     monkeypatch.setattr(trainer_module.dist, "get_world_size", lambda: 2)
+    model = _Model(_dspark_forward)
 
-    assert _val_epoch([_empty_batch()], is_distributed=True) is None
+    assert _val_epoch([_empty_batch()], model=model, is_distributed=True) is None
+    # This rank still ran the forward and joined the reduction.
+    assert model.calls == 1
+    assert len(reduce_calls) == 1
 
 
 def test_other_rank_data_is_counted_when_this_rank_is_empty(monkeypatch):
@@ -139,3 +149,23 @@ def test_other_rank_data_is_counted_when_this_rank_is_empty(monkeypatch):
     expected = _val_epoch([_real_batch()])
 
     assert metrics["loss_epoch"] == pytest.approx(expected["loss_epoch"])
+
+
+def test_unpaired_metric_divides_by_global_non_empty_count(monkeypatch):
+    # This rank: two real batches (2.0 each) and one empty. Other rank: one real
+    # batch with value 8.0. Reduced: (2 + 2 + 8) / 3 non-empty batches = 4.0.
+    def forward(loss_mask):
+        value = torch.tensor(2.0 if loss_mask.any() else 0.0)
+        return None, value, {"loss_step_0": value}
+
+    def all_reduce(tensor, op):
+        # Keys are [loss_step_0, counted batches].
+        tensor.add_(torch.tensor([8.0, 1.0]))
+
+    monkeypatch.setattr(trainer_module.dist, "all_reduce", all_reduce)
+    monkeypatch.setattr(trainer_module.dist, "get_world_size", lambda: 2)
+
+    batches = [_real_batch(), _real_batch(), _empty_batch()]
+    metrics = _val_epoch(batches, model=_Model(forward), is_distributed=True)
+
+    assert metrics["loss_step_0_epoch"] == pytest.approx(4.0)
