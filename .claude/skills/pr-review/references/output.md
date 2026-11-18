@@ -8,9 +8,9 @@ A review is one `review.json` file. `scripts/review_payload.py` checks it and tu
   "pr": 1234,
   "summary": "Design looks good; two gaps below.",
   "findings": [
-    {"confidence": 90, "file": "src/speculators/models/peagle/metrics.py", "line": 56, "body": "This still runs its own `argmax`; pass `with_ids=True` and use `out.pred_ids`, as DFlash does."},
-    {"confidence": 85, "file": "src/speculators/train/trainer.py", "start_line": 40, "line": 44, "body": "A NaN validation loss never compares lower, so `checkpoint_best` stays on the first epoch. Skip non-finite losses here."},
-    {"confidence": 80, "body": "The description has no Tests section, which AGENTS.md asks for."}
+    {"confidence": 90, "file": "src/speculators/x.py", "line": 56, "body": "This recomputes the `argmax` the fused pass already returned; use `out.pred_ids` instead."},
+    {"confidence": 85, "file": "src/speculators/x.py", "start_line": 40, "line": 44, "body": "A NaN validation loss never compares lower, so `checkpoint_best` stays on the first epoch. Skip non-finite losses here."},
+    {"confidence": 80, "body": "The description has no Tests section, which [AGENTS.md › Pull requests](https://github.com/vllm-project/speculators/blob/{base.sha}/AGENTS.md#pull-requests) asks for."}
   ]
 }
 ```
