@@ -15,13 +15,13 @@ Review like a maintainer of this repository who has little time and cares about 
 
 The context directory holds `pr.json`, `pr.diff`, `files.json`, `reviews.json`, `review_comments.json`, `issue_comments.json` and `stack.json`. Read the whole diff, and enough of the surrounding code to judge it in context.
 
-If `stack.json` lists parents, this PR is stacked on other open PRs by the same author, and its diff includes theirs. Review only `own.diff`, its changes on top of the nearest parent; if there is none (the branch has merged other changes since, so they can't be separated), review `pr.diff` but leave what the parents change to them. Read the parents' discussions under `stack/<number>/`: what was decided or said there is settled. Line numbers still refer to the PR head.
+If `stack.json` lists parents, this PR is stacked on other open PRs by the same author, and its diff includes theirs. Review only `own.diff`, its changes on top of the nearest parent; if there is none (the branch has merged other changes since, so they can't be separated), review `pr.diff` but leave what the parents change, in `stack/<number>/pr.diff`, to them. Read the parents' discussions under `stack/<number>/`: what was decided or said there is settled. Line numbers still refer to the PR head.
 
 Read what the PR and its discussion link to (issues, RFCs, papers, docs, benchmarks), and check that the PR does what they describe. If something you need can't be fetched, say so rather than guess.
 
 ## Is the PR ready for review?
 
-Don't review a PR that is still in flux (active experiments, trial-and-error fixes, the author saying it isn't done, unresolved debate about the approach), or one where your review would say substantially what an earlier review of yours already said. Report which of the two it is instead.
+Don't review a PR that is still in flux (active experiments, trial-and-error fixes, the author saying it isn't done, unresolved debate about the approach), or one where your review would say substantially what an earlier review of yours already said, unless someone asked for another review. Report which of the two it is instead.
 
 ## What to look at
 
@@ -49,7 +49,7 @@ Don't review a PR that is still in flux (active experiments, trial-and-error fix
 - `tests/`: whether the new paths and the speculative-decoding edge cases (vocab boundaries, multi-step loss) are covered, with vLLM and GPUs mocked where needed.
 - `.claude/skills/`, `AGENTS.md` and other instructions for agents: guidance should give principles and the repository knowledge a model can't infer, not micromanage. Flag step-by-step rules for judgment calls, restatements of what a capable model already knows, arbitrary thresholds, and shouting. Scripts, commands and machine-checked formats are the exception: those should be exact.
 
-**Contribution rules.** `CONTRIBUTING.md` and `AGENTS.md` say what a PR must carry (issue link, DCO sign-off, doc updates, the description). Flag what's missing as a finding about the PR as a whole, citing the rule.
+**Contribution rules.** `CONTRIBUTING.md` and `AGENTS.md` say what a PR must carry (issue link, DCO sign-off, doc updates, the description). Flag what's missing as a finding about the PR as a whole, citing the rule. The human-review checkbox is not one of them: AGENTS.md tells the agent writing a PR to leave it for a person to tick, so a ticked box on a PR an agent wrote is the expected state.
 
 **RFCs.** If the PR implements an RFC (issues labelled `rfc`), check it against the discussion's final consensus, not just the original proposal, and against objections still open. A deviation should be stated and justified in the PR.
 

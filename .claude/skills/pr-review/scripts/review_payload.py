@@ -38,20 +38,45 @@ SKILL_PATH = ".claude/skills/pr-review"
 _HUNK = re.compile(r"^@@ -\d+(?:,\d+)? \+(\d+)(?:,\d+)? @@")
 
 
+_ESCAPES = {"n": "\n", "t": "\t"}
+
+
+def _target_path(header: str) -> str | None:
+    """The new-file path of a `+++ ` header. Git quotes names with unusual
+    characters C-style, with non-ASCII bytes as octal escapes."""
+    target = header.strip()
+    if len(target) > 1 and target[0] == target[-1] == '"':
+        raw = bytearray()
+        for part in re.split(r"(\\(?:[0-7]{3}|.))", target[1:-1]):
+            if re.fullmatch(r"\\[0-7]{3}", part):
+                raw.append(int(part[1:], 8))
+            elif part.startswith("\\"):
+                raw += _ESCAPES.get(part[1], part[1]).encode()
+            else:
+                raw += part.encode()
+        target = raw.decode("utf-8", errors="replace")
+    return target[2:] if target.startswith("b/") else None
+
+
 def commentable_lines(diff: str) -> dict[str, dict[int, int]]:
     """Map path -> {new-file line number: hunk index} for added/context lines."""
     out: dict[str, dict[int, int]] = {}
     path: str | None = None
     line = hunk = 0
-    for raw in diff.splitlines():
+    in_header = False
+    # Only newlines end a diff line; str.splitlines() also splits on \f, \u2028
+    # and the like, which can appear inside a line's text.
+    for raw in diff.split("\n"):
         if raw.startswith("diff --git "):
-            path = None
-        elif raw.startswith("+++ "):
-            target = raw[4:].strip()
-            path = target[2:] if target.startswith("b/") else None
+            path, line, in_header = None, 0, True
+        elif in_header and raw.startswith("+++ "):
+            # Only a file's header carries `+++ `: an added line whose text
+            # starts with "++ " looks the same once it's in a hunk.
+            path = _target_path(raw[4:])
             if path is not None:
                 out.setdefault(path, {})
         elif raw.startswith("@@"):
+            in_header = False
             match = _HUNK.match(raw)
             line = int(match.group(1)) if match else 0
             hunk += 1

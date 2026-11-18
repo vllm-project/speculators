@@ -38,19 +38,23 @@ Run the commands below from the repository root. Note the time when you start.
      vllm-project/speculators <number> "$CTX"
    ```
 
-3. **Review.** Follow [references/rubric.md](references/rubric.md) against `$CTX`. If the rubric says the PR isn't ready or nothing has changed since the last review, stop and tell the user.
+3. **Review.** Follow [references/rubric.md](references/rubric.md) against `$CTX`. If the rubric says the PR isn't ready, stop and tell the user. If nothing has changed since your last review, stop too, unless the user asked for another review: then review it, without repeating what your earlier review said.
 
 4. **Write `$CTX/review.json`** in the format of [references/output.md](references/output.md).
 
 5. **Build the payload.**
 
    ```bash
+   # The footer links the skill at this commit, so it must exist on GitHub:
+   # unpushed skill commits fall back to main's.
+   SKILL_REF=$(git log -1 --format=%H -- .claude/skills/pr-review)
+   git branch -r --contains "$SKILL_REF" | grep -q . || SKILL_REF=$(git rev-parse origin/main)
    python3 .claude/skills/pr-review/scripts/review_payload.py "$CTX/review.json" "$CTX" \
-     --skill-ref "$(git rev-parse HEAD)" \
+     --skill-ref "$SKILL_REF" \
      --byline "🤖 Generated with [Claude Code](https://claude.ai/code)" > "$CTX/payload.json"
    ```
 
-   Exit status 3 means no finding reached the confidence bar: tell the user and post nothing. Clean PRs don't need noise.
+   If your copy of the skill has changes that aren't on GitHub, tell the user the footer links main's version instead. Exit status 3 means no finding reached the confidence bar: tell the user and post nothing. Clean PRs don't need noise.
 
 6. **Dry run (default).** Show the user the review body and each inline comment with its file and line. Do not post.
 
