@@ -8,7 +8,7 @@ A review is one `review.json` file. `scripts/review_payload.py` checks it and tu
   "pr": 1234,
   "summary": "Your verdict on the design in one or two short sentences.",
   "findings": [
-    {"confidence": 90, "file": "src/speculators/x.py", "line": 42, "body": "What is wrong and why it matters, then the fix."},
+    {"confidence": 90, "file": "src/speculators/x.py", "line": 42, "body": "What is wrong and what to do, in a sentence or two."},
     {"confidence": 85, "file": "src/speculators/x.py", "start_line": 40, "line": 44, "body": "A finding about a range of lines."},
     {"confidence": 80, "body": "A finding about the PR as a whole, such as a missing Tests section."}
   ]
