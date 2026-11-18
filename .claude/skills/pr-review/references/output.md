@@ -1,6 +1,6 @@
 # Review output format
 
-A review is one `review.json` file. `scripts/review_payload.py` turns it into a GitHub review; [review.schema.json](review.schema.json) is the same format as a JSON Schema.
+A review is one `review.json` file. `scripts/review_payload.py` checks it and turns it into a GitHub review.
 
 ```json
 {
