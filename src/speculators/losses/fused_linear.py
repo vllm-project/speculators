@@ -484,6 +484,8 @@ def fused_linear_compound(
         raise ValueError(
             f"logits_dtype must be one of {LOGITS_DTYPES}, got {logits_dtype!r}"
         )
+    if chunk_rows is not None and chunk_rows < 1:
+        raise ValueError(f"chunk_rows must be positive, got {chunk_rows}")
     flat_hidden, weight, flat_targets, target_weight = _prepare_inputs(
         hidden, weight, targets, target_weight
     )
@@ -513,8 +515,6 @@ def fused_linear_compound(
             fp32_logits=fp32_logits,
             dz_tiles=len(loss_terms) if deferred else 1,
         )
-    elif chunk_rows < 1:
-        raise ValueError(f"chunk_rows must be positive, got {chunk_rows}")
     losses, argmax, _, _ = _fused_linear_fwd(
         flat_hidden,
         weight,
