@@ -1,17 +1,17 @@
 """Fused linear losses (speculators.losses.fused_linear).
 
 The op computes the fused losses from hidden states and the lm_head weight in
-row chunks; the [N, V] draft logits and their gradient never exist. CPU runs a
-torch reference of the per-chunk math (fp64 gradcheck, opcheck); GPU runs the
-Triton kernels and is checked against the materialized fused path.
+row chunks; the [N, V] draft logits and their gradient never exist. The op
+runs Triton kernels on a GPU and is checked against the materialized fused
+path; CPU only covers argument validation.
 """
 
 import pytest
 import torch
 from torch.library import opcheck
 
-from speculators.losses import eager, resolve_loss_config
 from speculators.losses import fused_linear as fl
+from speculators.losses import resolve_loss_config
 from speculators.models.dflash.core import DFlashDraftModel
 from tests.unit.models.test_fused_losses import (
     DEVICE,
@@ -21,16 +21,6 @@ from tests.unit.models.test_fused_losses import (
 
 pytestmark = pytest.mark.usefixtures("narrowest_tile")
 
-NAMES = ("kl_div", "rkl", "jsd", "ce", "tv", "nla", "lk_hybrid")
-EAGER = {
-    "kl_div": eager.kl_div_loss,
-    "rkl": eager.reverse_kl_div_loss,
-    "jsd": eager.js_div_loss,
-    "ce": eager.ce_loss,
-    "tv": eager.tv_loss,
-    "nla": eager.neg_log_acceptance_loss,
-    "lk_hybrid": eager.lk_hybrid_loss,
-}
 ALL_TERMS = 0b11111
 
 
@@ -48,64 +38,8 @@ def _inputs(rows, hidden, vocab, dtype, device, seed=0):
 
 
 # ---------------------------------------------------------------------------
-# CPU: torch reference path
+# Argument validation (no GPU needed)
 # ---------------------------------------------------------------------------
-
-
-def test_values_match_eager_on_materialized_logits():
-    h, w, t = _inputs(13, 6, 17, torch.float64, "cpu")
-    out = fl.fused_linear_compound(h, w, t, NAMES, metric_terms=("tv",), chunk_rows=5)
-    logits = h @ w.T
-    for name in NAMES:
-        # eager computes its softmaxes in fp32
-        ref = EAGER[name](logits[None], t[None])[0].double()
-        torch.testing.assert_close(out.losses[name], ref, rtol=1e-5, atol=1e-6)
-    torch.testing.assert_close(out.metrics["tv"], out.losses["tv"].detach())
-    assert torch.equal(out.pred_ids, logits.argmax(-1))
-    assert torch.equal(out.target_ids, t.argmax(-1))
-
-
-@pytest.mark.parametrize("name", [n for n in NAMES if n != "lk_hybrid"])
-def test_gradcheck_fp64(name):
-    h, w, t = _inputs(13, 6, 17, torch.float64, "cpu", seed=1)
-    h.requires_grad_(True)
-
-    def loss(x):
-        return fl.fused_linear_compound(x, w, t, (name,), chunk_rows=5).losses[name]
-
-    assert torch.autograd.gradcheck(loss, (h,))
-
-
-def test_lk_hybrid_gradient_matches_eager():
-    """lk_hybrid's blend weight is detached by design, so gradcheck does not
-    apply; compare with eager's gradient instead."""
-    h, w, t = _inputs(13, 6, 17, torch.float64, "cpu", seed=2)
-    x = h.clone().requires_grad_(True)
-    fl.fused_linear_compound(x, w, t, ("lk_hybrid",), chunk_rows=5).losses[
-        "lk_hybrid"
-    ].sum().backward()
-    y = h.clone().requires_grad_(True)
-    eager.lk_hybrid_loss((y @ w.T)[None], t[None]).sum().backward()
-    assert x.grad is not None
-    assert y.grad is not None
-    torch.testing.assert_close(x.grad, y.grad, rtol=1e-4, atol=1e-6)
-
-
-def _opcheck_args(device, dtype):
-    h, w, t = _inputs(13, 8, 40, dtype, device, seed=3)
-    _, _, stats = torch.ops.speculators.fused_linear_loss_fwd(
-        h, w, t, ALL_TERMS, ALL_TERMS, 5
-    )
-    grad = torch.randn(5, 13, device=device, dtype=stats.dtype)
-    fwd = (h.clone().requires_grad_(True), w, t, ALL_TERMS, ALL_TERMS, 5)
-    bwd = (grad, h, w, t, stats, ALL_TERMS, 5)
-    return fwd, bwd
-
-
-def test_opcheck_cpu():
-    fwd, bwd = _opcheck_args("cpu", torch.float64)
-    opcheck(torch.ops.speculators.fused_linear_loss_fwd.default, fwd)
-    opcheck(torch.ops.speculators.fused_linear_loss_bwd.default, bwd)
 
 
 def test_rejects_invalid_arguments():
@@ -116,6 +50,8 @@ def test_rejects_invalid_arguments():
         fl.fused_linear_compound(h, w.detach(), t[:-1], ("kl_div",))
     with pytest.raises(ValueError, match="chunk_rows must be positive"):
         fl.fused_linear_compound(h, w.detach(), t, ("kl_div",), chunk_rows=0)
+    with pytest.raises(ValueError, match="needs a GPU"):
+        fl.fused_linear_compound(h, w.detach(), t, ("kl_div",))
 
 
 def test_chunk_rows_for(monkeypatch):
@@ -264,6 +200,17 @@ def test_no_host_syncs():
         (out.losses["kl_div"].sum() + out.losses["tv"].sum()).backward()
     finally:
         torch.cuda.set_sync_debug_mode("default")
+
+
+def _opcheck_args(device, dtype):
+    h, w, t = _inputs(13, 8, 40, dtype, device, seed=3)
+    _, _, stats = torch.ops.speculators.fused_linear_loss_fwd(
+        h, w, t, ALL_TERMS, ALL_TERMS, 5
+    )
+    grad = torch.randn(5, 13, device=device, dtype=stats.dtype)
+    fwd = (h.clone().requires_grad_(True), w, t, ALL_TERMS, ALL_TERMS, 5)
+    bwd = (grad, h, w, t, stats, ALL_TERMS, 5)
+    return fwd, bwd
 
 
 @requires_accelerator
@@ -452,35 +399,6 @@ def test_mismatched_dtypes_without_autocast_raise():
     h, w, t = _inputs(8, 4, 10, torch.float32, "cpu")
     with pytest.raises(ValueError, match="dtypes differ"):
         fl.fused_linear_compound(h, w.double(), t, ("kl_div",))
-
-
-def test_cpu_half_precision_inputs():
-    """CPU has no out_dtype GEMM: bf16 operands are projected as fp32 copies,
-    so the losses match the fp32 run on the same values."""
-    h, w, t = _inputs(32, 16, 100, torch.bfloat16, "cpu", seed=16)
-    names = ("kl_div", "ce")
-    out, grad = _run(
-        lambda x: fl.fused_linear_compound(x, w, t, names, chunk_rows=8), h, names
-    )
-    ref, ref_grad = _run(
-        lambda x: fl.fused_linear_compound(
-            x, w.float(), t.float(), names, chunk_rows=8
-        ),
-        h.float(),
-        names,
-    )
-    # d hidden is formed in bf16 (dz and dz @ W)
-    _assert_matches(
-        out,
-        grad.float(),
-        ref,
-        ref_grad,
-        names,
-        rtol=1e-6,
-        atol=1e-6,
-        grad_rtol=2e-2,
-        grad_atol=1e-2,
-    )
 
 
 @requires_accelerator
