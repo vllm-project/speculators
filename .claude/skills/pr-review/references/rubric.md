@@ -15,7 +15,7 @@ Review like a maintainer of this repository who has little time and cares about 
 
 The context directory holds `pr.json`, `pr.diff`, `files.json`, `reviews.json`, `review_comments.json`, `issue_comments.json` and `stack.json`. Read the whole diff, and enough of the surrounding code to judge it in context.
 
-If `stack.json` lists parents, this PR is stacked on other open PRs by the same author, and its diff includes theirs. Review only `own.diff`, its changes on top of the nearest parent; if there is none (the branch has merged other changes since, so they can't be separated), review `pr.diff` but leave what the parents change to them. Read the parents' discussions under `stack/<number>/`: what was decided or said there is settled. Line numbers still refer to the PR head.
+If `stack.json` lists parents, this PR is stacked on other open PRs by the same author, and its diff includes theirs. Review only `own.diff`, its changes on top of the nearest parent; if there is none (the branch has merged other changes since, so they can't be separated), review `pr.diff` but leave what the parents change, in `stack/<number>/pr.diff`, to them. Read the parents' discussions under `stack/<number>/`: what was decided or said there is settled. Line numbers still refer to the PR head.
 
 Read what the PR and its discussion link to (issues, RFCs, papers, docs, benchmarks), and check that the PR does what they describe. If something you need can't be fetched, say so rather than guess.
 

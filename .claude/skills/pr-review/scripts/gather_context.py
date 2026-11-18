@@ -16,8 +16,8 @@ Writes into out_dir:
 and, for a stacked PR only:
   own.diff              this PR's changes on top of its nearest parent, when
                         every commit in between is one of this PR's own
-  stack/<n>/            each parent's reviews.json, review_comments.json
-                        and issue_comments.json
+  stack/<n>/            each parent's pr.diff, reviews.json,
+                        review_comments.json and issue_comments.json
 """
 
 from __future__ import annotations
@@ -106,8 +106,12 @@ def gather(repo: str, number: str, out_dir: Path) -> None:
             )
             own_diff = True
         for parent in parents:
-            _discussion(
-                repo, str(parent["number"]), out_dir / "stack" / str(parent["number"])
+            parent_dir = out_dir / "stack" / str(parent["number"])
+            _discussion(repo, str(parent["number"]), parent_dir)
+            # What the parent changes: what to leave to its review when there
+            # is no own.diff to go by.
+            (parent_dir / "pr.diff").write_bytes(
+                get_raw(f"/repos/{repo}/pulls/{parent['number']}", accept=DIFF)
             )
     (out_dir / "stack.json").write_text(
         json.dumps({"parents": parents, "own_diff": own_diff}, indent=1)
