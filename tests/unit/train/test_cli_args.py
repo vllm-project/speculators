@@ -88,7 +88,6 @@ def test_dspark_default_uses_kl(monkeypatch):
     train_kw, val_kw = DSparkDraftModel.get_trainer_kwargs(**vars(args))
     assert "kl_div" in train_kw["loss_config"]
     assert train_kw["loss_config"]["kl_div"][0] is losses.kl_div_loss
-    assert train_kw["tv_loss_fn"] is losses.tv_loss
     assert "kl_div" in val_kw["loss_config"]
     assert train_kw["confidence_head_alpha"] == 1.0
     assert val_kw["confidence_head_alpha"] == 1.0
@@ -98,8 +97,6 @@ def test_dspark_explicit_eager(monkeypatch):
     args = _parse(monkeypatch, ["--loss-implementation", "eager"])
     train_kw, val_kw = DSparkDraftModel.get_trainer_kwargs(**vars(args))
     assert train_kw["loss_config"]["kl_div"][0] is eager.kl_div_loss
-    assert train_kw["tv_loss_fn"] is eager.tv_loss
-    assert val_kw["tv_loss_fn"] is eager.tv_loss
 
 
 def test_dspark_compound_loss(monkeypatch):

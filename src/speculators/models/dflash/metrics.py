@@ -69,17 +69,18 @@ def compute_metrics(
             dflash_loss_decay, gamma=gamma, sample_from_anchor=sample_from_anchor
         )
 
-    loss, term_losses = compound_loss(
+    # The argmaxes come from the fused loss pass when the config is all fused.
+    out = compound_loss(
         logits,
         targets,
         loss_mask,
         pos_idx,
         loss_config=loss_config,
         decay_fn=decay_fn,
+        with_ids=True,
     )
-
-    pred_ids = torch.argmax(logits, dim=-1)
-    target_ids = torch.argmax(targets, dim=-1)
+    loss, term_losses = out.loss, out.term_losses
+    pred_ids, target_ids = out.pred_ids, out.target_ids
 
     correct_per_pos, total_per_pos = compute_accuracy_multi_step(
         pred_ids, target_ids, loss_mask, pos_idx, block_size
