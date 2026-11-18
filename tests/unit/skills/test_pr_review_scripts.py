@@ -263,6 +263,8 @@ PATHS = ["src/pkg/fused.py", "src/pkg/core.py", "src/other/core.py"]
         ("[see fused.py:3 here](https://x)", "[see fused.py:3 here](https://x)"),
         ("see ``fused.py:3``", "see ``fused.py:3``"),
         ("~~~\nfused.py:3\n~~~", "~~~\nfused.py:3\n~~~"),
+        ("see fused.py:12-15x", "see fused.py:12-15x"),
+        ('[see fused.py:3](/docs "title")', '[see fused.py:3](/docs "title")'),
     ],
     ids=[
         "full-path",
@@ -277,10 +279,30 @@ PATHS = ["src/pkg/fused.py", "src/pkg/core.py", "src/other/core.py"]
         "inside-link-text",
         "double-backtick",
         "tilde-fence",
+        "malformed-range",
+        "titled-link",
     ],
 )
 def test_link_refs(text, expected):
     assert review_payload.link_refs(text, PATHS, "o/r", HEAD) == expected
+
+
+def test_link_paths_are_percent_encoded():
+    out = review_payload.link_refs("a.py:3", ["dir#tag/a.py"], "o/r", HEAD)
+    assert out == f"[`a.py:3`](https://github.com/o/r/blob/{HEAD}/dir%23tag/a.py#L3)"
+
+
+def test_a_pure_rename_counts_as_a_changed_path():
+    diff = (
+        "diff --git a/pkg/a.py b/pkg/a.py\n--- a/pkg/a.py\n+++ b/pkg/a.py\n"
+        "@@ -1 +1 @@\n-x\n+y\n"
+        "diff --git a/old.py b/other/a.py\nsimilarity index 100%\n"
+        "rename from old.py\nrename to other/a.py\n"
+    )
+    lines = review_payload.commentable_lines(diff)
+    assert lines == {"pkg/a.py": {1: 1}, "other/a.py": {}}
+    # Two changed files are named a.py now, so a bare reference stays text.
+    assert review_payload.link_refs("a.py:1", list(lines), "o/r", HEAD) == "a.py:1"
 
 
 def test_payload_links_references_in_every_part():

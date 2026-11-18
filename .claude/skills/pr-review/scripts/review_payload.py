@@ -30,6 +30,7 @@ import json
 import re
 import sys
 from pathlib import Path
+from urllib.parse import quote
 
 REVIEW_FORMAT_VERSION = 1
 MIN_CONFIDENCE = 80
@@ -41,10 +42,10 @@ _HUNK = re.compile(r"^@@ -\d+(?:,\d+)? \+(\d+)(?:,\d+)? @@")
 _ESCAPES = {"n": "\n", "t": "\t"}
 
 
-def _target_path(header: str) -> str | None:
-    """The new-file path of a `+++ ` header. Git quotes names with unusual
+def _unquote(name: str) -> str:
+    """A path as git writes it in a diff header. Git quotes names with unusual
     characters C-style, with non-ASCII bytes as octal escapes."""
-    target = header.strip()
+    target = name.strip()
     if len(target) > 1 and target[0] == target[-1] == '"':
         raw = bytearray()
         for part in re.split(r"(\\(?:[0-7]{3}|.))", target[1:-1]):
@@ -55,6 +56,12 @@ def _target_path(header: str) -> str | None:
             else:
                 raw += part.encode()
         target = raw.decode("utf-8", errors="replace")
+    return target
+
+
+def _target_path(header: str) -> str | None:
+    """The new-file path of a `+++ ` header, or None for /dev/null."""
+    target = _unquote(header)
     return target[2:] if target.startswith("b/") else None
 
 
@@ -69,6 +76,10 @@ def commentable_lines(diff: str) -> dict[str, dict[int, int]]:
     for raw in diff.split("\n"):
         if raw.startswith("diff --git "):
             path, line, in_header = None, 0, True
+        elif in_header and raw.startswith("rename to "):
+            # A pure rename has no `+++` header but is still a changed file;
+            # it has no commentable lines unless a `+++` header follows.
+            out.setdefault(_unquote(raw[len("rename to ") :]), {})
         elif in_header and raw.startswith("+++ "):
             # Only a file's header carries `+++ `: an added line whose text
             # starts with "++ " looks the same once it's in a hunk.
@@ -121,11 +132,11 @@ def _inline_comment(finding: dict, anchors: dict[str, dict[int, int]]) -> dict |
 
 # `path:12` or `path:12-15`; `path` may be a suffix such as a bare file name.
 _REF = r"((?:[\w.-]+/)*[\w.-]+\.\w+):(\d+)(?:-(\d+))?"
-_BARE_REF = re.compile(r"(?<![\w\[(/`.-])" + _REF + r"(?![\w\]`])")
+_BARE_REF = re.compile(r"(?<![\w\[(/`.-])" + _REF + r"(?![\w\]`-])")
 _CODE_REF = re.compile("`" + _REF + "`")
 _FENCE = re.compile(r"(```.*?```|~~~.*?~~~)", re.S)
 # An existing Markdown link, whose text may itself be a code span.
-_LINK = re.compile(r"(\[[^\]\n]*\]\([^)\s]*\))")
+_LINK = re.compile(r"(\[[^\]\n]*\]\([^)\n]*\))")
 # A double-backtick span first, so its inner backticks don't start a single one.
 _CODE_SPAN = re.compile(r"(``.+?``|`[^`\n]+`)")
 
@@ -146,7 +157,8 @@ def link_refs(text: str, paths: list[str], repo: str, sha: str) -> str:
             return match.group(0)
         anchor = f"L{start}" + (f"-L{end}" if end else "")
         label = f"{ref}:{start}" + (f"-{end}" if end else "")
-        return f"[`{label}`](https://github.com/{repo}/blob/{sha}/{hits[0]}#{anchor})"
+        url_path = quote(hits[0], safe="/")
+        return f"[`{label}`](https://github.com/{repo}/blob/{sha}/{url_path}#{anchor})"
 
     out = []
     for i, block in enumerate(_FENCE.split(text)):
