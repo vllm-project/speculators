@@ -4,7 +4,7 @@ Use these criteria to design and compare runs. Derive final values from the sele
 
 ## Draft-family selection
 
-- **Eagle3 / P-EAGLE:** choose when the requested architecture or existing checkpoint uses that family. Pay attention to decoder architecture, normalization choices, recurrent/test-time-training depth, and target hidden-state selection.
+- **Eagle3:** choose when the requested architecture or existing checkpoint uses that family. Pay attention to decoder architecture, normalization choices, recurrent/test-time-training depth, and target hidden-state selection.
 - **DFlash:** parallel masked draft blocks. Confirm whether the anchor is a bonus token, the resulting number of proposed tokens, and whether the selected loss is compatible with D-PACE or another position-weighting scheme.
 - **DFlash2:** DFlash plus local dynamic convolutions and a candidate selector; optional confidence-head training must match a serving runtime that consumes the same features and realized path.
 - **DSpark:** DFlash-family draft with a sequential/Markov head and optional path-conditioned confidence. Confirm Markov rank/head type and sampling-from-anchor semantics.
