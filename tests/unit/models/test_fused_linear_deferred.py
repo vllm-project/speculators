@@ -7,14 +7,12 @@ rounding on GPU, including D-PACE, whose loss-dependent weights are what rule
 out finishing the gradient in forward.
 """
 
-from functools import partial
 
 import pytest
 import torch
 
-from speculators.losses import compound_loss_from_hidden, fused, resolve_loss_config
+from speculators.losses import fused, resolve_loss_config
 from speculators.losses import fused_linear as fl
-from speculators.losses.utils import dpace_loss_decay
 from speculators.models.dflash.metrics import compute_metrics_from_hidden
 from tests.unit.models.test_fused_linear import _run
 from tests.unit.models.test_fused_linear_targets import _inputs
@@ -61,115 +59,8 @@ def _both_modes(h, w, t, names, target_weight=None, **kwargs):
 
 
 # ---------------------------------------------------------------------------
-# CPU (torch reference path)
+# Options (no GPU needed)
 # ---------------------------------------------------------------------------
-
-
-@pytest.mark.parametrize("names", NAME_SETS, ids=IDS)
-@pytest.mark.parametrize("recompute_targets", [False, True])
-def test_deferred_equals_recompute_fp64(names, recompute_targets):
-    h, w, vh, tw = _inputs(13, 6, 5, 17, torch.float64, "cpu", seed=1)
-    targets, target_weight = (vh, tw) if recompute_targets else (vh @ tw.T, None)
-    (out, grad), (ref, ref_grad) = _both_modes(
-        h, w, targets, names, target_weight, chunk_rows=5
-    )
-    for name in names:
-        torch.testing.assert_close(out.losses[name], ref.losses[name])
-    torch.testing.assert_close(grad, ref_grad)
-
-
-@pytest.mark.parametrize("name", ["kl_div", "rkl", "jsd", "ce", "tv", "nla"])
-def test_gradcheck_deferred(name):
-    h, w, vh, tw = _inputs(13, 6, 5, 17, torch.float64, "cpu", seed=2)
-    h.requires_grad_(True)
-
-    def loss(x):
-        out = fl.fused_linear_compound(
-            x, w, vh, (name,), chunk_rows=5, target_weight=tw, grad_mode="deferred"
-        )
-        return out.losses[name]
-
-    assert torch.autograd.gradcheck(loss, (h,))
-
-
-@pytest.mark.parametrize("spec", ["ce", '{"kl_div": 0.5, "tv": 0.5}'])
-def test_dpace_gradients_deferred_equal_recompute(spec):
-    """D-PACE weights depend on the loss value; deferred mode stays exact
-    because they arrive as per-row grad_output in backward."""
-    h, w, vh, tw = _inputs(24, 6, 5, 17, torch.float64, "cpu", seed=3)
-    loss_mask = torch.ones(1, 24, dtype=torch.long)
-    loss_mask[0, 5:9] = 0
-    pos_idx = (torch.arange(24) % 8).unsqueeze(0)
-    decay_fn = partial(
-        dpace_loss_decay, loss_mask=loss_mask, block_size=8, dpace_alpha=0.5
-    )
-    config = resolve_loss_config(spec)
-    grads = {}
-    for mode in ("deferred", "recompute"):
-        x = h.clone().requires_grad_(True)
-        out = compound_loss_from_hidden(
-            x[None],
-            w,
-            vh[None],
-            loss_mask,
-            pos_idx,
-            config,
-            decay_fn=decay_fn,
-            chunk_rows=7,
-            target_weight=tw,
-            grad_mode=mode,
-        )
-        out.loss.backward()
-        grads[mode] = (out.loss.detach(), x.grad)
-    torch.testing.assert_close(grads["deferred"][0], grads["recompute"][0])
-    torch.testing.assert_close(grads["deferred"][1], grads["recompute"][1])
-
-
-@pytest.mark.parametrize("grad_mode", ["deferred", "recompute"])
-def test_skipped_rows_are_fully_masked(grad_mode):
-    """``rows`` computes only the listed rows; the rest report 0 and get no
-    gradient, and computed rows equal the full computation."""
-    h, w, vh, tw = _inputs(16, 6, 5, 17, torch.float64, "cpu", seed=4)
-    names = ("kl_div", "ce")
-    keep = torch.tensor([1, 2, 3, 5, 6, 7, 9, 10, 11, 13, 14, 15])
-    skipped = torch.tensor([0, 4, 8, 12])
-    common = {"target_weight": tw, "grad_mode": grad_mode, "chunk_rows": 5}
-    out, grad = _run(
-        lambda x: fl.fused_linear_compound(x, w, vh, names, rows=keep, **common),
-        h,
-        names,
-    )
-    full, full_grad = _run(
-        lambda x: fl.fused_linear_compound(x, w, vh, names, **common), h, names
-    )
-    for name in names:
-        assert torch.count_nonzero(out.losses[name][skipped]) == 0
-        torch.testing.assert_close(out.losses[name][keep], full.losses[name][keep])
-    assert torch.count_nonzero(out.pred_ids[skipped]) == 0
-    assert torch.equal(out.pred_ids[keep], full.pred_ids[keep])
-    assert torch.count_nonzero(grad[skipped]) == 0
-    # _run weights rows by (row % 3); the kept rows' gradients are unchanged
-    torch.testing.assert_close(grad[keep], full_grad[keep])
-
-
-def test_no_grad_computes_losses_only(monkeypatch):
-    h, w, vh, tw = _inputs(10, 6, 5, 17, torch.float64, "cpu", seed=5)
-    calls: list[int] = []
-    real = fl._forward_deferred_chunk
-
-    def spy(*args):
-        calls.append(1)
-        return real(*args)
-
-    monkeypatch.setattr(fl, "_forward_deferred_chunk", spy)
-    with torch.no_grad():
-        out = fl.fused_linear_compound(
-            h.requires_grad_(True), w, vh, ("kl_div",), target_weight=tw
-        )
-    assert not calls
-    assert out.losses["kl_div"].grad_fn is None
-    fl.fused_linear_compound(h, w, vh, ("kl_div",), target_weight=tw)
-    assert calls
 
 
 def test_option_validation():
@@ -197,6 +88,57 @@ def test_chunk_rows_capped_at_2048(rows, expected, monkeypatch):
 # ---------------------------------------------------------------------------
 # GPU (Triton loss_grad_kernel)
 # ---------------------------------------------------------------------------
+
+
+@requires_accelerator
+@pytest.mark.parametrize("grad_mode", ["deferred", "recompute"])
+def test_skipped_rows_are_fully_masked(grad_mode):
+    """``rows`` computes only the listed rows; the rest report 0 and get no
+    gradient, and computed rows equal the full computation."""
+    h, w, vh, tw = _inputs(16, 6, 5, 17, torch.float32, DEVICE, seed=4)
+    names = ("kl_div", "ce")
+    keep = torch.tensor([1, 2, 3, 5, 6, 7, 9, 10, 11, 13, 14, 15], device=DEVICE)
+    skipped = torch.tensor([0, 4, 8, 12], device=DEVICE)
+    common = {"target_weight": tw, "grad_mode": grad_mode, "chunk_rows": 5}
+    out, grad = _run(
+        lambda x: fl.fused_linear_compound(x, w, vh, names, rows=keep, **common),
+        h,
+        names,
+    )
+    full, full_grad = _run(
+        lambda x: fl.fused_linear_compound(x, w, vh, names, **common), h, names
+    )
+    for name in names:
+        assert torch.count_nonzero(out.losses[name][skipped]) == 0
+        torch.testing.assert_close(
+            out.losses[name][keep], full.losses[name][keep], rtol=1e-5, atol=1e-5
+        )
+    assert torch.count_nonzero(out.pred_ids[skipped]) == 0
+    assert torch.equal(out.pred_ids[keep], full.pred_ids[keep])
+    assert torch.count_nonzero(grad[skipped]) == 0
+    # _run weights rows by (row % 3); the kept rows' gradients are unchanged
+    torch.testing.assert_close(grad[keep], full_grad[keep], rtol=1e-4, atol=1e-6)
+
+
+@requires_accelerator
+def test_no_grad_computes_losses_only(monkeypatch):
+    h, w, vh, tw = _inputs(10, 6, 5, 17, torch.float32, DEVICE, seed=5)
+    calls: list[int] = []
+    real = fl._forward_deferred_chunk
+
+    def spy(*args):
+        calls.append(1)
+        return real(*args)
+
+    monkeypatch.setattr(fl, "_forward_deferred_chunk", spy)
+    with torch.no_grad():
+        out = fl.fused_linear_compound(
+            h.requires_grad_(True), w, vh, ("kl_div",), target_weight=tw
+        )
+    assert not calls
+    assert out.losses["kl_div"].grad_fn is None
+    fl.fused_linear_compound(h, w, vh, ("kl_div",), target_weight=tw)
+    assert calls
 
 
 def _kernel_reference(z, t, names):

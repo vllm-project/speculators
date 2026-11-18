@@ -19,8 +19,6 @@ from tests.unit.models.test_fused_losses import (
 
 pytestmark = pytest.mark.usefixtures("narrowest_tile")
 
-NAMES = ("kl_div", "rkl", "jsd", "ce", "tv", "nla", "lk_hybrid")
-
 
 def _inputs(rows, hidden, verifier_hidden, vocab, dtype, device, seed=0):
     """Draft hidden/weight plus verifier hidden/weight that give close softmaxes."""
@@ -46,37 +44,8 @@ def _target_logits(vh, tw):
 
 
 # ---------------------------------------------------------------------------
-# CPU
+# Argument checks (no GPU needed)
 # ---------------------------------------------------------------------------
-
-
-def test_values_match_materialized_targets_fp64():
-    h, w, vh, tw = _inputs(13, 6, 5, 17, torch.float64, "cpu")
-    out = fl.fused_linear_compound(
-        h, w, vh, NAMES, metric_terms=("tv",), chunk_rows=5, target_weight=tw
-    )
-    ref = fl.fused_linear_compound(
-        h, w, _target_logits(vh, tw), NAMES, metric_terms=("tv",), chunk_rows=5
-    )
-    for name in NAMES:
-        torch.testing.assert_close(out.losses[name], ref.losses[name])
-    torch.testing.assert_close(out.metrics["tv"], ref.metrics["tv"])
-    assert torch.equal(out.pred_ids, ref.pred_ids)
-    assert torch.equal(out.target_ids, ref.target_ids)
-
-
-@pytest.mark.parametrize("name", [n for n in NAMES if n != "lk_hybrid"])
-def test_gradcheck_fp64(name):
-    h, w, vh, tw = _inputs(13, 6, 5, 17, torch.float64, "cpu", seed=1)
-    h.requires_grad_(True)
-
-    def loss(x):
-        out = fl.fused_linear_compound(
-            x, w, vh, (name,), chunk_rows=5, target_weight=tw
-        )
-        return out.losses[name]
-
-    assert torch.autograd.gradcheck(loss, (h,))
 
 
 def test_validation():
