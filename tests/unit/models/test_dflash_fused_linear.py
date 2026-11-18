@@ -196,6 +196,16 @@ def test_recomputed_targets_cover_the_full_sequence_branch(sample_from_anchor):
 
 
 @requires_gpu
+def test_rejects_unknown_fused_linear_targets():
+    model = _model(False, torch.float32)
+    with (
+        torch.compiler.set_stance("force_eager"),
+        pytest.raises(ValueError, match="fused_linear_targets"),
+    ):
+        model(**_inputs(torch.float32), fused_linear=True, fused_linear_targets="bogus")
+
+
+@requires_gpu
 @pytest.mark.usefixtures("aot_eager_forward")
 @pytest.mark.parametrize("targets", ["recompute", "materialize"])
 def test_training_step_matches_fused_compiled(targets, monkeypatch):
