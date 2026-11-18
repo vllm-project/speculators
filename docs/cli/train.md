@@ -189,6 +189,10 @@ torchrun --standalone --nproc_per_node=4 -m speculators.train \
 
 - **`--dflash-decay-gamma`** (float, default: `4.0`) Decay gamma for DFlash-family loss weighting.
 
+- **`--fused-linear-targets`** (str, default: `"recompute"`) With `--loss-implementation fused_linear`: `recompute` the target logits per chunk from the verifier hidden states (no `[T, V]` tensor; one extra verifier GEMM per chunk), or `materialize` them once. See [Loss Functions](../user_guide/loss_functions.md#memory-efficient-dflash-loss).
+
+- **`--fused-linear-logits`** (str, default: `"input"`) With `--loss-implementation fused_linear`: `input` keeps the logit tiles in the training dtype; `float32` takes them from the GEMM accumulator for more accurate gradients (notably TV-based losses) at slightly slower GEMMs.
+
 - **`--per-position-loss-weight`** (str, default: `"dpace"` for dflash, `"fixed-exp-decay"` otherwise) Per-position loss weighting scheme. Options: `fixed-exp-decay`, `dpace`. Applies to DFlash-family models. `dpace` requires `--loss-fn ce`.
 
 - **`--dpace-alpha`** (float, default: `0.5`) Confidence smoothing constant for the D-PACE loss. Only used with `--per-position-loss-weight dpace`.
