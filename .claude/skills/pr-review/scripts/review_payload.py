@@ -15,6 +15,7 @@ Enforced here so every caller gets the same rules:
 - a finding becomes an inline comment only if its lines are commentable
   right-side lines of one diff hunk (GitHub rejects the whole review
   otherwise); any other finding goes into the review body;
+- a finding's `detail` is posted under its body in a collapsed section;
 - `path:line` references to changed files become permalinks at the
   reviewed head;
 - the body ends with a link to the skill at the commit that produced it.
@@ -29,6 +30,7 @@ import argparse
 import json
 import re
 import sys
+import textwrap
 from pathlib import Path
 from urllib.parse import quote
 
@@ -112,6 +114,19 @@ def _validate(review: dict) -> None:
             raise SystemExit(f"review_payload: finding {i} needs an int `confidence`")
         if not (finding.get("body") or "").strip():
             raise SystemExit(f"review_payload: finding {i} needs a `body`")
+        if not isinstance(finding.get("detail", ""), str):
+            raise SystemExit(f"review_payload: finding {i} has a non-string `detail`")
+
+
+def _detail_block(finding: dict) -> str:
+    """The finding's detail as a collapsed section, or "" when it has none.
+
+    The blank lines make GitHub render the inside as Markdown.
+    """
+    detail = (finding.get("detail") or "").strip()
+    if not detail:
+        return ""
+    return f"\n\n<details><summary>Details</summary>\n\n{detail}\n\n</details>"
 
 
 def _inline_comment(finding: dict, anchors: dict[str, dict[int, int]]) -> dict | None:
@@ -121,7 +136,8 @@ def _inline_comment(finding: dict, anchors: dict[str, dict[int, int]]) -> dict |
     lines = anchors.get(path, {})
     if line not in lines:
         return None
-    comment = {"path": path, "line": line, "side": "RIGHT", "body": finding["body"]}
+    body = finding["body"].strip() + _detail_block(finding)
+    comment = {"path": path, "line": line, "side": "RIGHT", "body": body}
     start = finding.get("start_line")
     if isinstance(start, int) and start != line:
         if start > line or lines.get(start) != lines[line]:
@@ -212,19 +228,19 @@ def build_payload(
         where = finding.get("file")
         if where and isinstance(finding.get("line"), int):
             where = f"{where}:{finding['line']}"
-        in_body.append(
-            linked(f"- {finding['body'].strip()}" + (f" (`{where}`)" if where else ""))
-        )
+        item = f"- {finding['body'].strip()}" + (f" (`{where}`)" if where else "")
+        # Indented, the collapsed section stays part of its list item.
+        item += textwrap.indent(_detail_block(finding), "  ")
+        in_body.append(linked(item))
     counts.update(inline=len(comments), in_body=len(in_body))
 
     skill_url = f"https://github.com/{repo}/tree/{skill_ref}/{SKILL_PATH}"
     footer = f"Review criteria: [`pr-review` skill @ `{skill_ref[:12]}`]({skill_url})"
     if byline:
         footer = f"{byline} · {footer}"
-    body = linked(review["summary"].strip())
-    if in_body:
-        body += "\n\n" + "\n".join(in_body)
-    body += f"\n\n<sub>{footer}</sub>"
+    # The summary is often empty: the findings then stand on their own.
+    parts = [linked(review["summary"].strip()), "\n".join(in_body)]
+    body = "\n\n".join([*filter(None, parts), f"<sub>{footer}</sub>"])
 
     payload = {
         "commit_id": head,

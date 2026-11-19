@@ -6,17 +6,18 @@ A review is one `review.json` file. `scripts/review_payload.py` checks it and tu
 {
   "version": 1,
   "pr": 1234,
-  "summary": "Design looks good; two gaps below.",
+  "summary": "",
   "findings": [
     {"confidence": 90, "file": "src/speculators/x.py", "line": 56, "body": "This recomputes the `argmax` the fused pass already returned; use `out.pred_ids` instead."},
-    {"confidence": 85, "file": "src/speculators/x.py", "start_line": 40, "line": 44, "body": "A NaN validation loss never compares lower, so `checkpoint_best` stays on the first epoch. Skip non-finite losses here."},
+    {"confidence": 85, "file": "src/speculators/x.py", "start_line": 40, "line": 44, "body": "A NaN validation loss never compares lower, so `checkpoint_best` stays on the first epoch. Skip non-finite losses here.", "detail": "`nan < best` is `False` for every `best`, so the comparison on line 42 never passes again. `if math.isfinite(val_loss) and val_loss < best:` fixes it."},
     {"confidence": 80, "body": "The description has no Tests section, which [AGENTS.md › Pull requests](https://github.com/vllm-project/speculators/blob/{base.sha}/AGENTS.md#pull-requests) asks for."}
   ]
 }
 ```
 
 - `pr` is the number of the PR in the context directory; a review for any other PR is refused.
-- `summary` is markdown: your verdict only, not a description of the PR (see the rubric). It is posted only when at least one finding survives.
+- `summary` is markdown and usually empty: it holds only what no finding can (see the rubric). It is posted only when at least one finding survives.
+- `body` is markdown: the comment as the author first reads it. `detail` is optional markdown, posted under the body in a collapsed section (see the rubric for what goes where).
 - A finding about the PR as a whole (description, contribution rules, splitting) has no `file` or `line`. It goes into the review body.
 - `confidence` is the 0–100 score from the rubric. Findings below 80 are dropped, PR-wide ones included.
 - `file` is the path as it appears after `+++ b/` in the diff.

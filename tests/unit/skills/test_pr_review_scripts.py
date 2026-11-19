@@ -319,6 +319,38 @@ def test_payload_links_references_in_every_part():
     assert f"and [`a.py:21`]({link}L21)" in payload["body"]
 
 
+def test_empty_summary_leaves_only_findings_and_footer():
+    finding = {"confidence": 90, "body": "b", "file": "pkg/a.py", "line": 3}
+    payload, _ = _build(_review(finding, summary=""))
+    assert payload["body"].startswith("<sub>")
+    payload, _ = _build(_review({"confidence": 90, "body": "whole PR"}, summary=" "))
+    assert payload["body"].startswith("- whole PR\n\n<sub>")
+
+
+def test_detail_is_posted_collapsed_under_the_body():
+    inline = {"confidence": 90, "body": "b", "file": "pkg/a.py", "line": 3}
+    payload, _ = _build(
+        _review(
+            {**inline, "detail": "see a.py:2\n\n```python\nx = 1\n```"},
+            {"confidence": 90, "body": "whole PR", "detail": "why"},
+            {**inline, "detail": " "},
+        )
+    )
+    link = f"https://github.com/vllm-project/speculators/blob/{HEAD}/pkg/a.py#L2"
+    assert payload["comments"][0]["body"] == (
+        "b\n\n<details><summary>Details</summary>\n\n"
+        f"see [`a.py:2`]({link})\n\n```python\nx = 1\n```\n\n</details>"
+    )
+    assert payload["comments"][1]["body"] == "b"
+    # In the body the section is indented, so it stays inside its list item.
+    assert (
+        "- whole PR\n\n  <details><summary>Details</summary>\n\n  why\n\n  </details>"
+        in payload["body"]
+    )
+    with pytest.raises(SystemExit, match="non-string `detail`"):
+        _build(_review({**inline, "detail": ["x"]}))
+
+
 def test_footer_links_the_skill_at_its_commit():
     payload, _ = _build(_review({"confidence": 90, "body": "b"}), byline="by me")
     footer = payload["body"].splitlines()[-1]
