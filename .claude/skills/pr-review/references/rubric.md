@@ -81,7 +81,7 @@ Before writing, go over each finding once more against the code: is it true, doe
 
 ## Writing the review
 
-The format is in [output.md](output.md).
+The format is in [output.md](output.md), with a check to run on your draft before you finish.
 
 The **summary** holds only what no finding can: which finding to settle first when the others depend on it, a linked source (a paper, an issue) you needed and couldn't load, or why you didn't review. Most reviews have none of these, and the summary stays empty. The author wrote the PR, so saying what it does, what it gets right or what you checked gives them nothing to act on, and a PR that is fine needs no case made for it.
 

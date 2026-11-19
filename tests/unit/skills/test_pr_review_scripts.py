@@ -351,6 +351,47 @@ def test_detail_is_posted_collapsed_under_the_body():
         _build(_review({**inline, "detail": ["x"]}))
 
 
+def test_length_check_measures_only_bodies_that_would_be_posted():
+    link = "[CONTRIBUTING.md](https://github.com/o/r/blob/" + "a" * 40 + "/C.md#x)"
+    fits = " ".join(["word"] * 20) + ". " + " ".join(["word"] * 28) + f" {link}."
+    long_body = ". ".join([" ".join(["word"] * 12)] * 5) + "."
+    long_sentence = " ".join(["word"] * 31) + "."
+    code = "Short.\n\n```python\n" + "x = 1\n" * 40 + "```"
+    review = _review(
+        {"confidence": 90, "body": fits},
+        {"confidence": 90, "body": long_body},
+        {"confidence": 90, "body": long_sentence},
+        {"confidence": 79, "body": long_body},
+        {"confidence": 90, "body": code},
+    )
+    problems = review_payload.length_problems(review)
+    assert [p.split(":")[0] for p in problems] == ["finding 1", "finding 2"]
+    assert "the body is 60 words" in problems[0]
+    assert "a sentence is 31 words" in problems[1]
+
+
+def test_check_mode_fails_on_long_bodies_and_builds_nothing(
+    tmp_path, monkeypatch, capsys
+):
+    (tmp_path / "pr.json").write_text(json.dumps(_pr()))
+    (tmp_path / "pr.diff").write_text(DIFF)
+    draft = tmp_path / "review.json"
+    argv = ["review_payload.py", str(draft), str(tmp_path), "--check"]
+    monkeypatch.setattr("sys.argv", argv)
+
+    draft.write_text(json.dumps(_review({"confidence": 90, "body": "word " * 51})))
+    with pytest.raises(SystemExit) as exit_info:
+        review_payload.main()
+    assert exit_info.value.code == review_payload.EXIT_TOO_LONG
+    assert "finding 0: the body is 51 words" in capsys.readouterr().err
+
+    draft.write_text(json.dumps(_review({"confidence": 90, "body": "Short."})))
+    review_payload.main()
+    out = capsys.readouterr()
+    assert out.out == ""
+    assert "check passed" in out.err
+
+
 def test_footer_links_the_skill_at_its_commit():
     payload, _ = _build(_review({"confidence": 90, "body": "b"}), byline="by me")
     footer = payload["body"].splitlines()[-1]

@@ -25,4 +25,12 @@ A review is one `review.json` file. `scripts/review_payload.py` checks it and tu
 - `start_line` is optional and marks a range ending at `line`. Both lines must be in the same hunk.
 - A finding whose lines aren't commentable is not lost: it is appended to the review body with its location.
 
+Before you finish, check the draft and fix what it reports (`scripts/` is next to this `references/` directory):
+
+```bash
+python3 scripts/review_payload.py review.json <context_dir> --check
+```
+
+It validates the format and measures each body that would be posted: at most 50 words, and no sentence over 30. A body over that is carrying its reasoning, which belongs in `detail`.
+
 The review is always posted as a comment. It never approves and never requests changes; a maintainer makes that call.
