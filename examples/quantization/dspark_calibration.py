@@ -200,7 +200,7 @@ def calibration_forward(
     )
     mask_ids[:, :: model.block_size] = input_ids[:, anchors]
     noise = model.embed_tokens(input=mask_ids)
-    target = model.hidden_norm(hidden_states=model.fc(input=hidden_states))
+    target = model.hidden_norm(hidden_states=model.fc(hidden_states))
     positions = get_base_indices_for_anchored_blocks(
         anchor_positions=position_ids[0, anchors], block_size=model.block_size
     )
