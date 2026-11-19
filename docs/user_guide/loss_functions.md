@@ -45,7 +45,9 @@ speculators train ... --loss-fn '{"ce": 0.1, "tv": 0.9}'
 Two options trade memory or speed for accuracy:
 
 - `--fused-linear-targets` (default `recompute`) recomputes each chunk's target logits from the verifier hidden states, one extra verifier GEMM per chunk. `materialize` builds the `[N, V]` target logits once instead.
-- `--fused-linear-logits` (default `input`) keeps the logit tiles in the training dtype, like materialized logits. `float32` takes them straight from the GEMM accumulator: more accurate gradients, notably for TV-based losses, at 7-10% more time.
+- `--fused-linear-logits` (default `input`) keeps the logit tiles in the training dtype, like materialized logits. `float32` takes them straight from the GEMM accumulator: more accurate gradients, notably for TV-based losses, at 7-10% more time. `float16` casts the bf16 operands to fp16 for 8x finer tiles at bf16 tile size, for up to 4% more time and one fp16 copy of the head.
+
+With the full vocabulary, DFlash's `lm_head` is the verifier head, so with recomputed targets and a distribution loss (KL, TV, ...) the draft logits are formed as the target logits plus `(h - h_verifier) @ W^T`. Their rounding then scales with the draft-target difference instead of the logits: at V = 152k and acceptance 0.88-0.98, the KL / TV gradient error vs fp64 drops from 16-87% to 2-9% with `input` tiles and to about 0.4% with `float16` tiles (0.3% with `float32`).
 
 Chunks are sized from a scratch budget set by `SPECULATORS_FUSED_LINEAR_BUDGET_MIB` (default 4096). Only DFlash supports `fused_linear`; other models raise an error.
 

@@ -320,12 +320,13 @@ class LossArgs(_Group):
         "verifier GEMM per chunk, in forward), or materialize them once (keeps "
         "one [T, V] tensor). Ignored by the other implementations.",
     )
-    fused_linear_logits: Literal["input", "float32"] = Field(
+    fused_linear_logits: Literal["input", "float32", "float16"] = Field(
         default="input",
         description="With loss_implementation=fused_linear: dtype of the logit "
         "tiles. input keeps them in the training dtype (bf16), like materialized "
         "logits; float32 takes them from the GEMM accumulator -- more accurate "
-        "gradients (notably for TV-based losses), slower GEMMs. Ignored by the "
+        "gradients (notably for TV-based losses), slower GEMMs; float16 casts "
+        "bf16 operands to fp16 for 8x finer tiles at bf16 cost. Ignored by the "
         "other implementations.",
     )
     loss_fn: str | None = Field(
