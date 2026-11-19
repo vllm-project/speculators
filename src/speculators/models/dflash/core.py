@@ -46,7 +46,6 @@ class DFlashDraftModel(DraftVocabMixin, DFlashCheckpointModel):
     objective: TrainingObjective = staticmethod(dflash_objective)
     config_class: ClassVar[type[DFlashSpeculatorConfig]] = DFlashSpeculatorConfig  # type: ignore[misc]
     supports_gradient_checkpointing = True  # noqa: D003  # Qwen3DFlashDecoderLayer inherits GradientCheckpointingLayer
-    requires_optimizer_metadata: ClassVar[bool] = True
     _no_split_modules = ["Qwen3DFlashDecoderLayer"]
     _keys_to_ignore_on_load_missing: ClassVar[list[str]] = [  # type: ignore[misc]
         "embed_tokens.weight",

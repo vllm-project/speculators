@@ -1,28 +1,12 @@
-"""Optimizer resume preserves tensor identity across backbone composition."""
-
-import copy
-import json
-from typing import Any, cast
+"""Same-version optimizer resume preserves the next update."""
 
 import pytest
 import torch
-from torch.distributed.checkpoint.state_dict import (
-    StateDictOptions,
-    get_optimizer_state_dict,
-)
 
 from speculators.models.modular import ModularDraftModel
 from speculators.train import checkpointer as checkpointer_module
 from speculators.train.checkpointer import SingleGPUCheckpointer
-from speculators.train.optimizer_checkpoint import (
-    optimizer_metadata,
-    prepare_optimizer_state,
-    save_optimizer_metadata,
-)
-from tests.unit.models.test_dflash_family_contracts import (
-    legacy_name,
-    make_contract_model,
-)
+from tests.unit.models.test_dflash_family_contracts import make_contract_model
 from tests.unit.models.test_modular_model import modular_config
 
 
@@ -65,146 +49,6 @@ def test_resume_next_step_matches_uninterrupted(named, multiple, tmp_path, monke
     ):
         assert name == other_name
         torch.testing.assert_close(parameter, other, atol=0, rtol=0)
-
-
-@pytest.mark.parametrize("recipe", ["dflash", "dspark"])
-def test_named_legacy_optimizer_is_mapped_without_tensor_copy(recipe, tmp_path):
-    model = make_contract_model(recipe, False)
-    optimizer = torch.optim.AdamW(model.named_parameters())
-    _step(model, [optimizer])
-    state = optimizer.state_dict()
-    for group in state["param_groups"]:
-        group["param_names"] = [
-            "module." + legacy_name(name, recipe) for name in group["param_names"]
-        ]
-    prepared = prepare_optimizer_state(
-        tmp_path / "missing.json", model, [optimizer], state, distributed=False
-    )
-    assert prepared["param_groups"][0]["param_names"] == [
-        name for name, _ in model.named_parameters()
-    ]
-    for key in state["state"]:
-        assert prepared["state"][key]["exp_avg"] is state["state"][key]["exp_avg"]
-
-
-@pytest.mark.parametrize("recipe", ["dflash", "dspark"])
-def test_legacy_distributed_optimizer_names_are_mapped(recipe, tmp_path):
-    model = make_contract_model(recipe, False)
-    optimizer = torch.optim.AdamW(model.named_parameters())
-    _step(model, [optimizer])
-    state = cast(
-        "dict[str, Any]",
-        get_optimizer_state_dict(
-            model, optimizer, options=StateDictOptions(full_state_dict=True)
-        ),
-    )
-    legacy = dict(
-        state,
-        state={
-            legacy_name(name, recipe): value for name, value in state["state"].items()
-        },
-        param_groups=[
-            dict(
-                group,
-                params=[legacy_name(name, recipe) for name in group["params"]],
-            )
-            for group in state["param_groups"]
-        ],
-    )
-    prepared = prepare_optimizer_state(
-        tmp_path / "missing.json", model, [optimizer], legacy, distributed=True
-    )
-    assert prepared["state"].keys() == state["state"].keys()
-    assert prepared["param_groups"] == state["param_groups"]
-
-
-def test_unnamed_legacy_optimizer_is_rejected(tmp_path):
-    model = make_contract_model("dflash", False)
-    optimizer = torch.optim.AdamW(model.parameters())
-    with pytest.raises(ValueError, match="unnamed legacy.*optimizer"):
-        prepare_optimizer_state(
-            tmp_path / "missing.json",
-            model,
-            [optimizer],
-            optimizer.state_dict(),
-            distributed=False,
-        )
-
-
-@pytest.mark.parametrize("change", ["version", "order", "optimizer"])
-def test_changed_optimizer_identity_is_rejected(change, tmp_path):
-    model = make_contract_model("dflash", False)
-    optimizer = torch.optim.AdamW(model.parameters())
-    metadata = optimizer_metadata(model, [optimizer], distributed=False)
-    if change == "version":
-        metadata["version"] = 2
-    elif change == "order":
-        metadata["parameter_groups"][0][0].reverse()
-    else:
-        metadata["optimizer_types"] = ["different.Optimizer"]
-    path = tmp_path / "optimizer_metadata.json"
-    path.write_text(json.dumps(metadata))
-    with pytest.raises(ValueError, match="metadata does not match"):
-        prepare_optimizer_state(
-            path, model, [optimizer], optimizer.state_dict(), distributed=False
-        )
-
-
-def test_legacy_names_cannot_hide_reordered_parameters(tmp_path):
-    model = make_contract_model("dflash", False)
-    optimizer = torch.optim.AdamW(model.named_parameters())
-    state = copy.deepcopy(optimizer.state_dict())
-    state["param_groups"][0]["param_names"].reverse()
-    with pytest.raises(ValueError, match="identities or ordering differ"):
-        prepare_optimizer_state(
-            tmp_path / "missing.json", model, [optimizer], state, distributed=False
-        )
-
-
-def test_metadata_validates_distributed_optimizer_topology(tmp_path):
-    model = make_contract_model("dflash", False)
-    optimizer = torch.optim.AdamW(model.parameters())
-    path = tmp_path / "optimizer_metadata.json"
-    save_optimizer_metadata(path, model, [optimizer], distributed=True)
-    with pytest.raises(ValueError, match="metadata does not match"):
-        prepare_optimizer_state(
-            path, model, [optimizer], optimizer.state_dict(), distributed=False
-        )
-
-
-def test_versioned_distributed_state_can_migrate_correction_paths(tmp_path):
-    model = make_contract_model("dspark", False)
-    optimizer = torch.optim.AdamW(model.named_parameters())
-    _step(model, [optimizer])
-    state = cast(
-        "dict[str, Any]",
-        get_optimizer_state_dict(
-            model, optimizer, options=StateDictOptions(full_state_dict=True)
-        ),
-    )
-
-    def legacy(name):
-        return legacy_name(name, "dspark")
-
-    metadata = optimizer_metadata(model, [optimizer], distributed=True)
-    metadata["parameter_groups"] = [
-        [[legacy(name) for name in group] for group in groups]
-        for groups in metadata["parameter_groups"]
-    ]
-    path = tmp_path / "optimizer_metadata.json"
-    path.write_text(json.dumps(metadata))
-    old_state = dict(
-        state,
-        state={legacy(name): value for name, value in state["state"].items()},
-        param_groups=[
-            dict(group, params=[legacy(name) for name in group["params"]])
-            for group in state["param_groups"]
-        ],
-    )
-    prepared = prepare_optimizer_state(
-        path, model, [optimizer], old_state, distributed=True
-    )
-    assert prepared["state"].keys() == state["state"].keys()
 
 
 def test_mixed_model_checkpoint_resumes_next_update(tmp_path, monkeypatch):

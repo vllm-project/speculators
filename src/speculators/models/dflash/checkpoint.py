@@ -78,12 +78,6 @@ class DFlashCheckpointModel(SpeculatorModel):
             _rename_key(name, prefixes): tensor for name, tensor in state_dict.items()
         }
 
-    @classmethod
-    def checkpoint_parameter_name(cls, name: str) -> str:
-        """Resolve parameter identities from optimizer metadata."""
-        name = name.removeprefix("module.")
-        return _rename_key(name, cls._checkpoint_prefixes())
-
     def save_pretrained(
         self,
         save_directory,

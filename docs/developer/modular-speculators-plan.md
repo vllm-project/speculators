@@ -9,7 +9,6 @@ Implemented in separate Jujutsu changes:
 - `test(models): capture legacy DFlash family contracts`: fixed-weight numerical references from `988ed16b1f91315942049da3093d88dba70c45d9`, covering all four existing recipes and both slot conventions. The fixture includes parameter keys, freezing/save ownership, optimizer partitioning, output probes, losses, metrics, and gradient probes.
 - `refactor(models): compose DFlash backbones and expose decoder layers`: typed block layouts and backbone inputs/features, a target-free `draft_features()` path, explicit DFlash2 decoder construction, migration of all four forward callers, and a `get_decoder_layers()` training interface. Invalid short-input padding indices are now safe, and zero requested anchors are explicitly rejected.
 - `fix(checkpoints): map composed DFlash weights at serialization boundaries`: named models translate between flat checkpoint keys and registered module paths. Export preserves the live model config and caller's tensor dictionary.
-- `fix(train): validate optimizer identities when resuming composed models`: new checkpoints write `optimizer_metadata.json`. Named legacy single-device/DDP and distributed states can map old parameter names when group ordering matches. Unnamed legacy optimizer files without metadata fail explicitly; use `--from-pretrained` for weights-only initialization. Model-weight compatibility does not imply arbitrary legacy optimizer-state compatibility.
 - `refactor(models): separate correction modules from training objectives`: correction weights have a single `correction.*` owner, confidence remains independent, and each algorithm delegates to a parameter-free objective callable. Dense correction and candidate scoring have explicit target-free interfaces. Legacy correction names import/export through the same adapters.
 - `feat(models): configure block backbones and corrections independently`: `ModularDraftModel` and typed recipes select either backbone with any of the four corrections. Component YAML, training configuration integration, native checkpoint dispatch, matching legacy exports, and resolved architecture artifacts are included. The DFlash2 + Markov + confidence example uses this shared model without a pairing-specific subclass.
 
@@ -156,17 +155,9 @@ Primary files: `config.py`, `model.py`, `train/checkpointer.py`, `train/trainer.
 - [x] Reject legacy exports of unsupported mixtures before writing partial output. Never label an arbitrary mixture as a known serving architecture just because shapes match.
 - [ ] Add a deliberate one-time loader for this branch's intermediate nested layout only if an inventory finds checkpoints worth preserving; otherwise document that development-only layout as unsupported.
 
-### Training-state migration
+### Training resume
 
-- [x] Inventory single-GPU optimizer parameter ordering and names, plus distributed optimizer fully qualified names. Module nesting can change parameter order even when tensors are identical.
-- [x] For new training states, store enough versioned parameter identity/group metadata to validate or reconstruct optimizer assignments. Include multiple optimizers and schedulers.
-- [x] Map legacy distributed optimizer names with the model-key adapter where a verified migration is possible.
-- [ ] For legacy positional optimizer states, derive the old recipe's parameter ordering and validate identities/shapes and group membership. Do not assume matching tensor counts or shapes prove the assignment is correct.
-- [x] If an old training state cannot be mapped reliably, fail full resume with a specific explanation and document the explicit model-weights-only initialization path. Never silently reset optimizer state during a requested resume.
-- [ ] Preserve scheduler state, step counters and dtypes, epoch/local-step metadata, sampler position, and best-validation bookkeeping for supported resume paths. Preserve any existing RNG-state handling; do not claim exact stochastic continuation beyond what is restored.
-- [x] Test one additional optimizer step after save/resume against uninterrupted execution with deterministic inputs and restored state.
-
-Completion: legacy model weights load correctly, current recipes export correctly, native round trips work, and full resume is either tested or explicitly rejected for a documented legacy format.
+Full training resume requires the same Speculators version that wrote the checkpoint. The same-version tests compare the next optimizer update against uninterrupted execution.
 
 ## 7. Phase E: extract correction modules and training objectives
 
@@ -275,6 +266,6 @@ Keep each delivery step reviewable and preserve working named recipes at integra
 - [x] The first mixed recipe works through configuration without another algorithm subclass.
 - [x] Legacy weights and native modular weights load through public APIs and checkpointer paths.
 - [ ] Existing supported serving recipes retain a validated export path; new mixtures have an explicit serving support status.
-- [x] Supported full-resume paths restore the intended optimizer state; unsupported legacy states fail explicitly with a documented weights-only alternative.
+- [x] Same-version full resume restores optimizer state.
 - [x] Configuration, provenance, examples, migration notes, and developer guidance describe the implemented support rather than the intended future scope.
 - [ ] Required checks pass, or remaining environment-dependent checks and their effect on release readiness are recorded explicitly.

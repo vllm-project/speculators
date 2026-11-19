@@ -55,7 +55,7 @@ model.save_pretrained("./output/native-copy")
 
 The existing `dflash`, `dflash2`, `dspark`, and `xpress` model names remain available with their original configuration defaults. These named algorithms save and load flat checkpoints. Modular models save and load hierarchical checkpoints.
 
-Full training resume additionally validates optimizer parameter identities. New training checkpoints include `optimizer_metadata.json`, including for optimizers constructed without parameter names. Legacy named optimizer states can migrate when group identities and ordering match. Unnamed legacy states without metadata fail explicitly; use `--from-pretrained` to initialize model weights for a new training run instead of requesting full resume.
+Full training resume requires the same Speculators version that wrote the checkpoint. Use `--from-pretrained` to initialize a new run from compatible model weights.
 
 ## Serving support
 

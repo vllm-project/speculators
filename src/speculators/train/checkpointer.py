@@ -20,10 +20,6 @@ from torch.nn.parallel import DistributedDataParallel
 from transformers.modeling_utils import PreTrainedModel
 
 from speculators.train.distributed import get_rank, is_distributed
-from speculators.train.optimizer_checkpoint import (
-    prepare_optimizer_state,
-    save_optimizer_metadata,
-)
 from speculators.utils.util import get_current_device
 
 logger = logging.getLogger("speculators")
@@ -159,9 +155,6 @@ class BaseCheckpointer:
     def scheduler_path(self, epoch: int | str):
         scheduler_fname = "scheduler_state_dict.pt"
         return self.path / str(epoch) / scheduler_fname
-
-    def optimizer_metadata_path(self, epoch: int | str):
-        return self.path / str(epoch) / "optimizer_metadata.json"
 
     def best_path(self) -> Path:
         return self.path / "checkpoint_best"
@@ -346,17 +339,10 @@ class SingleGPUCheckpointer(BaseCheckpointer):
             map_location=device,
         )
         optimizers = _as_list(optimizer)
+        loaded_list = loaded if isinstance(loaded, list) else [loaded]
         raw_model = (
             model.module if isinstance(model, DistributedDataParallel) else model
         )
-        loaded = prepare_optimizer_state(
-            self.optimizer_metadata_path(self.previous_epoch),
-            raw_model,
-            optimizers,
-            loaded,
-            distributed=False,
-        )
-        loaded_list = loaded if isinstance(loaded, list) else [loaded]
         dtype = float_dtype or raw_model.dtype
         for opt, state_dict in zip(optimizers, loaded_list, strict=True):
             opt.load_state_dict(convert_float_dtype(state_dict, dtype))
@@ -383,12 +369,6 @@ class SingleGPUCheckpointer(BaseCheckpointer):
         # Preserve the legacy single-optimizer format when there is only one.
         payload = state_dicts[0] if len(state_dicts) == 1 else state_dicts
         torch.save(payload, self.optimizer_path(epoch))
-        save_optimizer_metadata(
-            self.optimizer_metadata_path(epoch),
-            raw_model,
-            optimizers,
-            distributed=False,
-        )
         self._copy_train_command(epoch)
 
 
@@ -434,13 +414,6 @@ class DistributedCheckpointer(BaseCheckpointer):
             full_state_dict, float_dtype or model.dtype
         )
 
-        full_state_dict = prepare_optimizer_state(
-            self.optimizer_metadata_path(self.previous_epoch),
-            model,
-            optimizers,
-            full_state_dict,
-            distributed=True,
-        )
         set_optimizer_state_dict(
             model,
             optimizers,
@@ -480,12 +453,6 @@ class DistributedCheckpointer(BaseCheckpointer):
             model.save_pretrained(self.path / str(epoch), state_dict=model_state_dict)
             patch_config_dtype(self.path / str(epoch) / "config.json", float_dtype)
             torch.save(optimizer_state_dict, self.optimizer_path(epoch))
-            save_optimizer_metadata(
-                self.optimizer_metadata_path(epoch),
-                model,
-                _as_list(optimizer),
-                distributed=True,
-            )
             self._copy_train_command(epoch)
 
         dist.barrier()
