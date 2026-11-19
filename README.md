@@ -31,6 +31,10 @@ ______________________________________________________________________
 
 ______________________________________________________________________
 
+## Find a Trained Speculator
+
+Looking for a ready-to-use speculator? Browse trained models and their evaluation results on the [Speculators Dashboard](https://neuralmagic.github.io/speculators-dashboard/).
+
 ## 🚀 What's New!
 
 Big updates have landed in Speculators! To get a more in-depth look, check out the [Speculators documentation](https://docs.vllm.ai/projects/speculators/en/latest/).
@@ -55,10 +59,6 @@ ______________________________________________________________________
 
 > [!TIP]
 > Read more about Speculators features in this [vLLM blog post](https://blog.vllm.ai/2025/12/13/speculators-v030.html).
-
-## Supported Models
-
-Browse trained speculators and their evaluation results on the [Speculators dashboard](https://neuralmagic.github.io/speculators-dashboard/).
 
 ## vLLM Inference
 
