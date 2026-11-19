@@ -3,6 +3,7 @@
 
 usage: review_payload.py <review.json> <context_dir> --skill-ref <sha>
                          [--byline <text>]
+       review_payload.py <review.json> <context_dir> --check
 
 context_dir is the output of gather_context.py (pr.json and pr.diff are
 read). Prints the payload JSON on stdout, ready for
@@ -22,6 +23,11 @@ Enforced here so every caller gets the same rules:
 
 Exits with status 3 and prints nothing when no finding survives: clean PRs
 get no review.
+
+With --check nothing is built: the draft is validated, and each body that would
+be posted is measured. A body over MAX_BODY_WORDS, or with a sentence over
+MAX_SENTENCE_WORDS, is reported and the exit status is 4, so whoever drafted
+the review can shorten it. Building a payload only warns about them.
 """
 
 from __future__ import annotations
@@ -37,6 +43,10 @@ from urllib.parse import quote
 REVIEW_FORMAT_VERSION = 1
 MIN_CONFIDENCE = 80
 EXIT_NOTHING_TO_POST = 3
+EXIT_TOO_LONG = 4
+# A body is read at a glance; its reasoning goes in the finding's `detail`.
+MAX_BODY_WORDS = 50
+MAX_SENTENCE_WORDS = 30
 SKILL_PATH = ".claude/skills/pr-review"
 _HUNK = re.compile(r"^@@ -\d+(?:,\d+)? \+(\d+)(?:,\d+)? @@")
 
@@ -194,6 +204,35 @@ def link_refs(text: str, paths: list[str], repo: str, sha: str) -> str:
     return "".join(out)
 
 
+_LINK_TEXT = re.compile(r"\[([^\]\n]*)\]\([^)\n]*\)")
+_SENTENCE_END = re.compile(r"(?<=[.?!:])\s+")
+
+
+def length_problems(review: dict) -> list[str]:
+    """One line per body that would be posted and is too long to read at a glance."""
+    problems = []
+    for i, finding in enumerate(review.get("findings", [])):
+        if finding["confidence"] < MIN_CONFIDENCE:
+            continue
+        # A link counts as its text, and a code block is not prose.
+        text = _LINK_TEXT.sub(r"\1", _FENCE.sub(" ", finding["body"]))
+        words = len(text.split())
+        if words > MAX_BODY_WORDS:
+            problems.append(
+                f"finding {i}: the body is {words} words, over {MAX_BODY_WORDS}. "
+                "Keep what is wrong and what to do; move the rest to `detail`."
+            )
+        longest = max(_SENTENCE_END.split(text), key=lambda part: len(part.split()))
+        if len(longest.split()) > MAX_SENTENCE_WORDS:
+            start = " ".join(longest.split()[:8])
+            problems.append(
+                f"finding {i}: a sentence is {len(longest.split())} words, over "
+                f"{MAX_SENTENCE_WORDS}. Split it, or move part of it to `detail`: "
+                f'"{start} ..."'
+            )
+    return problems
+
+
 def build_payload(
     review: dict, pr: dict, diff: str, skill_ref: str, byline: str = ""
 ) -> tuple[dict | None, dict]:
@@ -255,17 +294,33 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("review_json", type=Path)
     parser.add_argument("context_dir", type=Path)
-    parser.add_argument("--skill-ref", required=True, help="commit of the skill used")
+    parser.add_argument("--skill-ref", help="commit of the skill used")
     parser.add_argument("--byline", default="", help="who or what wrote the review")
+    parser.add_argument(
+        "--check",
+        action="store_true",
+        help="validate the draft and its body lengths; build nothing",
+    )
     args = parser.parse_args()
+    if not args.check and not args.skill_ref:
+        parser.error("--skill-ref is required unless --check is given")
 
+    review = json.loads(args.review_json.read_text())
     payload, counts = build_payload(
-        json.loads(args.review_json.read_text()),
+        review,
         json.loads((args.context_dir / "pr.json").read_text()),
         (args.context_dir / "pr.diff").read_text(),
-        args.skill_ref,
+        args.skill_ref or "",
         args.byline,
     )
+    problems = length_problems(review)
+    for problem in problems:
+        sys.stderr.write(f"review_payload: {problem}\n")
+    if args.check:
+        if problems:
+            raise SystemExit(EXIT_TOO_LONG)
+        sys.stderr.write("review_payload: check passed\n")
+        return
     sys.stderr.write(
         f"review_payload: {counts['inline']} inline, {counts['in_body']} in body, "
         f"{counts['dropped']} below confidence {MIN_CONFIDENCE}\n"
