@@ -124,16 +124,3 @@ class DFlash2DraftModel(DFlashDraftModel):
             "selector_miss_policy": kwargs.get("selector_miss_policy", "replace"),
         }
         return dict(shared), dict(shared)
-
-    def _predecessor_ids(
-        self,
-        input_ids: torch.Tensor,  # shape: [1, total_seq_len]
-        anchored_block_indices: torch.Tensor,  # shape: [num_anchors*block_size]
-    ) -> torch.Tensor:
-        block_tokens = input_ids[0, anchored_block_indices].view(
-            -1, self.block_size
-        )  # shape: [num_anchors, block_size]
-        if self.config.sample_from_anchor:
-            return block_tokens
-        # For token sequence 0 1 2 3 return previous token ids 0 0 1 2
-        return torch.cat([block_tokens[:, :1], block_tokens[:, :-1]], dim=1)

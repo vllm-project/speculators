@@ -8,6 +8,7 @@ from transformers.models.qwen3.modeling_qwen3 import Qwen3Config
 
 from speculators import SpeculatorModelConfig, SpeculatorsConfig, VerifierConfig
 from speculators.losses import resolve_loss_config
+from speculators.models.components import BlockLayout
 from speculators.models.dflash2 import DFlash2DraftModel, DFlash2SpeculatorConfig
 from speculators.models.dflash2.metrics import (
     compute_metrics as compute_dflash2_metrics,
@@ -309,32 +310,23 @@ def test_model_rejects_pruned_draft_vocabulary():
         DFlash2DraftModel(_tiny_config(draft_vocab_size=32))
 
 
-def test_predecessor_ids_shift_each_block_from_its_anchor():
-    model = DFlash2DraftModel(_tiny_config())
-    input_ids = torch.arange(16).unsqueeze(0)
-    anchored_block_indices = torch.tensor([2, 3, 4, 5, 8, 9, 10, 11])
-
-    predecessor_ids = model._predecessor_ids(
-        input_ids,
-        anchored_block_indices,
+@pytest.mark.parametrize(
+    ("sample_from_anchor", "expected"),
+    [
+        (False, [[2, 2, 3, 4], [8, 8, 9, 10]]),
+        (True, [[2, 3, 4, 5], [8, 9, 10, 11]]),
+    ],
+)
+def test_block_layout_predecessor_ids(sample_from_anchor, expected):
+    layout = BlockLayout(
+        anchor_positions=torch.tensor([2, 8]),
+        block_positions=torch.tensor([2, 3, 4, 5, 8, 9, 10, 11]),
+        loss_mask=torch.ones(1, 8),
+        block_size=4,
+        sample_from_anchor=sample_from_anchor,
     )
-
-    expected = torch.tensor([[2, 2, 3, 4], [8, 8, 9, 10]])
-    torch.testing.assert_close(predecessor_ids, expected)
-
-
-def test_predecessor_ids_sample_from_anchor():
-    model = DFlash2DraftModel(_tiny_config(sample_from_anchor=True))
-    input_ids = torch.arange(16).unsqueeze(0)
-    anchored_block_indices = torch.tensor([2, 3, 4, 5, 8, 9, 10, 11])
-
-    predecessor_ids = model._predecessor_ids(
-        input_ids,
-        anchored_block_indices,
-    )
-
-    expected = torch.tensor([[2, 3, 4, 5], [8, 9, 10, 11]])
-    torch.testing.assert_close(predecessor_ids, expected)
+    actual = layout.predecessor_ids(torch.arange(16).unsqueeze(0))
+    torch.testing.assert_close(actual, torch.tensor(expected))
 
 
 def test_selector_training_candidates_keep_strict_top_k_and_inject_missing_target():

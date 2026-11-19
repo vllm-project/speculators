@@ -88,22 +88,12 @@ class DFlashDraftModel(DraftVocabMixin, DFlashCheckpointModel):
         self._init_vocab(config)
 
         tl_config = config.transformer_layer_config
-        # Number of draft layers is encoded in transformer_layer_config
-        num_draft_layers = tl_config.num_hidden_layers
-
         self.backbone = self._create_backbone(config)
 
-        # Both are optional: declared only for alternating/sliding attention.
         self.sliding_window = getattr(tl_config, "sliding_window", None)
-        self.sliding_window_indices = [
-            i
-            for i, layer_type in enumerate(
-                getattr(tl_config, "layer_types", None) or []
-            )
-            if layer_type == "sliding_attention"
-        ]
-        self.uses_sliding_window_attn = bool(self.sliding_window_indices)
-        self.uses_full_attn = bool(num_draft_layers - len(self.sliding_window_indices))
+        sliding_layers = self.backbone.sliding_window_indices
+        self.uses_sliding_window_attn = bool(sliding_layers)
+        self.uses_full_attn = len(sliding_layers) < len(self.backbone.layers)
 
         self.verifier_norm = resolve_verifier_norm_class(config)(
             config.transformer_layer_config.hidden_size,

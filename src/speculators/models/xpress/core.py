@@ -92,9 +92,3 @@ class XPressDraftModel(DFlashDraftModel):
             "ce_from_data": kwargs.get("ce_from_data", False),
         }
         return dict(shared), dict(shared)
-
-    def _draft_to_verifier_ids(self, draft_ids: torch.Tensor) -> torch.Tensor:
-        """Map draft-vocab argmax ids back to verifier-vocab ids (d2t offsets)."""
-        if self.d2t is not None:
-            return draft_ids + self.d2t[draft_ids]
-        return draft_ids
