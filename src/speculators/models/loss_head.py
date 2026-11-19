@@ -44,6 +44,7 @@ SAMPLE_FROM_ANCHOR = {"dflash": False, "dspark": True}
 FUSED_LINEAR_IMPLEMENTATIONS = (
     "fused_linear",
     "fused_linear_fp32",
+    "fused_linear_fp16",
     "fused_linear_materialize",
 )
 IMPLEMENTATIONS = ("fused", "eager", *FUSED_LINEAR_IMPLEMENTATIONS)
@@ -134,8 +135,8 @@ def loss_head(cfg: HeadConfig, inputs: HeadInputs) -> tuple[torch.Tensor, dict]:
     The fused-linear implementations (DFlash only) never materialise the draft
     logits: ``fused_linear`` (the model default) also recomputes the target
     logits per chunk from the verifier hidden states (bf16 tiles, deferred
-    gradients, anchor rows skipped), ``fused_linear_fp32`` does the same with
-    fp32 logit tiles, and
+    gradients, anchor rows skipped), ``fused_linear_fp32`` / ``_fp16`` do
+    the same with fp32 / fp16 logit tiles, and
     ``fused_linear_materialize`` takes the target logits materialised.
 
     Eager, without ``torch.autocast`` or ``torch.compile``: inputs are created
@@ -143,7 +144,9 @@ def loss_head(cfg: HeadConfig, inputs: HeadInputs) -> tuple[torch.Tensor, dict]:
     without its confidence head (per-row work, not ``[N, V]``).
     """
     fused_linear = cfg.implementation in FUSED_LINEAR_IMPLEMENTATIONS
-    recompute_targets = cfg.implementation in ("fused_linear", "fused_linear_fp32")
+    recompute_targets = (
+        fused_linear and cfg.implementation != "fused_linear_materialize"
+    )
     loss_config = cached_loss_config(
         cfg.loss, "fused" if fused_linear else cfg.implementation
     )
@@ -171,9 +174,10 @@ def loss_head(cfg: HeadConfig, inputs: HeadInputs) -> tuple[torch.Tensor, dict]:
             targets,
             inputs.loss_mask,
             target_weight=inputs.verifier_weight if recompute_targets else None,
-            logits_dtype=(
-                "float32" if cfg.implementation == "fused_linear_fp32" else "input"
-            ),
+            logits_dtype={
+                "fused_linear_fp32": "float32",
+                "fused_linear_fp16": "float16",
+            }.get(cfg.implementation, "input"),
             skip_anchor_rows=True,
             **dflash_kwargs,
         )

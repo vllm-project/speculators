@@ -191,7 +191,7 @@ torchrun --standalone --nproc_per_node=4 -m speculators.train \
 
 - **`--fused-linear-targets`** (str, default: `"recompute"`) With `--loss-implementation fused_linear`: `recompute` the target logits per chunk from the verifier hidden states (no `[T, V]` tensor; one extra verifier GEMM per chunk), or `materialize` them once. See [Loss Functions](../user_guide/loss_functions.md#memory-efficient-dflash-loss).
 
-- **`--fused-linear-logits`** (str, default: `"input"`) With `--loss-implementation fused_linear`: `input` keeps the logit tiles in the training dtype; `float32` takes them from the GEMM accumulator for more accurate gradients (notably TV-based losses) at slightly slower GEMMs.
+- **`--fused-linear-logits`** (str, default: `"input"`) With `--loss-implementation fused_linear`: `input` keeps the logit tiles in the training dtype; `float32` takes them from the GEMM accumulator for more accurate gradients (notably TV-based losses) at slightly slower GEMMs; `float16` casts bf16 operands to fp16 for 8x finer tiles at bf16 tile size.
 
 - **`--per-position-loss-weight`** (str, default: `"dpace"` for dflash, `"fixed-exp-decay"` otherwise) Per-position loss weighting scheme. Options: `fixed-exp-decay`, `dpace`. Applies to DFlash-family models. `dpace` requires `--loss-fn ce`.
 

@@ -565,9 +565,13 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
         if fused_linear:
             # loss_implementation="fused_linear": no [1, T, V] draft logits, and
             # with recomputed targets no [1, T, V] target logits either.
+            # With the full vocab lm_head is the verifier head (loaded from it,
+            # frozen, never saved); passing that one weight for both enables
+            # fused_linear's shared-head delta form.
+            head = self.lm_head if self.use_draft_vocab else self.verifier_lm_head
             loss, metrics = compute_metrics_from_hidden(
                 hidden,
-                self.lm_head.weight,
+                head.weight,
                 targets,
                 aligned_loss_mask,
                 self.block_size,
