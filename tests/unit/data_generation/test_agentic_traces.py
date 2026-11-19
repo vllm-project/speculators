@@ -150,6 +150,18 @@ class _FakeProcessor:
         return f"<{len(input_ids)} tokens>"
 
 
+class _FakeTokenizer:
+    def apply_chat_template(self, conversation, **kwargs):
+        return {
+            "input_ids": [1, 2, 3, 4],
+            "assistant_masks": [0, 0, 1, 1],
+        }
+
+
+class _TraceProcessor(_FakeProcessor):
+    tokenizer = _FakeTokenizer()
+
+
 def _capture_conversations(tmp_path, monkeypatch, events):
     """Run a synthetic trace through the builder and return its conversation."""
     trace_path = tmp_path / "pi.jsonl"
@@ -170,6 +182,54 @@ def _capture_conversations(tmp_path, monkeypatch, events):
         primary_id="inst.abc",
     )
     return captured["dataset"][0]["conversations"]
+
+
+def test_rows_from_pi_trace_per_trace_returns_one_row(tmp_path, monkeypatch):
+    trace_path = tmp_path / "pi.jsonl"
+    event = {"type": "agent_end", "messages": _pi_messages(), "willRetry": False}
+    trace_path.write_text(json.dumps(event) + "\n")
+    boundaries = [
+        {"input_ids": [1, 2, 3], "loss_mask": [0, 1, 1], "conv": []},
+        {"input_ids": [1, 2, 3, 4], "loss_mask": [0, 0, 1, 1], "conv": []},
+    ]
+    monkeypatch.setattr(
+        agentic_traces, "_normalize_conversation", lambda conversation: conversation
+    )
+    monkeypatch.setattr(
+        agentic_traces, "_render_boundary_rows", lambda *args, **kwargs: boundaries
+    )
+    # Final conv must match the normalized conversation for the merge to apply.
+    conversation, _ = pi_messages_to_conversation(_pi_messages())
+    boundaries[-1]["conv"] = conversation
+
+    rows = rows_from_pi_trace(
+        trace_path,
+        processor=_TraceProcessor(),
+        render_endpoint="http://localhost:8000",
+        seq_length=64,
+        primary_id="inst.abc",
+        row_mode="per_trace",
+    )
+
+    assert len(rows) == 1
+    assert rows[0]["id"] == "inst.abc_trace"
+    assert rows[0]["loss_mask"] == [0, 0, 1, 1]
+    assert rows[0]["metadata"]["row_mode"] == "per_trace"
+
+
+def test_rows_from_pi_trace_rejects_unknown_row_mode(tmp_path):
+    trace_path = tmp_path / "pi.jsonl"
+    trace_path.write_text("{}\n")
+
+    with pytest.raises(ValueError, match="unsupported row_mode"):
+        rows_from_pi_trace(
+            trace_path,
+            processor=_FakeProcessor(),
+            render_endpoint="http://localhost:8000",
+            seq_length=64,
+            primary_id="inst.abc",
+            row_mode="bad",
+        )
 
 
 def test_rows_from_pi_trace_accumulates_runs(tmp_path, monkeypatch):

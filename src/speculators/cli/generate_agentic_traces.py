@@ -263,6 +263,7 @@ def _run_generate(  # noqa: PLR0917
     tools: str,
     trace_dir: str | None,
     keep_traces: bool,
+    row_mode: str = "per_turn",
 ) -> None:
     logging.basicConfig(
         level=logging.INFO,
@@ -330,6 +331,7 @@ def _run_generate(  # noqa: PLR0917
                     render_endpoint=render_endpoint,
                     seq_length=seq_length,
                     primary_id=result["instance_id"],
+                    row_mode=row_mode,
                 )
             )
         except Exception as exc:  # noqa: BLE001
@@ -429,6 +431,13 @@ def generate_agentic_traces(  # noqa: PLR0917
         int,
         typer.Option(help="Maximum sequence length of an output row"),
     ] = 32768,
+    row_mode: Annotated[
+        str,
+        typer.Option(
+            "--row-mode",
+            help="Row layout: per_turn (one row per assistant turn) or per_trace",
+        ),
+    ] = "per_turn",
     limit: Annotated[
         int | None,
         typer.Option(help="Maximum number of tasks to run"),
@@ -495,6 +504,7 @@ def generate_agentic_traces(  # noqa: PLR0917
         workers=workers,
         timeout=timeout,
         seq_length=seq_length,
+        row_mode=row_mode,
         limit=limit,
         max_samples=max_samples,
         tools=tools,
