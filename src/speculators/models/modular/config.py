@@ -78,12 +78,11 @@ class BlockRecipe(BaseModel):
 
 @SpeculatorModelConfig.register("modular")
 class ModularSpeculatorConfig(DFlashSpeculatorConfig):
-    """Native block-model format; legacy serving export is a separate operation."""
+    """Configuration for hierarchical modular checkpoints."""
 
     speculators_model_type: Literal["modular"] = "modular"  # type: ignore[assignment]
     has_no_defaults_at_init: ClassVar[bool] = True
     architectures: list[str] = Field(default_factory=lambda: ["ModularDraftModel"])
-    checkpoint_format_version: Literal[1] | None = 1
     recipe: BlockRecipe = Field(default_factory=BlockRecipe)
 
     @model_validator(mode="after")
@@ -102,10 +101,6 @@ class ModularSpeculatorConfig(DFlashSpeculatorConfig):
                 )
             if backbone.conv_kernel_size > self.block_size:
                 raise ValueError("Backbone conv_kernel_size cannot exceed block_size")
-        if self.checkpoint_format_version != 1:
-            raise ValueError(
-                "Modular configurations require native checkpoint format version 1"
-            )
         if (
             self.speculators_config is not None
             and self.speculators_config.algorithm != "modular"

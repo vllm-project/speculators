@@ -24,10 +24,6 @@ class DFlashSpeculatorConfig(SpeculatorModelConfig):
     """
 
     speculators_model_type: Literal["dflash"] = "dflash"
-    checkpoint_format_version: Literal[1] | None = Field(
-        default=None,
-        description="None selects legacy flat checkpoints; 1 selects nested backbones.",
-    )
     architectures: list[str] = Field(
         default_factory=lambda: ["DFlashSpeculator"],
         description="Model architectures that can load these weights",

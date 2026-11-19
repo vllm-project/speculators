@@ -8,7 +8,7 @@ Implemented in separate Jujutsu changes:
 
 - `test(models): capture legacy DFlash family contracts`: fixed-weight numerical references from `988ed16b1f91315942049da3093d88dba70c45d9`, covering all four existing recipes and both slot conventions. The fixture includes parameter keys, freezing/save ownership, optimizer partitioning, output probes, losses, metrics, and gradient probes.
 - `refactor(models): compose DFlash backbones and expose decoder layers`: typed block layouts and backbone inputs/features, a target-free `draft_features()` path, explicit DFlash2 decoder construction, migration of all four forward callers, and a `get_decoder_layers()` training interface. Invalid short-input padding indices are now safe, and zero requested anchors are explicitly rejected.
-- `fix(checkpoints): map composed DFlash weights at serialization boundaries`: flat serving exports remain the default for named recipes; `save_pretrained(..., checkpoint_format="native")` writes nested names with `checkpoint_format_version=1`. Legacy/native imports, sharded pretrained loads, converters, and direct checkpointer weight loading share the mapping and validate learned weights. Export does not mutate the live model config or consume the caller's tensor dictionary.
+- `fix(checkpoints): map composed DFlash weights at serialization boundaries`: named models translate between flat checkpoint keys and registered module paths. Export preserves the live model config and caller's tensor dictionary.
 - `fix(train): validate optimizer identities when resuming composed models`: new checkpoints write `optimizer_metadata.json`. Named legacy single-device/DDP and distributed states can map old parameter names when group ordering matches. Unnamed legacy optimizer files without metadata fail explicitly; use `--from-pretrained` for weights-only initialization. Model-weight compatibility does not imply arbitrary legacy optimizer-state compatibility.
 - `refactor(models): separate correction modules from training objectives`: correction weights have a single `correction.*` owner, confidence remains independent, and each algorithm delegates to a parameter-free objective callable. Dense correction and candidate scoring have explicit target-free interfaces. Legacy correction names import/export through the same adapters.
 - `feat(models): configure block backbones and corrections independently`: `ModularDraftModel` and typed recipes select either backbone with any of the four corrections. Component YAML, training configuration integration, native checkpoint dispatch, matching legacy exports, and resolved architecture artifacts are included. The DFlash2 + Markov + confidence example uses this shared model without a pairing-specific subclass.
@@ -87,9 +87,7 @@ Retain `embed_tokens`, `lm_head`, `t2d`, and `d2t` on the wrapper initially. Pre
 
 ### Checkpoint policy
 
-Native modular checkpoints use nested parameter paths and an explicit format version. Existing unversioned configurations select a known legacy recipe and legacy key mapping. Loading translates into the internal layout; exporting to a legacy runtime translates out of it.
-
-Preserve the default published format for existing named recipes during migration. The modular entry point saves the versioned native format by default. Expose explicit native save and legacy serving export choices, with matching configuration and tensor names. Do not infer the output format from module attributes or mutate the live model configuration during export.
+Named recipes save and load flat checkpoints. The modular entry point saves and loads hierarchical checkpoints. Model type determines the layout, and checkpoint saving preserves the live model configuration.
 
 ## 3. Phase A: capture the existing contracts
 
@@ -145,7 +143,6 @@ Completion: existing DFlash-family training forwards and trainer setup work with
 
 Primary files: `config.py`, `model.py`, `train/checkpointer.py`, `train/trainer.py`, and `convert/dflash/converter.py` under `src/speculators/`.
 
-- [x] Add a checkpoint format version to native modular model configuration. Keep training-state format metadata distinct from model-weight format metadata.
 - [x] Implement named adapters for each legacy recipe and external source format. Use anchored prefix mappings, not unrestricted substring replacement.
 - [x] Centralize mapping and validation so all entry points share the same rules. Keep ordinary internal `state_dict()` names native and predictable.
 - [x] Cover all entry points: `SpeculatorModel.from_pretrained()`, concrete model loading, explicit `state_dict` loading, converter loads, single-GPU/DDP resume, distributed state-dict loading, and best-checkpoint reloads.

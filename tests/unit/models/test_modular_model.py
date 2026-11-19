@@ -5,7 +5,7 @@ from copy import deepcopy
 
 import pytest
 import torch
-from safetensors.torch import load_file
+from safetensors.torch import load_file, save_file
 
 from speculators.model import SpeculatorModel
 from speculators.models.dflash import DFlashDraftModel, DFlashSpeculatorConfig
@@ -28,7 +28,7 @@ def modular_config(
     backbone="dflash2", correction="markov", *, confidence=False, sample=False
 ):
     source = make_contract_model("dflash", sample)
-    excluded = {"speculators_model_type", "architectures", "checkpoint_format_version"}
+    excluded = {"speculators_model_type", "architectures"}
     values = {
         name: deepcopy(getattr(source.config, name))
         for name in DFlashSpeculatorConfig.model_fields
@@ -136,9 +136,15 @@ def test_mixed_native_checkpoint_roundtrip_and_export_rejection(tmp_path, monkey
     loaded = SpeculatorModel.from_pretrained(tmp_path / "native", local_files_only=True)
     assert isinstance(loaded, ModularDraftModel)
     assert loaded.config.recipe == model.config.recipe
+    index = json.loads(
+        (tmp_path / "native" / "model.safetensors.index.json").read_text()
+    )
+    assert "backbone.fc.weight" in index["weight_map"]
+    assert any(key.startswith("correction.") for key in index["weight_map"])
+    assert "fc.weight" not in index["weight_map"]
     for name, tensor in model.state_dict().items():
         torch.testing.assert_close(loaded.state_dict()[name], tensor, equal_nan=True)
-    with pytest.raises(ValueError, match="no legacy serving export"):
+    with pytest.raises(ValueError, match="layout is fixed"):
         model.save_pretrained(tmp_path / "unsupported", checkpoint_format="legacy")
     assert not (tmp_path / "unsupported").exists()
 
@@ -213,44 +219,19 @@ def test_mixed_markov_modes_and_confidence_features(head_type, confidence):
     )
 
 
-@pytest.mark.parametrize("recipe", RECIPES)
-@pytest.mark.parametrize("dtype", [torch.float32, torch.bfloat16])
-def test_known_recipe_exports_real_legacy_configuration(
-    recipe, dtype, tmp_path, monkeypatch
-):
-    correction = {
-        "dflash": "identity",
-        "dflash2": "selector",
-        "dspark": "markov",
-        "xpress": "xpress",
-    }[recipe]
-    model = ModularDraftModel(
-        modular_config(
-            "dflash2" if recipe == "dflash2" else "dflash",
-            correction,
-            confidence=recipe == "dspark",
-        )
-    )
-    model.load_state_dict(make_contract_model(recipe, False).state_dict())
-    model.to(dtype)
-    before = model.config.to_dict()
-    model.save_pretrained(tmp_path, checkpoint_format="legacy")
-    assert model.config.to_dict() == before
-    config = json.loads((tmp_path / "config.json").read_text())
-    assert config["speculators_model_type"] == recipe
-    assert config["speculators_config"]["algorithm"] == recipe
-    assert "recipe" not in config
-    monkeypatch.setattr(DFlashDraftModel, "load_verifier_weights", lambda self: None)
-    loaded = SpeculatorModel.from_pretrained(
-        tmp_path, local_files_only=True, dtype=dtype
-    )
-    assert type(loaded) is RECIPES[recipe][0]
-    assert isinstance(loaded, DFlashDraftModel)
-    saved = load_file(tmp_path / "model.safetensors")
-    assert saved["fc.weight"].dtype == dtype
-    assert config["dtype"] == str(dtype).removeprefix("torch.")
-    for name, tensor in model.backbone.state_dict().items():
-        torch.testing.assert_close(loaded.backbone.state_dict()[name], tensor)
+def test_modular_rejects_flat_weights(tmp_path):
+    model = ModularDraftModel(modular_config("dflash", "identity"))
+    model.save_pretrained(tmp_path)
+    path = tmp_path / "model.safetensors"
+    flat = {
+        name.removeprefix("backbone."): tensor
+        for name, tensor in load_file(path).items()
+    }
+    save_file(flat, path)
+    with pytest.raises(ValueError, match="missing learned weights.*backbone.fc"):
+        SpeculatorModel.from_pretrained(tmp_path, local_files_only=True)
+    with pytest.raises(ValueError, match="unexpected weights.*fc.weight"):
+        model.prepare_checkpoint_state_dict(flat)
 
 
 @pytest.mark.parametrize(

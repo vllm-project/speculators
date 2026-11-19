@@ -250,7 +250,7 @@ class TestSave:
         # No source weights: every draft-body weight (fc, norm, hidden_norm,
         # layers.*) is missing and must be flagged, not silently kept as NaN.
         # Raises before load_verifier_weights, so no verifier download.
-        with pytest.raises(ValueError, match="Draft weights missing"):
+        with pytest.raises(ValueError, match="missing learned weights"):
             DFlashConverter()._save(_tiny_dflash_config(), {}, tmp_path)
 
 

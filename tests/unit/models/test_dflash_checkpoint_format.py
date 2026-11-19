@@ -1,4 +1,4 @@
-"""Legacy serving names and native module paths share one weight mapping."""
+"""Named DFlash checkpoints use flat serving names."""
 
 import json
 
@@ -7,8 +7,7 @@ import torch
 from safetensors.torch import load_file, save_file
 
 from speculators.model import SpeculatorModel
-from speculators.models.dflash import DFlashDraftModel, DFlashSpeculatorConfig
-from speculators.models.dflash.checkpoint import export_state_dict, import_state_dict
+from speculators.models.dflash import DFlashDraftModel
 from speculators.train import checkpointer as checkpointer_module
 from speculators.train.checkpointer import (
     DistributedCheckpointer,
@@ -23,11 +22,8 @@ def cpu_checkpoints(monkeypatch):
 
 
 @pytest.mark.parametrize("recipe", RECIPES)
-@pytest.mark.parametrize("checkpoint_format", ["legacy", "native"])
 @pytest.mark.parametrize("sharded", [False, True])
-def test_pretrained_roundtrip(
-    recipe, checkpoint_format, sharded, tmp_path, monkeypatch
-):
+def test_pretrained_roundtrip(recipe, sharded, tmp_path, monkeypatch):
     model = make_contract_model(recipe, False)
     before = model.config.to_dict()
     state = model.state_dict()
@@ -42,18 +38,11 @@ def test_pretrained_roundtrip(
     model.save_pretrained(
         tmp_path,
         state_dict=state,
-        checkpoint_format=checkpoint_format,
         max_shard_size="1KB" if sharded else "1GB",
     )
     assert model.config.to_dict() == before
     assert "backbone.fc.weight" in state  # supplied dictionaries are not consumed
-    config = json.loads((tmp_path / "config.json").read_text())
-    assert config["checkpoint_format_version"] == (
-        1 if checkpoint_format == "native" else None
-    )
-    expected_key = (
-        "backbone.fc.weight" if checkpoint_format == "native" else "fc.weight"
-    )
+    expected_key = "fc.weight"
     if sharded:
         index = json.loads((tmp_path / "model.safetensors.index.json").read_text())
         assert expected_key in index["weight_map"]
@@ -63,7 +52,6 @@ def test_pretrained_roundtrip(
     assert type(loaded) is type(model)
     for name, tensor in state.items():
         torch.testing.assert_close(loaded.state_dict()[name], tensor)
-    # The selected native/legacy format persists across another default save.
     loaded.save_pretrained(tmp_path / "again")
     assert expected_key in load_file(tmp_path / "again" / "model.safetensors")
 
@@ -79,24 +67,12 @@ def test_named_recipes_default_to_legacy_export(recipe, tmp_path):
         assert "layers.0.attention_conv.base_kernel" in exported
 
 
-def test_import_rejects_collisions_and_mixed_layouts():
-    tensor = torch.ones(16)
-    with pytest.raises(ValueError, match="collide"):
-        import_state_dict({"norm.weight": tensor, "backbone.norm.weight": tensor})
-    with pytest.raises(ValueError, match="mixes"):
-        import_state_dict(
-            {"norm.weight": tensor, "backbone.hidden_norm.weight": tensor}
-        )
-
-
-def test_import_shares_storage_and_preserves_module_metadata():
+def test_named_checkpoint_layout_is_fixed(tmp_path):
     model = make_contract_model("dflash", False)
-    state = model.state_dict()
-    legacy = export_state_dict(state, native=False)
-    imported = import_state_dict(legacy)
-    assert imported["backbone.fc.weight"] is state["backbone.fc.weight"]
-    with_metadata = import_state_dict(state)
-    assert with_metadata._metadata == state._metadata
+    with pytest.raises(ValueError, match="unexpected weights.*backbone.fc"):
+        model.prepare_checkpoint_state_dict(model.state_dict())
+    with pytest.raises(ValueError, match="layout is fixed"):
+        model.save_pretrained(tmp_path / "unsupported", checkpoint_format="native")
 
 
 def test_pretrained_rejects_missing_body_weights(tmp_path):
@@ -128,25 +104,6 @@ def test_custom_pretrained_key_mapping_is_validated(tmp_path, monkeypatch):
             local_files_only=True,
             key_mapping={r"^projection\.": "unknown."},
         )
-
-
-def test_pretrained_rejects_collision_across_shards(tmp_path):
-    model = make_contract_model("dflash", False)
-    model.save_pretrained(tmp_path, max_shard_size="1KB")
-    index_path = tmp_path / "model.safetensors.index.json"
-    index = json.loads(index_path.read_text())
-    save_file(
-        {"backbone.fc.weight": model.backbone.fc.weight}, tmp_path / "extra.safetensors"
-    )
-    index["weight_map"]["backbone.fc.weight"] = "extra.safetensors"
-    index_path.write_text(json.dumps(index))
-    with pytest.raises(ValueError, match="collide"):
-        DFlashDraftModel.from_pretrained(tmp_path, local_files_only=True)
-
-
-def test_unknown_format_version_is_rejected():
-    with pytest.raises(ValueError):
-        DFlashSpeculatorConfig(checkpoint_format_version=2)  # type: ignore[arg-type]
 
 
 @pytest.mark.parametrize("distributed", [False, True])

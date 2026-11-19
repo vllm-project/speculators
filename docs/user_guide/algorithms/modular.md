@@ -44,7 +44,7 @@ Training saves the resolved architecture in each checkpoint's `config.json` and 
 
 ## Load and save
 
-Native modular checkpoints use `backbone.*` and `correction.*` parameter names and `checkpoint_format_version=1`:
+Native modular checkpoints use `backbone.*` and `correction.*` parameter names:
 
 ```python
 from speculators import SpeculatorModel
@@ -53,20 +53,12 @@ model = SpeculatorModel.from_pretrained("./output/checkpoint")
 model.save_pretrained("./output/native-copy")
 ```
 
-The existing `dflash`, `dflash2`, `dspark`, and `xpress` model names remain available with their original configuration defaults. Their default saves retain flat legacy names; `checkpoint_format="native"` explicitly requests nested names. Old flat checkpoints load through the same public APIs and checkpointer weight-loading paths.
+The existing `dflash`, `dflash2`, `dspark`, and `xpress` model names remain available with their original configuration defaults. These named algorithms save and load flat checkpoints. Modular models save and load hierarchical checkpoints.
 
 Full training resume additionally validates optimizer parameter identities. New training checkpoints include `optimizer_metadata.json`, including for optimizers constructed without parameter names. Legacy named optimizer states can migrate when group identities and ordering match. Unnamed legacy states without metadata fail explicitly; use `--from-pretrained` to initialize model weights for a new training run instead of requesting full resume.
 
 ## Serving support
 
 Native modular mixtures currently require a serving implementation that understands their component recipe and proposal behavior. This change does not add native modular execution to vLLM. The `correct()` and `score_candidates()` APIs operate without training targets, but they are component operations rather than a serving scheduler or cache implementation.
-
-A modular recipe that exactly matches an existing named algorithm can export that algorithm's checkpoint format:
-
-```python
-model.save_pretrained("./output/legacy-export", checkpoint_format="legacy")
-```
-
-That export includes the corresponding legacy model configuration as well as the parameter names. A new mixture, such as DFlash2 convolutional layers with Markov correction, has no legacy serving equivalent and rejects this export. Keep its native checkpoint for training and future serving integration. Export key/configuration tests do not replace validation in your serving engine.
 
 When launching vLLM through `scripts/launch_vllm.py`, pass `--provenance-dir` pointing at the associated run's output/checkpoint directory. Include the run's command, checkpoint hashes, and patch artifacts when publishing models or evaluation results.

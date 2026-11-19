@@ -7,7 +7,7 @@ in the Speculators library.
 
 import os
 from abc import abstractmethod
-from typing import ClassVar, cast
+from typing import Any, ClassVar, cast
 
 import torch
 from torch import nn
@@ -386,7 +386,8 @@ class SpeculatorModel(ClassRegistryMixin, PreTrainedModel):  # type: ignore[misc
                 **kwargs,
             )
 
-        model: SpeculatorModel = super().from_pretrained(  # type: ignore[misc]
+        output_loading_info = kwargs.pop("output_loading_info", False)
+        loaded = super().from_pretrained(
             pretrained_model_name_or_path,
             *model_args,
             config=config,
@@ -398,13 +399,23 @@ class SpeculatorModel(ClassRegistryMixin, PreTrainedModel):  # type: ignore[misc
             revision=revision,
             use_safetensors=use_safetensors,
             weights_only=weights_only,
+            output_loading_info=True,
             **kwargs,
         )
+        # Transformers returns a tuple when output_loading_info=True.
+        model, loading_info = cast("tuple[SpeculatorModel, dict[str, Any]]", loaded)
+        cls._validate_pretrained_loading_info(loading_info)
         if hasattr(model, "load_vocab_mappings"):
             model.load_vocab_mappings(t2d, d2t)  # type: ignore[operator,attr-defined]
         if hasattr(model, "load_verifier_weights"):
             model.load_verifier_weights()  # type: ignore[operator,attr-defined]
+        if output_loading_info:
+            return model, loading_info  # type: ignore[return-value]
         return model
+
+    @staticmethod
+    def _validate_pretrained_loading_info(loading_info):
+        """Validate the Transformers load report before restoring verifier weights."""
 
     @classmethod
     def registered_model_class_from_config(

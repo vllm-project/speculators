@@ -89,4 +89,3 @@ def test_config_only_initialization_preserves_recipe(tmp_path, monkeypatch):
     )
     assert isinstance(model, ModularDraftModel)
     assert model.config.recipe == config.recipe
-    assert model.config.checkpoint_format_version == 1

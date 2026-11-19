@@ -11,7 +11,6 @@ from torch.distributed.checkpoint.state_dict import (
     get_optimizer_state_dict,
 )
 
-from speculators.models.dflash.checkpoint import legacy_key
 from speculators.models.modular import ModularDraftModel
 from speculators.train import checkpointer as checkpointer_module
 from speculators.train.checkpointer import SingleGPUCheckpointer
@@ -20,7 +19,10 @@ from speculators.train.optimizer_checkpoint import (
     prepare_optimizer_state,
     save_optimizer_metadata,
 )
-from tests.unit.models.test_dflash_family_contracts import make_contract_model
+from tests.unit.models.test_dflash_family_contracts import (
+    legacy_name,
+    make_contract_model,
+)
 from tests.unit.models.test_modular_model import modular_config
 
 
@@ -73,8 +75,7 @@ def test_named_legacy_optimizer_is_mapped_without_tensor_copy(recipe, tmp_path):
     state = optimizer.state_dict()
     for group in state["param_groups"]:
         group["param_names"] = [
-            "module." + legacy_key(name, model.legacy_correction_name)
-            for name in group["param_names"]
+            "module." + legacy_name(name, recipe) for name in group["param_names"]
         ]
     prepared = prepare_optimizer_state(
         tmp_path / "missing.json", model, [optimizer], state, distributed=False
@@ -100,16 +101,12 @@ def test_legacy_distributed_optimizer_names_are_mapped(recipe, tmp_path):
     legacy = dict(
         state,
         state={
-            legacy_key(name, model.legacy_correction_name): value
-            for name, value in state["state"].items()
+            legacy_name(name, recipe): value for name, value in state["state"].items()
         },
         param_groups=[
             dict(
                 group,
-                params=[
-                    legacy_key(name, model.legacy_correction_name)
-                    for name in group["params"]
-                ],
+                params=[legacy_name(name, recipe) for name in group["params"]],
             )
             for group in state["param_groups"]
         ],
@@ -187,7 +184,7 @@ def test_versioned_distributed_state_can_migrate_correction_paths(tmp_path):
     )
 
     def legacy(name):
-        return legacy_key(name, "markov_head")
+        return legacy_name(name, "dspark")
 
     metadata = optimizer_metadata(model, [optimizer], distributed=True)
     metadata["parameter_groups"] = [

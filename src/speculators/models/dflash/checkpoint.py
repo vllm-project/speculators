@@ -1,79 +1,125 @@
 """DFlash-family checkpoint names, independent of physical module ownership."""
 
-from collections import OrderedDict
-from collections.abc import Iterable, Mapping
+from copy import copy, deepcopy
+from typing import ClassVar
 
-import torch
+from speculators.model import SpeculatorModel
 
-BACKBONE_NAMES = frozenset({"layers", "fc", "hidden_norm", "norm", "rotary_emb"})
-CORRECTION_NAMES = frozenset({"markov_head", "candidate_selector", "refiner_head"})
-LEGACY_KEY_MAPPING = {
-    r"^(layers|fc|hidden_norm|norm|rotary_emb)\.": r"backbone.\1.",
-    r"^(markov_head|candidate_selector|refiner_head)\.": "correction.",
+_BACKBONE_PREFIXES = {
+    name: f"backbone.{name}"
+    for name in ("layers", "fc", "hidden_norm", "norm", "rotary_emb")
 }
 
 
-def native_key(key: str) -> str:
-    if key.split(".", 1)[0] in CORRECTION_NAMES:
-        return "correction" + key[key.index(".") :] if "." in key else "correction"
-    return f"backbone.{key}" if key.split(".", 1)[0] in BACKBONE_NAMES else key
-
-
-def legacy_key(key: str, correction_name: str | None = None) -> str:
-    if key.startswith("correction.") and correction_name is not None:
-        return correction_name + key.removeprefix("correction")
-    if key.startswith("backbone."):
-        candidate = key.removeprefix("backbone.")
-        if candidate.split(".", 1)[0] in BACKBONE_NAMES:
-            return candidate
+def _rename_key(key: str, prefixes: dict[str, str]) -> str:
+    for source, target in prefixes.items():
+        prefix = f"{source}."
+        if key.startswith(prefix):
+            return f"{target}.{key.removeprefix(prefix)}"
     return key
 
 
-def checkpoint_key_map(keys: Iterable[str]) -> dict[str, str]:
-    """Validate source names before loading any tensors, including shard headers."""
-    result = {}
-    destinations = set()
-    layouts = set()
-    for key in keys:
-        destination = native_key(key)
-        if destination in destinations:
-            raise ValueError(f"Checkpoint keys collide at {destination!r}")
-        destinations.add(destination)
-        result[key] = destination
-        if key.split(".", 1)[0] in BACKBONE_NAMES:
-            layouts.add("legacy")
-        elif legacy_key(key) != key:
-            layouts.add("native")
-    if len(layouts) > 1:
-        raise ValueError("Checkpoint mixes legacy and native backbone keys")
-    return result
+def _validate_checkpoint_keys(missing, unexpected):
+    if missing or unexpected:
+        raise ValueError(
+            f"Invalid draft checkpoint: missing learned weights {sorted(missing)}; "
+            f"unexpected weights {sorted(unexpected)}"
+        )
 
 
-def import_state_dict(state_dict: Mapping[str, torch.Tensor]):
-    """Rename keys without copying tensor storage or changing caller dictionaries."""
-    mapping = checkpoint_key_map(state_dict)
-    renamed = OrderedDict((mapping[key], value) for key, value in state_dict.items())
-    metadata = getattr(state_dict, "_metadata", None)
-    if metadata is not None:
-        renamed.__dict__["_metadata"] = {
-            native_key(key): value for key, value in metadata.items()
+class DFlashCheckpointModel(SpeculatorModel):
+    """Adapt DFlash-family checkpoint names at serialization boundaries."""
+
+    hierarchical_checkpoint: ClassVar[bool] = False
+    legacy_correction_name: ClassVar[str | None] = None
+
+    @classmethod
+    def _checkpoint_prefixes(cls) -> dict[str, str]:
+        if cls.hierarchical_checkpoint:
+            return {}
+        prefixes = dict(_BACKBONE_PREFIXES)
+        if cls.legacy_correction_name is not None:
+            prefixes[cls.legacy_correction_name] = "correction"
+        return prefixes
+
+    @classmethod
+    def from_pretrained(cls, *args, **kwargs):
+        mapping = {
+            rf"^{source}\.": f"{target}."
+            for source, target in cls._checkpoint_prefixes().items()
         }
-    return renamed
+        mapping.update(kwargs.pop("key_mapping", {}) or {})
+        return super().from_pretrained(*args, key_mapping=mapping, **kwargs)
 
+    @staticmethod
+    def _validate_pretrained_loading_info(loading_info):
+        _validate_checkpoint_keys(
+            loading_info["missing_keys"], loading_info["unexpected_keys"]
+        )
 
-def export_state_dict(
-    state_dict: Mapping[str, torch.Tensor],
-    *,
-    native: bool,
-    correction_name: str | None = None,
-):
-    renamed = import_state_dict(state_dict)
-    if native:
-        return renamed
-    if correction_name is None and any(
-        key.startswith("correction.") for key in renamed
+    @classmethod
+    def _save_prefixes(cls) -> dict[str, str]:
+        return {target: source for source, target in cls._checkpoint_prefixes().items()}
+
+    def prepare_checkpoint_state_dict(self, state_dict):
+        """Adapt and validate weights before single-device or FSDP resume."""
+        save_prefixes = self._save_prefixes()
+        expected = {_rename_key(name, save_prefixes) for name in self.state_dict()}
+        allowed_missing = set(self._keys_to_ignore_on_load_missing)
+        keys = state_dict.keys()
+        _validate_checkpoint_keys(
+            expected - keys - allowed_missing,
+            keys - expected,
+        )
+        prefixes = self._checkpoint_prefixes()
+        if not prefixes:
+            return state_dict
+        return {
+            _rename_key(name, prefixes): tensor for name, tensor in state_dict.items()
+        }
+
+    @classmethod
+    def checkpoint_parameter_name(cls, name: str) -> str:
+        """Resolve parameter identities from optimizer metadata."""
+        name = name.removeprefix("module.")
+        return _rename_key(name, cls._checkpoint_prefixes())
+
+    def save_pretrained(
+        self,
+        save_directory,
+        is_main_process=True,
+        state_dict=None,
+        push_to_hub=False,
+        max_shard_size="50GB",
+        variant=None,
+        token=None,
+        save_peft_format=True,
+        save_original_format=True,  # noqa: ARG002 - model type owns conversion
+        distributed_checkpoint=False,
+        **kwargs,
     ):
-        raise ValueError("A correction recipe is required for legacy export")
-    return OrderedDict(
-        (legacy_key(key, correction_name), value) for key, value in renamed.items()
-    )
+        """Save weights in the layout assigned to this model family."""
+        if "checkpoint_format" in kwargs:
+            raise ValueError("Checkpoint layout is fixed by the model type")
+        state_dict = self.state_dict() if state_dict is None else state_dict
+        save_prefixes = self._save_prefixes()
+        exported = {
+            _rename_key(name, save_prefixes): tensor
+            for name, tensor in state_dict.items()
+        }
+        # Transformers updates config metadata while writing the checkpoint.
+        view = copy(self)
+        view.config = deepcopy(self.config)
+        return super(DFlashCheckpointModel, view).save_pretrained(
+            save_directory,
+            is_main_process=is_main_process,
+            state_dict=exported,
+            push_to_hub=push_to_hub,
+            max_shard_size=max_shard_size,
+            variant=variant,
+            token=token,
+            save_peft_format=save_peft_format,
+            save_original_format=False,
+            distributed_checkpoint=distributed_checkpoint,
+            **kwargs,
+        )

@@ -1,11 +1,9 @@
 """Composition of block backbones, correction modules, and training strategies."""
 
-from copy import deepcopy
 from functools import partial
 from pathlib import Path
-from typing import Any, ClassVar
+from typing import ClassVar
 
-import torch
 import yaml
 
 from speculators.model import SpeculatorModel
@@ -14,17 +12,17 @@ from speculators.models.dflash.backbone import DFlashBackbone
 from speculators.models.dflash.config import DFlashSpeculatorConfig
 from speculators.models.dflash.core import DFlashDraftModel
 from speculators.models.dflash.objective import dflash_objective
-from speculators.models.dflash2 import DFlash2DraftModel, DFlash2SpeculatorConfig
+from speculators.models.dflash2 import DFlash2DraftModel
 from speculators.models.dflash2.model_definitions import (
     CandidateSelector,
     Qwen3DFlash2DecoderLayer,
 )
 from speculators.models.dflash2.objective import dflash2_objective
-from speculators.models.dspark import DSparkDraftModel, DSparkSpeculatorConfig
+from speculators.models.dspark import DSparkDraftModel
 from speculators.models.dspark.model_definitions import ConfidenceHead, MarkovHead
 from speculators.models.dspark.objective import dspark_objective
 from speculators.models.modular.config import BlockRecipe, ModularSpeculatorConfig
-from speculators.models.xpress import XPressDraftModel, XPressSpeculatorConfig
+from speculators.models.xpress import XPressDraftModel
 from speculators.models.xpress.model_definitions import XPressRefinerHead
 from speculators.models.xpress.objective import xpress_objective
 
@@ -44,12 +42,9 @@ _TRAINER_RECIPES: dict[str, type[DFlashDraftModel]] = {
 
 @SpeculatorModel.register("modular")
 class ModularDraftModel(DFlashDraftModel):
-    """Train supported mixtures without a subclass for each pairing.
+    """Train supported mixtures and save hierarchical checkpoints."""
 
-    Native mixed checkpoints require a matching serving implementation. Legacy
-    export is available only when the whole recipe matches an existing model.
-    """
-
+    hierarchical_checkpoint = True
     config_class: ClassVar[type[ModularSpeculatorConfig]] = ModularSpeculatorConfig  # type: ignore[misc,assignment]
     _no_split_modules = ["Qwen3DFlashDecoderLayer", "Qwen3DFlash2DecoderLayer"]
 
@@ -142,84 +137,3 @@ class ModularDraftModel(DFlashDraftModel):
             )
         assert config.recipe.objective is not None  # noqa: S101
         return _TRAINER_RECIPES[config.recipe.objective].get_trainer_kwargs(**kwargs)
-
-    def save_pretrained(self, save_directory, *args, checkpoint_format=None, **kwargs):
-        if checkpoint_format not in (None, "legacy", "native"):
-            raise ValueError(f"Unknown checkpoint format: {checkpoint_format!r}")
-        if checkpoint_format != "legacy":
-            return super().save_pretrained(
-                save_directory, *args, checkpoint_format="native", **kwargs
-            )
-        model_class, config = self._legacy_recipe()
-        # A meta-device serialization facade gives the serving export the actual
-        # legacy class/config without allocating another model's tensor storage.
-        with torch.device("meta"):
-            facade = model_class(config).to(dtype=self.dtype)
-        state = kwargs.pop("state_dict", None)
-        kwargs["state_dict"] = self.state_dict() if state is None else state
-        kwargs["checkpoint_format"] = "legacy"
-        return facade.save_pretrained(save_directory, *args, **kwargs)
-
-    def _legacy_recipe(self):
-        recipe = self.config.recipe
-        backbone, correction, confidence = (
-            recipe.backbone,
-            recipe.correction,
-            recipe.confidence,
-        )
-        common = {
-            key: deepcopy(getattr(self.config, key))
-            for key in (
-                "transformer_layer_config",
-                "draft_vocab_size",
-                "block_size",
-                "aux_hidden_state_layer_ids",
-                "mask_token_id",
-                "target_hidden_size",
-                "sliding_window_non_causal",
-                "sample_from_anchor",
-            )
-        }
-        extra: dict[str, Any] = {}
-        cls: type[DFlashDraftModel]
-        config_cls: type[DFlashSpeculatorConfig]
-        if backbone.kind == "dflash2" and correction.kind == "selector":
-            name, cls, config_cls = (
-                "dflash2",
-                DFlash2DraftModel,
-                DFlash2SpeculatorConfig,
-            )
-            extra = {
-                "conv_kernel_size": backbone.conv_kernel_size,
-                "conv_group_size": backbone.conv_group_size,
-                "selector_rank": correction.rank,
-                "selector_top_k": correction.selector_top_k,
-            }
-        elif backbone.kind == "dflash" and correction.kind == "xpress":
-            name, cls, config_cls = "xpress", XPressDraftModel, XPressSpeculatorConfig
-            extra = {
-                "xpress_rank": correction.rank,
-                "xpress_mlp_ratio": correction.xpress_mlp_ratio,
-                "num_jacobi_passes": correction.num_jacobi_passes,
-            }
-        elif backbone.kind == "dflash" and recipe.objective == "dspark":
-            name, cls, config_cls = "dspark", DSparkDraftModel, DSparkSpeculatorConfig
-            extra = {
-                "markov_rank": correction.rank if correction.kind == "markov" else 0,
-                "markov_head_type": correction.markov_head_type,
-                "enable_confidence_head": confidence.enabled,
-                "confidence_head_with_markov": confidence.with_correction_features,
-            }
-        elif backbone.kind == "dflash" and recipe.objective == "dflash":
-            name, cls, config_cls = "dflash", DFlashDraftModel, DFlashSpeculatorConfig
-        else:
-            raise ValueError(
-                "This mixed recipe has no legacy serving export; save the native format"
-            )
-        serving = deepcopy(self.config.speculators_config)
-        if serving is None:
-            raise ValueError(
-                "Legacy serving export requires verifier/proposal metadata"
-            )
-        serving.algorithm = name
-        return cls, config_cls(**common, **extra, speculators_config=serving)
