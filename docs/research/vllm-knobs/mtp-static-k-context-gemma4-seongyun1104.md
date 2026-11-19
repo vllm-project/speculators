@@ -1,7 +1,7 @@
 ---
-title: "Static draft depth across batch and context on Gemma-4 31B FP8 (@seongyun1104)"
+title: "Static MTP draft depth across batch and context on Gemma-4 31B FP8 (@seongyun1104)"
 tags:
-  - Draft model
+  - MTP
   - Gemma4
   - vLLM
 ---
@@ -11,7 +11,7 @@ tags:
 **[@seongyun1104](https://github.com/seongyun1104)** posted on **2026-11-11**
 </div>
 
-# Static draft depth across batch and context on Gemma-4 31B FP8 (@seongyun1104)
+# Static MTP draft depth across batch and context on Gemma-4 31B FP8 (@seongyun1104)
 
 ## Summary
 
@@ -23,12 +23,12 @@ The question was whether, at a fixed batch size, the best static draft depth K c
 
 - Target model: [`prithivMLmods/gemma-4-31B-it-qat-FP8`](https://huggingface.co/prithivMLmods/gemma-4-31B-it-qat-FP8), revision `1245be0199c1b792597ed7ea1ac5897269e66a89`, FP8 (compressed-tensors W8A8). The weights byte count was checked before the run.
 - Draft model: [`google/gemma-4-31B-it-qat-q4_0-unquantized-assistant`](https://huggingface.co/google/gemma-4-31B-it-qat-q4_0-unquantized-assistant), revision `96d4c8ca3cb38c107a8478587878124895d1e844`, unquantized as published. The weights byte count was checked before the run.
-- Algorithm: vLLM draft-model speculation with static `num_speculative_tokens` K.
+- Algorithm: MTP speculation with a static `num_speculative_tokens` K. The server log records `method='mtp'` for Z, K1, K3 and K5.
 - Knob under test: K ∈ {0, 1, 3, 5}, plus a target-only baseline.
   - `OFF`: no drafter (target-only baseline).
   - `Z`: drafter loaded, K = 0 at every batch size, via `num_speculative_tokens_per_batch_size [[1, 64, 0]]`.
   - `K1`, `K3`, `K5`: static K.
-  - Everything else is identical across arms: target, drafter, attention backend, prefix caching, max model length, max sequences, memory utilization, and workload.
+  - Z, K1, K3 and K5 use the same assistant drafter; OFF is target-only. Everything else is identical across all arms: target, attention backend, prefix caching, max model length, max sequences, memory utilization, and workload.
 - Evaluation: `vllm bench serve`, random dataset, input length = context (1,024 / 2,048 / 4,096 / 16,384 tokens), output 640 tokens with `ignore_eos`, temperature 0 (greedy). `num_prompts` = `max_concurrency` = batch size, request rate `inf`. Batch sizes 1, 8, 16 and 32, with 10 (batch, context) shapes.
 - Serving:
   - vLLM `7ecc83a9877552a5f4be31c133ab8502dd40f50e` (precompiled wheel `vllm-0.33.0rc1.dev784+g7ecc83a98`) plus `bs_ctx_bd09764c45.patch` (applied tree `eeb37ef757`).
