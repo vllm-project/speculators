@@ -63,7 +63,10 @@ def test_matches_materialized(loss, weighting, targets):
         torch.testing.assert_close(g, r, rtol=1e-3, atol=1e-4 * float(r.abs().max()))
 
 
-def _dspark(head_type):
+DRAFT_VOCAB = 600  # < VOCAB: a pruned draft vocabulary with its own lm_head
+
+
+def _dspark(head_type="vanilla", draft_vocab=VOCAB, params=torch.float32):
     tl_config = Qwen3Config(
         hidden_size=HIDDEN,
         intermediate_size=2 * HIDDEN,
@@ -76,7 +79,7 @@ def _dspark(head_type):
     )
     config = DSparkSpeculatorConfig(
         transformer_layer_config=tl_config,
-        draft_vocab_size=VOCAB,
+        draft_vocab_size=draft_vocab,
         block_size=BLOCK,
         aux_hidden_state_layer_ids=[0, 1],
         mask_token_id=0,
@@ -85,18 +88,30 @@ def _dspark(head_type):
     )
     torch.manual_seed(0)
     model = DSparkDraftModel(config)
+    if draft_vocab < VOCAB:
+        t2d = torch.zeros(VOCAB, dtype=torch.bool)
+        t2d[torch.randperm(VOCAB)[:draft_vocab]] = True
+        draft_ids = t2d.nonzero().squeeze(1)
+        model.load_vocab_mappings(t2d, draft_ids - torch.arange(draft_vocab))
     with torch.no_grad():
         for parameter in model.parameters():
             if parameter.isnan().any():
                 torch.nn.init.normal_(parameter, std=0.02)
-        # full vocab: lm_head is the verifier head, as after load_verifier_weights
         torch.nn.init.normal_(model.lm_head.weight, std=0.3)
+        # full vocab: lm_head is the verifier head, as after
+        # load_verifier_weights; a draft vocabulary keeps a head of its own
         model.verifier_lm_head.weight.copy_(model.lm_head.weight)
+        if draft_vocab < VOCAB:
+            model.verifier_lm_head.weight.add_(
+                0.1 * torch.randn_like(model.lm_head.weight)
+            )
         torch.nn.init.ones_(model.verifier_norm.weight)
-    return model.to(device=DEVICE).train()  # type: ignore[call-arg]
+    return model.to(device=DEVICE, dtype=params).train()  # type: ignore[call-arg]
 
 
-def _model_step(model, implementation, spec, weighting, targets):
+def _model_step(
+    model, implementation, spec, weighting, targets="recompute", dtype=torch.float32
+):
     kwargs, _ = DSparkDraftModel.get_trainer_kwargs(
         loss_fn=spec,
         loss_implementation=implementation,
@@ -106,7 +121,7 @@ def _model_step(model, implementation, spec, weighting, targets):
     )
     model.zero_grad(set_to_none=True)
     torch.manual_seed(2)  # anchor sampling
-    _, loss, metrics = model(**_dflash_inputs(torch.float32), **kwargs)
+    _, loss, metrics = model(**_dflash_inputs(dtype), **kwargs)
     loss.backward()
     grads = {
         n: p.grad.clone() for n, p in model.named_parameters() if p.grad is not None
@@ -114,20 +129,41 @@ def _model_step(model, implementation, spec, weighting, targets):
     return loss.detach(), metrics, grads
 
 
+def _compile_forward(monkeypatch):
+    """Compile forward with aot_eager: Dynamo and AOTAutograd trace the op as
+    in training, without Inductor codegen."""
+    original = DSparkDraftModel.forward._torchdynamo_orig_callable  # type: ignore[attr-defined]
+    monkeypatch.setattr(
+        DSparkDraftModel, "forward", torch.compile(original, backend="aot_eager")
+    )
+    torch._dynamo.reset()
+
+
 MODEL_CASES = [
-    ("kl_div", "fixed-exp-decay", "vanilla"),
-    ("ce", "dpace", "rnn"),
-    ('{"ce": 0.1, "tv": 0.9}', "fixed-exp-decay", "gated"),
+    ("kl_div", "fixed-exp-decay", "vanilla", VOCAB),
+    ("ce", "dpace", "rnn", VOCAB),
+    ('{"ce": 0.1, "tv": 0.9}', "fixed-exp-decay", "gated", VOCAB),
+    ('{"kl_div": 0.5, "tv": 0.5}', "fixed-exp-decay", "vanilla", DRAFT_VOCAB),
 ]
 
 
-@pytest.mark.parametrize(("spec", "weighting", "head_type"), MODEL_CASES)
+@pytest.mark.parametrize(
+    ("spec", "weighting", "head_type", "draft_vocab"),
+    MODEL_CASES,
+    ids=[
+        f"{c[0]}-{c[1]}-{c[2]}-{'shared' if c[3] == VOCAB else 'draft-vocab'}"
+        for c in MODEL_CASES
+    ],
+)
 @pytest.mark.parametrize("targets", ["recompute", "materialize"])
-def test_training_step_matches_fused(spec, weighting, head_type, targets, monkeypatch):
+def test_training_step_matches_fused(
+    spec, weighting, head_type, draft_vocab, targets, monkeypatch
+):
     """A DSpark training step: loss, metrics and every gradient (markov_w2's
-    included) agree with the materialized path."""
+    included) agree with the materialized path, with the shared full-vocab
+    head (delta form) and with a draft vocabulary's own head."""
     monkeypatch.setenv("SPECULATORS_FUSED_LINEAR_BUDGET_MIB", "1")  # 2 chunks
-    model = _dspark(head_type)
+    model = _dspark(head_type, draft_vocab)
     with torch.compiler.set_stance("force_eager"):
         ref = _model_step(model, "fused", spec, weighting, targets)
         out = _model_step(model, "fused_linear", spec, weighting, targets)
@@ -143,16 +179,45 @@ def test_training_step_matches_fused(spec, weighting, head_type, targets, monkey
 
 
 def test_compiled_training_step_matches_eager(monkeypatch):
-    """Dynamo and AOTAutograd trace the op as in training (aot_eager: no
-    Inductor codegen)."""
-    original = DSparkDraftModel.forward._torchdynamo_orig_callable  # type: ignore[attr-defined]
-    monkeypatch.setattr(
-        DSparkDraftModel, "forward", torch.compile(original, backend="aot_eager")
-    )
-    model = _dspark("vanilla")
+    model = _dspark()
     with torch.compiler.set_stance("force_eager"):
-        ref = _model_step(model, "fused_linear", "kl_div", "dpace", "recompute")
-    out = _model_step(model, "fused_linear", "kl_div", "dpace", "recompute")
+        ref = _model_step(model, "fused_linear", "kl_div", "dpace")
+    _compile_forward(monkeypatch)
+    out = _model_step(model, "fused_linear", "kl_div", "dpace")
     torch.testing.assert_close(out[0], ref[0])
     for name, grad in ref[2].items():
         torch.testing.assert_close(out[2][name], grad, msg=name)
+
+
+@pytest.mark.parametrize(
+    ("params", "compiled"),
+    [(torch.float32, False), (torch.bfloat16, True)],
+    ids=["fp32-params-eager", "bf16-params-compiled"],
+)
+def test_training_step_under_autocast(params, compiled, monkeypatch):
+    """As the trainer runs it: autocast(bf16), fp32 params (DDP) or bf16 params
+    (FSDP param_dtype). fused_linear keeps fp32 logits, so it differs from the
+    bf16-logit path by bf16 rounding only."""
+    if compiled:
+        _compile_forward(monkeypatch)
+    model = _dspark("gated", params=params)
+    results = {}
+    for implementation in ("fused", "fused_linear"):
+        with (
+            torch.compiler.set_stance("default" if compiled else "force_eager"),
+            torch.autocast("cuda", dtype=torch.bfloat16),
+        ):
+            results[implementation] = _model_step(
+                model, implementation, "kl_div", "fixed-exp-decay", dtype=torch.bfloat16
+            )
+    loss, _, grads = results["fused"]
+    loss_fl, _, grads_fl = results["fused_linear"]
+    torch.testing.assert_close(loss_fl, loss, rtol=1e-2, atol=1e-4)
+    assert grads_fl.keys() == grads.keys()
+    assert "markov_head.markov_w2.weight" in grads
+    for name, grad in grads.items():
+        assert grads_fl[name].dtype == params, name
+        cosine = torch.nn.functional.cosine_similarity(
+            grads_fl[name].float().flatten(), grad.float().flatten(), dim=0
+        )
+        assert cosine > 0.99, (name, float(cosine))
