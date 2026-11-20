@@ -3,17 +3,13 @@ from typing import ClassVar
 import torch
 from transformers import PretrainedConfig
 
-from speculators.losses import (
-    LossConfig,
-    kl_div_loss,
-    resolve_loss_config,
-)
+from speculators.losses import LossConfig, kl_div_loss, resolve_loss_config
 from speculators.model import SpeculatorModel
+from speculators.models.components import BlockLayout
 from speculators.models.dflash.core import DFlashDraftModel
 from speculators.models.dspark.config import DSparkSpeculatorConfig
 from speculators.models.dspark.metrics import compute_metrics
 from speculators.models.dspark.model_definitions import ConfidenceHead, MarkovHead
-from speculators.models.utils import conditional_torch_compile
 
 _DEFAULT_LOSS_CONFIG: LossConfig = {"kl_div": (kl_div_loss, 1.0)}
 
@@ -113,10 +109,10 @@ class DSparkDraftModel(DFlashDraftModel):
         }
         return dict(shared), dict(shared)
 
-    @conditional_torch_compile
     def forward(
         self,
-        hidden_states: torch.Tensor,  # [1, total_seq_len, num_hidden*hidden_size]
+        # [1, total_seq_len, num_target_layers * hidden_size]
+        hidden_states: torch.Tensor,
         input_ids: torch.Tensor,  # [1, total_seq_len]
         loss_mask: torch.Tensor,  # [1, total_seq_len]
         verifier_last_hidden_states: torch.Tensor,  # [1, total_seq_len, hidden_size]
@@ -130,51 +126,42 @@ class DSparkDraftModel(DFlashDraftModel):
         dpace_alpha: float = 0.5,
         **kwargs,
     ):
-        hidden, logits, targets, aligned_loss_mask, anchored_block_indices = (
-            self._backbone_forward(
-                hidden_states,
-                input_ids,
-                loss_mask,
-                verifier_last_hidden_states,
-                document_ids,
-                position_ids,
-                max_anchors=max_anchors,
-                **kwargs,
-            )
+        return super().forward(
+            hidden_states,
+            input_ids,
+            loss_mask,
+            verifier_last_hidden_states,
+            document_ids,
+            position_ids,
+            loss_config=loss_config,
+            gamma=gamma,
+            max_anchors=max_anchors,
+            per_position_loss_weight=per_position_loss_weight,
+            dpace_alpha=dpace_alpha,
+            loss_kwargs={"confidence_head_alpha": confidence_head_alpha},
+            **kwargs,
         )
 
+    def apply_training_correction(
+        self, hidden, logits, _targets, layout, input_ids, _document_ids, **_kwargs
+    ):
         # DSpark: add the Markov logit bias and predict per-position confidence.
-        num_blocks = max_anchors
+        num_blocks = layout.anchor_positions.numel()
         block = self.block_size
         mask_tokens_size = num_blocks * block
-        # Ground-truth block tokens (verifier vocab); position 0 is the anchor.
-        block_tokens = input_ids[0, anchored_block_indices].view(num_blocks, block)
-        if self.config.sample_from_anchor:
-            # With sample_from_anchor=True (DSpark default), slot k predicts
-            # token p+k+1 and the inference Markov chain conditions slot k's
-            # bias on the token at the previous position p+k.
-            prev_token_ids = block_tokens
-        else:
-            # With sample_from_anchor=False (Dflash default), slot k predicts
-            # token p+k, so the previous token within the block is
-            # block_tokens[:, k-1] (shifted).
-            prev_token_ids = torch.cat(
-                [block_tokens[:, :1], block_tokens[:, :-1]], dim=1
-            )  # [num_blocks, block]
+        prev_token_ids = layout.predecessor_ids(input_ids)
         hidden_blocks = hidden.view(num_blocks, block, -1)
-
-        confidence_logits = None
         prev_emb = None
         if self.markov_head is not None:
             prev_emb = self.markov_head.prev_embeddings(prev_token_ids)
-            markov_bias = self.markov_head.block_bias(
+            bias = self.markov_head.block_bias(
                 prev_token_ids=prev_token_ids,
                 hidden_states=hidden_blocks,
                 prev_emb=prev_emb,
             )
-            logits = (logits.view(num_blocks, block, -1) + markov_bias).view(
-                1, mask_tokens_size, -1
-            )
+            logits = (logits.view(num_blocks, block, -1) + bias).reshape_as(logits)
+
+        confidence_logits = None
 
         if self.confidence_head is not None:
             # confidence_head_with_markov requires markov_rank > 0 (enforced in
@@ -189,12 +176,28 @@ class DSparkDraftModel(DFlashDraftModel):
             confidence_logits = self.confidence_head(conf_features).reshape(
                 1, mask_tokens_size
             )
+        return logits, confidence_logits
 
-        loss, metrics = compute_metrics(
+    def compute_loss_and_metrics(
+        self,
+        logits,
+        targets,
+        layout: BlockLayout,
+        correction,
+        *,
+        loss_config: LossConfig | None,
+        gamma: float,
+        per_position_loss_weight: str,
+        dpace_alpha: float,
+        confidence_head_alpha=1.0,
+        **_kwargs,
+    ):
+        logits, confidence_logits = correction
+        return compute_metrics(
             logits,
             targets,
             confidence_logits,
-            aligned_loss_mask,
+            layout.loss_mask,
             self.block_size,
             loss_config=loss_config or _DEFAULT_LOSS_CONFIG,
             gamma=gamma,
@@ -203,4 +206,3 @@ class DSparkDraftModel(DFlashDraftModel):
             dpace_alpha=dpace_alpha,
             sample_from_anchor=self.config.sample_from_anchor,
         )
-        return None, loss, metrics

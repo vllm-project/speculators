@@ -1,6 +1,6 @@
 """DFlash transformer body, independent of vocabulary and training objectives."""
 
-from collections.abc import Callable
+from typing import ClassVar
 
 import torch
 from torch import nn
@@ -8,20 +8,29 @@ from torch.nn.attention.flex_attention import BlockMask
 from transformers import PretrainedConfig
 from transformers.models.qwen3.modeling_qwen3 import Qwen3RMSNorm, Qwen3RotaryEmbedding
 
+from speculators.models.dflash.model_definitions import Qwen3DFlashDecoderLayer
 from speculators.models.utils import flatten_rope_parameters
 
 
 class DFlashBackbone(nn.Module):
+    decoder_layer_class: ClassVar[type[Qwen3DFlashDecoderLayer]] = (
+        Qwen3DFlashDecoderLayer
+    )
+
     def __init__(
         self,
         tl_config: PretrainedConfig,
         num_target_layers: int,
-        decoder_layer_factory: Callable[[int], nn.Module],
+        **decoder_layer_kwargs: int,
     ) -> None:
         super().__init__()
         self.layers = nn.ModuleList(
             [
-                decoder_layer_factory(layer_idx)
+                self.decoder_layer_class(
+                    tl_config,  # type: ignore[arg-type]
+                    layer_idx,
+                    **decoder_layer_kwargs,
+                )
                 for layer_idx in range(tl_config.num_hidden_layers)
             ]
         )
@@ -49,6 +58,9 @@ class DFlashBackbone(nn.Module):
             tl_config.hidden_size,
             eps=tl_config.rms_norm_eps,  # type: ignore[arg-type]
         )
+
+    def post_init(self) -> None:
+        """Run variant initialization after the enclosing model initializes weights."""
 
     def forward(
         self,
