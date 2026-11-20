@@ -13,6 +13,7 @@ Fill in the PR template's **Purpose** and **Tests** sections (see [PULL_REQUEST_
 - **Purpose**: 1 sentence or a few bullets on *why*/*what*, plus the issue link if available. Not a restatement of the diff.
 - **Tests**: Any additional testing / experimentation that was done. This should be kept as concise as possible (don't list all the new tests added). If experiments were done, please list setup reproducibility info in a `details` block and only list the key results.
 - Keep the description proportional to the diff. A few changed lines do not need a paragraph each; if the description is longer than what it describes, cut it.
+- To shorten it, leave detail out rather than compress it. The diff and commit messages carry the rest; dense sentences packed with qualifiers and parentheses take longer to read than the detail they save.
 - Do not state unverified hypotheses as facts.
 - In a stacked PR, do not restate where it sits in the stack ("first of N", "stacked on #1234", "top of the stack") or list the other PRs. GitHub renders the stack already. Reference another PR only for something the stack view does not carry, such as which commit a measurement was taken against. The exception is a stack GitHub can't show: PRs from a fork can't be based on each other's branches, so each is based on `main` and its diff includes the PRs below it. There, name the PR this one builds on ("Builds on #1234"), so reviewers know which changes are this PR's own.
 - No emoji headings, no "comprehensive"/"robust"/"production-ready", no per-file summary tables.
