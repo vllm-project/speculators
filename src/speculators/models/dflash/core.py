@@ -1,34 +1,37 @@
 import logging
+from functools import partial
 from typing import ClassVar
 
 import torch
 from torch import nn
 from torch.nn.attention.flex_attention import create_block_mask, create_mask
 from transformers import PretrainedConfig
-from transformers.models.qwen3.modeling_qwen3 import (
-    Qwen3RMSNorm,
-    Qwen3RotaryEmbedding,
-)
 
 from speculators.losses import LossConfig, resolve_loss_config
 from speculators.model import DraftVocabMixin, SpeculatorModel
 from speculators.models.attention import create_float_mask
 from speculators.models.dflash import DFlashSpeculatorConfig
 from speculators.models.dflash.attention import create_anchor_block_mask_mod
+from speculators.models.dflash.backbone import DFlashBackbone
 from speculators.models.dflash.metrics import compute_metrics
 from speculators.models.dflash.model_definitions import Qwen3DFlashDecoderLayer
 from speculators.models.dflash.utils import (
     get_base_indices_for_anchored_blocks,
+    rename_checkpoint_key,
     select_anchors,
 )
 from speculators.models.utils import (
     conditional_torch_compile,
-    flatten_rope_parameters,
     resolve_target_layer_ids,
     resolve_verifier_norm_class,
 )
 
 logger = logging.getLogger(__name__)
+
+_BACKBONE_CHECKPOINT_PREFIXES = {
+    name: f"backbone.{name}"
+    for name in ("layers", "fc", "hidden_norm", "norm", "rotary_emb")
+}
 
 # Compile so the mask builds block-sparse instead of materializing DFlash's huge
 # dense [Q, KV] grid every step. (No benefit for EAGLE3's small autoregressive mask.)
@@ -90,42 +93,16 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
         self._init_vocab(config)
 
         tl_config = config.transformer_layer_config
-        # Number of draft layers is encoded in transformer_layer_config
-        num_draft_layers = tl_config.num_hidden_layers
-        self.layers = nn.ModuleList(
-            [
-                self._make_decoder_layer(config, layer_idx)
-                for layer_idx in range(num_draft_layers)
-            ]
+        self.backbone = DFlashBackbone(
+            tl_config,
+            len(self.target_layer_ids),
+            decoder_layer_factory=partial(self._make_decoder_layer, config),
         )
-        # Both are optional: declared only for alternating/sliding attention.
         self.sliding_window = getattr(tl_config, "sliding_window", None)
-        self.sliding_window_indices = [
-            i
-            for i, layer_type in enumerate(
-                getattr(tl_config, "layer_types", None) or []
-            )
-            if layer_type == "sliding_attention"
-        ]
-        self.uses_sliding_window_attn = bool(self.sliding_window_indices)
-        self.uses_full_attn = bool(num_draft_layers - len(self.sliding_window_indices))
+        sliding_layers = self.backbone.sliding_window_indices
+        self.uses_sliding_window_attn = bool(sliding_layers)
+        self.uses_full_attn = len(sliding_layers) < len(self.layers)
 
-        self.norm = Qwen3RMSNorm(
-            config.transformer_layer_config.hidden_size,
-            eps=config.transformer_layer_config.rms_norm_eps,  # type: ignore[arg-type]
-        )
-        rotary_config = flatten_rope_parameters(config.transformer_layer_config)
-        self.rotary_emb = Qwen3RotaryEmbedding(rotary_config)  # type: ignore[arg-type]
-
-        self.fc = nn.Linear(
-            len(self.target_layer_ids) * config.transformer_layer_config.hidden_size,
-            config.transformer_layer_config.hidden_size,
-            bias=False,
-        )
-        self.hidden_norm = Qwen3RMSNorm(
-            config.transformer_layer_config.hidden_size,
-            eps=config.transformer_layer_config.rms_norm_eps,  # type: ignore[arg-type]
-        )
         self.verifier_norm = resolve_verifier_norm_class(config)(
             config.transformer_layer_config.hidden_size,
             eps=config.transformer_layer_config.rms_norm_eps,  # type: ignore[arg-type]
@@ -160,6 +137,64 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
         self.__dict__["_keys_to_ignore_on_load_missing"] = (
             keys_to_ignore_on_load_missing
         )
+
+    @classmethod
+    def from_pretrained(cls, *args, **kwargs):
+        mapping = {
+            rf"^{source}\.": f"{target}."
+            for source, target in _BACKBONE_CHECKPOINT_PREFIXES.items()
+        }
+        mapping.update(kwargs.pop("key_mapping", {}) or {})
+        return super().from_pretrained(*args, key_mapping=mapping, **kwargs)
+
+    def remap_checkpoint_keys_for_load(self, state_dict):
+        """Translate flat checkpoint names for direct training-state loads."""
+        return {
+            rename_checkpoint_key(name, _BACKBONE_CHECKPOINT_PREFIXES): tensor
+            for name, tensor in state_dict.items()
+        }
+
+    def save_pretrained(
+        self,
+        save_directory,
+        is_main_process=True,
+        state_dict=None,
+        push_to_hub=False,
+        max_shard_size="50GB",
+        variant=None,
+        token=None,
+        save_peft_format=True,
+        save_original_format=True,  # noqa: ARG002 - model type owns conversion
+        distributed_checkpoint=False,
+        **kwargs,
+    ):
+        """Save backbone weights under the existing flat checkpoint names."""
+        state_dict = self.state_dict() if state_dict is None else state_dict
+        save_prefixes = {
+            target: source for source, target in _BACKBONE_CHECKPOINT_PREFIXES.items()
+        }
+        exported = {
+            rename_checkpoint_key(name, save_prefixes): tensor
+            for name, tensor in state_dict.items()
+        }
+        return super().save_pretrained(
+            save_directory,
+            is_main_process=is_main_process,
+            state_dict=exported,
+            push_to_hub=push_to_hub,
+            max_shard_size=max_shard_size,
+            variant=variant,
+            token=token,
+            save_peft_format=save_peft_format,
+            save_original_format=False,
+            distributed_checkpoint=distributed_checkpoint,
+            **kwargs,
+        )
+
+    @property
+    def layers(self) -> nn.ModuleList:
+        """Expose decoder layers to the training infrastructure."""
+        return self.backbone.layers
 
     @property
     def target_layer_ids(self) -> list[int]:
@@ -419,19 +454,11 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
         noise_embedding = self.embed_tokens(mask_token_ids)
         # shape: [1, num_anchors*block_size, hidden_size]
 
-        fc_output = self.fc(hidden_states)
-        fc_output = self.hidden_norm(fc_output)
-        # shape: [1, total_seq_len, hidden_size]
-
         mask_position_ids = get_base_indices_for_anchored_blocks(
             position_ids[0, anchor_positions], self.block_size
         )
         position_ids = torch.cat([position_ids, mask_position_ids.unsqueeze(0)], dim=1)
         # shape: [1, total_seq_len + num_anchors*block_size]
-
-        # the hidden_states shape doesn't match position_ids but doesn't need
-        # to, as hidden_states is only used to set dtype and device in rotary_emb
-        position_embeddings = self.rotary_emb(hidden_states, position_ids)
 
         anchored_block_indices = get_base_indices_for_anchored_blocks(
             anchor_positions, self.block_size
@@ -456,20 +483,14 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
                 targets = verifier_logits[:, anchored_block_indices]
             # shape: [1, num_anchors*block_size, draft_vocab_size]
 
-        for layer_idx, layer in enumerate(self.layers):
-            noise_embedding = layer(
-                hidden_states=noise_embedding,
-                target_hidden=fc_output,
-                attention_mask=sliding_window_attn_mask
-                if layer_idx in self.sliding_window_indices
-                else full_attn_mask,
-                position_ids=position_ids,
-                use_cache=False,
-                position_embeddings=position_embeddings,
-                **kwargs,
-            )
-
-        hidden = self.norm(noise_embedding)
+        hidden = self.backbone(
+            noise_embedding,
+            hidden_states,
+            position_ids,
+            sliding_window_attn_mask=sliding_window_attn_mask,
+            full_attn_mask=full_attn_mask,
+            **kwargs,
+        )
         logits = self.lm_head(hidden)
         # shape: [1, num_anchors*block_size, vocab_size]
 

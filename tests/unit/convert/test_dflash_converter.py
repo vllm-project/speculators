@@ -186,8 +186,10 @@ class TestRemapWeights:
         weights["fc.weight"] = wide_fc
 
         remapped = DFlashConverter()._remap_weights(weights, config, model)
-        assert remapped["fc.weight"].shape[1] == model.fc.in_features
-        assert torch.equal(remapped["fc.weight"], wide_fc[:, : model.fc.in_features])
+        assert remapped["fc.weight"].shape[1] == model.backbone.fc.in_features
+        assert torch.equal(
+            remapped["fc.weight"], wide_fc[:, : model.backbone.fc.in_features]
+        )
 
     def test_passthrough_when_no_fused_qkv(self):
         config = _tiny_dflash_config()
@@ -228,7 +230,7 @@ class TestRopeParameters:
             "full_attention": {"rope_type": "default", "rope_theta": 1000000.0},
         }
         model = DFlashDraftModel(config=config)
-        assert model.rotary_emb is not None
+        assert model.backbone.rotary_emb is not None
 
     def test_nested_rope_params_no_warn_all_sliding(self, caplog):
         config = _tiny_dflash_config()
