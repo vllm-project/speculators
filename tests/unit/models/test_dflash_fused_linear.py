@@ -182,11 +182,10 @@ def test_training_step_under_autocast(params, compiled):
         torch._dynamo.reset()
     model = _model(False, params)
     inputs = _inputs(torch.bfloat16)
-    stance = "default" if compiled else "force_eager"
     results = {}
     for implementation in ("fused", "fused_linear"):
         with (
-            torch.compiler.set_stance(stance),
+            torch.compiler.set_stance("default" if compiled else "force_eager"),
             torch.autocast("cuda", dtype=torch.bfloat16),
         ):
             results[implementation] = _step(
