@@ -1,10 +1,12 @@
 """Unit tests for training dataloader setup."""
 
 import pickle
+from pathlib import Path
 from unittest.mock import Mock
 
 import pytest
 
+from hs_connectors import FileTransfer, FP8Transfer, HiddenStatesTransfer
 from speculators.train import dataloader
 
 
@@ -82,3 +84,53 @@ def test_setup_dataloader_forwards_pin_device_to_spawned_workers(
     worker_init_fn = pickle.loads(pickle.dumps(loader.worker_init_fn))  # noqa: S301
     assert worker_init_fn.func is dataloader._worker_init_fn
     assert worker_init_fn.keywords == {"pin_device": pin_device}
+
+
+@pytest.mark.parametrize(
+    ("transfer", "expected_pin"),
+    [
+        (None, False),
+        (FileTransfer(Path("hs")), False),
+        (FP8Transfer(Path("hs")), False),
+        (Mock(spec=HiddenStatesTransfer), True),
+    ],
+    ids=["default-file", "file", "fp8", "other"],
+)
+def test_loaders_pin_workers_unless_transfer_loads_to_cpu(
+    monkeypatch, transfer, expected_pin
+):
+    """File-based transfers load to CPU, so their workers skip the device pin;
+    any other transfer keeps it for both the train and val loaders."""
+    setup_calls = []
+    monkeypatch.setattr(
+        dataloader,
+        "ArrowDataset",
+        Mock(return_value=Mock(datapath=Path("data"))),
+    )
+    monkeypatch.setattr(dataloader, "SpeculatorsDataset", Mock())
+    monkeypatch.setattr(
+        dataloader,
+        "_setup_dataloader",
+        lambda *args, **kwargs: setup_calls.append(kwargs["pin_device"]),
+    )
+
+    dataloader.create_train_val_loaders(
+        data_path="data",
+        total_seq_len=8,
+        hidden_states_dtype=dataloader.torch.bfloat16,
+        transfer=transfer,
+        vllm_endpoint="",
+        on_missing="raise",
+        verifier_name_or_path="",
+        request_timeout=None,
+        max_retries=0,
+        generation_validation_retries=0,
+        max_consecutive_generation_failures=1,
+        hidden_size=4,
+        num_target_layers=1,
+        num_workers=2,
+        prefetch_factor=2,
+        preprocess=None,
+    )
+
+    assert setup_calls == [expected_pin, expected_pin]
