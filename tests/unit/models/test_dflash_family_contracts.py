@@ -179,10 +179,19 @@ def assert_report_close(actual, expected):
 def test_legacy_recipe_numerical_contract(recipe, sample_from_anchor):
     reference = json.loads(REFERENCE_PATH.read_text())
     assert reference["revision"] == REFERENCE_REVISION
-    assert_report_close(
-        contract_report(recipe, sample_from_anchor),
-        reference["recipes"][f"{recipe}:{sample_from_anchor}"],
-    )
+    actual = contract_report(recipe, sample_from_anchor)
+    expected = reference["recipes"][f"{recipe}:{sample_from_anchor}"]
+    if recipe == "dflash2":
+        # The old accuracy counted unary predictions. The selector tests cover
+        # the new accuracy, including a target injected outside the original top-k.
+        for report in (actual, expected):
+            for key in ("full_acc_sum", "full_acc_total"):
+                report["metrics"].pop(key, None)
+    elif recipe == "xpress":
+        # The pre-refactor fixture predates verifier-based XPress accuracy.
+        for key in ("full_acc_sum", "full_acc_total"):
+            actual["metrics"].pop(key)
+    assert_report_close(actual, expected)
 
 
 if __name__ == "__main__":
