@@ -64,7 +64,13 @@ def native_run(monkeypatch):
 
 
 @pytest.mark.parametrize("mode", ["acceptance", "speedup"])
-def test_native_command_preserves_overrides(tmp_path, native_run, mode):
+@pytest.mark.parametrize(
+    ("dataset", "native_dataset"),
+    [("humaneval", "spec_al_humaneval"), ("librispeech", "librispeech")],
+)
+def test_native_command_preserves_overrides(
+    tmp_path, native_run, mode, dataset, native_dataset
+):
     output = tmp_path / mode
     body = '{"max_completion_tokens":1024}'
     assert (
@@ -74,7 +80,7 @@ def test_native_command_preserves_overrides(tmp_path, native_run, mode):
                 "--output-artifact-dir",
                 str(output),
                 "--dataset",
-                "humaneval",
+                dataset,
                 "--model",
                 "test-model",
                 "--url",
@@ -105,13 +111,10 @@ def test_native_command_preserves_overrides(tmp_path, native_run, mode):
     assert "--concurrency" not in command
     assert command.count("--extra-inputs") == 1
     assert command[command.index("--extra-inputs") + 1] == body
-    assert command[command.index("--public-dataset") + 1] == "spec_al_humaneval"
+    assert command[command.index("--public-dataset") + 1] == native_dataset
     assert ("--streaming" in command) == (mode == "speedup")
     assert ("--auto-plot" in command) == (mode == "speedup")
-    assert (
-        shlex.split((output / "humaneval" / "aiperf_command.txt").read_text())
-        == command
-    )
+    assert shlex.split((output / dataset / "aiperf_command.txt").read_text()) == command
 
 
 @pytest.mark.parametrize(

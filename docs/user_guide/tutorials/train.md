@@ -8,6 +8,8 @@ This tutorial walks you through training a speculator model end to end, from raw
 
 Pick an algorithm and a training mode below; the rest of the walkthrough is the same for every combination. The examples use `Qwen/Qwen3-8B` as the target model -- except for MTP, which needs a verifier with native MTP layers and so uses `Qwen/Qwen3.5-9B`. The process is the same for other models.
 
+For an audio verifier, see [Qwen3-ASR training](qwen3_asr.md). It uses this same multimodal pipeline with audio conversations.
+
 ## Choose Your Setup
 
 ### 1. Pick an algorithm

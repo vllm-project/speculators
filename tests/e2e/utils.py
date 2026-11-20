@@ -15,6 +15,7 @@ from datetime import UTC, datetime
 from functools import wraps
 from pathlib import Path
 from textwrap import indent
+from typing import Any
 
 import pytest
 from datasets import Dataset as HFDataset
@@ -31,6 +32,7 @@ from speculators.provenance import find_repo_root, git_sha
 __all__ = [
     "SCRIPTS_DIR",
     "VLLM_PYTHON",
+    "ChatPrompts",
     "launch_mooncake_master",
     "launch_mooncake_master_context",
     "launch_vllm_server",
@@ -46,6 +48,9 @@ __all__ = [
     "stop_vllm_server",
     "wait_for_server",
 ]
+
+
+ChatPrompts = list[list[dict[str, Any]]]
 
 
 def purge_newfiles(fn: Callable[..., Path]):
@@ -177,6 +182,8 @@ def launch_vllm_server(
         str(hidden_states_path),
         "--hidden-states-backend",
         hidden_states_backend,
+        "--provenance-dir",
+        str(Path(hidden_states_path).parent / "vllm_provenance"),
     ]
     if mooncake_master is not None:
         cmd += ["--mooncake-master", mooncake_master]
@@ -717,7 +724,7 @@ def run_benchmark(
 def run_vllm_engine(
     model_path: str,
     tmp_path: Path,
-    prompts: list[list[dict[str, str]]],
+    prompts: ChatPrompts,
     max_model_len: int = 1024,
     gpu_memory_utilization: float = 0.8,
     enforce_eager: bool = False,
