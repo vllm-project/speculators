@@ -193,6 +193,7 @@ def checkpoint_dir(tmp_path, tiny_model_on_gpu):
     checkpointer = SingleGPUCheckpointer(ckpt_dir)
     optimizer = torch.optim.AdamW(tiny_model_on_gpu.parameters(), lr=1e-4)
     checkpointer.save_checkpoint(tiny_model_on_gpu, optimizer, epoch=0)
+    checkpointer.mark_checkpoint_complete(0)
     return ckpt_dir
 
 
@@ -413,6 +414,7 @@ def test_weight_precedence(eagle3_config, pretrained_dir, tmp_path):
     checkpointer = SingleGPUCheckpointer(ckpt_dir)
     optimizer = torch.optim.AdamW(loaded.parameters(), lr=1e-4)
     checkpointer.save_checkpoint(loaded, optimizer, epoch=0)
+    checkpointer.mark_checkpoint_complete(0)
 
     # Load checkpoint into a model that had pretrained value (66.0)
     with patch.object(Eagle3DraftModel, "load_verifier_weights"):
