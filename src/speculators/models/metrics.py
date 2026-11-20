@@ -4,33 +4,6 @@ import torch
 
 
 @torch.no_grad()
-def compute_accepted_length_counts(
-    correct: torch.Tensor,  # shape: [num_blocks, num_draft_slots]
-    valid: torch.Tensor,  # shape: [num_blocks, num_draft_slots]
-) -> tuple[torch.Tensor, torch.Tensor]:
-    """Count accepted length per speculative block as raw sum/total counts.
-
-    A block is accepted up to its first wrong draft slot, so its length is the
-    leading run of correct slots plus the verifier's always-emitted bonus token
-    (vLLM's convention). Forming the run inside the block preserves the
-    correlation between slots; a product of per-slot marginals discards it and
-    understates the result.
-
-    Args:
-        correct: Whether each draft slot matched the target.
-        valid: Whether each draft slot is trained on (block-shaped loss mask).
-
-    Returns:
-        Tuple of (accepted_length_sum, valid_block_total) as raw counts suitable
-        for distributed reduction before computing the ratio.
-    """
-    accepted = torch.logical_and(correct, valid).to(torch.float32)
-    per_block_len = accepted.cumprod(dim=-1).sum(dim=-1) + 1.0
-    block_valid = valid.any(dim=-1).to(torch.float32)
-    return (per_block_len * block_valid).sum(), block_valid.sum()
-
-
-@torch.no_grad()
 def compute_greedy_block_metrics(
     correct: torch.Tensor,
     loss_mask: torch.Tensor,
@@ -43,15 +16,20 @@ def compute_greedy_block_metrics(
     start_pos = 0 if sample_from_anchor else 1
     correct_slots = correct.reshape(-1, block_size)[:, start_pos:]
     valid_slots = loss_mask.to(torch.bool).reshape(-1, block_size)[:, start_pos:]
-    correct_per_pos = (correct_slots & valid_slots).sum(dim=0, dtype=torch.float32)
+    correct_and_valid = correct_slots & valid_slots
+    correct_per_pos = correct_and_valid.sum(dim=0, dtype=torch.float32)
     total_per_pos = valid_slots.sum(dim=0, dtype=torch.float32)
-    eal_sum, eal_total = compute_accepted_length_counts(correct_slots, valid_slots)
+    # Count only the leading run of correct slots, plus the verifier bonus token.
+    accepted_length = (
+        correct_and_valid.cumprod(dim=-1, dtype=torch.float32).sum(dim=-1) + 1.0
+    )
+    valid_blocks = valid_slots.any(dim=-1).to(torch.float32)
 
     metrics = {
         "full_acc_sum": correct_per_pos.sum(),
         "full_acc_total": total_per_pos.sum(),
-        f"{eal_name}_sum": eal_sum,
-        f"{eal_name}_total": eal_total,
+        f"{eal_name}_sum": (accepted_length * valid_blocks).sum(),
+        f"{eal_name}_total": valid_blocks.sum(),
     }
     for offset, position in enumerate(range(start_pos, block_size)):
         metrics[f"position_{position}_acc_sum"] = correct_per_pos[offset]
