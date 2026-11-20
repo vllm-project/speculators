@@ -1,4 +1,4 @@
-"""Shared model accuracy metrics."""
+"""Shared model accuracy and acceptance metrics."""
 
 import torch
 
@@ -35,6 +35,47 @@ def compute_greedy_block_metrics(
         metrics[f"position_{position}_acc_sum"] = correct_per_pos[offset]
         metrics[f"position_{position}_acc_total"] = total_per_pos[offset]
     return metrics
+
+
+@torch.no_grad()
+def compute_acceptance_rate_metrics(
+    probabilities: torch.Tensor,
+    loss_mask: torch.Tensor,
+    *,
+    name: str = "accept_rate",
+) -> dict[str, torch.Tensor]:
+    """Aggregate per-token acceptance probabilities over the loss mask."""
+    mask = loss_mask.to(probabilities.dtype)
+    return {
+        f"{name}_sum": (probabilities * mask).sum(),
+        f"{name}_total": mask.sum().clamp_min(1.0),
+    }
+
+
+@torch.no_grad()
+def compute_analytical_block_acceptance(
+    probabilities: torch.Tensor,
+    loss_mask: torch.Tensor,
+    block_size: int,
+    sample_from_anchor: bool,
+    *,
+    prefix: str = "",
+) -> tuple[dict[str, torch.Tensor], torch.Tensor, torch.Tensor]:
+    """Report analytical acceptance and return the prefixes and mask for calibration."""
+    start_pos = 0 if sample_from_anchor else 1
+    draft_slots = probabilities.reshape(-1, block_size)[:, start_pos:]
+    draft_mask = loss_mask.to(probabilities.dtype).reshape(-1, block_size)[
+        :, start_pos:
+    ]
+    accept_prefix = (draft_slots * draft_mask).cumprod(dim=-1)
+    accepted_length = accept_prefix.sum(dim=-1) + 1.0  # Verifier bonus token.
+    valid_blocks = (draft_mask.sum(dim=-1) > 0).to(probabilities.dtype)
+    metrics = compute_acceptance_rate_metrics(
+        probabilities, loss_mask, name=f"{prefix}accept_rate"
+    )
+    metrics[f"{prefix}accept_len_sum"] = (accepted_length * valid_blocks).sum()
+    metrics[f"{prefix}accept_len_total"] = valid_blocks.sum().clamp_min(1.0)
+    return metrics, accept_prefix, draft_mask
 
 
 def compute_accuracy_single_step(
