@@ -29,7 +29,7 @@ What we found:
 - **A perfect estimate would add little in most settings:** under 3.5% more tokens per step when AV already verifies 60% to 90% of the drafts.
 - **The gain grows when AV has to cut more drafts:** +6.6% for Qwen3.8-27B at concurrency 256, and +8.8% for Qwen3-4B at concurrency 512.
 - **Per-request uncertainty recovers none of it.** Even knowing each request's true bias in advance would gain at most +0.2%. The estimate is not systematically wrong about some requests. It is wrong about individual drafts, and those misses look random from one step to the next.
-- So, to improve AV's estimate, we need better signals about each individual draft, not uncertainty about each request.
+- **The remaining gain is mostly out of reach.** It would need better signals about each individual draft, and losslessness limits those hard. For sampling to stay lossless, the decision to verify a draft must not depend on the drafted token itself, a constraint that goes back to the DSpark paper (see also [vllm#52228](https://github.com/vllm-project/vllm/pull/52228)). AV may only use the drafter's distribution before the token is drawn, which the estimator already does through the drafter's confidence. The signal that would close the gap, whether the target agrees with the drafted token, is exactly what verification computes.
 
 ![Extra tokens per step from a perfect allocation, vs. the share of drafts AV verifies](../../assets/research/av-allocation-oracle-headroom.png)
 
@@ -88,7 +88,7 @@ Earlier runs with single datasets (HumanEval, math_reasoning, writing) and with 
 
 ## Next steps
 
-Test new signals about each individual draft that keep sampling lossless, for example the target model's entropy at the last accepted token (known before drafting), or the drafter's entropy and top-2 margin combined with its confidence. Evaluate them on these traces in the settings with headroom (Qwen3.8-27B at concurrency 256, Qwen3-4B at concurrency 512).
+Few lossless signals are left to try. The candidates are other summaries of the drafter's distribution (entropy, top-2 margin) combined with its confidence, and the target model's entropy at the last accepted token, which is known before drafting. [vllm#52228](https://github.com/vllm-project/vllm/pull/52228) found that entropy and top-2 margin alone do not beat the drafter's confidence, so we expect small gains at best. They can be tested cheaply on these traces in the settings with headroom (Qwen3.8-27B at concurrency 256, Qwen3-4B at concurrency 512). Signals that look at the drafted token rank better, but break losslessness and are ruled out.
 
 ## Setup and reproduction
 
