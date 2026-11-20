@@ -35,6 +35,8 @@ What we found:
 
 Each point is one model, dataset and concurrency. Filled circles use the number of drafts AV actually chose to verify. Hollow circles force that number to 25%, 50% or 75% of the drafts, to show what happens when the budget is tighter. The gray crosses (near zero) are the best per-request correction at the same budgets.
 
+**Data and code:** all traces and replay results are in [this folder](https://drive.google.com/drive/folders/1yZevVELISE4LHjLY8VqcnVd1Hdg7j8-Y) (119 MB, parquet, with a README explaining every column). The replay code is in [vllm-scripts](https://github.com/tomasruizt/vllm-scripts/tree/master/experiments/av_alloc_headroom), so you can try your own allocation strategy on the same traces.
+
 ## Background
 
 How AV picks drafts today ([vllm#52228](https://github.com/vllm-project/vllm/pull/52228)): for every draft token, an online estimator predicts the chance that the target accepts it, from the drafter's own confidence. A draft only counts if all drafts before it in the same request are accepted too, so AV multiplies these chances along each request. It then verifies the B most promising drafts in the batch, where B comes from a cost model.
@@ -91,6 +93,8 @@ Earlier runs with single datasets (HumanEval, math_reasoning, writing) and with 
 Few lossless signals are left to try. The candidates are other summaries of the drafter's distribution (entropy, top-2 margin) combined with its confidence, and the target model's entropy at the last accepted token, which is known before drafting. [vllm#52228](https://github.com/vllm-project/vllm/pull/52228) found that entropy and top-2 margin alone do not beat the drafter's confidence, so we expect small gains at best. They can be tested cheaply on these traces in the settings with headroom (Qwen3.8-27B at concurrency 256, Qwen3-4B at concurrency 512). Signals that look at the drafted token rank better, but break losslessness and are ruled out.
 
 ## Setup and reproduction
+
+The traces and replay results are in [this folder](https://drive.google.com/drive/folders/1yZevVELISE4LHjLY8VqcnVd1Hdg7j8-Y). To rerun the analysis, unzip the data and run `replay.py` and `build_report.py` from [vllm-scripts](https://github.com/tomasruizt/vllm-scripts/tree/master/experiments/av_alloc_headroom).
 
 <details markdown>
 <summary>Setup</summary>
