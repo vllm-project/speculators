@@ -85,22 +85,23 @@ _LOG2 = tl.constexpr(0.6931471805599453)
 # a constexpr object as an autograd.Function argument and would graph-break;
 # the ``TERMS: tl.constexpr`` parameter re-wraps it in the kernel.
 TERM_SLOTS = {"kl_div": 0, "rkl": 1, "jsd": 2, "ce": 3, "tv": 4}
-_N_TERMS = len(TERM_SLOTS)
-_BITS = {name: 1 << slot for name, slot in TERM_SLOTS.items()}
-_KL = tl.constexpr(_BITS["kl_div"])
-_RKL = tl.constexpr(_BITS["rkl"])
-_JSD = tl.constexpr(_BITS["jsd"])
-_CE = tl.constexpr(_BITS["ce"])
-_TV = tl.constexpr(_BITS["tv"])
+N_TERMS = len(TERM_SLOTS)
+TERM_BITS = {name: 1 << slot for name, slot in TERM_SLOTS.items()}
+_KL = tl.constexpr(TERM_BITS["kl_div"])
+_RKL = tl.constexpr(TERM_BITS["rkl"])
+_JSD = tl.constexpr(TERM_BITS["jsd"])
+_CE = tl.constexpr(TERM_BITS["ce"])
+_TV = tl.constexpr(TERM_BITS["tv"])
 # Terms that need the target softmax; CE needs only the target argmax.
-_DIST_MASK = _BITS["kl_div"] | _BITS["rkl"] | _BITS["jsd"] | _BITS["tv"]
-_DIST = tl.constexpr(_DIST_MASK)
+DIST_MASK = TERM_BITS["kl_div"] | TERM_BITS["rkl"] | TERM_BITS["jsd"] | TERM_BITS["tv"]
+_DIST = tl.constexpr(DIST_MASK)
 
-# stats [_N_STATS, n_rows], fp32: [0]/[1] draft row max / sum-exp, [2]/[3]
+# stats [N_STATS, n_rows], fp32: [0]/[1] draft row max / sum-exp, [2]/[3]
 # the same for targets (distribution terms only), [4] rkl row loss L, [5] jsd
 # KL(dp || mix), [6] ce target argmax as float32 (exact: vocab < 2**24),
 # [7] tv s_s. Rows of terms not in TERMS are left unwritten.
-_N_STATS = 8
+N_STATS = 8
+
 
 # Named losses and the primitive terms each is composed from.
 LOSS_TERMS: dict[str, tuple[str, ...]] = {
@@ -401,7 +402,7 @@ class _FusedLoss(torch.autograd.Function):
     selects what backward differentiates. Terms outside ``grad_terms`` are
     metric-only: computed in the same pass, never differentiated.
 
-    Returns ``[_N_TERMS, B, T]`` fp32 per-position losses indexed by
+    Returns ``[N_TERMS, B, T]`` fp32 per-position losses indexed by
     ``TERM_SLOTS`` (slots outside ``terms`` are uninitialized and must not be
     read) and ``[2, B, T]`` int64 first-index argmax of logits and targets
     (non-differentiable). Targets intentionally receive no gradient; use the
@@ -413,9 +414,9 @@ class _FusedLoss(torch.autograd.Function):
         B, T, V = logits.shape
         logits_flat = logits.contiguous().view(B * T, V)
         targets_flat = targets.contiguous().view(B * T, V)
-        losses = torch.empty(_N_TERMS, B * T, device=logits.device, dtype=torch.float32)
+        losses = torch.empty(N_TERMS, B * T, device=logits.device, dtype=torch.float32)
         argmax = torch.empty(2, B * T, device=logits.device, dtype=torch.int64)
-        stats = torch.empty(_N_STATS, B * T, device=logits.device, dtype=torch.float32)
+        stats = torch.empty(N_STATS, B * T, device=logits.device, dtype=torch.float32)
         loss_forward_kernel[(B * T,)](
             logits_flat,
             targets_flat,
@@ -432,12 +433,12 @@ class _FusedLoss(torch.autograd.Function):
         # is the only differentiated term the targets are released after
         # forward.
         ctx.save_for_backward(
-            logits_flat, targets_flat if grad_terms & _DIST_MASK else None, stats
+            logits_flat, targets_flat if grad_terms & DIST_MASK else None, stats
         )
         ctx.mark_non_differentiable(argmax)
         ctx.grad_terms = grad_terms
         ctx.shape = (B, T, V)
-        return losses.view(_N_TERMS, B, T), argmax.view(2, B, T)
+        return losses.view(N_TERMS, B, T), argmax.view(2, B, T)
 
     @staticmethod
     def backward(ctx, grad_output, _grad_argmax):
@@ -445,7 +446,7 @@ class _FusedLoss(torch.autograd.Function):
         if ctx.grad_terms == 0:
             return None, None, None, None
         B, T, V = ctx.shape
-        grad_out = grad_output.contiguous().view(_N_TERMS, B * T)
+        grad_out = grad_output.contiguous().view(N_TERMS, B * T)
         grad_in = torch.empty_like(logits_flat)
         loss_backward_kernel[(B * T,)](
             logits_flat,
@@ -464,10 +465,10 @@ class _FusedLoss(torch.autograd.Function):
 _NLA_EPS = 1e-5
 
 
-def _mask(terms: Sequence[str]) -> int:
+def terms_mask(terms: Sequence[str]) -> int:
     mask = 0
     for term in terms:
-        mask |= _BITS[term]
+        mask |= TERM_BITS[term]
     return mask
 
 
@@ -479,12 +480,12 @@ def fused_terms(
     One forward kernel pass computes them all and one backward pass writes a
     single combined gradient. Names are keys of ``TERM_SLOTS``.
     """
-    mask = _mask(terms)
+    mask = terms_mask(terms)
     losses, _ = _FusedLoss.apply(logits, targets, mask, mask)
     return {term: losses[TERM_SLOTS[term]] for term in terms}
 
 
-def _compose(
+def compose_loss(
     name: str, terms: dict[str, torch.Tensor], eta: float = 3.0
 ) -> torch.Tensor:
     """Build a named loss from its primitive terms (see ``LOSS_TERMS``)."""
@@ -527,15 +528,15 @@ def fused_compound(
     is also a loss term reuses that output.
     """
     loss_terms = sorted(
-        {t for name in names for t in LOSS_TERMS[name]}, key=lambda t: _BITS[t]
+        {t for name in names for t in LOSS_TERMS[name]}, key=lambda t: TERM_BITS[t]
     )
-    grad_mask = _mask(loss_terms)
+    grad_mask = terms_mask(loss_terms)
     losses, argmax = _FusedLoss.apply(
-        logits, targets, grad_mask | _mask(metric_terms), grad_mask
+        logits, targets, grad_mask | terms_mask(metric_terms), grad_mask
     )
     terms = {t: losses[TERM_SLOTS[t]] for t in loss_terms}
     return FusedOutputs(
-        losses={name: _compose(name, terms) for name in names},
+        losses={name: compose_loss(name, terms) for name in names},
         metrics={t: losses[TERM_SLOTS[t]].detach() for t in metric_terms},
         pred_ids=argmax[0],
         target_ids=argmax[1],
@@ -580,7 +581,7 @@ def fused_tv_loss(logits, targets):
 
 def fused_nla_loss(logits, targets):
     """Per-position negative-log-acceptance ``[1, T] = -log(alpha)``; composes on TV."""
-    return _compose("nla", fused_terms(logits, targets, ("tv",)))
+    return compose_loss("nla", fused_terms(logits, targets, ("tv",)))
 
 
 def fused_lk_hybrid_loss(logits, targets, eta: float = 3.0):
@@ -588,4 +589,4 @@ def fused_lk_hybrid_loss(logits, targets, eta: float = 3.0):
     composed as in ``lk_hybrid_loss`` (blend weight detached).
     """
     terms = fused_terms(logits, targets, ("kl_div", "tv"))
-    return _compose("lk_hybrid", terms, eta=eta)
+    return compose_loss("lk_hybrid", terms, eta=eta)
