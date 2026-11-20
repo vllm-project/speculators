@@ -27,7 +27,7 @@ We compared no speculation, fixed K=15, and K=15 with AV, each on two B300s (TP2
 
 The methods used different GPU pairs and shared host resources, so the measured speedups may include hardware-placement and contention effects. A sequential comparison on the same GPU pair would separate those effects from the choice of decoding method.
 
-![Throughput versus inverse TPOT for target-only, fixed K=15, and AV](../assets/research/dspark-gdn-block16/throughput-inverse-tpot.png)
+![Throughput versus inverse TPOT for target-only, fixed K=15, and AV](../../assets/research/dspark-gdn-block16/throughput-inverse-tpot.png)
 
 Higher and further right is better. The x-axis is inverse mean request TPOT in tok/s/user, and the y-axis is aggregate output throughput in tok/s.
 
@@ -151,12 +151,12 @@ To check the original implementation question, we recorded FULL graph replay wit
 
 The commands and pinned model revisions are linked below. We extended the graph capture sizes because K=15 creates larger target and drafter batches. Without enough graph coverage, eager execution could obscure the comparison.
 
-- [Server commands, software versions, pinned model downloads, and benchmark instructions](../assets/research/dspark-gdn-block16/vllm_command.txt)
+- [Server commands, software versions, pinned model downloads, and benchmark instructions](../../assets/research/dspark-gdn-block16/vllm_command.txt)
 - [Exact vLLM source commit](https://github.com/vllm-project/vllm/commit/555978f8cf2cd21b22adba5d09d5f6e9df357714) (PR #60229 snapshot from 2026-10-27, without local source changes)
-- AIPerf configs: [target-only](../assets/research/dspark-gdn-block16/baseline-sweep.yaml), [fixed K=15](../assets/research/dspark-gdn-block16/fixed-sweep.yaml), [AV](../assets/research/dspark-gdn-block16/adaptive-sweep.yaml)
-- GSM8K: [evaluation command](../assets/research/dspark-gdn-block16/eval_command.txt) and [evaluation client](../assets/research/dspark-gdn-block16/eval_gsm8k.py.txt) (save as `eval_gsm8k.py`)
-- [All 36 per-run measurements](../assets/research/dspark-gdn-block16/measurements.csv)
-- C1 profiles: [CUDA-event stage timings](../assets/research/dspark-gdn-block16/c1-stage-timings.csv) and [Nsight GDN recurrence timings](../assets/research/dspark-gdn-block16/c1-gdn-timings.json). CPU and GPU stage durations overlap and must not be added together.
+- AIPerf configs: [target-only](../../assets/research/dspark-gdn-block16/baseline-sweep.yaml), [fixed K=15](../../assets/research/dspark-gdn-block16/fixed-sweep.yaml), [AV](../../assets/research/dspark-gdn-block16/adaptive-sweep.yaml)
+- GSM8K: [evaluation command](../../assets/research/dspark-gdn-block16/eval_command.txt) and [evaluation client](../../assets/research/dspark-gdn-block16/eval_gsm8k.py.txt) (save as `eval_gsm8k.py`)
+- [All 36 per-run measurements](../../assets/research/dspark-gdn-block16/measurements.csv)
+- C1 profiles: [CUDA-event stage timings](../../assets/research/dspark-gdn-block16/c1-stage-timings.csv) and [Nsight GDN recurrence timings](../../assets/research/dspark-gdn-block16/c1-gdn-timings.json). CPU and GPU stage durations overlap and must not be added together.
 
 </details>
 

@@ -59,7 +59,7 @@ The strict selector miss policy is implemented in [Speculators PR #1217](https:/
 
 `dpace` is higher on six subsets and lower on three. Mean acceptance length is approximately 3.26 for `dpace` and 3.24 for `ce+tv, fixed-exp-decay`.
 
-![DFlash2 per-position loss weight, dpace vs ce+tv, fixed-exp-decay, 25k training steps: acceptance length by subset and per-position acceptance rate](../assets/research/dflash2_dpace_25k_dflash2.png)
+![DFlash2 per-position loss weight, dpace vs ce+tv, fixed-exp-decay, 25k training steps: acceptance length by subset and per-position acceptance rate](../../../assets/research/dflash2_dpace_25k_dflash2.png)
 
 #### 25k training steps, DSpark
 
@@ -77,7 +77,7 @@ The strict selector miss policy is implemented in [Speculators PR #1217](https:/
 
 `ce+tv, fixed-exp-decay` is higher on all nine subsets for DSpark at 25k steps. Mean acceptance length is approximately 3.29 for `dpace` and 3.39 for `ce+tv, fixed-exp-decay`.
 
-![DSpark per-position loss weight, dpace vs ce+tv, fixed-exp-decay, 25k training steps: acceptance length by subset and per-position acceptance rate](../assets/research/dflash2_dpace_25k_dspark.png)
+![DSpark per-position loss weight, dpace vs ce+tv, fixed-exp-decay, 25k training steps: acceptance length by subset and per-position acceptance rate](../../../assets/research/dflash2_dpace_25k_dspark.png)
 
 #### 5k training steps, DFlash2
 
@@ -95,7 +95,7 @@ The strict selector miss policy is implemented in [Speculators PR #1217](https:/
 
 `dpace` is higher on seven of nine subsets for DFlash2 at 5k steps and tied on one. Mean acceptance length is approximately 3.00 for `dpace` and 2.94 for `ce+tv, fixed-exp-decay`.
 
-![DFlash2 per-position loss weight, dpace vs ce+tv, fixed-exp-decay, 5k training steps: acceptance length by subset and per-position acceptance rate](../assets/research/dflash2_dpace_5k_dflash2.png)
+![DFlash2 per-position loss weight, dpace vs ce+tv, fixed-exp-decay, 5k training steps: acceptance length by subset and per-position acceptance rate](../../../assets/research/dflash2_dpace_5k_dflash2.png)
 
 #### 5k training steps, DSpark
 
@@ -113,7 +113,7 @@ The strict selector miss policy is implemented in [Speculators PR #1217](https:/
 
 `ce+tv, fixed-exp-decay` is higher on eight of nine subsets for DSpark at 5k steps. Mean acceptance length is approximately 2.94 for `dpace` and 3.00 for `ce+tv, fixed-exp-decay`.
 
-![DSpark per-position loss weight, dpace vs ce+tv, fixed-exp-decay, 5k training steps: acceptance length by subset and per-position acceptance rate](../assets/research/dflash2_dpace_5k_dspark.png)
+![DSpark per-position loss weight, dpace vs ce+tv, fixed-exp-decay, 5k training steps: acceptance length by subset and per-position acceptance rate](../../../assets/research/dflash2_dpace_5k_dspark.png)
 
 Across both step counts, `dpace` improves acceptance length over `ce+tv, fixed-exp-decay` for DFlash2 at both 5k and 25k steps, and is worse for DSpark at both. The training default is still `fixed-exp-decay` for both architectures. This ablation is the evidence for using `dpace` on DFlash2, not a default change that already landed.
 
@@ -139,7 +139,7 @@ Acceptance length by subset (tokens per round):
 
 Strict is higher on all nine subsets at 5k steps, which prompted adding `strict` as a selectable policy in [Speculators PR #1217](https://github.com/vllm-project/speculators/pull/1217). Mean acceptance length is approximately 2.76 for replace and 2.92 for strict.
 
-![DFlash2 selector miss policy, replace vs strict, 5k training steps: acceptance length by subset and per-position acceptance rate](../assets/research/dflash2_selector_5k.png)
+![DFlash2 selector miss policy, replace vs strict, 5k training steps: acceptance length by subset and per-position acceptance rate](../../../assets/research/dflash2_selector_5k.png)
 
 #### 25k training steps
 
@@ -157,7 +157,7 @@ Strict is higher on all nine subsets at 5k steps, which prompted adding `strict`
 
 At 25k steps the results are mixed: strict is higher on five subsets, lower on three, and tied on one. Mean acceptance length is approximately 3.73 for replace and 3.76 for strict. Per-position acceptance rates are nearly identical between the two policies.
 
-![DFlash2 selector miss policy, replace vs strict, 25k training steps: acceptance length by subset and per-position acceptance rate](../assets/research/dflash2_selector_25k.png)
+![DFlash2 selector miss policy, replace vs strict, 25k training steps: acceptance length by subset and per-position acceptance rate](../../../assets/research/dflash2_selector_25k.png)
 
 The training-time validation metric `val/unary_candidate_recall_at_16_epoch` (how often the gold token appears in the unary head's top-16 candidates) favors `strict` at both step counts: 0.687 → 0.713 at 5k, and 0.780 → 0.790 at 25k. This metric is more consistent than the downstream acceptance-length comparison above.
 
@@ -187,7 +187,7 @@ Acceptance length by subset (tokens per round):
 
 Mean acceptance length is very similar between the two normalization schemes, and per-position acceptance rates nearly overlap. Subset-level differences are small and mixed in direction, showing no consistent winner between the two normalization methods at this step count.
 
-![DFlash2 loss normalization, valid-token-count vs effective-weight-sum, 20k training steps: acceptance length by subset and per-position acceptance rate](../assets/research/dflash2_normalization_20k.png)
+![DFlash2 loss normalization, valid-token-count vs effective-weight-sum, 20k training steps: acceptance length by subset and per-position acceptance rate](../../../assets/research/dflash2_normalization_20k.png)
 
 ## Observations
 

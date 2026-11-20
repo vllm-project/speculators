@@ -74,15 +74,15 @@ Fixed budget's acceptance length is flat across concurrency; AV's drops by about
 
 ### DFlash
 
-![DFlash: fixed budget vs adaptive verification vs baseline, throughput vs interactivity](../assets/research/interactivity_errorbars_dflash.png) ![DFlash: acceptance length vs concurrency, fixed vs adaptive verification](../assets/research/acceptance_length_dflash.png)
+![DFlash: fixed budget vs adaptive verification vs baseline, throughput vs interactivity](../../assets/research/interactivity_errorbars_dflash.png) ![DFlash: acceptance length vs concurrency, fixed vs adaptive verification](../../assets/research/acceptance_length_dflash.png)
 
 ### DFlash2
 
-![DFlash2: fixed budget vs adaptive verification vs baseline, throughput vs interactivity](../assets/research/interactivity_errorbars_dflash2.png) ![DFlash2: acceptance length vs concurrency, fixed vs adaptive verification](../assets/research/acceptance_length_dflash2.png)
+![DFlash2: fixed budget vs adaptive verification vs baseline, throughput vs interactivity](../../assets/research/interactivity_errorbars_dflash2.png) ![DFlash2: acceptance length vs concurrency, fixed vs adaptive verification](../../assets/research/acceptance_length_dflash2.png)
 
 ### DSpark
 
-![DSpark: fixed budget vs adaptive verification vs baseline, throughput vs interactivity](../assets/research/interactivity_errorbars_dspark.png) ![DSpark: acceptance length vs concurrency, fixed vs adaptive verification](../assets/research/acceptance_length_dspark.png)
+![DSpark: fixed budget vs adaptive verification vs baseline, throughput vs interactivity](../../assets/research/interactivity_errorbars_dspark.png) ![DSpark: acceptance length vs concurrency, fixed vs adaptive verification](../../assets/research/acceptance_length_dspark.png)
 
 ## Observations
 

@@ -8,6 +8,7 @@ and that ``compound_loss`` routes an all-fused config through one call with
 the same result as the per-term path, D-PACE weighting included.
 """
 
+from dataclasses import dataclass
 from functools import partial
 
 import pytest
@@ -50,16 +51,6 @@ SUBSETS = [
 
 def _fused():
     return pytest.importorskip("speculators.losses.fused")
-
-
-@pytest.fixture
-def narrowest_tile(monkeypatch):
-    """Pin both kernels to their narrowest tile: one compile per term set."""
-    fused = _fused()
-    for kernel in (fused.loss_forward_kernel, fused.loss_backward_kernel):
-        floor = min(config.kwargs["BLOCK_SIZE"] for config in kernel.configs)
-        narrow = [c for c in kernel.configs if c.kwargs["BLOCK_SIZE"] == floor]
-        monkeypatch.setattr(kernel, "configs", narrow[:1])
 
 
 def _inputs(rows: int, vocab: int, dtype: torch.dtype, seed: int):
@@ -176,9 +167,8 @@ def test_compound_loss_runs_one_kernel_pass(monkeypatch, weighting):
 
     leaf = logits.clone().requires_grad_(True)
     monkeypatch.setattr(fused._FusedLoss, "apply", counting_apply)
-    total, term_losses = compound_loss(
-        leaf, targets, loss_mask, pos_idx, config, decay_fn=decay_fn
-    )
+    out = compound_loss(leaf, targets, loss_mask, pos_idx, config, decay_fn=decay_fn)
+    total, term_losses = out.loss, out.term_losses
     monkeypatch.undo()
     total.backward()
     assert calls == [fused._KL.value | fused._TV.value]
@@ -216,7 +206,7 @@ def test_compound_loss_with_an_eager_term_falls_back_per_term(monkeypatch):
         return apply(*args)
 
     monkeypatch.setattr(fused._FusedLoss, "apply", counting_apply)
-    total, _ = compound_loss(logits, targets, loss_mask, pos_idx, config)
+    total = compound_loss(logits, targets, loss_mask, pos_idx, config).loss
     monkeypatch.undo()
     # Mixed config: the fused tv term runs alone, not via the multi-term call.
     assert calls == [fused._TV.value]
@@ -270,6 +260,24 @@ def test_compound_loss_with_an_empty_config_is_zero():
     logits, targets, _ = _inputs(4, 32, torch.float32, seed=5)
     loss_mask = torch.ones(1, 4, device=DEVICE, dtype=torch.long)
     pos_idx = torch.zeros(1, 4, device=DEVICE, dtype=torch.long)
-    total, term_losses = compound_loss(logits, targets, loss_mask, pos_idx, {})
-    assert float(total) == 0.0
-    assert term_losses == {}
+    out = compound_loss(logits, targets, loss_mask, pos_idx, {})
+    assert float(out.loss) == 0.0
+    assert out.term_losses == {}
+
+
+@dataclass
+class _ScaledKL:  # eq without frozen: instances are unhashable
+    scale: float = 1.0
+
+    def __call__(self, logits, targets):
+        return self.scale * eager.kl_div_loss(logits, targets)
+
+
+def test_compound_loss_accepts_an_unhashable_callable_term():
+    logits, targets, _ = _inputs(4, 32, torch.float32, seed=6)
+    loss_mask = torch.ones(1, 4, device=DEVICE, dtype=torch.long)
+    pos_idx = torch.zeros(1, 4, device=DEVICE, dtype=torch.long)
+    args = (logits, targets, loss_mask, pos_idx)
+    total = compound_loss(*args, {"custom": (_ScaledKL(), 1.0)}).loss
+    ref = compound_loss(*args, {"kl_div": (eager.kl_div_loss, 1.0)}).loss
+    torch.testing.assert_close(total, ref)
