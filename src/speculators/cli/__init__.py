@@ -11,6 +11,7 @@ from importlib.metadata import version as pkg_version
 import typer
 
 from speculators.cli.convert import convert
+from speculators.cli.generate_agentic_traces import generate_agentic_traces_app
 from speculators.cli.generate_offline_data import generate_offline_data
 from speculators.cli.prepare_data import prepare_data
 from speculators.cli.regenerate_responses import regenerate_responses
@@ -44,6 +45,11 @@ def _main(
 
 
 app.command(rich_help_panel="Pipeline")(prepare_data)
+app.add_typer(
+    generate_agentic_traces_app,
+    name="generate-agentic-traces",
+    rich_help_panel="Pipeline",
+)
 app.command(name="stitch-mtp", rich_help_panel="Pipeline")(stitch_command)
 app.command(rich_help_panel="Pipeline")(generate_offline_data)
 app.command(rich_help_panel="Pipeline")(regenerate_responses)
