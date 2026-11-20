@@ -12,11 +12,12 @@ from speculators.losses import resolve_loss_config
 from speculators.models.components import BlockLayout
 from speculators.models.dflash2 import DFlash2DraftModel, DFlash2SpeculatorConfig
 from speculators.models.dflash2.metrics import (
-    compute_metrics as compute_dflash2_metrics,
-)
-from speculators.models.dflash2.metrics import (
+    SelectorTrainingOutput,
     compute_selector_loss,
     selector_training_candidates,
+)
+from speculators.models.dflash2.metrics import (
+    compute_metrics as compute_dflash2_metrics,
 )
 from speculators.models.dflash2.model_definitions import (
     CandidateSelector,
@@ -456,10 +457,14 @@ def test_selector_loss_alpha_zero_preserves_unary_objective():
     actual, metrics = compute_dflash2_metrics(
         unary_logits=unary_logits,
         targets=targets,
-        training_candidate_ids=training_candidate_ids,
-        candidate_logits=candidate_logits,
-        target_positions=target_positions,
-        contains_target=contains_target,
+        correction=SelectorTrainingOutput(
+            candidate_ids=training_candidate_ids,
+            candidate_logits=candidate_logits,
+            target_positions=target_positions,
+            contains_target=contains_target,
+            selected_token_ids=target_ids,
+            target_ids=target_ids,
+        ),
         loss_mask=loss_mask,
         block_size=4,
         top_k=selector.top_k,
@@ -498,13 +503,21 @@ def test_candidate_target_mass_matches_dense_reference():
     )
     loss_mask = torch.ones(1, num_rows)
     loss_mask[:, ::3] = 0
+    candidate_logits = unary_logits.gather(-1, candidate_ids)
+    selected_token_ids = candidate_ids.gather(
+        -1, candidate_logits.argmax(dim=-1, keepdim=True)
+    ).squeeze(-1)
     _, metrics = compute_dflash2_metrics(
         unary_logits=unary_logits,
         targets=targets,
-        training_candidate_ids=candidate_ids,
-        candidate_logits=unary_logits.gather(-1, candidate_ids),
-        target_positions=target_positions,
-        contains_target=contains_target,
+        correction=SelectorTrainingOutput(
+            candidate_ids=candidate_ids,
+            candidate_logits=candidate_logits,
+            target_positions=target_positions,
+            contains_target=contains_target,
+            selected_token_ids=selected_token_ids,
+            target_ids=targets.argmax(dim=-1),
+        ),
         loss_mask=loss_mask,
         block_size=4,
         top_k=2,
@@ -610,14 +623,21 @@ def test_compute_metrics_rejects_unknown_selector_miss_policy():
         unary_logits, hidden_states, predecessor_ids, training_candidate_ids
     )
 
+    selected_token_ids = training_candidate_ids.gather(
+        -1, candidate_logits.argmax(dim=-1, keepdim=True)
+    ).squeeze(-1)
     with pytest.raises(ValueError, match="Unknown selector miss policy"):
         compute_dflash2_metrics(
             unary_logits=unary_logits,
             targets=targets,
-            training_candidate_ids=training_candidate_ids,
-            candidate_logits=candidate_logits,
-            target_positions=target_positions,
-            contains_target=contains_target,
+            correction=SelectorTrainingOutput(
+                candidate_ids=training_candidate_ids,
+                candidate_logits=candidate_logits,
+                target_positions=target_positions,
+                contains_target=contains_target,
+                selected_token_ids=selected_token_ids,
+                target_ids=target_ids,
+            ),
             loss_mask=loss_mask,
             block_size=4,
             top_k=selector.top_k,
