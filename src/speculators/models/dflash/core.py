@@ -1,5 +1,4 @@
 import logging
-from functools import partial
 from typing import ClassVar
 
 import torch
@@ -14,7 +13,6 @@ from speculators.models.dflash import DFlashSpeculatorConfig
 from speculators.models.dflash.attention import create_anchor_block_mask_mod
 from speculators.models.dflash.backbone import DFlashBackbone
 from speculators.models.dflash.metrics import compute_metrics
-from speculators.models.dflash.model_definitions import Qwen3DFlashDecoderLayer
 from speculators.models.dflash.utils import (
     get_base_indices_for_anchored_blocks,
     rename_checkpoint_key,
@@ -62,15 +60,10 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
     t2d: torch.Tensor | None
     d2t: torch.Tensor | None
 
-    def _make_decoder_layer(
-        self, config: DFlashSpeculatorConfig, layer_idx: int
-    ) -> nn.Module:
-        """Build one draft decoder layer.
-
-        DFlash-family variants override this factory when they wrap the shared
-        attention and MLP with additional modules.
-        """
-        return Qwen3DFlashDecoderLayer(config.transformer_layer_config, layer_idx)  # type: ignore[arg-type]
+    def _make_backbone(self, config: DFlashSpeculatorConfig) -> DFlashBackbone:
+        return DFlashBackbone(
+            config.transformer_layer_config, len(self.target_layer_ids)
+        )
 
     def __init__(
         self,
@@ -93,11 +86,7 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
         self._init_vocab(config)
 
         tl_config = config.transformer_layer_config
-        self.backbone = DFlashBackbone(
-            tl_config,
-            len(self.target_layer_ids),
-            decoder_layer_factory=partial(self._make_decoder_layer, config),
-        )
+        self.backbone = self._make_backbone(config)
         self.sliding_window = getattr(tl_config, "sliding_window", None)
         sliding_layers = self.backbone.sliding_window_indices
         self.uses_sliding_window_attn = bool(sliding_layers)
@@ -119,6 +108,7 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
             )
 
         self.post_init()
+        self.backbone.post_init()
         # Verifier-owned weights are reconstructed on load. Keep a reduced-vocab
         # lm_head serialized because current runtimes cannot derive it from the
         # full verifier head.
