@@ -7,6 +7,7 @@ over a fake endpoint.
 
 import asyncio
 import copy
+import importlib
 import json
 import time
 from typing import Any
@@ -15,8 +16,10 @@ import pytest
 import typer
 
 from speculators.cli.regenerate_responses import (
+    _default_outfile,
     _post_chat,
     _primary_identifier,
+    _resolve_dataset_config,
     _sample_from_response,
     _validate_dataset,
     _worker,
@@ -26,7 +29,9 @@ from speculators.cli.regenerate_responses import (
     load_input_dataset,
     load_seen,
     prepare_row,
+    refuse_append_without_resume,
     regenerate_conversation,
+    sanitize_filename,
 )
 from speculators.data_generation import vllm_client
 from speculators.data_generation.configs import DATASET_CONFIGS, DatasetConfig
@@ -1019,6 +1024,47 @@ def test_load_input_dataset_from_local_file(tmp_path, filename, data):
     assert prepared[1] == [{"role": "user", "content": "local prompt"}]
 
 
+def test_default_outfile_uses_resolved_dataset_config_name(monkeypatch):
+    # Not the registry key: a second name rule that ignores config.name must fail.
+    distinct_name = f"{DATASET_CONFIGS['magpie'].name} display"
+    monkeypatch.setattr(DATASET_CONFIGS["magpie"], "name", distinct_name)
+
+    def forbid_load(*_args, **_kwargs):
+        raise AssertionError("resolving a config must not load the dataset")
+
+    # The package attribute is the CLI command, which shadows the module.
+    regen = importlib.import_module("speculators.cli.regenerate_responses")
+    monkeypatch.setattr(regen, "load_dataset", forbid_load)
+
+    config = _resolve_dataset_config("magpie")
+    assert config is DATASET_CONFIGS["magpie"]
+    assert isinstance(config, DatasetConfig)
+    source = sanitize_filename(config.name)
+    model = "org/Llama-3.3-70B-Instruct"
+    outfile = _default_outfile("magpie", model)
+    dataset_portion = outfile.removesuffix(".jsonl").removesuffix(
+        "_Llama-3.3-70B-Instruct"
+    )
+    assert dataset_portion == source
+    assert outfile == (
+        f"{sanitize_filename(DATASET_CONFIGS['magpie'].name)}"
+        "_Llama-3.3-70B-Instruct.jsonl"
+    )
+
+    local_path = "/tmp/some dir/My Prompts.jsonl"
+    local = _resolve_dataset_config(local_path)
+    assert local.name == "My Prompts"
+    assert local == DatasetConfig(
+        name="My Prompts",
+        hf_path=local_path,
+        split="train",
+        prompt_field="prompt",
+    )
+    assert _default_outfile(local_path, model) == (
+        f"{sanitize_filename(local.name)}_Llama-3.3-70B-Instruct.jsonl"
+    )
+
+
 def test_tools_and_results_are_read_from_the_normalized_row():
     # Under a normalize_fn preset the conversation only appears in `messages`
     # after normalization; reading tools off the raw row regenerates tool-free.
@@ -1046,3 +1092,38 @@ def test_tools_and_results_are_read_from_the_normalized_row():
     assert tool_results == [("sunny", [])]
     # the raw row hides the conversation behind `input`: results would be lost
     assert extract_conversation(row, None)[1] == []
+
+
+# ---------------------------------------------------------------------------
+# Output file: do not append a second copy unless --resume is set.
+# ---------------------------------------------------------------------------
+
+
+def test_refuse_append_without_resume_rejects_nonempty_file(tmp_path):
+    outfile = tmp_path / "out.jsonl"
+    original = '{"id": "a"}\n'
+    outfile.write_text(original, encoding="utf-8")
+    size = outfile.stat().st_size
+
+    with pytest.raises(typer.BadParameter, match="--resume") as exc_info:
+        refuse_append_without_resume(str(outfile), resume=False)
+
+    assert "delete" in str(exc_info.value)
+    assert outfile.stat().st_size == size
+    assert outfile.read_text(encoding="utf-8") == original
+
+
+def test_refuse_append_without_resume_allows_resume(tmp_path):
+    outfile = tmp_path / "out.jsonl"
+    outfile.write_text('{"id": "a"}\n', encoding="utf-8")
+
+    refuse_append_without_resume(str(outfile), resume=True)
+
+
+@pytest.mark.parametrize("setup", ["missing", "empty"])
+def test_refuse_append_without_resume_allows_missing_or_empty(tmp_path, setup):
+    outfile = tmp_path / "out.jsonl"
+    if setup == "empty":
+        outfile.write_text("", encoding="utf-8")
+
+    refuse_append_without_resume(str(outfile), resume=False)
