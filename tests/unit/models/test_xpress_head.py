@@ -122,8 +122,8 @@ def test_teacher_forced_metrics_compare_with_verifier(sample_from_anchor):
     assert metrics["full_acc_total"].item() == 3 + sample_from_anchor
     assert metrics["position_1_acc_sum"].item() == 1
     assert metrics["position_2_acc_sum"].item() == 0
-    assert metrics["teacher_forced_eal_sum"].item() == 2 + sample_from_anchor
-    assert metrics["teacher_forced_eal_total"].item() == 1
+    assert metrics["eal_sum"].item() == 2 + sample_from_anchor
+    assert metrics["eal_total"].item() == 1
     for name, prediction in (
         ("accept_rate", logits),
         ("base_accept_rate", base_logits),

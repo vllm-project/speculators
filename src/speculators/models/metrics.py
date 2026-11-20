@@ -9,8 +9,6 @@ def compute_greedy_block_metrics(
     loss_mask: torch.Tensor,
     block_size: int,
     sample_from_anchor: bool,
-    *,
-    eal_name: str = "eal",
 ) -> dict[str, torch.Tensor]:
     """Pool greedy accuracy and accepted-length counts across draft blocks."""
     start_pos = 0 if sample_from_anchor else 1
@@ -28,8 +26,8 @@ def compute_greedy_block_metrics(
     metrics = {
         "full_acc_sum": correct_per_pos.sum(),
         "full_acc_total": total_per_pos.sum(),
-        f"{eal_name}_sum": (accepted_length * valid_blocks).sum(),
-        f"{eal_name}_total": valid_blocks.sum(),
+        "eal_sum": (accepted_length * valid_blocks).sum(),
+        "eal_total": valid_blocks.sum(),
     }
     for offset, position in enumerate(range(start_pos, block_size)):
         metrics[f"position_{position}_acc_sum"] = correct_per_pos[offset]
@@ -48,7 +46,7 @@ def compute_acceptance_rate_metrics(
     mask = loss_mask.to(probabilities.dtype)
     return {
         f"{name}_sum": (probabilities * mask).sum(),
-        f"{name}_total": mask.sum().clamp_min(1.0),
+        f"{name}_total": mask.sum(),
     }
 
 
@@ -74,7 +72,7 @@ def compute_analytical_block_acceptance(
         probabilities, loss_mask, name=f"{prefix}accept_rate"
     )
     metrics[f"{prefix}accept_len_sum"] = (accepted_length * valid_blocks).sum()
-    metrics[f"{prefix}accept_len_total"] = valid_blocks.sum().clamp_min(1.0)
+    metrics[f"{prefix}accept_len_total"] = valid_blocks.sum()
     return metrics, accept_prefix, draft_mask
 
 

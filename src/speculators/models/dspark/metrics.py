@@ -112,7 +112,7 @@ def compute_metrics(
 
         with torch.no_grad():
             mask_f = loss_mask.to(accept_rate.dtype)
-            mask_total = mask_f.sum().clamp_min(1.0)
+            mask_total = mask_f.sum()
             conf_prob = confidence_logits.float().sigmoid()
             metrics["confidence_loss_sum"] = conf_loss.detach().clone()
             metrics["confidence_loss_total"] = torch.ones((), device=device)
@@ -132,7 +132,7 @@ def compute_metrics(
             metrics["confidence_cumprod_bias_sum"] = (
                 (conf_prefix - accept_prefix) * draft_mask
             ).sum()
-            metrics["confidence_cumprod_bias_total"] = draft_mask.sum().clamp_min(1.0)
+            metrics["confidence_cumprod_bias_total"] = draft_mask.sum()
 
     ones = torch.ones((), device=device)
     metrics["loss_sum"] = loss.detach().clone()
