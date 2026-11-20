@@ -57,7 +57,14 @@ class _TTTCache:
         self.new_k: torch.Tensor
         self.new_v: torch.Tensor
 
-    def update(self, key_states, value_states, layer_idx, cache_kwargs=None):  # noqa: ARG002
+    def update(
+        self,
+        key_states,
+        value_states,
+        layer_idx,  # noqa: ARG002
+        cache_kwargs=None,  # noqa: ARG002
+        **kwargs,  # noqa: ARG002
+    ):
         self.new_k, self.new_v = key_states, value_states
         if not self.prefix_k:
             return key_states, value_states

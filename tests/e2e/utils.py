@@ -1,5 +1,6 @@
 import json
 import os
+import re
 import shutil
 import signal
 import subprocess
@@ -534,6 +535,37 @@ def run_stitch_mtp(
     assert result.returncode == 0, f"speculators stitch-mtp failed:\n{result.stderr}"
 
 
+_SQUASH_PR_RE = re.compile(r"\(#(\d+)\)\s*$")
+
+
+def _ci_pr_number(commit: str) -> str:
+    """Return the PR number for this build, or ``""`` if unknown.
+
+    PR builds get it from ``BUILDKITE_PULL_REQUEST``.  Builds of ``main``
+    (e.g. nightlies) fall back to the squash-merge subject, which ends in
+    ``(#NNNN)``.
+    """
+    pr = os.environ.get("BUILDKITE_PULL_REQUEST", "")
+    if pr and pr != "false":
+        return pr
+    repo_root = find_repo_root(Path(__file__))
+    if repo_root is None:
+        return ""
+    try:
+        subject = subprocess.run(  # noqa: S603
+            ["git", "log", "-1", "--format=%s", commit or "HEAD"],  # noqa: S607
+            capture_output=True,
+            text=True,
+            cwd=repo_root,
+            timeout=5,
+            check=False,
+        ).stdout.strip()
+    except (OSError, subprocess.SubprocessError):
+        return ""
+    match = _SQUASH_PR_RE.search(subject)
+    return match.group(1) if match else ""
+
+
 def _emit_ci_metric(
     metrics_dict: dict, extra_labels: dict[str, str] | None = None
 ) -> None:
@@ -572,11 +604,7 @@ def _emit_ci_metric(
                 "BUILDKITE_BUILD_URL",
                 os.environ.get("GITHUB_RUN_URL", ""),
             ),
-            "pr_number": (
-                pr
-                if (pr := os.environ.get("BUILDKITE_PULL_REQUEST", "")) != "false"
-                else ""
-            ),
+            "pr_number": _ci_pr_number(os.environ.get("BUILDKITE_COMMIT", "")),
             "test_id": test_id,
             "test_file": test_file,
             "node_name": os.environ.get("NODE_NAME", ""),
