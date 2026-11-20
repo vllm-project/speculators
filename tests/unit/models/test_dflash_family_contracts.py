@@ -135,7 +135,6 @@ def contract_report(recipe, sample_from_anchor, model=None):
             **batch,
             max_anchors=3,
             loss_config=resolve_loss_config("kl_div", "eager"),
-            tv_loss_fn=resolve_loss_config("tv", "eager")["tv"][0],
         )
     handle.remove()
     loss.backward()
