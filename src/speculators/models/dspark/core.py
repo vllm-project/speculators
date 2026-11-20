@@ -11,7 +11,10 @@ from speculators.losses import (
 from speculators.model import SpeculatorModel
 from speculators.models.dflash.core import DFlashDraftModel
 from speculators.models.dspark.config import DSparkSpeculatorConfig
-from speculators.models.dspark.metrics import compute_metrics
+from speculators.models.dspark.metrics import (
+    compute_metrics,
+    compute_metrics_from_hidden,
+)
 from speculators.models.dspark.model_definitions import ConfidenceHead, MarkovHead
 from speculators.models.utils import conditional_torch_compile
 
@@ -95,7 +98,11 @@ class DSparkDraftModel(DFlashDraftModel):
     def get_trainer_kwargs(**kwargs) -> tuple[dict, dict]:
         """Resolve DSpark's compound loss from ``--loss-fn``."""
         implementation = kwargs.get("loss_implementation", "fused")
-        loss_config = resolve_loss_config(kwargs["loss_fn"], implementation)
+        # fused_linear computes the fused losses from hidden states.
+        fused_linear = implementation == "fused_linear"
+        loss_config = resolve_loss_config(
+            kwargs["loss_fn"], "fused" if fused_linear else implementation
+        )
         gamma = kwargs.get("dflash_decay_gamma", 4.0)
         max_anchors = kwargs.get("max_anchors", 3072)
         confidence_head_alpha = kwargs.get("confidence_head_alpha", 1.0)
@@ -110,6 +117,9 @@ class DSparkDraftModel(DFlashDraftModel):
             "confidence_head_alpha": confidence_head_alpha,
             "per_position_loss_weight": per_position_loss_weight,
             "dpace_alpha": dpace_alpha,
+            "fused_linear": fused_linear,
+            "fused_linear_targets": kwargs.get("fused_linear_targets", "recompute"),
+            "fused_linear_logits": kwargs.get("fused_linear_logits", "input"),
         }
         return dict(shared), dict(shared)
 
@@ -128,8 +138,16 @@ class DSparkDraftModel(DFlashDraftModel):
         confidence_head_alpha: float = 1.0,
         per_position_loss_weight: str = "fixed-exp-decay",
         dpace_alpha: float = 0.5,
+        fused_linear: bool = False,
+        fused_linear_targets: str = "recompute",
+        fused_linear_logits: str = "input",
         **kwargs,
     ):
+        if fused_linear and self.markov_head is None:
+            raise ValueError(
+                "DSpark fused_linear needs a Markov head (markov_rank > 0)"
+            )
+        recompute_targets = fused_linear and fused_linear_targets == "recompute"
         hidden, logits, targets, aligned_loss_mask, anchored_block_indices = (
             self._backbone_forward(
                 hidden_states,
@@ -138,6 +156,8 @@ class DSparkDraftModel(DFlashDraftModel):
                 verifier_last_hidden_states,
                 document_ids,
                 position_ids,
+                materialize_logits=not fused_linear,
+                materialize_targets=not recompute_targets,
                 max_anchors=max_anchors,
                 **kwargs,
             )
@@ -165,16 +185,25 @@ class DSparkDraftModel(DFlashDraftModel):
 
         confidence_logits = None
         prev_emb = None
+        markov_features = None
         if self.markov_head is not None:
             prev_emb = self.markov_head.prev_embeddings(prev_token_ids)
-            markov_bias = self.markov_head.block_bias(
-                prev_token_ids=prev_token_ids,
-                hidden_states=hidden_blocks,
-                prev_emb=prev_emb,
-            )
-            logits = (logits.view(num_blocks, block, -1) + markov_bias).view(
-                1, mask_tokens_size, -1
-            )
+            if fused_linear:
+                # markov_w2(u) is added inside the loss's GEMMs
+                markov_features = self.markov_head.block_features(
+                    prev_token_ids=prev_token_ids,
+                    hidden_states=hidden_blocks,
+                    prev_emb=prev_emb,
+                ).reshape(1, mask_tokens_size, -1)
+            else:
+                markov_bias = self.markov_head.block_bias(
+                    prev_token_ids=prev_token_ids,
+                    hidden_states=hidden_blocks,
+                    prev_emb=prev_emb,
+                )
+                logits = (logits.view(num_blocks, block, -1) + markov_bias).view(
+                    1, mask_tokens_size, -1
+                )
 
         if self.confidence_head is not None:
             # confidence_head_with_markov requires markov_rank > 0 (enforced in
@@ -190,6 +219,35 @@ class DSparkDraftModel(DFlashDraftModel):
                 1, mask_tokens_size
             )
 
+        metric_kwargs = {
+            "gamma": gamma,
+            "confidence_head_alpha": confidence_head_alpha,
+            "per_position_loss_weight": per_position_loss_weight,
+            "dpace_alpha": dpace_alpha,
+            "sample_from_anchor": self.config.sample_from_anchor,
+        }
+        if markov_features is not None and self.markov_head is not None:
+            # fused_linear: no [1, T, V] draft logits or Markov bias, and with
+            # recomputed targets no target logits. With the full vocab lm_head
+            # is the verifier head, which enables the shared-head delta form.
+            head = self.lm_head if self.use_draft_vocab else self.verifier_lm_head
+            loss, metrics = compute_metrics_from_hidden(
+                hidden,
+                head.weight,
+                targets,
+                markov_features,
+                self.markov_head.markov_w2.weight,
+                confidence_logits,
+                aligned_loss_mask,
+                self.block_size,
+                loss_config or _DEFAULT_LOSS_CONFIG,
+                target_weight=(
+                    self.verifier_lm_head.weight if recompute_targets else None
+                ),
+                logits_dtype=fused_linear_logits,
+                **metric_kwargs,
+            )
+            return None, loss, metrics
         loss, metrics = compute_metrics(
             logits,
             targets,
@@ -197,10 +255,6 @@ class DSparkDraftModel(DFlashDraftModel):
             aligned_loss_mask,
             self.block_size,
             loss_config=loss_config or _DEFAULT_LOSS_CONFIG,
-            gamma=gamma,
-            confidence_head_alpha=confidence_head_alpha,
-            per_position_loss_weight=per_position_loss_weight,
-            dpace_alpha=dpace_alpha,
-            sample_from_anchor=self.config.sample_from_anchor,
+            **metric_kwargs,
         )
         return None, loss, metrics

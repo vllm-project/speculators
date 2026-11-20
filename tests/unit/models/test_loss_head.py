@@ -223,9 +223,9 @@ def test_eager_fp32_matches_golden(name):
             )
 
 
-def _assert_head_close(cfg, dtype, loss_tol, grad_tol):
+def _assert_head_close(cfg, dtype, loss_tol, grad_tol, implementation="fused"):
     ref_loss, ref_metrics, ref_grads = _reference(cfg, input_dtype=dtype)
-    fused_cfg = dataclasses.replace(cfg, implementation="fused")
+    fused_cfg = dataclasses.replace(cfg, implementation=implementation)
     device = "cuda"
     loss, metrics, grads = _run(fused_cfg, _inputs(fused_cfg, device, dtype))
     torch.testing.assert_close(loss, ref_loss, **loss_tol)
@@ -243,14 +243,28 @@ def _assert_head_close(cfg, dtype, loss_tol, grad_tol):
         )
 
 
+# fused_linear (no materialized draft logits) covers DFlash and DSpark.
+IMPLEMENTATIONS = [
+    "fused",
+    "fused_linear",
+    "fused_linear_fp32",
+    "fused_linear_materialize",
+]
+
+
 @requires_cuda
+# fp32 inputs give fp32 logit tiles either way: fused_linear_fp32 adds nothing here.
+@pytest.mark.parametrize(
+    "implementation", [i for i in IMPLEMENTATIONS if i != "fused_linear_fp32"]
+)
 @pytest.mark.parametrize("name", sorted(CASES))
-def test_fused_fp32_matches_eager_reference(name):
+def test_fused_fp32_matches_eager_reference(name, implementation):
     _assert_head_close(
         CASES[name],
         torch.float32,
         loss_tol={"rtol": 1e-4, "atol": 1e-5},
         grad_tol={"rtol": 1e-3, "atol": 1e-4},
+        implementation=implementation,
     )
 
 
@@ -261,6 +275,7 @@ def test_fused_fp32_matches_eager_reference(name):
 # GPUs or CUDA builds may need them widened. TV-based terms are the least
 # accurate: their gradient switches on dp <= tp, which bf16 logits flip near
 # ties, so the 0.1-0.4 bounds there only catch gross breakage, not precision.
+# Every implementation must stay below these.
 BF16_LOSS_RTOL = 2e-3
 # Relative L2 error ||g - g_ref|| / ||g_ref||: unlike the max error below, it
 # is not driven by a few outliers, so its bounds can be tighter.
@@ -305,12 +320,12 @@ def test_bf16_bounds_cover_every_case():
 
 @functools.cache
 def _bf16_fused_and_reference(
-    name: str,
+    name: str, implementation: str
 ) -> tuple[torch.Tensor, torch.Tensor, dict, dict]:
     """``(loss, ref_loss, grads, ref_grads)``, shared by both bf16 tests."""
     cfg = CASES[name]
     ref_loss, _, ref_grads = _reference(cfg, input_dtype=torch.bfloat16)
-    fused_cfg = dataclasses.replace(cfg, implementation="fused")
+    fused_cfg = dataclasses.replace(cfg, implementation=implementation)
     loss, _, grads = _run(fused_cfg, _inputs(fused_cfg, "cuda", torch.bfloat16))
     assert grads.keys() == ref_grads.keys()
     for grad_name, ref in ref_grads.items():
@@ -319,9 +334,11 @@ def _bf16_fused_and_reference(
 
 
 @requires_cuda
+@pytest.mark.parametrize("implementation", IMPLEMENTATIONS)
 @pytest.mark.parametrize("name", sorted(CASES))
-def test_fused_bf16_error_vs_eager_reference(name):
-    loss, ref_loss, grads, ref_grads = _bf16_fused_and_reference(name)
+def test_fused_bf16_error_vs_eager_reference(name, implementation):
+    """fused_linear (fp32 logits) must stay within today's measured bounds."""
+    loss, ref_loss, grads, ref_grads = _bf16_fused_and_reference(name, implementation)
     torch.testing.assert_close(loss, ref_loss, rtol=BF16_LOSS_RTOL, atol=0.0)
     bound = BF16_GRAD_ERR_BOUND[name]
     for grad_name, ref in ref_grads.items():
@@ -332,9 +349,10 @@ def test_fused_bf16_error_vs_eager_reference(name):
 
 
 @requires_cuda
+@pytest.mark.parametrize("implementation", IMPLEMENTATIONS)
 @pytest.mark.parametrize("name", sorted(CASES))
-def test_fused_bf16_l2_error_vs_eager_reference(name):
-    _, _, grads, ref_grads = _bf16_fused_and_reference(name)
+def test_fused_bf16_l2_error_vs_eager_reference(name, implementation):
+    _, _, grads, ref_grads = _bf16_fused_and_reference(name, implementation)
     bound = BF16_GRAD_L2_ERR_BOUND[name]
     for grad_name, ref in ref_grads.items():
         error = float((grads[grad_name] - ref).norm())
