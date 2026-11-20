@@ -243,6 +243,7 @@ class BaseCheckpointer:
             self.TRAIN_COMMAND_FILENAME,
             "run.yaml",
             "speculators.patch",
+            "serving_eval",
         }
 
         for child in self.path.iterdir():

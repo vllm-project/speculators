@@ -5,6 +5,7 @@ import warnings
 from collections.abc import Callable
 from pathlib import Path
 from typing import Literal, NamedTuple
+from uuid import uuid4
 
 import torch
 import torch.distributed as dist
@@ -22,6 +23,7 @@ from transformers import (
 )
 
 from speculators.model import SpeculatorModel
+from speculators.train.checkpoint_eval import run_checkpoint_eval
 from speculators.train.checkpointer import (
     BaseCheckpointer,
     DistributedCheckpointer,
@@ -33,7 +35,10 @@ from speculators.train.distributed import (
     get_rank,
     is_distributed,
 )
-from speculators.train.graceful_shutdown import with_graceful_shutdown
+from speculators.train.graceful_shutdown import (
+    TrainingInterruptedError,
+    with_graceful_shutdown,
+)
 from speculators.train.optimizers import build_optimizers
 from speculators.train.recovery import BatchRecoveryCoordinator
 from speculators.train.utils import normalize_counted_metrics
@@ -198,6 +203,8 @@ class TrainerConfig(NamedTuple):
     fsdp_replicate_frozen: bool = False
     gradient_checkpointing: bool = False
     max_steps: int | None = None
+    checkpoint_eval_command: str | None = None
+    checkpoint_eval_timeout: float = 300.0
 
 
 def _resolve_scheduler_steps(
@@ -266,6 +273,7 @@ class Trainer:
             else SingleGPUCheckpointer
         )
         self.checkpointer: BaseCheckpointer = checkpointer_class(self.config.save_path)
+        self._last_checkpoint_eval: tuple[str, int] | None = None
 
         self.setup_trainer()
         self.setup_model()
@@ -788,6 +796,51 @@ class Trainer:
                         old.unlink()
                 link_name.symlink_to(target)
         root_logger.info(f"Checkpoint saved to {self.checkpointer.path / str(epoch)}")
+        self._evaluate_checkpoint(epoch)
+
+    def _evaluate_checkpoint(self, epoch: int | str) -> None:
+        command = self.config.checkpoint_eval_command
+        if not command or epoch == "interrupted":
+            return
+        key = (str(epoch), self.global_step)
+        if self._last_checkpoint_eval == key:
+            return
+        self._last_checkpoint_eval = key
+        try:
+            if self.rank == 0:
+                output = (
+                    self.checkpointer.path
+                    / "serving_eval"
+                    / f"step_{self.global_step}_{uuid4().hex}"
+                )
+                try:
+                    metrics = run_checkpoint_eval(
+                        command,
+                        self.checkpointer.path / str(epoch),
+                        output,
+                        self.global_step,
+                        self.config.checkpoint_eval_timeout,
+                    )
+                    metric_logger.info(
+                        {"serving_eval": metrics, "epoch": epoch},
+                        extra={"step": self.global_step},
+                    )
+                except TrainingInterruptedError:
+                    raise
+                except Exception:  # noqa: BLE001
+                    # Both evaluation and optional metric backends are outside
+                    # the training path; neither should abort a saved run.
+                    root_logger.warning(
+                        "Checkpoint evaluation failed; continuing training. "
+                        "Artifacts: %s",
+                        output,
+                        exc_info=True,
+                    )
+        finally:
+            # Evaluation is bounded by checkpoint_eval_timeout. Peers must not
+            # overwrite the weights or race checkpoint retention while it runs.
+            if self.is_distributed:
+                dist.barrier()
 
     def maybe_update_best(self, epoch: int, val_metrics: dict | None):
         if val_metrics is None or "loss_epoch" not in val_metrics:
@@ -802,6 +855,7 @@ class Trainer:
             # maybe_save_checkpoint returns early when save_best is set, so the
             # end-of-epoch cursor has to be written here or resume restarts at 0.
             self._save_training_state(epoch, 0)
+            self._evaluate_checkpoint(epoch)
         elif self.config.checkpoint_freq >= 1 and not (
             epoch == 0 or (epoch + 1) % int(self.config.checkpoint_freq) == 0
         ):
