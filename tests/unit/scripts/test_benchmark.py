@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import sys
 import types
 from pathlib import Path
@@ -20,17 +21,25 @@ from benchmark import (  # type: ignore[import-not-found]
     _aggregate_kernel_rows,
     _aggregate_timing,
     _build_kernel_pie,
+    _comment_marker,
+    _comparability_warnings,
     _fmt_welch,
     _gather_per_rank,
     _get_phase_means,
+    _invocation,
+    _marker_label,
+    _md_significance,
     _MetricCapture,
+    _peak_allocated_mb,
     _phase_peaks,
     _print_summary,
     _report_paths,
     _run_training,
     _SyntheticLoader,
     _welch_test,
+    build_comment,
     collect_provenance,
+    comment_benchmark,
     compare_benchmarks,
     compute_aggregate_throughput,
     compute_statistics,
@@ -114,6 +123,7 @@ class TestCollectProvenance:
 
         expected_keys = {
             "git_sha",
+            "command",
             "timestamp",
             "hostname",
             "python_version",
@@ -923,3 +933,235 @@ class TestReportBenchmark:
         path = self._write(tmp_path, result)
         with pytest.raises(SystemExit):
             report_benchmark(str(path))
+
+
+# ---------------------------------------------------------------------------
+# comment
+# ---------------------------------------------------------------------------
+
+_SCALED_MS = (
+    "fetch_ms",
+    "fwd_ms",
+    "bwd_ms",
+    "opt_ms",
+    "step_ms",
+    "queue_ms",
+    "h2d_ms",
+    "clip_ms",
+)
+
+
+def _faster_per_step(factor=0.5, n=4):
+    """``_make_per_step`` scaled, as a run that got faster would report it."""
+    steps = _make_per_step(n)
+    for step in steps:
+        for key in _SCALED_MS:
+            step[key] *= factor
+        step["tokens_per_s"] /= factor
+    return steps
+
+
+def _make_pair(factor=0.5):
+    """(before, after) results differing only in speed."""
+    return _make_report_result(), _make_report_result(per_step=_faster_per_step(factor))
+
+
+class TestInvocation:
+    def test_plain_run_is_a_python_command(self):
+        with patch.object(sys, "argv", ["/elsewhere/benchmark.py", "run", "--synth"]):
+            assert _invocation() == "python benchmark.py run --synth"
+
+    def test_torchrun_launcher_is_recorded(self):
+        """The worker argv alone would claim one process reproduces eight."""
+        env = {
+            "TORCHELASTIC_RUN_ID": "abc",
+            "LOCAL_WORLD_SIZE": "8",
+            "GROUP_WORLD_SIZE": "1",
+        }
+        with (
+            patch.object(sys, "argv", ["/elsewhere/benchmark.py", "run"]),
+            patch.dict(os.environ, env, clear=False),
+        ):
+            assert _invocation() == (
+                "torchrun --standalone --nproc-per-node=8 benchmark.py run"
+            )
+
+    def test_multi_node_marks_the_rendezvous_as_the_readers_to_supply(self):
+        env = {
+            "TORCHELASTIC_RUN_ID": "abc",
+            "LOCAL_WORLD_SIZE": "8",
+            "GROUP_WORLD_SIZE": "2",
+        }
+        with (
+            patch.object(sys, "argv", ["/elsewhere/benchmark.py", "run"]),
+            patch.dict(os.environ, env, clear=False),
+        ):
+            cmd = _invocation()
+        assert "--nnodes=2" in cmd
+        assert "--nproc-per-node=8" in cmd
+        assert "rdzv-endpoint" in cmd
+
+
+class TestMarkerLabel:
+    def test_label_cannot_close_the_marker(self):
+        marker = _comment_marker("fix --> injected")
+        assert marker.count("-->") == 1
+        assert marker == "<!-- speculators-benchmark:fix-injected -->"
+
+    def test_plain_labels_pass_through(self):
+        assert _comment_marker("tp2_fp8") == "<!-- speculators-benchmark:tp2_fp8 -->"
+
+    def test_no_label_leaves_the_marker_unscoped(self):
+        assert _comment_marker() == "<!-- speculators-benchmark -->"
+
+    def test_a_label_of_only_punctuation_still_names_something(self):
+        assert _marker_label("///") == "unlabeled"
+
+
+class TestPeakAllocated:
+    def test_single_rank_is_named_as_rank_zero(self):
+        peak, scope = _peak_allocated_mb(_make_report_result())
+        assert peak == pytest.approx(2048.0)
+        assert scope == "rank 0"
+
+    def test_multi_rank_reports_the_worst_rank(self):
+        result = _make_report_result()
+        result["memory"]["per_rank"].append(
+            {"rank": 1, "peak_allocated_mb": 4096.0, "peak_reserved_mb": 5120.0}
+        )
+        peak, scope = _peak_allocated_mb(result)
+        assert peak == pytest.approx(4096.0)
+        assert scope == "max over 2 ranks"
+
+
+class TestComparabilityWarnings:
+    def test_identical_configs_warn_about_nothing(self):
+        base, cand = _make_pair()
+        assert _comparability_warnings(base, cand) == []
+
+    def test_sequence_length_change_is_flagged(self):
+        base, cand = _make_pair()
+        cand["config"]["total_seq_len"] = 4096
+        assert ("Sequence length", 8192, 4096) in _comparability_warnings(base, cand)
+
+    def test_different_gpu_is_flagged(self):
+        base, cand = _make_pair()
+        cand["provenance"]["gpu_info"] = [{"name": "A100"}]
+        assert ("GPU", "H100", "A100") in _comparability_warnings(base, cand)
+
+
+class TestBuildCommentSingleRun:
+    def test_headline_and_tables(self):
+        md = build_comment(_make_report_result(), None)
+        assert md.startswith("<!-- speculators-benchmark -->")
+        assert "107.0 ms/step" in md
+        # Rows follow whatever the run timed, including the split marks.
+        assert "| `queue_ms` |" in md
+        assert "| `clip_ms` |" in md
+        assert "Peak allocated (rank 0): 2,048 MB" in md
+        assert "```mermaid" in md
+        assert "<summary>Provenance</summary>" in md
+
+    def test_unprofiled_run_has_no_kernel_section(self):
+        md = build_comment(_make_report_result(kernels=False), None)
+        assert "```mermaid" not in md
+        assert "GPU kernel time" not in md
+
+    def test_heading_metadata_is_escaped(self):
+        md = build_comment(_make_report_result(verifier="<script>x</script>"), None)
+        assert "## Training benchmark: eagle3 / &lt;script&gt;" in md
+
+    def test_table_metadata_stays_inside_its_code_span(self):
+        # A code span renders as literal text, so the value is left as written;
+        # a backtick in it would end the span and is the one thing replaced.
+        md = build_comment(_make_report_result(verifier="a`<img src=x>"), None)
+        assert "| verifier_name_or_path | `a'<img src=x>` |" in md
+
+
+class TestBuildCommentDiff:
+    def test_speedup_headline_and_deltas(self):
+        base, cand = _make_pair(factor=0.5)
+        md = build_comment(base, cand)
+        assert "2.00× faster" in md
+        assert "107.0 → 53.5 ms/step" in md
+        assert "| `step_ms` |" in md
+        assert "✅ **-50.0%**" in md
+        assert "GPU kernel time (ms/step, self time)" in md
+        # A diff shows both sides as numbers; a pie of one of them would only
+        # invite reading the wrong one.
+        assert "```mermaid" not in md
+
+    def test_regression_headline(self):
+        base, cand = _make_pair(factor=2.0)
+        md = build_comment(base, cand)
+        assert "2.00× slower" in md
+
+    def test_degenerate_significance_is_not_reported_as_nan(self):
+        base, cand = _make_pair()
+        md = build_comment(base, cand)
+        # fetch_frac is the same constant on both sides, which leaves Welch's
+        # test undefined; scipy says so with a nan that must not reach a table.
+        assert "| `fetch_frac` | 0.1 | 0.1 | +0.0% | — |" in md
+
+    def test_mismatched_runs_are_warned_about_before_the_headline(self):
+        base, cand = _make_pair()
+        cand["config"]["total_seq_len"] = 4096
+        md = build_comment(base, cand)
+        assert "> [!WARNING]" in md
+        assert md.index("[!WARNING]") < md.index("faster")
+        assert "Sequence length" in md
+
+    def test_label_names_the_variant(self):
+        base, cand = _make_pair()
+        md = build_comment(base, cand, label="tp2")
+        assert md.startswith("<!-- speculators-benchmark:tp2 -->")
+        assert "Training benchmark — tp2:" in md
+
+
+class TestMdSignificance:
+    def test_constant_series_report_no_test(self):
+        per_step = _make_per_step()
+        assert _md_significance(per_step, per_step, "step_ms") == "—"
+
+    def test_varying_series_report_a_p_value(self):
+        a = _make_per_step()
+        b = _faster_per_step(factor=0.5)
+        assert "p" in _md_significance(a, b, "tokens_per_s")
+
+
+class TestCommentBenchmark:
+    def _write(self, tmp_path, result, name="run.json"):
+        path = tmp_path / name
+        path.write_text(json.dumps(result))
+        return str(path)
+
+    def test_writes_markdown_to_the_requested_path(self, tmp_path, capsys):
+        path = self._write(tmp_path, _make_report_result())
+        out_path = tmp_path / "comment.md"
+        comment_benchmark(path, None, str(out_path), None)
+
+        assert "107.0 ms/step" in out_path.read_text()
+        # The paths go to stderr so stdout stays pipeable into `gh pr comment`.
+        captured = capsys.readouterr()
+        assert captured.out == ""
+        assert "comment.md" in captured.err
+
+    def test_prints_to_stdout_without_an_output_path(self, tmp_path, capsys):
+        path = self._write(tmp_path, _make_report_result())
+        comment_benchmark(path, None, None, None)
+        assert "<!-- speculators-benchmark -->" in capsys.readouterr().out
+
+    def test_baseline_makes_it_a_diff(self, tmp_path):
+        base, cand = _make_pair()
+        base_path = self._write(tmp_path, base, "before.json")
+        cand_path = self._write(tmp_path, cand, "after.json")
+        out_path = tmp_path / "comment.md"
+        comment_benchmark(cand_path, base_path, str(out_path), None)
+        assert "2.00× faster" in out_path.read_text()
+
+    def test_old_result_file_rejected(self, tmp_path):
+        result = _make_report_result()
+        result["benchmark_version"] = "1.0"
+        path = self._write(tmp_path, result)
+        with pytest.raises(SystemExit, match="Incompatible benchmark version"):
+            comment_benchmark(path, None, None, None)
