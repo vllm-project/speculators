@@ -662,3 +662,103 @@ def test_getitems_keeps_valid_samples_when_one_generation_fails(tmp_path):
     client = source.client
     assert isinstance(client, _QueuedAsyncOpenAI)
     assert client.requests == [[1, 2, 3], [1, 2, 3]]
+
+
+def test_verifier_kvs_survive_pipeline(tmp_path: Path):
+    """Test optional verifier KV caches survive _build_sample and _pad_samples."""
+    loaded_hs = {
+        "token_ids": torch.tensor([1, 2, 3], dtype=torch.long),
+        "hidden_states": torch.tensor(
+            [
+                [[0.0, 0.1, 0.2, 0.3], [10.0, 10.1, 10.2, 10.3]],
+                [[1.0, 1.1, 1.2, 1.3], [11.0, 11.1, 11.2, 11.3]],
+                [[2.0, 2.1, 2.2, 2.3], [12.0, 12.1, 12.2, 12.3]],
+            ]
+        ),
+        "kv_last_local_k": torch.tensor([[100.0], [101.0], [102.0]]),
+        "kv_last_local_v": torch.tensor([[110.0], [111.0], [112.0]]),
+        "kv_last_global_k": torch.tensor([[200.0], [201.0], [202.0]]),
+        "kv_last_global_v": torch.tensor([[210.0], [211.0], [212.0]]),
+    }
+
+    dataset = _make_generation_dataset(
+        tmp_path, _SequenceTransfer([loaded_hs]), handles=["h-0"]
+    )
+    record = dataset.records[0]
+    sample = dataset._build_sample(0, record, loaded_hs)
+    assert not isinstance(sample, SampleUnavailable)
+
+    assert "verifier_kv_last_local" in sample
+    assert "verifier_kv_last_global" in sample
+
+    expected_local_stack = torch.stack(
+        [loaded_hs["kv_last_local_k"], loaded_hs["kv_last_local_v"]], dim=1
+    )
+    assert torch.equal(sample["verifier_kv_last_local"], expected_local_stack)
+
+    collated = _pad_samples([sample], 5, torch.float32)
+
+    assert "verifier_kv_last_local" in collated
+    assert "verifier_kv_last_global" in collated
+
+    local_kv = collated["verifier_kv_last_local"]
+    assert local_kv.shape == (1, 5, 2, 1)
+
+    expected_local = torch.tensor(
+        [
+            [
+                [[100.0], [110.0]],
+                [[101.0], [111.0]],
+                [[102.0], [112.0]],
+                [[0.0], [0.0]],
+                [[0.0], [0.0]],
+            ]
+        ]
+    )
+    assert torch.equal(local_kv, expected_local)
+
+
+def test_verifier_kvs_mixed_batch():
+    """KV-present and KV-absent samples in one batch should not crash or drop data."""
+    with_kv = {
+        "input_ids": torch.tensor([0]),
+        "loss_mask": torch.tensor([1]),
+        "hidden_states": torch.tensor([[0.0]]),
+        "verifier_last_hidden_states": torch.tensor([[0.0]]),
+        "verifier_kv_last_local": torch.tensor([[100.0]]),
+        "lengths": torch.tensor([1]),
+        "position_ids": torch.tensor([0]),
+    }
+    without_kv = {k: v for k, v in with_kv.items() if not k.startswith("verifier_kv")}
+
+    for batch in [[with_kv, without_kv], [without_kv, with_kv]]:
+        collated = _pad_samples(batch, 5, torch.float32)
+
+        assert "verifier_kv_last_local" in collated
+        local_kv = collated["verifier_kv_last_local"]
+        assert local_kv.shape == (1, 5, 1)
+
+        if batch[0] is with_kv:
+            expected = torch.tensor([[[100.0], [0.0], [0.0], [0.0], [0.0]]])
+        else:
+            expected = torch.tensor([[[0.0], [100.0], [0.0], [0.0], [0.0]]])
+
+        assert torch.equal(local_kv, expected)
+
+
+def test_verifier_kvs_dtype_cast():
+    """Verify _pad_samples casts verifier KV tensors when dtype is bfloat16."""
+    sample = {
+        "input_ids": torch.tensor([0]),
+        "loss_mask": torch.tensor([1]),
+        "hidden_states": torch.tensor([[0.0]], dtype=torch.float32),
+        "verifier_last_hidden_states": torch.tensor([[0.0]], dtype=torch.float32),
+        "verifier_kv_last_local": torch.tensor([[100.0]], dtype=torch.float32),
+        "lengths": torch.tensor([1]),
+        "position_ids": torch.tensor([0]),
+    }
+
+    collated = _pad_samples([sample], 4, torch.bfloat16)
+    assert collated["verifier_kv_last_local"].dtype == torch.bfloat16
+    assert collated["hidden_states"].dtype == torch.bfloat16
+    assert collated["verifier_last_hidden_states"].dtype == torch.bfloat16
