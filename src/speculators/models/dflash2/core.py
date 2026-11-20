@@ -7,15 +7,13 @@ from speculators.losses import LossConfig, kl_div_loss, resolve_loss_config
 from speculators.model import SpeculatorModel
 from speculators.models.dflash.config import DFlashSpeculatorConfig
 from speculators.models.dflash.core import DFlashDraftModel
+from speculators.models.dflash2.backbone import DFlash2Backbone
 from speculators.models.dflash2.config import DFlash2SpeculatorConfig
 from speculators.models.dflash2.metrics import (
     compute_metrics,
     selector_training_candidates,
 )
-from speculators.models.dflash2.model_definitions import (
-    CandidateSelector,
-    Qwen3DFlash2DecoderLayer,
-)
+from speculators.models.dflash2.model_definitions import CandidateSelector
 from speculators.models.utils import conditional_torch_compile
 
 __all__ = [
@@ -32,6 +30,16 @@ class DFlash2DraftModel(DFlashDraftModel):
     config_class: ClassVar[type[DFlash2SpeculatorConfig]] = DFlash2SpeculatorConfig  # type: ignore[misc,assignment]
     _no_split_modules = ["Qwen3DFlash2DecoderLayer"]
 
+    def _make_backbone(self, config: DFlashSpeculatorConfig) -> DFlash2Backbone:
+        assert isinstance(config, DFlash2SpeculatorConfig)  # noqa: S101
+        return DFlash2Backbone(
+            config.transformer_layer_config,
+            len(self.target_layer_ids),
+            block_size=config.block_size,
+            conv_kernel_size=config.conv_kernel_size,
+            conv_group_size=config.conv_group_size,
+        )
+
     def __init__(self, config: DFlash2SpeculatorConfig) -> None:
         target_vocab_size = config.transformer_layer_config.vocab_size
         if config.draft_vocab_size != target_vocab_size:
@@ -47,16 +55,6 @@ class DFlash2DraftModel(DFlashDraftModel):
             )
         super().__init__(config=config)
 
-        for layer_ in self.layers:
-            # By capability, so a _make_decoder_layer override still works.
-            reset_convolutions = getattr(layer_, "reset_convolutions", None)
-            if not callable(reset_convolutions):
-                raise TypeError(
-                    f"{type(layer_).__name__} has no reset_convolutions(); a DFlash2 "
-                    "decoder layer must wrap its sublayers in resettable convolutions."
-                )
-            reset_convolutions()
-
         initializer_range = getattr(
             config.transformer_layer_config, "initializer_range", 0.02
         )
@@ -66,18 +64,6 @@ class DFlash2DraftModel(DFlashDraftModel):
             rank=config.selector_rank,
             top_k=config.selector_top_k,
             initializer_range=initializer_range,
-        )
-
-    def _make_decoder_layer(
-        self, config: DFlashSpeculatorConfig, layer_idx: int
-    ) -> Qwen3DFlash2DecoderLayer:
-        assert isinstance(config, DFlash2SpeculatorConfig)  # noqa: S101
-        return Qwen3DFlash2DecoderLayer(
-            config.transformer_layer_config,  # type: ignore[arg-type]
-            layer_idx,
-            block_size=config.block_size,
-            conv_kernel_size=config.conv_kernel_size,
-            conv_group_size=config.conv_group_size,
         )
 
     @classmethod
