@@ -70,6 +70,11 @@ def main() -> None:
     parser.add_argument("--tensor-parallel-size", type=int, default=1)
     parser.add_argument("--spec-tokens", type=int, default=7)
     parser.add_argument("--spec-method", help="Defaults to the checkpoint's algorithm")
+    parser.add_argument(
+        "--no-hash-checkpoints",
+        action="store_true",
+        help="Record file sizes and mtimes instead of hashing local model weights",
+    )
     parser.add_argument("--max-model-len", type=int, default=8192)
     parser.add_argument("--gpu-memory-utilization", type=float, default=0.9)
     parser.add_argument("--enforce-eager", action="store_true")
@@ -110,6 +115,7 @@ def main() -> None:
         spec_method,
         "--provenance-dir",
         str(output / "server"),
+        *(["--no-hash-checkpoints"] if args.no_hash_checkpoints else []),
         "--",
         "--host",
         "127.0.0.1",

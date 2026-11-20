@@ -121,6 +121,7 @@ def test_adapter_passes_checkpoint_algorithm_and_unique_model_to_existing_tools(
         from pathlib import Path
         args = sys.argv[1:]
         assert args[args.index("--spec-method") + 1] == "eagle3"
+        assert args.index("--no-hash-checkpoints") < args.index("--")
         checkpoint = os.environ["SPECULATORS_EVAL_CHECKPOINT"]
         assert args[args.index("--spec-model") + 1] == checkpoint
         model = args[args.index("--served-model-name") + 1]
@@ -168,6 +169,7 @@ def test_adapter_passes_checkpoint_algorithm_and_unique_model_to_existing_tools(
             "target",
             "--cuda-visible-devices",
             "1",
+            "--no-hash-checkpoints",
             "--port",
             str(port),
             "--startup-timeout",

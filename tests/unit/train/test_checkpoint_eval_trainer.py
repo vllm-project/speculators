@@ -1,6 +1,8 @@
 """Checkpoint-boundary tests without loading or training a language model."""
 
 import logging
+import os
+import signal
 import sys
 from datetime import timedelta
 from pathlib import Path
@@ -8,12 +10,16 @@ from types import SimpleNamespace
 from typing import Any, cast
 
 import pytest
+import torch
 import torch.distributed as dist
 import torch.multiprocessing as mp
 
 from speculators.train.checkpointer import SingleGPUCheckpointer
 from speculators.train.config import TrainConfig
-from speculators.train.graceful_shutdown import TrainingInterruptedError
+from speculators.train.graceful_shutdown import (
+    TrainingInterruptedError,
+    with_graceful_shutdown,
+)
 from speculators.train.trainer import Trainer, TrainerConfig
 
 
@@ -136,15 +142,6 @@ def test_evaluation_failure_preserves_checkpoint_and_training_continues(
     )
 
 
-def test_only_rank_zero_executes_the_command(tmp_path, evaluator, monkeypatch):
-    trainer = _trainer(tmp_path, evaluator)
-    trainer.is_distributed = True
-    trainer.rank = 1
-    monkeypatch.setattr("speculators.train.trainer.dist.barrier", lambda: None)
-    trainer._evaluate_checkpoint(0)
-    assert not (tmp_path / "serving_eval").exists()
-
-
 @pytest.mark.parametrize(
     "error", [ValueError("invalid metric name"), TrainingInterruptedError()]
 )
@@ -230,3 +227,73 @@ def test_distributed_invalid_result_does_not_abort_or_strand_peers(tmp_path):
     assert (tmp_path / "rank0.done").read_text() == "continued"
     assert (tmp_path / "rank1.done").read_text() == "continued"
     assert len(list((tmp_path / "serving_eval").glob("*/evaluation.json"))) == 1
+
+
+def _distributed_evaluation(rank, root, ready):
+    path = Path(root)
+    # Complete imports on both spawned workers before starting the short
+    # process-group timeout used to reproduce the original evaluation barrier.
+    ready.wait(timeout=60)
+    dist.init_process_group(
+        "gloo",
+        init_method=f"file://{path / 'rendezvous'}",
+        rank=rank,
+        world_size=2,
+        timeout=timedelta(seconds=2),
+    )
+    try:
+        trainer = _trainer(path, f"{sys.executable} {path / 'evaluate.py'}")
+        trainer.is_distributed = True
+        trainer.rank = rank
+
+        def save(_model, _optimizers, epoch):
+            assert epoch == "interrupted"
+            # Exercise the collective that an interrupt checkpoint would need.
+            count = torch.ones(1)
+            dist.all_reduce(count)
+            assert count.item() == 2
+            (path / f"rank{rank}.saved").touch()
+
+        cast("Any", trainer.checkpointer).save_checkpoint = save
+
+        @with_graceful_shutdown(timeout=10)
+        def train(t):
+            (path / f"rank{rank}.pid").write_text(str(os.getpid()))
+            dist.barrier()
+            t._evaluate_checkpoint(0)
+            (path / f"rank{rank}.resumed").touch()
+            dist.barrier()
+
+        train(trainer)
+    finally:
+        dist.destroy_process_group()
+
+
+@pytest.mark.parametrize(
+    "interrupt_rank", [None, 0, 1], ids=["long-eval", "signal-rank0", "signal-peer"]
+)
+def test_distributed_slow_evaluation_and_graceful_shutdown(tmp_path, interrupt_rank):
+    script = tmp_path / "evaluate.py"
+    root_pid = tmp_path / "rank0.pid"
+    body = (
+        "import os, signal, time\nfrom pathlib import Path\n"
+        f"assert os.getppid() == int(Path({str(root_pid)!r}).read_text())\n"
+    )
+    if interrupt_rank is not None:
+        pid_file = tmp_path / f"rank{interrupt_rank}.pid"
+        body += (
+            f"pid = int(Path({str(pid_file)!r}).read_text())\n"
+            f"os.kill(pid, {int(signal.SIGTERM)})\n"
+        )
+    script.write_text(
+        body + "time.sleep(4)\n"
+        "out = Path(os.environ['SPECULATORS_EVAL_OUTPUT_DIR'])\n"
+        "out.joinpath('metrics.json').write_text('{\"mal\": 2}')\n"
+    )
+    ready = mp.get_context("spawn").Barrier(2)
+    mp.spawn(_distributed_evaluation, args=(str(tmp_path), ready), nprocs=2)
+    for rank in (0, 1):
+        assert (tmp_path / f"rank{rank}.saved").exists() == (interrupt_rank is not None)
+        assert (tmp_path / f"rank{rank}.resumed").exists() == (interrupt_rank is None)
+    metrics = list((tmp_path / "serving_eval").glob("*/metrics.json"))
+    assert len(metrics) == (1 if interrupt_rank is None else 0)

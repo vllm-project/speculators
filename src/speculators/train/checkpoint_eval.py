@@ -7,6 +7,8 @@ import shlex
 import signal
 import stat
 import subprocess
+import time
+from collections.abc import Callable
 from contextlib import suppress
 from pathlib import Path
 
@@ -24,12 +26,33 @@ _DISTRIBUTED_ENV = {
 _MAX_METRICS_BYTES = 1 << 20
 
 
+def _wait_for_evaluator(
+    process: subprocess.Popen,
+    timeout: float,
+    check_interrupted: Callable[[], None] | None,
+) -> int:
+    if check_interrupted is None:
+        return process.wait(timeout=timeout)
+    deadline = time.monotonic() + timeout
+    while True:
+        check_interrupted()
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise subprocess.TimeoutExpired(process.args, timeout)
+        try:
+            return process.wait(timeout=min(0.25, remaining))
+        except subprocess.TimeoutExpired:
+            pass
+
+
 def run_checkpoint_eval(
     command: str,
     checkpoint: Path,
     output_dir: Path,
     step: int,
     timeout: float,
+    *,
+    check_interrupted: Callable[[], None] | None = None,
 ) -> dict[str, float]:
     """Run a POSIX evaluator command and read its finite scalar ``metrics.json``.
 
@@ -75,7 +98,7 @@ def run_checkpoint_eval(
             start_new_session=True,
         ) as process:
             try:
-                returncode = process.wait(timeout=timeout)
+                returncode = _wait_for_evaluator(process, timeout, check_interrupted)
             finally:
                 # A serving engine can leave workers behind even after its parent
                 # exits. Reap the whole session on success, failure or cancellation.
@@ -84,6 +107,8 @@ def run_checkpoint_eval(
         if returncode:
             raise subprocess.CalledProcessError(returncode, argv)
 
+    if check_interrupted is not None:
+        check_interrupted()
     return _read_metrics(output_dir / "metrics.json")
 
 

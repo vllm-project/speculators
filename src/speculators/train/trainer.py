@@ -31,6 +31,7 @@ from speculators.train.checkpointer import (
 )
 from speculators.train.distributed import (
     apply_fully_sharded,
+    checkpoint_eval_rendezvous,
     get_local_rank,
     get_rank,
     is_distributed,
@@ -701,6 +702,8 @@ class Trainer:
                 # Avoid saving back to back ay the end of each epoch
             ):
                 self.maybe_save_checkpoint(epoch, local_step=local_step)
+                # Exclude checkpoint I/O and evaluation from the next batch.
+                t_before_fetch = time.perf_counter()
 
     def _maybe_val_sync(self, batch_index: int) -> None:
         if not self.is_distributed or _VAL_SYNC_INTERVAL <= 0:
@@ -806,41 +809,38 @@ class Trainer:
         if self._last_checkpoint_eval == key:
             return
         self._last_checkpoint_eval = key
-        try:
-            if self.rank == 0:
-                output = (
-                    self.checkpointer.path
-                    / "serving_eval"
-                    / f"step_{self.global_step}_{uuid4().hex}"
+        group = dist.group.WORLD if self.is_distributed else None
+        with checkpoint_eval_rendezvous(
+            group, self.config.checkpoint_eval_timeout
+        ) as check:
+            if self.rank != 0:
+                return
+            output = (
+                self.checkpointer.path
+                / "serving_eval"
+                / f"step_{self.global_step}_{uuid4().hex}"
+            )
+            try:
+                metrics = run_checkpoint_eval(
+                    command,
+                    self.checkpointer.path / str(epoch),
+                    output,
+                    self.global_step,
+                    self.config.checkpoint_eval_timeout,
+                    check_interrupted=check,
                 )
-                try:
-                    metrics = run_checkpoint_eval(
-                        command,
-                        self.checkpointer.path / str(epoch),
-                        output,
-                        self.global_step,
-                        self.config.checkpoint_eval_timeout,
-                    )
-                    metric_logger.info(
-                        {"serving_eval": metrics, "epoch": epoch},
-                        extra={"step": self.global_step},
-                    )
-                except TrainingInterruptedError:
-                    raise
-                except Exception:  # noqa: BLE001
-                    # Both evaluation and optional metric backends are outside
-                    # the training path; neither should abort a saved run.
-                    root_logger.warning(
-                        "Checkpoint evaluation failed; continuing training. "
-                        "Artifacts: %s",
-                        output,
-                        exc_info=True,
-                    )
-        finally:
-            # Evaluation is bounded by checkpoint_eval_timeout. Peers must not
-            # overwrite the weights or race checkpoint retention while it runs.
-            if self.is_distributed:
-                dist.barrier()
+                metric_logger.info(
+                    {"serving_eval": metrics, "epoch": epoch},
+                    extra={"step": self.global_step},
+                )
+            except TrainingInterruptedError:
+                raise
+            except Exception:  # noqa: BLE001
+                root_logger.warning(
+                    "Checkpoint evaluation failed; continuing training. Artifacts: %s",
+                    output,
+                    exc_info=True,
+                )
 
     def maybe_update_best(self, epoch: int, val_metrics: dict | None):
         if val_metrics is None or "loss_epoch" not in val_metrics:

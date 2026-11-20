@@ -455,7 +455,7 @@ class TrainerArgs(_Group):
         gt=0,
         allow_inf_nan=False,
         description="Maximum seconds for checkpoint evaluation, including startup. "
-        "Must be shorter than the training process-group timeout. Default: 300.",
+        "Other ranks wait outside training collectives. Default: 300.",
     )
 
     @field_validator("checkpoint_freq")
