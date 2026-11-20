@@ -225,6 +225,7 @@ We are committed to fostering a welcoming and inclusive community. Please read a
 ## Additional Resources
 
 - [CODE_OF_CONDUCT.md](https://github.com/vllm-project/speculators/blob/main/CODE_OF_CONDUCT.md): Our expectations for community behavior.
+- [AI_POLICY.md](./AI_POLICY.md): Expectations for AI-assisted contributions.
 - [Makefile](https://github.com/vllm-project/speculators/blob/main/Makefile): Quality check and style commands.
 
 ## License

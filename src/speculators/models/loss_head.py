@@ -155,7 +155,6 @@ def loss_head(cfg: HeadConfig, inputs: HeadInputs) -> tuple[torch.Tensor, dict]:
         logits.view(num_blocks, cfg.block_size, -1)
         + markov_bias.view(num_blocks, cfg.block_size, -1)
     ).view(1, n, -1)
-    tv_loss_fn = cached_loss_config("tv", cfg.implementation)["tv"][0]
     return dspark_metrics.compute_metrics(
         logits,
         targets,
@@ -163,7 +162,6 @@ def loss_head(cfg: HeadConfig, inputs: HeadInputs) -> tuple[torch.Tensor, dict]:
         inputs.loss_mask,
         cfg.block_size,
         loss_config,
-        tv_loss_fn=tv_loss_fn,
         per_position_loss_weight=cfg.weighting,
         sample_from_anchor=SAMPLE_FROM_ANCHOR["dspark"],
     )
