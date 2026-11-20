@@ -276,6 +276,9 @@ select = [
     "SIM102", # nested if is clearer
     "PTH", # os.path is acceptable in data generation
 ]
+".claude/skills/*/scripts/*.py" = [
+    "INP001", # standalone skill scripts, run directly rather than imported as a package
+]
 "scripts/**/*.py" = [
     "INP001", # allow implicit namespace packages in scripts
     "PTH", # os.path is acceptable in scripts
