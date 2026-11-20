@@ -13,17 +13,18 @@ seed does not decay: without it the backbone drifts to serve the refiner and the
 standalone drafter (the K=0 seed) degrades over a long co-training run.
 """
 
-from functools import partial
 from typing import Any
 
 import torch
-from torch.nn.functional import cross_entropy, softmax
 
 from speculators.losses import (
     LossConfig,
     compound_loss,
-    dflash_loss_decay,
-    dpace_loss_decay,
+)
+from speculators.models.dflash.utils import block_positions_and_loss_decay
+from speculators.models.metrics import (
+    compute_acceptance_rate_metrics,
+    compute_base_metrics,
 )
 
 __all__ = [
@@ -31,31 +32,7 @@ __all__ = [
 ]
 
 
-def _hard_label_ce(
-    logits: torch.Tensor,
-    labels: torch.Tensor,
-    loss_mask: torch.Tensor,
-    pos_idx: torch.Tensor,
-    decay_fn,
-) -> torch.Tensor:
-    """CE against HARD data labels with loss_function's weighting semantics.
-
-    The CE here targets the token the sequence actually continued with (the
-    target model's own sample at regeneration time), not the teacher argmax."""
-
-    v = logits.shape[-1]
-    elem = cross_entropy(
-        logits.reshape(-1, v).float(), labels.reshape(-1), reduction="none"
-    ).view(1, -1)
-    mask = loss_mask.to(elem.dtype)
-    elem = elem * mask
-    if decay_fn is not None:
-        elem = elem * decay_fn(pos_idx.to(elem.dtype), elementwise_loss=elem)
-    denom = mask.sum(dim=1) + 1e-8
-    return (elem.sum(dim=1) / denom).mean()
-
-
-def compute_metrics(  # noqa: C901
+def compute_metrics(
     logits_tf: torch.Tensor,
     round_logits: list[torch.Tensor],
     base_logits: torch.Tensor | None,
@@ -70,66 +47,34 @@ def compute_metrics(  # noqa: C901
     per_position_loss_weight: str = "fixed-exp-decay",
     dpace_alpha: float = 0.5,
     sample_from_anchor: bool = False,
-    ce_data_labels: torch.Tensor | None = None,
-    data_labels: torch.Tensor | None = None,
 ) -> tuple[torch.Tensor, dict]:
     """Compute the XPress loss and a metrics dict (``*_sum``/``*_total`` pairs)."""
     device = logits_tf.device
-    seq_len = logits_tf.shape[1]
-    pos_idx = (torch.arange(seq_len, device=device) % block_size).unsqueeze(0)
-    if per_position_loss_weight == "dpace":
-        decay_fn = partial(
-            dpace_loss_decay,
-            loss_mask=loss_mask,
-            block_size=block_size,
-            dpace_alpha=dpace_alpha,
+    pos_idx, decay_fn = block_positions_and_loss_decay(
+        loss_mask,
+        block_size,
+        gamma=gamma,
+        per_position_loss_weight=per_position_loss_weight,
+        dpace_alpha=dpace_alpha,
+        sample_from_anchor=sample_from_anchor,
+    )
+
+    def _term_loss(logits, term_decay_fn, *, with_acceptance=False, with_ids=False):
+        return compound_loss(
+            logits,
+            targets,
+            loss_mask,
+            pos_idx,
+            loss_config=loss_config,
+            decay_fn=term_decay_fn,
+            metric_terms=("tv",) if with_acceptance else (),
+            with_ids=with_ids,
         )
-    else:
-        decay_fn = partial(
-            dflash_loss_decay, gamma=gamma, sample_from_anchor=sample_from_anchor
-        )
 
-    ce_labels = ce_data_labels if "ce" in loss_config else None
-    if ce_labels is not None:
-        _cfg_soft = {k: v for k, v in loss_config.items() if k != "ce"}
-        _ce_weight = loss_config["ce"][1]
-
-    def _term_loss(lgts, term_decay_fn):
-        """compound loss with the CE component optionally re-pointed at the
-        DATA tokens instead of the teacher argmax."""
-        if ce_labels is None:
-            out = compound_loss(
-                lgts,
-                targets,
-                loss_mask,
-                pos_idx,
-                loss_config=loss_config,
-                decay_fn=term_decay_fn,
-            )
-            return out.loss, out.term_losses
-        if _cfg_soft:
-            out = compound_loss(
-                lgts,
-                targets,
-                loss_mask,
-                pos_idx,
-                loss_config=_cfg_soft,
-                decay_fn=term_decay_fn,
-            )
-            soft, terms = out.loss, out.term_losses
-        else:
-            soft, terms = lgts.new_zeros((), dtype=torch.float32), {}
-        ce = _hard_label_ce(lgts, ce_labels, loss_mask, pos_idx, term_decay_fn)
-        terms = dict(terms)
-        if _cfg_soft and not terms:
-            ((_only_name, (_, _only_w)),) = _cfg_soft.items()
-            terms[f"{_only_name}_loss"] = (
-                soft.detach() / _only_w if _only_w else soft.detach()
-            )
-        terms["ce_loss"] = ce.detach()
-        return soft + _ce_weight * ce, terms
-
-    loss_tf, term_losses = _term_loss(logits_tf, decay_fn)
+    teacher_forced = _term_loss(
+        logits_tf, decay_fn, with_acceptance=True, with_ids=True
+    )
+    loss_tf = teacher_forced.loss
     loss = loss_tf
 
     metrics: dict[str, Any] = {}
@@ -139,7 +84,7 @@ def compute_metrics(  # noqa: C901
 
     round_losses = []
     for logits_j in round_logits:
-        loss_j, _ = _term_loss(logits_j, decay_fn)
+        loss_j = _term_loss(logits_j, decay_fn).loss
         round_losses.append(loss_j)
     if round_losses:
         loss_cons = torch.stack(round_losses).mean()
@@ -152,42 +97,32 @@ def compute_metrics(  # noqa: C901
 
     if base_logits is not None:
         anchor_decay_fn = None if base_anchor_full_weight else decay_fn
-        loss_base, _ = _term_loss(base_logits, anchor_decay_fn)
+        base = _term_loss(base_logits, anchor_decay_fn, with_acceptance=True)
+        loss_base = base.loss
+        metrics.update(
+            compute_acceptance_rate_metrics(
+                1.0 - base.metric_terms["tv"], loss_mask, name="base_accept_rate"
+            )
+        )
         loss = loss + base_anchor_weight * loss_base
         metrics["base_anchor_loss_sum"] = loss_base.detach().clone()
         metrics["base_anchor_loss_total"] = ones.clone()
 
-    metrics["loss_sum"] = loss.detach().clone()
-    metrics["loss_total"] = ones.clone()
-    for term_name, term_val in term_losses.items():
-        metrics[f"{term_name}_sum"] = term_val
-        metrics[f"{term_name}_total"] = ones.clone()
-
-    # Analytical per-position acceptance rate of the (teacher-forced) refined
-    # drafter = distributional overlap with the target.
-    with torch.no_grad():
-
-        def _overlap(a_logits, b_logits, chunk=1024):
-            outs = []
-            for i in range(0, a_logits.shape[1], chunk):
-                ap = softmax(a_logits[:, i : i + chunk].float(), dim=-1)
-                bp = softmax(b_logits[:, i : i + chunk].float(), dim=-1)
-                outs.append(torch.minimum(ap, bp).sum(dim=-1))
-            return torch.cat(outs, dim=1)  # [1, T]
-
-        accept_rate = _overlap(logits_tf, targets)
-        mask_f = loss_mask.to(accept_rate.dtype)
-        metrics["accept_rate_sum"] = (accept_rate * mask_f).sum()
-        metrics["accept_rate_total"] = mask_f.sum().clamp_min(1.0)
-        # Top-1 accuracy compares the refined argmax against the DATA token the
-        # sequence continued with, not against the teacher's greedy argmax.
-        _acc_ref = data_labels if data_labels is not None else targets.argmax(dim=-1)
-        acc_hit = (logits_tf.argmax(dim=-1) == _acc_ref).to(mask_f.dtype)
-        metrics["accuracy_sum"] = (acc_hit * mask_f).sum()
-        metrics["accuracy_total"] = mask_f.sum().clamp_min(1.0)
-        if base_logits is not None:
-            base_accept = _overlap(base_logits, targets)
-            metrics["base_accept_rate_sum"] = (base_accept * mask_f).sum()
-            metrics["base_accept_rate_total"] = mask_f.sum().clamp_min(1.0)
+    metrics.update(
+        compute_acceptance_rate_metrics(
+            1.0 - teacher_forced.metric_terms["tv"], loss_mask
+        )
+    )
+    # Score refined predictions with teacher-forced predecessors.
+    metrics.update(
+        compute_base_metrics(
+            loss,
+            teacher_forced.term_losses,
+            teacher_forced.pred_ids == teacher_forced.target_ids,
+            loss_mask,
+            block_size,
+            sample_from_anchor,
+        )
+    )
 
     return loss, metrics
