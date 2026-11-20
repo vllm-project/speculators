@@ -16,7 +16,6 @@ standalone drafter (the K=0 seed) degrades over a long co-training run.
 from typing import Any
 
 import torch
-from torch.nn.functional import softmax
 
 from speculators.losses import (
     LossConfig,
@@ -60,7 +59,7 @@ def compute_metrics(
         sample_from_anchor=sample_from_anchor,
     )
 
-    def _term_loss(logits, term_decay_fn):
+    def _term_loss(logits, term_decay_fn, *, with_acceptance=False, with_ids=False):
         return compound_loss(
             logits,
             targets,
@@ -68,9 +67,13 @@ def compute_metrics(
             pos_idx,
             loss_config=loss_config,
             decay_fn=term_decay_fn,
+            metric_terms=("tv",) if with_acceptance else (),
+            with_ids=with_ids,
         )
 
-    teacher_forced = _term_loss(logits_tf, decay_fn)
+    teacher_forced = _term_loss(
+        logits_tf, decay_fn, with_acceptance=True, with_ids=True
+    )
     loss_tf = teacher_forced.loss
     loss = loss_tf
 
@@ -94,7 +97,13 @@ def compute_metrics(
 
     if base_logits is not None:
         anchor_decay_fn = None if base_anchor_full_weight else decay_fn
-        loss_base = _term_loss(base_logits, anchor_decay_fn).loss
+        base = _term_loss(base_logits, anchor_decay_fn, with_acceptance=True)
+        loss_base = base.loss
+        metrics.update(
+            compute_acceptance_rate_metrics(
+                1.0 - base.metric_terms["tv"], loss_mask, name="base_accept_rate"
+            )
+        )
         loss = loss + base_anchor_weight * loss_base
         metrics["base_anchor_loss_sum"] = loss_base.detach().clone()
         metrics["base_anchor_loss_total"] = ones.clone()
@@ -105,37 +114,19 @@ def compute_metrics(
         metrics[f"{term_name}_sum"] = term_val
         metrics[f"{term_name}_total"] = ones.clone()
 
-    # Analytical per-position acceptance rate of the (teacher-forced) refined
-    # drafter = distributional overlap with the target.
-    with torch.no_grad():
-
-        def _overlap(a_logits, b_logits, chunk=1024):
-            outs = []
-            for i in range(0, a_logits.shape[1], chunk):
-                ap = softmax(a_logits[:, i : i + chunk].float(), dim=-1)
-                bp = softmax(b_logits[:, i : i + chunk].float(), dim=-1)
-                outs.append(torch.minimum(ap, bp).sum(dim=-1))
-            return torch.cat(outs, dim=1)  # [1, T]
-
-        accept_rate = _overlap(logits_tf, targets)
-        metrics.update(compute_acceptance_rate_metrics(accept_rate, loss_mask))
-        pred_ids = logits_tf.argmax(dim=-1)
-        target_ids = targets.argmax(dim=-1)
-        metrics.update(
-            compute_greedy_block_metrics(
-                pred_ids == target_ids,
-                loss_mask,
-                block_size,
-                sample_from_anchor,
-                eal_name="teacher_forced_eal",
-            )
+    metrics.update(
+        compute_acceptance_rate_metrics(
+            1.0 - teacher_forced.metric_terms["tv"], loss_mask
         )
-        if base_logits is not None:
-            base_accept = _overlap(base_logits, targets)
-            metrics.update(
-                compute_acceptance_rate_metrics(
-                    base_accept, loss_mask, name="base_accept_rate"
-                )
-            )
+    )
+    metrics.update(
+        compute_greedy_block_metrics(
+            teacher_forced.pred_ids == teacher_forced.target_ids,
+            loss_mask,
+            block_size,
+            sample_from_anchor,
+            eal_name="teacher_forced_eal",
+        )
+    )
 
     return loss, metrics

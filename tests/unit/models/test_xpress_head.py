@@ -106,10 +106,11 @@ def test_teacher_forced_metrics_compare_with_verifier(sample_from_anchor):
     logits = torch.tensor([[[3.0, 0.0], [0.0, 3.0], [3.0, 0.0], [0.0, 3.0]]])
     targets = torch.tensor([[[3.0, 0.0], [0.0, 3.0], [0.0, 3.0], [0.0, 3.0]]])
     loss_mask = torch.tensor([[sample_from_anchor, True, True, True]])
+    base_logits = logits.flip(dims=(-1,))
     _, metrics = compute_metrics(
         logits,
         [],
-        None,
+        base_logits,
         targets,
         loss_mask,
         block_size=4,
@@ -123,3 +124,12 @@ def test_teacher_forced_metrics_compare_with_verifier(sample_from_anchor):
     assert metrics["position_2_acc_sum"].item() == 0
     assert metrics["teacher_forced_eal_sum"].item() == 2 + sample_from_anchor
     assert metrics["teacher_forced_eal_total"].item() == 1
+    for name, prediction in (
+        ("accept_rate", logits),
+        ("base_accept_rate", base_logits),
+    ):
+        overlap = torch.minimum(
+            prediction.softmax(dim=-1), targets.softmax(dim=-1)
+        ).sum(dim=-1)
+        torch.testing.assert_close(metrics[f"{name}_sum"], (overlap * loss_mask).sum())
+        assert metrics[f"{name}_total"].item() == loss_mask.sum().item()
