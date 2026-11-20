@@ -5,9 +5,11 @@ import logging
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, TypeVar
 
+import openai
 import torch
 import torch.distributed as dist
 
+from speculators.data_generation.vllm_client import is_retryable_status
 from speculators.train.distributed import get_local_rank, get_rank, is_distributed
 
 if TYPE_CHECKING:
@@ -90,7 +92,10 @@ class GenerationRecoveryGuard:
             try:
                 result = operation()
             except Exception as error:  # noqa: BLE001 - worker recovery boundary
-                if attempt == total_attempts:
+                if attempt == total_attempts or (
+                    isinstance(error, openai.APIStatusError)
+                    and not is_retryable_status(error.status_code)
+                ):
                     return self._record_exhausted(
                         description,
                         attempt=attempt,
@@ -126,7 +131,10 @@ class GenerationRecoveryGuard:
             except asyncio.CancelledError:
                 raise
             except Exception as error:  # noqa: BLE001 - worker recovery boundary
-                if attempt == total_attempts:
+                if attempt == total_attempts or (
+                    isinstance(error, openai.APIStatusError)
+                    and not is_retryable_status(error.status_code)
+                ):
                     return self._record_exhausted(
                         description,
                         attempt=attempt,
