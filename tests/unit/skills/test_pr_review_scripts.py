@@ -123,6 +123,13 @@ def test_assess(pr, reviews, reason):
         assert reason in state["reason"]
 
 
+def test_force_lifts_only_the_already_reviewed_block():
+    reviewed = [{"user": {"login": "bot"}, "state": "COMMENTED", "commit_id": HEAD}]
+    assert pr_state.assess(_pr(), reviewed, "bot", force=True)["eligible"]
+    for pr in (_pr(state="closed"), _pr(draft=True), _pr(body=TEMPLATE)):
+        assert not pr_state.assess(pr, reviewed, "bot", force=True)["eligible"]
+
+
 def test_assess_requires_head_sha():
     with pytest.raises(SystemExit):
         pr_state.assess(_pr(head={}), [], "bot")
