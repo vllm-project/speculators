@@ -1,7 +1,5 @@
 """Metrics and loss functions for DFlash draft model."""
 
-from typing import Any
-
 import torch
 
 from speculators.losses import (
@@ -10,7 +8,7 @@ from speculators.losses import (
     kl_div_loss,
 )
 from speculators.models.dflash.utils import block_positions_and_loss_decay
-from speculators.models.metrics import compute_greedy_block_metrics
+from speculators.models.metrics import compute_base_metrics
 
 _DEFAULT_LOSS_CONFIG: LossConfig = {"kl_div": (kl_div_loss, 1.0)}
 
@@ -67,18 +65,12 @@ def compute_metrics(
         decay_fn=decay_fn,
         with_ids=True,
     )
-    loss, term_losses = out.loss, out.term_losses
-    ones = torch.tensor(1.0, device=logits.device)
-    metrics: dict[str, Any] = {}
-    metrics["loss_sum"] = loss.detach().clone()
-    metrics["loss_total"] = ones
-    for term_name, term_val in term_losses.items():
-        metrics[f"{term_name}_sum"] = term_val
-        metrics[f"{term_name}_total"] = ones.clone()
-
-    metrics.update(
-        compute_greedy_block_metrics(
-            out.pred_ids == out.target_ids, loss_mask, block_size, sample_from_anchor
-        )
+    metrics = compute_base_metrics(
+        out.loss,
+        out.term_losses,
+        out.pred_ids == out.target_ids,
+        loss_mask,
+        block_size,
+        sample_from_anchor,
     )
-    return loss, metrics
+    return out.loss, metrics

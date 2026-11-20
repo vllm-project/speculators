@@ -18,7 +18,7 @@ from speculators.losses import (
 from speculators.models.dflash.utils import block_positions_and_loss_decay
 from speculators.models.metrics import (
     compute_analytical_block_acceptance,
-    compute_greedy_block_metrics,
+    compute_base_metrics,
 )
 
 __all__ = [
@@ -212,15 +212,10 @@ def compute_metrics(
     loss = unary_loss + selector_loss_alpha * selector_loss
 
     one = torch.ones((), device=unary_logits.device)
-    for term_name, term_val in unary.term_losses.items():
-        metrics[f"{term_name}_sum"] = term_val
-        metrics[f"{term_name}_total"] = one.clone()
     metrics["unary_loss_sum"] = unary_loss.detach().clone()
     metrics["unary_loss_total"] = one
     metrics["selector_loss_sum"] = selector_loss.detach().clone()
     metrics["selector_loss_total"] = one.clone()
-    metrics["loss_sum"] = loss.detach().clone()
-    metrics["loss_total"] = one.clone()
 
     with torch.no_grad():
         target_ids = targets.argmax(dim=-1)
@@ -271,8 +266,13 @@ def compute_metrics(
         # make injected gold tokens appear available at inference.
         selector_correct = teacher_forced_ids.eq(target_ids) & contains_target
         metrics.update(
-            compute_greedy_block_metrics(
-                selector_correct, valid, block_size, sample_from_anchor
+            compute_base_metrics(
+                loss,
+                unary.term_losses,
+                selector_correct,
+                valid,
+                block_size,
+                sample_from_anchor,
             )
         )
 

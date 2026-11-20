@@ -35,6 +35,26 @@ def compute_greedy_block_metrics(
     return metrics
 
 
+def compute_base_metrics(
+    loss: torch.Tensor,
+    term_losses: dict[str, torch.Tensor],
+    correct: torch.Tensor,
+    loss_mask: torch.Tensor,
+    block_size: int,
+    sample_from_anchor: bool,
+) -> dict[str, torch.Tensor]:
+    """Record the final training loss, its distillation terms, and greedy metrics."""
+    one = torch.ones((), device=loss.device)
+    metrics = {"loss_sum": loss.detach().clone(), "loss_total": one}
+    for name, term_loss in term_losses.items():
+        metrics[f"{name}_sum"] = term_loss
+        metrics[f"{name}_total"] = one.clone()
+    metrics.update(
+        compute_greedy_block_metrics(correct, loss_mask, block_size, sample_from_anchor)
+    )
+    return metrics
+
+
 @torch.no_grad()
 def compute_acceptance_rate_metrics(
     probabilities: torch.Tensor,
