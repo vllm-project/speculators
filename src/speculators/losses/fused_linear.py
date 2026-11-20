@@ -108,12 +108,17 @@ def _project(hidden: torch.Tensor, weight: torch.Tensor, tile: str) -> torch.Ten
         return hidden @ weight.t()
 
 
+def _operand_dtype(dtype: torch.dtype, tile: str) -> torch.dtype:
+    """GEMM operand dtype for ``tile``: fp16 for bf16 inputs with fp16 tiles."""
+    return torch.float16 if tile == "float16" and dtype == torch.bfloat16 else dtype
+
+
 def _tile_weight(weight: torch.Tensor | None, tile: str) -> torch.Tensor | None:
     """The projection operand: an fp16 copy of a bf16 weight for fp16 tiles,
     otherwise the weight itself."""
-    if weight is not None and tile == "float16" and weight.dtype == torch.bfloat16:
-        return weight.to(torch.float16)
-    return weight
+    if weight is None:
+        return None
+    return weight.to(_operand_dtype(weight.dtype, tile))
 
 
 def _contract(dz: torch.Tensor, weight: torch.Tensor) -> torch.Tensor:

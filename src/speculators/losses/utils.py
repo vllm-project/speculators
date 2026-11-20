@@ -340,15 +340,7 @@ def compound_loss_from_hidden(
     per chunk too. ``grad_mode``, ``logits_dtype`` and ``rows`` are passed to
     ``fused_linear_compound``.
     """
-    names: list[str] = []
-    for fn, _ in loss_config.values():
-        name = _fused_name(fn)
-        if name is None:
-            raise ValueError(
-                "compound_loss_from_hidden needs a loss config resolved with "
-                "the 'fused' implementation"
-            )
-        names.append(name)
+    names = _fused_names(loss_config, "compound_loss_from_hidden")
     try:
         from speculators.losses import fused_linear  # noqa: PLC0415
     except ImportError as error:
@@ -372,6 +364,74 @@ def compound_loss_from_hidden(
     return CompoundLossOutput(
         total, term_losses, out.pred_ids, out.target_ids, out.metrics
     )
+
+
+def compound_loss_reduced(
+    hidden: torch.Tensor,
+    weight: torch.Tensor,
+    extra: torch.Tensor,
+    extra_weight: torch.Tensor,
+    targets: torch.Tensor,
+    loss_mask: torch.Tensor,
+    pos_idx: torch.Tensor,
+    loss_config: LossConfig,
+    decay_fn: Callable[..., torch.Tensor] | None = None,
+    dpace_alpha: float | None = None,
+    block_size: int = 1,
+    metric_terms: Sequence[str] = (),
+    **kwargs,
+) -> CompoundLossOutput:
+    """``compound_loss`` of ``hidden @ weight.T + extra @ extra_weight.T``
+    without materializing the logits, ``extra_weight`` trainable.
+
+    The loss is reduced inside ``fused_linear_reduced``: with ``dpace_alpha``
+    by D-PACE, otherwise by the fixed ``decay_fn(pos_idx)``. ``kwargs`` are
+    passed to it (``target_weight``, ``logits_dtype``, ...).
+    """
+    names = _fused_names(loss_config, "compound_loss_reduced")
+    from speculators.losses import fused_linear_reduced as flr  # noqa: PLC0415
+
+    decay = None
+    if dpace_alpha is None and decay_fn is not None:
+        decay = decay_fn(pos_idx.float())
+    loss, out = flr.fused_linear_reduced(
+        hidden,
+        weight,
+        extra,
+        extra_weight,
+        targets,
+        names,
+        [w for _, w in loss_config.values()],
+        loss_mask,
+        decay=decay,
+        dpace_alpha=dpace_alpha,
+        block_size=block_size,
+        metric_terms=metric_terms,
+        **kwargs,
+    )
+    # Per-term values for logging, reduced from the detached per-row losses.
+    _, term_losses = _weighted_sum(
+        loss_config,
+        [out.losses[name].detach() for name in names],
+        loss_mask,
+        pos_idx,
+        decay_fn,
+    )
+    return CompoundLossOutput(
+        loss, term_losses, out.pred_ids, out.target_ids, out.metrics
+    )
+
+
+def _fused_names(loss_config: LossConfig, caller: str) -> list[str]:
+    names = []
+    for fn, _ in loss_config.values():
+        name = _fused_name(fn)
+        if name is None:
+            raise ValueError(
+                f"{caller} needs a loss config resolved with the 'fused' implementation"
+            )
+        names.append(name)
+    return names
 
 
 def _weighted_sum(loss_config, elementwise, loss_mask, pos_idx, decay_fn):
