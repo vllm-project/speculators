@@ -15,6 +15,8 @@ Enforced here so every caller gets the same rules:
 - a finding becomes an inline comment only if its lines are commentable
   right-side lines of one diff hunk (GitHub rejects the whole review
   otherwise); any other finding goes into the review body;
+- `path:line` references to changed files become permalinks at the
+  reviewed head;
 - the body ends with a link to the skill at the commit that produced it.
 
 Exits with status 3 and prints nothing when no finding survives: clean PRs
@@ -28,6 +30,7 @@ import json
 import re
 import sys
 from pathlib import Path
+from urllib.parse import quote
 
 REVIEW_FORMAT_VERSION = 1
 MIN_CONFIDENCE = 80
@@ -39,10 +42,10 @@ _HUNK = re.compile(r"^@@ -\d+(?:,\d+)? \+(\d+)(?:,\d+)? @@")
 _ESCAPES = {"n": "\n", "t": "\t"}
 
 
-def _target_path(header: str) -> str | None:
-    """The new-file path of a `+++ ` header. Git quotes names with unusual
+def _unquote(name: str) -> str:
+    """A path as git writes it in a diff header. Git quotes names with unusual
     characters C-style, with non-ASCII bytes as octal escapes."""
-    target = header.strip()
+    target = name.strip()
     if len(target) > 1 and target[0] == target[-1] == '"':
         raw = bytearray()
         for part in re.split(r"(\\(?:[0-7]{3}|.))", target[1:-1]):
@@ -53,6 +56,12 @@ def _target_path(header: str) -> str | None:
             else:
                 raw += part.encode()
         target = raw.decode("utf-8", errors="replace")
+    return target
+
+
+def _target_path(header: str) -> str | None:
+    """The new-file path of a `+++ ` header, or None for /dev/null."""
+    target = _unquote(header)
     return target[2:] if target.startswith("b/") else None
 
 
@@ -67,6 +76,10 @@ def commentable_lines(diff: str) -> dict[str, dict[int, int]]:
     for raw in diff.split("\n"):
         if raw.startswith("diff --git "):
             path, line, in_header = None, 0, True
+        elif in_header and raw.startswith("rename to "):
+            # A pure rename has no `+++` header but is still a changed file;
+            # it has no commentable lines unless a `+++` header follows.
+            out.setdefault(_unquote(raw[len("rename to ") :]), {})
         elif in_header and raw.startswith("+++ "):
             # Only a file's header carries `+++ `: an added line whose text
             # starts with "++ " looks the same once it's in a hunk.
@@ -117,6 +130,54 @@ def _inline_comment(finding: dict, anchors: dict[str, dict[int, int]]) -> dict |
     return comment
 
 
+# `path:12` or `path:12-15`; `path` may be a suffix such as a bare file name.
+_REF = r"((?:[\w.-]+/)*[\w.-]+\.\w+):(\d+)(?:-(\d+))?"
+_BARE_REF = re.compile(r"(?<![\w\[(/`.-])" + _REF + r"(?![\w\]`-])")
+_CODE_REF = re.compile("`" + _REF + "`")
+_FENCE = re.compile(r"(```.*?```|~~~.*?~~~)", re.S)
+# An existing Markdown link, whose text may itself be a code span.
+_LINK = re.compile(r"(\[[^\]\n]*\]\([^)\n]*\))")
+# A double-backtick span first, so its inner backticks don't start a single one.
+_CODE_SPAN = re.compile(r"(``.+?``|`[^`\n]+`)")
+
+
+def link_refs(text: str, paths: list[str], repo: str, sha: str) -> str:
+    """Turn `path:line` references to changed files into permalinks at `sha`.
+
+    A reference resolves when it names exactly one changed file, by its full
+    path or a path suffix; anything else is left as written. Fenced blocks,
+    existing links and code spans other than a bare reference are not
+    touched.
+    """
+
+    def resolve(match: re.Match) -> str:
+        ref, start, end = match.groups()
+        hits = [p for p in paths if p == ref or p.endswith("/" + ref)]
+        if len(hits) != 1:
+            return match.group(0)
+        anchor = f"L{start}" + (f"-L{end}" if end else "")
+        label = f"{ref}:{start}" + (f"-{end}" if end else "")
+        url_path = quote(hits[0], safe="/")
+        return f"[`{label}`](https://github.com/{repo}/blob/{sha}/{url_path}#{anchor})"
+
+    out = []
+    for i, block in enumerate(_FENCE.split(text)):
+        if i % 2:  # a fenced block
+            out.append(block)
+            continue
+        for k, chunk in enumerate(_LINK.split(block)):
+            if k % 2:  # an existing link
+                out.append(chunk)
+                continue
+            for j, piece in enumerate(_CODE_SPAN.split(chunk)):
+                if j % 2:  # an inline code span
+                    full = _CODE_REF.fullmatch(piece)
+                    out.append(resolve(full) if full else piece)
+                else:
+                    out.append(_BARE_REF.sub(resolve, piece))
+    return "".join(out)
+
+
 def build_payload(
     review: dict, pr: dict, diff: str, skill_ref: str, byline: str = ""
 ) -> tuple[dict | None, dict]:
@@ -134,32 +195,39 @@ def build_payload(
         return None, counts
 
     anchors = commentable_lines(diff)
+    repo = ((pr.get("base") or {}).get("repo") or {}).get("full_name", "")
+    head = (pr.get("head") or {}).get("sha", "")
+    paths = list(anchors)
+
+    def linked(text: str) -> str:
+        return link_refs(text, paths, repo, head)
+
     comments, in_body = [], []
     for finding in kept:
         comment = _inline_comment(finding, anchors)
         if comment is not None:
+            comment["body"] = linked(comment["body"])
             comments.append(comment)
             continue
         where = finding.get("file")
         if where and isinstance(finding.get("line"), int):
             where = f"{where}:{finding['line']}"
         in_body.append(
-            f"- {finding['body'].strip()}" + (f" (`{where}`)" if where else "")
+            linked(f"- {finding['body'].strip()}" + (f" (`{where}`)" if where else ""))
         )
     counts.update(inline=len(comments), in_body=len(in_body))
 
-    repo = ((pr.get("base") or {}).get("repo") or {}).get("full_name", "")
     skill_url = f"https://github.com/{repo}/tree/{skill_ref}/{SKILL_PATH}"
     footer = f"Review criteria: [`pr-review` skill @ `{skill_ref[:12]}`]({skill_url})"
     if byline:
         footer = f"{byline} · {footer}"
-    body = review["summary"].strip()
+    body = linked(review["summary"].strip())
     if in_body:
         body += "\n\n" + "\n".join(in_body)
     body += f"\n\n<sub>{footer}</sub>"
 
     payload = {
-        "commit_id": (pr.get("head") or {}).get("sha", ""),
+        "commit_id": head,
         "event": "COMMENT",
         "body": body,
         "comments": comments,
