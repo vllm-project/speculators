@@ -241,6 +241,8 @@ class SpeculatorModel(ClassRegistryMixin, PreTrainedModel):  # type: ignore[misc
     auto_package: ClassVar[str] = "speculators.models"
     registry_auto_discovery: ClassVar[bool] = True
 
+    requires_global_step: ClassVar[bool] = False
+
     # PreTrainedModel settings
     config_class: ClassVar[type[SpeculatorModelConfig]] = SpeculatorModelConfig  # type: ignore[assignment,misc]
     base_model_prefix: ClassVar[str] = "model"  # type: ignore[misc]
