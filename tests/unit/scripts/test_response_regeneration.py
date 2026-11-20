@@ -922,6 +922,73 @@ def test_regenerate_truncates_on_tool_name_mismatch():
     assert len(sent) == 1  # no splice, no follow-up request
 
 
+def test_regenerate_long_prompt_does_not_truncate_when_completion_under_max_tokens():
+    # Prompt is 100 tokens, which is > max_tokens (64).
+    # Since the completion is short (2 tokens) and completed cleanly
+    # (finish_reason="stop"), it must NOT be marked as truncated,
+    # allowing multi-turn continuation.
+    item = {
+        "idx": 4,
+        "primary_id": "u",
+        "turns": [
+            {"role": "user", "content": "turn 1"},
+            {"role": "user", "content": "turn 2"},
+        ],
+    }
+    responses = [
+        _response(
+            prompt_token_ids=list(range(100)),
+            token_ids=[101, 102],
+            content="ans 1",
+            finish="stop",
+        ),
+        _response(
+            prompt_token_ids=list(range(105)),
+            token_ids=[106, 107],
+            content="ans 2",
+            finish="stop",
+        ),
+    ]
+    samples, truncated, sent = _regen(item, responses, max_tokens=64)
+
+    assert not truncated
+    assert len(samples) == 2
+    assert len(sent) == 2
+
+
+@pytest.mark.parametrize(
+    ("token_count", "finish_reason"),
+    [
+        (10, "length"),  # truncated by engine with finish_reason="length"
+        (64, "stop"),  # truncated by reaching the completion token budget
+    ],
+)
+def test_regenerate_truncates_when_completion_hits_length_limit(
+    token_count, finish_reason
+):
+    item = {
+        "idx": 5,
+        "primary_id": "u",
+        "turns": [
+            {"role": "user", "content": "turn 1"},
+            {"role": "user", "content": "turn 2"},
+        ],
+    }
+    responses = [
+        _response(
+            prompt_token_ids=[1, 2],
+            token_ids=list(range(token_count)),
+            content="partial ans",
+            finish=finish_reason,
+        ),
+    ]
+    samples, truncated, sent = _regen(item, responses, max_tokens=64)
+
+    assert truncated
+    assert len(samples) == 1
+    assert len(sent) == 1
+
+
 # ---------------------------------------------------------------------------
 # 6. Every text-only shared-registry preset works in on-policy regeneration.
 # ---------------------------------------------------------------------------
