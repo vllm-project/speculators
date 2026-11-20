@@ -4,7 +4,9 @@ How to review a pull request on `vllm-project/speculators`, a library for traini
 
 ## Context
 
-The context directory holds `pr.json`, `pr.diff`, `files.json`, `reviews.json`, `review_comments.json` and `issue_comments.json`. Read the full diff. For changed files larger than 300 lines, also read the full file at the PR head (`head.sha` in `pr.json`) for surrounding context.
+The context directory holds `pr.json`, `pr.diff`, `files.json`, `reviews.json`, `review_comments.json`, `issue_comments.json` and `stack.json`. Read the full diff. For changed files larger than 300 lines, also read the full file at the PR head (`head.sha` in `pr.json`) for surrounding context.
+
+**Stacked PRs.** If `stack.json` lists parents, this PR is stacked on other open PRs by the same author, and its diff includes theirs. Review only `own.diff`, this PR's changes on top of the nearest parent; code that comes from a parent belongs to that parent's review. If there is no `own.diff` (the branch has merged other changes since the parent, so they can't be separated), review `pr.diff` but leave what the parents change, in `stack/<number>/pr.diff`, to them. Read each parent's discussion under `stack/<number>/` as part of Phase 2: a decision made there (a maintainer asking for an API change, say) is settled, and a point already raised there, by anyone including this reviewer, is not raised again here. Line numbers still refer to the PR head, so inline findings anchor as usual.
 
 If the PR description contains links (issues, discussions, external docs, benchmarks, etc.), fetch them and incorporate the context. Verify that the PR actually addresses what the linked resources describe — flag mismatches between linked context and the implementation.
 
@@ -107,7 +109,7 @@ False positives to actively filter out:
 - Issues a linter, typechecker, or CI would catch — do not run these yourself.
 - General quality concerns (documentation, naming style) that are purely cosmetic and not tied to correctness.
 - Issues silenced in code (e.g., lint ignore comments).
-- Intentional functionality changes that align with the PR's stated purpose.
+- Intentional functionality changes that align with the PR's stated purpose, or that a maintainer asked for (here or on a stacked parent).
 
 ## Phase 6: Draft the review
 

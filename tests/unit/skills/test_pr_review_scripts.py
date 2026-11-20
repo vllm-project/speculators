@@ -308,33 +308,144 @@ def test_the_documented_example_builds_a_review():
 # gather_context ---------------------------------------------------------------
 
 
-def _fake_pr(*heads):
-    """A `get` that returns the PR at each head in turn."""
-    remaining = iter(heads)
-    return lambda path: {"path": path, "head": {"sha": next(remaining)}}
+class FakeGitHub:
+    """Serves PR 7 by `author` (at each of `heads` in turn), the repo's other open
+    PRs, and compare results: `ancestors` maps a head sha to the commits between
+    it and PR 7's head, and `merge_bases` a sha to its merge base with main, the
+    default branch (by default one shared by every sha)."""
+
+    def __init__(self, *heads, others=(), ancestors=None, merge_bases=None):
+        self.heads = iter(heads)
+        self.others = list(others)
+        self.ancestors = ancestors or {}
+        self.merge_bases = merge_bases or {}
+
+    def get(self, path):
+        if path.startswith("/repos/o/r/compare/"):
+            basehead = path.removeprefix("/repos/o/r/compare/").split("?")[0]
+            base, head = basehead.split("...")
+            if base in self.ancestors:
+                return {"status": "ahead", "ahead_by": self.ancestors[base]}
+            if base == "main":
+                sha = self.merge_bases.get(head, "m" * 40)
+                return {"status": "diverged", "merge_base_commit": {"sha": sha}}
+            return {"status": "diverged", "ahead_by": 3}
+        return {
+            "number": 7,
+            "user": {"login": "author"},
+            "head": {"sha": next(self.heads)},
+            "base": {"repo": {"default_branch": "main"}},
+        }
+
+    def paginate(self, path):
+        if path.startswith("/repos/o/r/pulls?"):
+            return self.others
+        return [path]
+
+    def install(self, monkeypatch):
+        monkeypatch.setattr(gather_context, "get", self.get)
+        monkeypatch.setattr(gather_context, "paginate", self.paginate)
+        monkeypatch.setattr(
+            gather_context, "get_raw", lambda path, accept: f"diff {path}".encode()
+        )
+
+
+def _other(number, login, sha):
+    return {
+        "number": number,
+        "title": f"pr {number}",
+        "user": {"login": login},
+        "head": {"sha": sha},
+    }
 
 
 def test_gather_writes_every_context_file(tmp_path, monkeypatch):
-    monkeypatch.setattr(gather_context, "get", _fake_pr(HEAD, HEAD))
-    monkeypatch.setattr(gather_context, "get_raw", lambda path, accept: b"diff")
-    monkeypatch.setattr(gather_context, "paginate", lambda path: [path])
+    FakeGitHub(HEAD, HEAD).install(monkeypatch)
     gather_context.gather("o/r", "7", tmp_path)
-    assert json.loads((tmp_path / "pr.json").read_text()) == {
-        "path": "/repos/o/r/pulls/7",
-        "head": {"sha": HEAD},
-    }
-    assert (tmp_path / "pr.diff").read_bytes() == b"diff"
+    assert json.loads((tmp_path / "pr.json").read_text())["head"] == {"sha": HEAD}
+    assert (tmp_path / "pr.diff").read_bytes() == b"diff /repos/o/r/pulls/7"
     assert json.loads((tmp_path / "issue_comments.json").read_text()) == [
         "/repos/o/r/issues/7/comments"
     ]
     for name in ("files.json", "reviews.json", "review_comments.json"):
         assert (tmp_path / name).exists()
+    assert json.loads((tmp_path / "stack.json").read_text()) == {
+        "parents": [],
+        "own_diff": False,
+    }
+    assert not (tmp_path / "own.diff").exists()
+    assert not (tmp_path / "stack").exists()
 
 
 def test_gather_refuses_a_push_between_metadata_and_diff(tmp_path, monkeypatch):
-    monkeypatch.setattr(gather_context, "get", _fake_pr(HEAD, "b" * 40))
-    monkeypatch.setattr(gather_context, "get_raw", lambda path, accept: b"diff")
-    monkeypatch.setattr(gather_context, "paginate", lambda path: [path])
+    FakeGitHub(HEAD, "b" * 40).install(monkeypatch)
     with pytest.raises(SystemExit, match="pushed to during the fetch"):
         gather_context.gather("o/r", "7", tmp_path)
     assert not (tmp_path / "pr.json").exists()
+
+
+def test_a_stacked_pr_gets_its_own_diff_and_its_parents_discussion(
+    tmp_path, monkeypatch
+):
+    near, far, unrelated, foreign = "1" * 40, "2" * 40, "3" * 40, "4" * 40
+    FakeGitHub(
+        HEAD,
+        HEAD,
+        others=[
+            _other(5, "author", far),
+            _other(6, "author", near),
+            _other(8, "author", unrelated),  # diverged: not a parent
+            _other(9, "someone", foreign),  # ancestor, but another author's
+            _other(7, "author", HEAD),  # the PR itself
+        ],
+        ancestors={near: 2, far: 9, foreign: 1},
+    ).install(monkeypatch)
+    gather_context.gather("o/r", "7", tmp_path)
+    parents = json.loads((tmp_path / "stack.json").read_text())["parents"]
+    assert [(p["number"], p["commits_on_top"]) for p in parents] == [(6, 2), (5, 9)]
+    assert (tmp_path / "own.diff").read_bytes() == (
+        f"diff /repos/o/r/compare/{near}...{HEAD}".encode()
+    )
+    for n in ("5", "6"):
+        assert json.loads(
+            (tmp_path / "stack" / n / "issue_comments.json").read_text()
+        ) == [f"/repos/o/r/issues/{n}/comments"]
+        assert (tmp_path / "stack" / n / "pr.diff").read_bytes() == (
+            f"diff /repos/o/r/pulls/{n}".encode()
+        )
+
+
+def test_no_own_diff_when_the_branch_merged_main_since_its_parent(
+    tmp_path, monkeypatch
+):
+    parent = "1" * 40
+    FakeGitHub(
+        HEAD,
+        HEAD,
+        others=[_other(6, "author", parent)],
+        ancestors={parent: 3},
+        merge_bases={HEAD: "n" * 40},
+    ).install(monkeypatch)
+    gather_context.gather("o/r", "7", tmp_path)
+    stack = json.loads((tmp_path / "stack.json").read_text())
+    assert [p["number"] for p in stack["parents"]] == [6]
+    assert stack["own_diff"] is False
+    assert not (tmp_path / "own.diff").exists()
+    assert (tmp_path / "stack" / "6" / "issue_comments.json").exists()
+
+
+def test_every_listed_parent_gets_its_discussion_staged(tmp_path, monkeypatch):
+    shas = [str(i) * 40 for i in range(1, 7)]
+    FakeGitHub(
+        HEAD,
+        HEAD,
+        others=[_other(10 + i, "author", s) for i, s in enumerate(shas)],
+        ancestors={s: i + 1 for i, s in enumerate(shas)},
+    ).install(monkeypatch)
+    gather_context.gather("o/r", "7", tmp_path)
+    listed = [
+        p["number"]
+        for p in json.loads((tmp_path / "stack.json").read_text())["parents"]
+    ]
+    assert len(listed) == 6
+    assert sorted(int(d.name) for d in (tmp_path / "stack").iterdir()) == sorted(listed)
