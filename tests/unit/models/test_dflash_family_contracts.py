@@ -110,7 +110,11 @@ def contract_report(recipe, sample_from_anchor, model=None):
     def capture_metrics(*args, **kwargs):
         logits = kwargs.get("unary_logits") if not args else args[0]
         captured["objective_logits"] = summarize(logits)
-        if "candidate_logits" in kwargs:
+        if "correction" in kwargs:
+            captured["candidate_logits"] = summarize(
+                kwargs["correction"].candidate_logits
+            )
+        elif "candidate_logits" in kwargs:
             captured["candidate_logits"] = summarize(kwargs["candidate_logits"])
         return original_metrics(*args, **kwargs)
 
