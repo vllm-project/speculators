@@ -4,6 +4,7 @@ from typing import Any
 
 import pytest
 import torch
+from safetensors.torch import load_file
 from transformers.models.qwen3.modeling_qwen3 import Qwen3Config
 
 from speculators import SpeculatorModelConfig, SpeculatorsConfig, VerifierConfig
@@ -262,11 +263,15 @@ def _tiny_config(**overrides) -> DFlash2SpeculatorConfig:
     return DFlash2SpeculatorConfig(**values)
 
 
-def test_model_uses_canonical_checkpoint_keys():
+def test_model_uses_canonical_checkpoint_keys(tmp_path):
     """Saved parameter names must load directly in the public vLLM implementation."""
     model = DFlash2DraftModel(_tiny_config())
-    state_keys = set(model.state_dict())
+    assert model.layers is model.backbone.layers
+    assert "layers" not in model._modules
+    assert "backbone.layers.0.attention_conv.base_kernel" in model.state_dict()
 
+    model.save_pretrained(tmp_path)
+    state_keys = load_file(tmp_path / "model.safetensors").keys()
     assert "layers.0.attention_conv.base_kernel" in state_keys
     assert "layers.0.attention_conv.kernel_projection.weight" in state_keys
     assert "layers.0.mlp_conv.base_kernel" in state_keys

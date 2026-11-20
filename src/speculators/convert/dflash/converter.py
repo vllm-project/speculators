@@ -194,7 +194,7 @@ class DFlashConverter:
             elif ".g_proj." in key or key.startswith("aux_hidden_norms."):
                 dropped.append(key)
             elif key == "fc.weight":
-                model_fc_dim = model.fc.in_features
+                model_fc_dim = model.backbone.fc.in_features
                 if tensor.shape[1] > model_fc_dim:
                     logger.info(
                         f"Slicing fc.weight from {tensor.shape[1]} to {model_fc_dim}"
@@ -223,7 +223,9 @@ class DFlashConverter:
 
         body = {k: v for k, v in weights.items() if k not in ("t2d", "d2t")}
         body = self._remap_weights(body, config, model)
-        missing, unexpected = model.load_state_dict(body, strict=False)
+        missing, unexpected = model.load_state_dict(
+            model.remap_checkpoint_keys_for_load(body), strict=False
+        )
         if unexpected:
             raise ValueError(
                 "Unexpected keys in checkpoint -- the structure does not match "
