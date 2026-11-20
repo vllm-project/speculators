@@ -319,6 +319,79 @@ def test_payload_links_references_in_every_part():
     assert f"and [`a.py:21`]({link}L21)" in payload["body"]
 
 
+def test_empty_summary_leaves_only_findings_and_footer():
+    finding = {"confidence": 90, "body": "b", "file": "pkg/a.py", "line": 3}
+    payload, _ = _build(_review(finding, summary=""))
+    assert payload["body"].startswith("<sub>")
+    payload, _ = _build(_review({"confidence": 90, "body": "whole PR"}, summary=" "))
+    assert payload["body"].startswith("- whole PR\n\n<sub>")
+
+
+def test_detail_is_posted_collapsed_under_the_body():
+    inline = {"confidence": 90, "body": "b", "file": "pkg/a.py", "line": 3}
+    payload, _ = _build(
+        _review(
+            {**inline, "detail": "see a.py:2\n\n```python\nx = 1\n```"},
+            {"confidence": 90, "body": "whole PR", "detail": "why"},
+            {**inline, "detail": " "},
+        )
+    )
+    link = f"https://github.com/vllm-project/speculators/blob/{HEAD}/pkg/a.py#L2"
+    assert payload["comments"][0]["body"] == (
+        "b\n\n<details><summary>Details</summary>\n\n"
+        f"see [`a.py:2`]({link})\n\n```python\nx = 1\n```\n\n</details>"
+    )
+    assert payload["comments"][1]["body"] == "b"
+    # In the body the section is indented, so it stays inside its list item.
+    assert (
+        "- whole PR\n\n  <details><summary>Details</summary>\n\n  why\n\n  </details>"
+        in payload["body"]
+    )
+    with pytest.raises(SystemExit, match="non-string `detail`"):
+        _build(_review({**inline, "detail": ["x"]}))
+
+
+def test_length_check_measures_only_bodies_that_would_be_posted():
+    link = "[CONTRIBUTING.md](https://github.com/o/r/blob/" + "a" * 40 + "/C.md#x)"
+    fits = " ".join(["word"] * 20) + ". " + " ".join(["word"] * 28) + f" {link}."
+    long_body = ". ".join([" ".join(["word"] * 12)] * 5) + "."
+    long_sentence = " ".join(["word"] * 31) + "."
+    code = "Short.\n\n```python\n" + "x = 1\n" * 40 + "```"
+    review = _review(
+        {"confidence": 90, "body": fits},
+        {"confidence": 90, "body": long_body},
+        {"confidence": 90, "body": long_sentence},
+        {"confidence": 79, "body": long_body},
+        {"confidence": 90, "body": code},
+    )
+    problems = review_payload.length_problems(review)
+    assert [p.split(":")[0] for p in problems] == ["finding 1", "finding 2"]
+    assert "the body is 60 words" in problems[0]
+    assert "a sentence is 31 words" in problems[1]
+
+
+def test_check_mode_fails_on_long_bodies_and_builds_nothing(
+    tmp_path, monkeypatch, capsys
+):
+    (tmp_path / "pr.json").write_text(json.dumps(_pr()))
+    (tmp_path / "pr.diff").write_text(DIFF)
+    draft = tmp_path / "review.json"
+    argv = ["review_payload.py", str(draft), str(tmp_path), "--check"]
+    monkeypatch.setattr("sys.argv", argv)
+
+    draft.write_text(json.dumps(_review({"confidence": 90, "body": "word " * 51})))
+    with pytest.raises(SystemExit) as exit_info:
+        review_payload.main()
+    assert exit_info.value.code == review_payload.EXIT_TOO_LONG
+    assert "finding 0: the body is 51 words" in capsys.readouterr().err
+
+    draft.write_text(json.dumps(_review({"confidence": 90, "body": "Short."})))
+    review_payload.main()
+    out = capsys.readouterr()
+    assert out.out == ""
+    assert "check passed" in out.err
+
+
 def test_footer_links_the_skill_at_its_commit():
     payload, _ = _build(_review({"confidence": 90, "body": "b"}), byline="by me")
     footer = payload["body"].splitlines()[-1]

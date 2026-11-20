@@ -81,10 +81,12 @@ Before writing, go over each finding once more against the code: is it true, doe
 
 ## Writing the review
 
-The format is in [output.md](output.md).
+The format is in [output.md](output.md), with a check to run on your draft before you finish.
 
-The **summary** is your verdict on the design and anything the findings don't cover, in a sentence or two. Don't describe the PR to its author or list what it does well. When the design is fine and the findings speak for themselves, one line is enough: "Design looks good; one gap below."
+The **summary** holds only what no finding can: which finding to settle first when the others depend on it, a linked source (a paper, an issue) you needed and couldn't load, or why you didn't review. Most reviews have none of these, and the summary stays empty. The author wrote the PR, so saying what it does, what it gets right or what you checked gives them nothing to act on, and a PR that is fine needs no case made for it.
 
-Each **finding** is as long as a human reviewer would write it, usually a sentence or two: what is wrong and what to do. Leave detail out rather than compress it; the author can ask for a reproduction or an alternative. When a change is clearer as code, show it in a code block, and make sure it works in context. If the author's intent is unclear, ask. A finding about the PR as a whole has no `file`.
+Each **finding** has a `body` and, when it needs one, a `detail`. The body is what a human reviewer would write: what is wrong and what to do, in a sentence or two. Checking a claim is your work, not the comment's content. The author knows the code and can verify a claim that is stated plainly, so the body gives the conclusion and leaves out the trail that led to it; don't compress the trail into the body either. If the author's intent is unclear, ask. A finding about the PR as a whole has no `file`.
 
-**Sources.** When a finding rests on external behaviour (PyTorch, Transformers, vLLM), link or quote the documentation or source. Link the repository files you cite at the commit you read: code at the PR head, as `https://github.com/vllm-project/speculators/blob/{head.sha}/{path}#L{start}-L{end}` with a line of context either side, and repository rules at the base commit, down to the section, e.g. `[CONTRIBUTING.md › Code Style and Guidelines](https://github.com/vllm-project/speculators/blob/{base.sha}/CONTRIBUTING.md#code-style-and-guidelines)`.
+The `detail` is posted collapsed under the body, for an author who doubts the claim or wants to act on it: the evidence, a reproduction, a source, suggested code (make sure it works in context). A finding the code makes obvious needs none.
+
+**Sources** belong in the detail. When a finding rests on external behaviour (PyTorch, Transformers, vLLM), link or quote the documentation or source. Link the repository files you cite at the commit you read: code at the PR head, as `https://github.com/vllm-project/speculators/blob/{head.sha}/{path}#L{start}-L{end}` with a line of context either side, and repository rules at the base commit, down to the section, e.g. `[CONTRIBUTING.md › Code Style and Guidelines](https://github.com/vllm-project/speculators/blob/{base.sha}/CONTRIBUTING.md#code-style-and-guidelines)`.
