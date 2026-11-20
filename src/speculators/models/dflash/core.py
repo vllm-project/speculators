@@ -16,7 +16,7 @@ from speculators.models.attention import create_float_mask
 from speculators.models.dflash import DFlashSpeculatorConfig
 from speculators.models.dflash.attention import create_anchor_block_mask_mod
 from speculators.models.dflash.metrics import compute_metrics
-from speculators.models.dflash.model_definitions import Qwen3DFlashDecoderLayer
+from speculators.models.dflash.model_definitions import dflash_model_classes
 from speculators.models.dflash.utils import (
     get_base_indices_for_anchored_blocks,
     select_anchors,
@@ -38,8 +38,8 @@ _compiled_create_block_mask = torch.compile(create_block_mask)
 @SpeculatorModel.register("dflash")
 class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
     config_class: ClassVar[type[DFlashSpeculatorConfig]] = DFlashSpeculatorConfig  # type: ignore[misc]
-    supports_gradient_checkpointing = True  # noqa: D003  # Qwen3DFlashDecoderLayer inherits GradientCheckpointingLayer
-    _no_split_modules = ["Qwen3DFlashDecoderLayer"]
+    supports_gradient_checkpointing = True  # noqa: D003  # DFlash decoder layers inherit GradientCheckpointingLayer
+    _no_split_modules = ["Qwen3DFlashDecoderLayer", "DFlashMLADecoderLayer"]
     _keys_to_ignore_on_load_missing: ClassVar[list[str]] = [  # type: ignore[misc]
         "embed_tokens.weight",
         "verifier_norm.weight",
@@ -67,7 +67,9 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
         DFlash-family variants override this factory when they wrap the shared
         attention and MLP with additional modules.
         """
-        return Qwen3DFlashDecoderLayer(config.transformer_layer_config, layer_idx)  # type: ignore[arg-type]
+        return self._model_definitions.decoder_layer_class(
+            config.transformer_layer_config, layer_idx
+        )
 
     def __init__(
         self,
@@ -89,9 +91,13 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
         super().__init__(config=config)
         self._init_vocab(config)
 
-        tl_config = config.transformer_layer_config
+        # Unknown decoder types keep the historical Qwen3 GQA backbone.
+        self._model_definitions = dflash_model_classes.get(
+            config.transformer_layer_config.model_type, dflash_model_classes["qwen3"]
+        )
+
         # Number of draft layers is encoded in transformer_layer_config
-        num_draft_layers = tl_config.num_hidden_layers
+        num_draft_layers = config.transformer_layer_config.num_hidden_layers
         self.layers = nn.ModuleList(
             [
                 self._make_decoder_layer(config, layer_idx)
@@ -99,11 +105,13 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
             ]
         )
         # Both are optional: declared only for alternating/sliding attention.
-        self.sliding_window = getattr(tl_config, "sliding_window", None)
+        self.sliding_window = getattr(
+            config.transformer_layer_config, "sliding_window", None
+        )
         self.sliding_window_indices = [
             i
             for i, layer_type in enumerate(
-                getattr(tl_config, "layer_types", None) or []
+                getattr(config.transformer_layer_config, "layer_types", None) or []
             )
             if layer_type == "sliding_attention"
         ]
