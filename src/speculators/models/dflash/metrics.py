@@ -14,7 +14,7 @@ from speculators.losses import (
     kl_div_loss,
 )
 from speculators.models.dflash.utils import block_positions_and_loss_decay
-from speculators.models.metrics import compute_greedy_block_metrics
+from speculators.models.metrics import compute_base_metrics
 
 _DEFAULT_LOSS_CONFIG: LossConfig = {"kl_div": (kl_div_loss, 1.0)}
 
@@ -95,7 +95,7 @@ def compute_metrics_from_hidden(
 
 def _compute_metrics(
     loss_fn: Callable[..., CompoundLossOutput],
-    loss_mask: torch.Tensor,
+    loss_mask: torch.Tensor,  # shape: [1, num_anchors*block_size]
     block_size: int = 1,
     gamma: float = 4.0,
     loss_config: LossConfig | None = None,
@@ -118,18 +118,12 @@ def _compute_metrics(
 
     # The argmaxes come from the fused loss pass when the config is all fused.
     out = loss_fn(loss_mask, pos_idx, loss_config=loss_config, decay_fn=decay_fn)
-    loss, term_losses = out.loss, out.term_losses
-    ones = torch.ones((), device=loss.device)
-    metrics: dict[str, Any] = {}
-    metrics["loss_sum"] = loss.detach().clone()
-    metrics["loss_total"] = ones
-    for term_name, term_val in term_losses.items():
-        metrics[f"{term_name}_sum"] = term_val
-        metrics[f"{term_name}_total"] = ones.clone()
-
-    metrics.update(
-        compute_greedy_block_metrics(
-            out.pred_ids == out.target_ids, loss_mask, block_size, sample_from_anchor
-        )
+    metrics = compute_base_metrics(
+        out.loss,
+        out.term_losses,
+        out.pred_ids == out.target_ids,
+        loss_mask,
+        block_size,
+        sample_from_anchor,
     )
-    return loss, metrics
+    return out.loss, metrics

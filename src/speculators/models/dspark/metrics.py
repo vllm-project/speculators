@@ -25,7 +25,7 @@ from speculators.losses import (
 from speculators.models.dflash.utils import block_positions_and_loss_decay
 from speculators.models.metrics import (
     compute_analytical_block_acceptance,
-    compute_greedy_block_metrics,
+    compute_base_metrics,
 )
 
 __all__ = [
@@ -52,6 +52,57 @@ def _masked_decayed_mean(
     return (weighted.sum(dim=1) / denominator).mean()
 
 
+def compute_confidence_loss_and_metrics(
+    confidence_logits: torch.Tensor,
+    accept_rate: torch.Tensor,
+    accept_prefix: torch.Tensor,
+    draft_mask: torch.Tensor,
+    loss_mask: torch.Tensor,
+    pos_idx: torch.Tensor,
+    block_size: int,
+    gamma: float,
+    sample_from_anchor: bool,
+) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
+    """Supervise the confidence head and measure its calibration."""
+    metrics: dict[str, torch.Tensor] = {}
+    c_star = accept_rate.detach().to(confidence_logits.dtype)
+    bce = binary_cross_entropy_with_logits(
+        confidence_logits, c_star, reduction="none"
+    )  # [1, T]
+    # D-PACE expects token CE, so keep the confidence BCE on fixed decay.
+    confidence_decay_fn = partial(
+        dflash_loss_decay, gamma=gamma, sample_from_anchor=sample_from_anchor
+    )
+    conf_loss = _masked_decayed_mean(bce, loss_mask, pos_idx, confidence_decay_fn)
+
+    with torch.no_grad():
+        mask_f = loss_mask.to(accept_rate.dtype)
+        mask_total = mask_f.sum()
+        conf_prob = confidence_logits.float().sigmoid()
+        metrics["confidence_loss_sum"] = conf_loss.detach().clone()
+        metrics["confidence_loss_total"] = torch.ones(
+            (), device=confidence_logits.device
+        )
+        metrics["confidence_abs_error_sum"] = (
+            (conf_prob - accept_rate).abs() * mask_f
+        ).sum()
+        metrics["confidence_abs_error_total"] = mask_total
+        # Mean predicted vs. observed acceptance — a calibration sanity check.
+        metrics["confidence_pred_mean_sum"] = (conf_prob * mask_f).sum()
+        metrics["confidence_pred_mean_total"] = mask_total.clone()
+        # Calibration of the cumulative acceptance product, which is what
+        # dynamic draft-length thresholding consumes (signed pred - target).
+        start_pos = 0 if sample_from_anchor else 1
+        conf_prefix = (
+            conf_prob.reshape(-1, block_size)[:, start_pos:] * draft_mask
+        ).cumprod(dim=-1)
+        metrics["confidence_cumprod_bias_sum"] = (
+            (conf_prefix - accept_prefix) * draft_mask
+        ).sum()
+        metrics["confidence_cumprod_bias_total"] = draft_mask.sum()
+    return conf_loss, metrics
+
+
 def compute_metrics(
     logits: torch.Tensor,  # [1, T, draft_vocab_size] (Markov-corrected)
     targets: torch.Tensor,  # [1, T, draft_vocab_size]
@@ -67,7 +118,6 @@ def compute_metrics(
 ) -> tuple[torch.Tensor, dict]:
     """Compute the DSpark loss and a metrics dict (``*_sum``/``*_total`` pairs)."""
 
-    device = logits.device
     pos_idx, decay_fn = block_positions_and_loss_decay(
         loss_mask,
         block_size,
@@ -90,7 +140,7 @@ def compute_metrics(
         metric_terms=("tv",),
         with_ids=True,
     )
-    loss, term_losses = out.loss, out.term_losses
+    loss = out.loss
 
     # Analytical per-position acceptance rate = distributional overlap
     # = 1 - TV; the fused kernel avoids the two full-vocab fp32 softmaxes.
@@ -99,51 +149,28 @@ def compute_metrics(
         accept_rate, loss_mask, block_size, sample_from_anchor
     )
     if confidence_logits is not None:
-        c_star = accept_rate.detach().to(confidence_logits.dtype)
-        bce = binary_cross_entropy_with_logits(
-            confidence_logits, c_star, reduction="none"
-        )  # [1, T]
-        # D-PACE expects token CE, so keep the confidence BCE on fixed decay.
-        confidence_decay_fn = partial(
-            dflash_loss_decay, gamma=gamma, sample_from_anchor=sample_from_anchor
+        conf_loss, confidence_metrics = compute_confidence_loss_and_metrics(
+            confidence_logits,
+            accept_rate,
+            accept_prefix,
+            draft_mask,
+            loss_mask,
+            pos_idx,
+            block_size,
+            gamma,
+            sample_from_anchor,
         )
-        conf_loss = _masked_decayed_mean(bce, loss_mask, pos_idx, confidence_decay_fn)
         loss = loss + confidence_head_alpha * conf_loss
-
-        with torch.no_grad():
-            mask_f = loss_mask.to(accept_rate.dtype)
-            mask_total = mask_f.sum()
-            conf_prob = confidence_logits.float().sigmoid()
-            metrics["confidence_loss_sum"] = conf_loss.detach().clone()
-            metrics["confidence_loss_total"] = torch.ones((), device=device)
-            metrics["confidence_abs_error_sum"] = (
-                (conf_prob - accept_rate).abs() * mask_f
-            ).sum()
-            metrics["confidence_abs_error_total"] = mask_total
-            # Mean predicted vs. observed acceptance — a calibration sanity check.
-            metrics["confidence_pred_mean_sum"] = (conf_prob * mask_f).sum()
-            metrics["confidence_pred_mean_total"] = mask_total.clone()
-            # Calibration of the cumulative acceptance product, which is what
-            # dynamic draft-length thresholding consumes (signed pred - target).
-            start_pos = 0 if sample_from_anchor else 1
-            conf_prefix = (
-                conf_prob.reshape(-1, block_size)[:, start_pos:] * draft_mask
-            ).cumprod(dim=-1)
-            metrics["confidence_cumprod_bias_sum"] = (
-                (conf_prefix - accept_prefix) * draft_mask
-            ).sum()
-            metrics["confidence_cumprod_bias_total"] = draft_mask.sum()
-
-    ones = torch.ones((), device=device)
-    metrics["loss_sum"] = loss.detach().clone()
-    metrics["loss_total"] = ones
-    for term_name, term_val in term_losses.items():
-        metrics[f"{term_name}_sum"] = term_val
-        metrics[f"{term_name}_total"] = ones.clone()
+        metrics.update(confidence_metrics)
 
     metrics.update(
-        compute_greedy_block_metrics(
-            out.pred_ids == out.target_ids, loss_mask, block_size, sample_from_anchor
+        compute_base_metrics(
+            loss,
+            out.term_losses,
+            out.pred_ids == out.target_ids,
+            loss_mask,
+            block_size,
+            sample_from_anchor,
         )
     )
     return loss, metrics

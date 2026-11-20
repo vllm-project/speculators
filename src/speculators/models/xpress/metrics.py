@@ -24,7 +24,7 @@ from speculators.losses import (
 from speculators.models.dflash.utils import block_positions_and_loss_decay
 from speculators.models.metrics import (
     compute_acceptance_rate_metrics,
-    compute_greedy_block_metrics,
+    compute_base_metrics,
 )
 
 __all__ = [
@@ -108,12 +108,6 @@ def compute_metrics(
         metrics["base_anchor_loss_sum"] = loss_base.detach().clone()
         metrics["base_anchor_loss_total"] = ones.clone()
 
-    metrics["loss_sum"] = loss.detach().clone()
-    metrics["loss_total"] = ones.clone()
-    for term_name, term_val in teacher_forced.term_losses.items():
-        metrics[f"{term_name}_sum"] = term_val
-        metrics[f"{term_name}_total"] = ones.clone()
-
     metrics.update(
         compute_acceptance_rate_metrics(
             1.0 - teacher_forced.metric_terms["tv"], loss_mask
@@ -121,7 +115,9 @@ def compute_metrics(
     )
     # Score refined predictions with teacher-forced predecessors.
     metrics.update(
-        compute_greedy_block_metrics(
+        compute_base_metrics(
+            loss,
+            teacher_forced.term_losses,
             teacher_forced.pred_ids == teacher_forced.target_ids,
             loss_mask,
             block_size,
