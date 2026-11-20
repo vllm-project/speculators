@@ -49,7 +49,7 @@ Two options trade memory or speed for accuracy:
 
 With the full vocabulary, DFlash's `lm_head` is the verifier head, so with recomputed targets and a distribution loss (KL, TV, ...) the draft logits are formed as the target logits plus `(h - h_verifier) @ W^T`. Their rounding then scales with the draft-target difference instead of the logits: at V = 152k and acceptance 0.88-0.98, the KL / TV gradient error vs fp64 drops from 16-87% to 2-9% with `input` tiles and to about 0.4% with `float16` tiles (0.3% with `float32`).
 
-Chunks are sized from a scratch budget set by `SPECULATORS_FUSED_LINEAR_BUDGET_MIB` (default 4096). Only DFlash supports `fused_linear`; other models raise an error.
+Chunks are sized from a scratch budget set by `SPECULATORS_FUSED_LINEAR_BUDGET_MIB` (default 4096). DFlash and DSpark (with a Markov head) support `fused_linear`; for DSpark the Markov bias `markov_w2(u)` is added inside the same GEMM and `markov_w2` trains as usual. Other models raise an error.
 
 ## References
 

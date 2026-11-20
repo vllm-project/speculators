@@ -40,7 +40,7 @@ WEIGHTINGS = ("fixed-exp-decay", "dpace")
 DRAFT_NOISE = 0.5
 # Model defaults (models/{dflash,dspark}/config.py).
 SAMPLE_FROM_ANCHOR = {"dflash": False, "dspark": True}
-# DFlash-only implementations that never materialise the draft logits.
+# Implementations that never materialise the draft logits (DFlash, DSpark).
 FUSED_LINEAR_IMPLEMENTATIONS = (
     "fused_linear",
     "fused_linear_fp32",
