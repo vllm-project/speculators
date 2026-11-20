@@ -39,7 +39,7 @@ Each point is one model, dataset and concurrency. Filled circles use the number 
 
 How AV picks drafts today ([vllm#52228](https://github.com/vllm-project/vllm/pull/52228)): for every draft token, an online estimator predicts the chance that the target accepts it, from the drafter's own confidence. A draft only counts if all drafts before it in the same request are accepted too, so AV multiplies these chances along each request. It then verifies the B most promising drafts in the batch, where B comes from a cost model.
 
-Shubhra first tried adding an uncertainty bonus to the estimator ([shubhra/vllm#1](https://github.com/shubhra/vllm/pull/1)) and saw no change in throughput or acceptance. That bonus was the same for every request and shrank to almost zero after the first step, so it never changed which requests got verified. A per-request version looked more promising: a request that only ever gets 1 or 2 drafts verified never shows whether its later drafts would have been accepted, so the estimator could stay wrong about it.
+This work started from Shubhra's experiment with an uncertainty term per draft position ([shubhra/vllm#1](https://github.com/shubhra/vllm/pull/1)). It showed that uncertainty at the position level leaves throughput and acceptance unchanged, and her logs of how AV spreads drafts across requests showed where the decisions that matter are made: inside each step, between requests. Some requests get 7 or 8 drafts verified, others 1 or 2. A request that only ever gets 1 or 2 never shows whether its later drafts would have been accepted, so the estimator could stay wrong about it. That made per-request uncertainty the natural next thing to test.
 
 ## How we measured it
 
