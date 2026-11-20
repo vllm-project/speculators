@@ -174,7 +174,7 @@ class SpeculatorsDataset(Dataset):
 
         seq_len = loaded_hs["token_ids"].shape[0]
 
-        sample = {
+        sample: BatchType = {
             "hidden_states": hs_features.flatten(1),  # [seq_len, n_feat * h]
             "input_ids": loaded_hs["token_ids"],  # [seq_len]
             "verifier_last_hidden_states": loaded_hs["hidden_states"][
@@ -184,6 +184,14 @@ class SpeculatorsDataset(Dataset):
             "lengths": torch.tensor([seq_len], dtype=torch.long),
             "position_ids": torch.arange(seq_len, dtype=torch.long),
         }
+        if "kv_last_local_k" in loaded_hs and "kv_last_local_v" in loaded_hs:
+            sample["verifier_kv_last_local"] = torch.stack(
+                [loaded_hs["kv_last_local_k"], loaded_hs["kv_last_local_v"]], dim=1
+            )
+        if "kv_last_global_k" in loaded_hs and "kv_last_global_v" in loaded_hs:
+            sample["verifier_kv_last_global"] = torch.stack(
+                [loaded_hs["kv_last_global_k"], loaded_hs["kv_last_global_v"]], dim=1
+            )
 
         return self.preprocess(sample) if self.preprocess else sample
 
@@ -239,23 +247,37 @@ class SpeculatorsDataset(Dataset):
 
 def _pad_samples(batch: list[BatchType], max_len: int, dtype: torch.dtype) -> BatchType:
     """Copy samples into one fixed-length, padded batch."""
+    all_keys: list[str] = []
+    for sample in batch:
+        for key in sample:
+            if key not in all_keys:
+                all_keys.append(key)
+
     collated_data: BatchType = {}
-    for key in batch[0]:
+    for key in all_keys:
         if key == "lengths":
-            collated_data[key] = torch.cat([sample[key] for sample in batch], dim=0)
+            collated_data[key] = torch.cat(
+                [sample[key] for sample in batch if key in sample], dim=0
+            )
             continue
 
         # One copy per sample: preallocated buffer, hidden states cast during write.
-        first = batch[0][key]
-        buffer_dtype = dtype if "hidden_states" in key else first.dtype
+        first = next(sample[key] for sample in batch if key in sample)
+        buffer_dtype = (
+            dtype if ("hidden_states" in key or "verifier_kv" in key) else first.dtype
+        )
         out = torch.zeros(
             (max_len, *first.shape[1:]), dtype=buffer_dtype, device=first.device
         )
         offset = 0
         for sample in batch:
-            tensor = sample[key]
-            num_rows = min(tensor.shape[0], max_len - offset)
-            out[offset : offset + num_rows] = tensor[:num_rows]
+            if key in sample:
+                tensor = sample[key]
+                num_rows = min(tensor.shape[0], max_len - offset)
+                out[offset : offset + num_rows] = tensor[:num_rows]
+            else:
+                seq_len = sample["input_ids"].shape[0] if "input_ids" in sample else 0
+                num_rows = min(seq_len, max_len - offset)
             offset += num_rows
             if offset == max_len:
                 break
