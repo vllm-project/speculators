@@ -596,13 +596,6 @@ class XPressArgs(_Group):
         description="XPress: weight of the drafter-anchor loss on the backbone's "
         "own logits (keeps the co-trained Jacobi seed from decaying).",
     )
-    ce_from_data: bool = Field(
-        default=False,
-        description="XPress: point the CE loss component at the DATA "
-        "tokens (the target's own continuation from regeneration) instead of the "
-        "teacher-argmax labels. Applies to the teacher-forced, consistency, and "
-        "anchor terms alike. Requires full verifier vocab.",
-    )
     base_anchor_full_weight: bool = Field(
         default=False,
         description="XPress: apply the drafter-anchor with UNDECAYED per-position "

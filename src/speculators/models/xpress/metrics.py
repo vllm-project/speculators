@@ -17,7 +17,7 @@ from functools import partial
 from typing import Any
 
 import torch
-from torch.nn.functional import cross_entropy, softmax
+from torch.nn.functional import softmax
 
 from speculators.losses import (
     LossConfig,
@@ -30,30 +30,6 @@ from speculators.models.metrics import compute_greedy_block_metrics
 __all__ = [
     "compute_metrics",
 ]
-
-
-def _hard_label_ce(
-    logits: torch.Tensor,
-    labels: torch.Tensor,
-    loss_mask: torch.Tensor,
-    pos_idx: torch.Tensor,
-    decay_fn,
-) -> torch.Tensor:
-    """CE against HARD data labels with loss_function's weighting semantics.
-
-    The CE here targets the token the sequence actually continued with (the
-    target model's own sample at regeneration time), not the teacher argmax."""
-
-    v = logits.shape[-1]
-    elem = cross_entropy(
-        logits.reshape(-1, v).float(), labels.reshape(-1), reduction="none"
-    ).view(1, -1)
-    mask = loss_mask.to(elem.dtype)
-    elem = elem * mask
-    if decay_fn is not None:
-        elem = elem * decay_fn(pos_idx.to(elem.dtype), elementwise_loss=elem)
-    denom = mask.sum(dim=1) + 1e-8
-    return (elem.sum(dim=1) / denom).mean()
 
 
 def compute_metrics(  # noqa: C901
@@ -71,8 +47,6 @@ def compute_metrics(  # noqa: C901
     per_position_loss_weight: str = "fixed-exp-decay",
     dpace_alpha: float = 0.5,
     sample_from_anchor: bool = False,
-    ce_data_labels: torch.Tensor | None = None,
-    data_labels: torch.Tensor | None = None,
 ) -> tuple[torch.Tensor, dict]:
     """Compute the XPress loss and a metrics dict (``*_sum``/``*_total`` pairs)."""
     device = logits_tf.device
@@ -90,47 +64,18 @@ def compute_metrics(  # noqa: C901
             dflash_loss_decay, gamma=gamma, sample_from_anchor=sample_from_anchor
         )
 
-    ce_labels = ce_data_labels if "ce" in loss_config else None
-    if ce_labels is not None:
-        _cfg_soft = {k: v for k, v in loss_config.items() if k != "ce"}
-        _ce_weight = loss_config["ce"][1]
+    def _term_loss(logits, term_decay_fn):
+        return compound_loss(
+            logits,
+            targets,
+            loss_mask,
+            pos_idx,
+            loss_config=loss_config,
+            decay_fn=term_decay_fn,
+        )
 
-    def _term_loss(lgts, term_decay_fn):
-        """compound loss with the CE component optionally re-pointed at the
-        DATA tokens instead of the teacher argmax."""
-        if ce_labels is None:
-            out = compound_loss(
-                lgts,
-                targets,
-                loss_mask,
-                pos_idx,
-                loss_config=loss_config,
-                decay_fn=term_decay_fn,
-            )
-            return out.loss, out.term_losses
-        if _cfg_soft:
-            out = compound_loss(
-                lgts,
-                targets,
-                loss_mask,
-                pos_idx,
-                loss_config=_cfg_soft,
-                decay_fn=term_decay_fn,
-            )
-            soft, terms = out.loss, out.term_losses
-        else:
-            soft, terms = lgts.new_zeros((), dtype=torch.float32), {}
-        ce = _hard_label_ce(lgts, ce_labels, loss_mask, pos_idx, term_decay_fn)
-        terms = dict(terms)
-        if _cfg_soft and not terms:
-            ((_only_name, (_, _only_w)),) = _cfg_soft.items()
-            terms[f"{_only_name}_loss"] = (
-                soft.detach() / _only_w if _only_w else soft.detach()
-            )
-        terms["ce_loss"] = ce.detach()
-        return soft + _ce_weight * ce, terms
-
-    loss_tf, term_losses = _term_loss(logits_tf, decay_fn)
+    teacher_forced = _term_loss(logits_tf, decay_fn)
+    loss_tf = teacher_forced.loss
     loss = loss_tf
 
     metrics: dict[str, Any] = {}
@@ -140,7 +85,7 @@ def compute_metrics(  # noqa: C901
 
     round_losses = []
     for logits_j in round_logits:
-        loss_j, _ = _term_loss(logits_j, decay_fn)
+        loss_j = _term_loss(logits_j, decay_fn).loss
         round_losses.append(loss_j)
     if round_losses:
         loss_cons = torch.stack(round_losses).mean()
@@ -153,14 +98,14 @@ def compute_metrics(  # noqa: C901
 
     if base_logits is not None:
         anchor_decay_fn = None if base_anchor_full_weight else decay_fn
-        loss_base, _ = _term_loss(base_logits, anchor_decay_fn)
+        loss_base = _term_loss(base_logits, anchor_decay_fn).loss
         loss = loss + base_anchor_weight * loss_base
         metrics["base_anchor_loss_sum"] = loss_base.detach().clone()
         metrics["base_anchor_loss_total"] = ones.clone()
 
     metrics["loss_sum"] = loss.detach().clone()
     metrics["loss_total"] = ones.clone()
-    for term_name, term_val in term_losses.items():
+    for term_name, term_val in teacher_forced.term_losses.items():
         metrics[f"{term_name}_sum"] = term_val
         metrics[f"{term_name}_total"] = ones.clone()
 
@@ -191,11 +136,6 @@ def compute_metrics(  # noqa: C901
                 eal_name="teacher_forced_eal",
             )
         )
-        # Preserve the data-token diagnostic when data labels are available.
-        accuracy_ref = data_labels if data_labels is not None else target_ids
-        acc_hit = (pred_ids == accuracy_ref).to(mask_f.dtype)
-        metrics["accuracy_sum"] = (acc_hit * mask_f).sum()
-        metrics["accuracy_total"] = mask_f.sum().clamp_min(1.0)
         if base_logits is not None:
             base_accept = _overlap(base_logits, targets)
             metrics["base_accept_rate_sum"] = (base_accept * mask_f).sum()
