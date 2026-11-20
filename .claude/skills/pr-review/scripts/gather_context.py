@@ -14,8 +14,8 @@ Writes into out_dir:
                         history, nearest first, and whether own.diff was
                         written ({"parents": [], "own_diff": false} when none)
 and, for a stacked PR only:
-  own.diff              this PR's changes on top of its nearest parent, when
-                        every commit in between is one of this PR's own
+  own.diff              this PR's changes on top of its nearest parent, unless
+                        the branch has merged the default branch in since
   stack/<n>/            each parent's pr.diff, reviews.json,
                         review_comments.json and issue_comments.json
 """
@@ -55,17 +55,9 @@ def find_parents(repo: str, pr: dict) -> list[dict]:
     return sorted(parents, key=lambda p: p["commits_on_top"])
 
 
-def _commits_between(repo: str, base: str, head: str, count: int) -> list[str]:
-    shas: list[str] = []
-    page = 1
-    while len(shas) < count:
-        cmp = get(f"/repos/{repo}/compare/{base}...{head}?per_page=100&page={page}")
-        batch = [c["sha"] for c in cmp.get("commits", [])]
-        if not batch:
-            break
-        shas += batch
-        page += 1
-    return shas
+def _merge_base(repo: str, branch: str, sha: str) -> str:
+    cmp = get(f"/repos/{repo}/compare/{branch}...{sha}?per_page=1")
+    return cmp["merge_base_commit"]["sha"]
 
 
 def gather(repo: str, number: str, out_dir: Path) -> None:
@@ -91,14 +83,15 @@ def gather(repo: str, number: str, out_dir: Path) -> None:
     own_diff = False
     if parents:
         nearest = parents[0]
-        # The comparison from the parent also holds anything merged into this
-        # branch since, e.g. from main. Only when every commit in between is
-        # one of this PR's own is it this PR's change alone.
-        between = _commits_between(
-            repo, nearest["head_sha"], head, nearest["commits_on_top"]
-        )
-        own = {c["sha"] for c in paginate(f"{pr_path}/commits")}
-        if between and set(between) <= own:
+        # The comparison from the parent also holds whatever was merged into
+        # this branch from main since. Such a merge moves the branch's merge
+        # base with main past the parent's. (The PR's commit list can't tell:
+        # when the PR is based on its parent's branch, it lists the merged-in
+        # commits too.)
+        main = pr["base"]["repo"]["default_branch"]
+        if _merge_base(repo, main, head) == _merge_base(
+            repo, main, nearest["head_sha"]
+        ):
             (out_dir / "own.diff").write_bytes(
                 get_raw(
                     f"/repos/{repo}/compare/{nearest['head_sha']}...{head}", accept=DIFF
