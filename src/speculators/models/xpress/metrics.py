@@ -25,6 +25,7 @@ from speculators.losses import (
     dflash_loss_decay,
     dpace_loss_decay,
 )
+from speculators.models.metrics import compute_greedy_block_metrics
 
 __all__ = [
     "compute_metrics",
@@ -179,10 +180,20 @@ def compute_metrics(  # noqa: C901
         mask_f = loss_mask.to(accept_rate.dtype)
         metrics["accept_rate_sum"] = (accept_rate * mask_f).sum()
         metrics["accept_rate_total"] = mask_f.sum().clamp_min(1.0)
-        # Top-1 accuracy compares the refined argmax against the DATA token the
-        # sequence continued with, not against the teacher's greedy argmax.
-        _acc_ref = data_labels if data_labels is not None else targets.argmax(dim=-1)
-        acc_hit = (logits_tf.argmax(dim=-1) == _acc_ref).to(mask_f.dtype)
+        pred_ids = logits_tf.argmax(dim=-1)
+        target_ids = targets.argmax(dim=-1)
+        metrics.update(
+            compute_greedy_block_metrics(
+                pred_ids == target_ids,
+                loss_mask,
+                block_size,
+                sample_from_anchor,
+                eal_name="teacher_forced_eal",
+            )
+        )
+        # Preserve the data-token diagnostic when data labels are available.
+        accuracy_ref = data_labels if data_labels is not None else target_ids
+        acc_hit = (pred_ids == accuracy_ref).to(mask_f.dtype)
         metrics["accuracy_sum"] = (acc_hit * mask_f).sum()
         metrics["accuracy_total"] = mask_f.sum().clamp_min(1.0)
         if base_logits is not None:

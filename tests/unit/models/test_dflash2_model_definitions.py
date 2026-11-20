@@ -475,9 +475,16 @@ def test_selector_loss_alpha_zero_preserves_unary_objective():
     assert metrics["eal_total"].item() == 1.0
     # The inherited unary EAL would stop at the first drafted position.
     assert unary_metrics["eal_sum"].item() == 1.0
-    torch.testing.assert_close(
-        metrics["accept_len_sum"], unary_metrics["accept_len_sum"]
-    )
+    assert metrics["full_acc_sum"].item() == 2.0
+    assert metrics["full_acc_total"].item() == 3.0
+    assert metrics["position_1_acc_sum"].item() == 1.0
+    assert metrics["position_2_acc_sum"].item() == 0.0
+    assert metrics["position_3_acc_sum"].item() == 1.0
+    for name in ("accept_rate", "accept_len"):
+        for suffix in ("sum", "total"):
+            key = f"{name}_{suffix}"
+            assert key not in metrics
+            torch.testing.assert_close(metrics[f"unary_{key}"], unary_metrics[key])
 
 
 def test_candidate_target_mass_matches_dense_reference():

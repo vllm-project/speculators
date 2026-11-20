@@ -24,10 +24,7 @@ from speculators.losses import (
     dflash_loss_decay,
     dpace_loss_decay,
 )
-from speculators.models.metrics import (
-    compute_accepted_length_counts,
-    compute_accuracy_multi_step,
-)
+from speculators.models.metrics import compute_greedy_block_metrics
 
 __all__ = [
     "compute_metrics",
@@ -65,6 +62,8 @@ def compute_metrics(
     per_position_loss_weight: str = "fixed-exp-decay",
     dpace_alpha: float = 0.5,
     sample_from_anchor: bool = True,
+    *,
+    include_greedy_metrics: bool = True,
 ) -> tuple[torch.Tensor, dict]:
     """Compute the DSpark loss and a metrics dict (``*_sum``/``*_total`` pairs)."""
 
@@ -95,7 +94,7 @@ def compute_metrics(
         loss_config=loss_config,
         decay_fn=decay_fn,
         metric_terms=("tv",),
-        with_ids=True,
+        with_ids=include_greedy_metrics,
     )
     loss, term_losses = out.loss, out.term_losses
 
@@ -169,24 +168,13 @@ def compute_metrics(
         metrics["accept_len_sum"] = (per_block_len * block_valid).sum()
         metrics["accept_len_total"] = block_valid.sum().clamp_min(1.0)
 
-    # Per-position greedy accuracy
-    pred_ids, target_ids = out.pred_ids, out.target_ids
-    correct_per_pos, total_per_pos = compute_accuracy_multi_step(
-        pred_ids, target_ids, loss_mask, pos_idx, block_size
-    )
-    metrics["full_acc_sum"] = correct_per_pos[start_pos:].sum()
-    metrics["full_acc_total"] = total_per_pos[start_pos:].sum()
-    for pos in range(start_pos, block_size):
-        metrics[f"position_{pos}_acc_sum"] = correct_per_pos[pos]
-        metrics[f"position_{pos}_acc_total"] = total_per_pos[pos]
-
-    # Greedy counterpart to accept_len, on the same per-block/bonus-token
-    # convention, so DFlash-family runs compare on one number.
-    eal_sum, eal_total = compute_accepted_length_counts(
-        (pred_ids == target_ids).reshape(num_blocks, block_size)[:, start_pos:],
-        draft_mask.to(torch.bool),
-    )
-    metrics["eal_sum"] = eal_sum
-    metrics["eal_total"] = eal_total
-
+    if include_greedy_metrics:
+        metrics.update(
+            compute_greedy_block_metrics(
+                out.pred_ids == out.target_ids,
+                loss_mask,
+                block_size,
+                sample_from_anchor,
+            )
+        )
     return loss, metrics

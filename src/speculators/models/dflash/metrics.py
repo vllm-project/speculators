@@ -15,10 +15,7 @@ from speculators.losses import (
     dpace_loss_decay,
     kl_div_loss,
 )
-from speculators.models.metrics import (
-    compute_accepted_length_counts,
-    compute_accuracy_multi_step,
-)
+from speculators.models.metrics import compute_greedy_block_metrics
 
 _DEFAULT_LOSS_CONFIG: LossConfig = {"kl_div": (kl_div_loss, 1.0)}
 
@@ -131,13 +128,7 @@ def _compute_metrics(
     # The argmaxes come from the fused loss pass when the config is all fused.
     out = loss_fn(loss_mask, pos_idx, loss_config=loss_config, decay_fn=decay_fn)
     loss, term_losses = out.loss, out.term_losses
-    pred_ids, target_ids = out.pred_ids, out.target_ids
-
-    correct_per_pos, total_per_pos = compute_accuracy_multi_step(
-        pred_ids, target_ids, loss_mask, pos_idx, block_size
-    )
-
-    ones = torch.tensor(1.0, device=device)
+    ones = torch.ones((), device=loss.device)
     metrics: dict[str, Any] = {}
     metrics["loss_sum"] = loss.detach().clone()
     metrics["loss_total"] = ones
@@ -145,21 +136,9 @@ def _compute_metrics(
         metrics[f"{term_name}_sum"] = term_val
         metrics[f"{term_name}_total"] = ones.clone()
 
-    # Start position: 0 if sample_from_anchor else 1 (skip anchor)
-    start_pos = 0 if sample_from_anchor else 1
-    metrics["full_acc_sum"] = correct_per_pos[start_pos:].sum()
-    metrics["full_acc_total"] = total_per_pos[start_pos:].sum()
-
-    for pos in range(start_pos, block_size):
-        metrics[f"position_{pos}_acc_sum"] = correct_per_pos[pos]
-        metrics[f"position_{pos}_acc_total"] = total_per_pos[pos]
-
-    # Counted per block so the accepted run is formed before any averaging; the
-    # sum/total pair then pools across batches and ranks like every other metric.
-    eal_sum, eal_total = compute_accepted_length_counts(
-        (pred_ids == target_ids).reshape(-1, block_size)[:, start_pos:],
-        loss_mask.to(torch.bool).reshape(-1, block_size)[:, start_pos:],
+    metrics.update(
+        compute_greedy_block_metrics(
+            out.pred_ids == out.target_ids, loss_mask, block_size, sample_from_anchor
+        )
     )
-    metrics["eal_sum"] = eal_sum
-    metrics["eal_total"] = eal_total
     return loss, metrics

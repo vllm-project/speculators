@@ -30,6 +30,35 @@ def compute_accepted_length_counts(
     return (per_block_len * block_valid).sum(), block_valid.sum()
 
 
+@torch.no_grad()
+def compute_greedy_block_metrics(
+    correct: torch.Tensor,
+    loss_mask: torch.Tensor,
+    block_size: int,
+    sample_from_anchor: bool,
+    *,
+    eal_name: str = "eal",
+) -> dict[str, torch.Tensor]:
+    """Pool greedy accuracy and accepted-length counts across draft blocks."""
+    start_pos = 0 if sample_from_anchor else 1
+    correct_slots = correct.reshape(-1, block_size)[:, start_pos:]
+    valid_slots = loss_mask.to(torch.bool).reshape(-1, block_size)[:, start_pos:]
+    correct_per_pos = (correct_slots & valid_slots).sum(dim=0, dtype=torch.float32)
+    total_per_pos = valid_slots.sum(dim=0, dtype=torch.float32)
+    eal_sum, eal_total = compute_accepted_length_counts(correct_slots, valid_slots)
+
+    metrics = {
+        "full_acc_sum": correct_per_pos.sum(),
+        "full_acc_total": total_per_pos.sum(),
+        f"{eal_name}_sum": eal_sum,
+        f"{eal_name}_total": eal_total,
+    }
+    for offset, position in enumerate(range(start_pos, block_size)):
+        metrics[f"position_{position}_acc_sum"] = correct_per_pos[offset]
+        metrics[f"position_{position}_acc_total"] = total_per_pos[offset]
+    return metrics
+
+
 def compute_accuracy_single_step(
     pred_ids: torch.Tensor,  # shape: [1, seq_len]
     target_ids: torch.Tensor,  # shape: [1, seq_len]

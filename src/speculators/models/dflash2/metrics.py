@@ -17,7 +17,7 @@ from speculators.losses import (
     loss_function,
 )
 from speculators.models.dspark.metrics import compute_metrics as compute_unary_metrics
-from speculators.models.metrics import compute_accepted_length_counts
+from speculators.models.metrics import compute_greedy_block_metrics
 
 __all__ = [
     "compute_metrics",
@@ -176,7 +176,13 @@ def compute_metrics(
         per_position_loss_weight=per_position_loss_weight,
         dpace_alpha=dpace_alpha,
         sample_from_anchor=sample_from_anchor,
+        include_greedy_metrics=False,
     )
+
+    for name in ("accept_rate", "accept_len"):
+        for suffix in ("sum", "total"):
+            key = f"{name}_{suffix}"
+            metrics[f"unary_{key}"] = metrics.pop(key)
 
     selector_valid_mask = contains_target if selector_miss_policy == "strict" else None
     selector_loss = compute_selector_loss(
@@ -247,14 +253,12 @@ def compute_metrics(
 
         # Gate on the original unary candidate set: selector training must not
         # make injected gold tokens appear available at inference.
-        start_pos = 0 if sample_from_anchor else 1
         selector_correct = teacher_forced_ids.eq(target_ids) & contains_target
-        eal_sum, eal_total = compute_accepted_length_counts(
-            selector_correct.view(num_blocks, block_size)[:, start_pos:],
-            valid_blocks[:, start_pos:],
+        metrics.update(
+            compute_greedy_block_metrics(
+                selector_correct, valid, block_size, sample_from_anchor
+            )
         )
-        metrics["eal_sum"] = eal_sum
-        metrics["eal_total"] = eal_total
 
         oracle_alive = torch.ones(
             num_blocks, dtype=torch.bool, device=unary_logits.device
