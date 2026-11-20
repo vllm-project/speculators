@@ -119,13 +119,13 @@ def compute_metrics(
             1.0 - teacher_forced.metric_terms["tv"], loss_mask
         )
     )
+    # Score refined predictions with teacher-forced predecessors.
     metrics.update(
         compute_greedy_block_metrics(
             teacher_forced.pred_ids == teacher_forced.target_ids,
             loss_mask,
             block_size,
             sample_from_anchor,
-            eal_name="teacher_forced_eal",
         )
     )
 

@@ -21,7 +21,11 @@ from speculators.losses.eager import (
     reverse_kl_div_loss,
     tv_loss,
 )
-from speculators.models.metrics import compute_accuracy_single_step
+from speculators.models.metrics import (
+    compute_accuracy_single_step,
+    compute_analytical_block_acceptance,
+)
+from speculators.train.utils import normalize_counted_metrics
 
 
 @pytest.mark.parametrize(
@@ -506,3 +510,20 @@ class TestBf16GradientPrecision:
 
         rel_err = ((actual - exact).norm() / exact.norm()).item()
         assert rel_err < 0.02, f"{loss_fn.__name__} bf16 gradient error {rel_err:.1%}"
+
+
+def test_analytical_acceptance_ignores_empty_batches_when_normalized():
+    probabilities = torch.tensor([[0.5, 0.5]])
+    empty, _, _ = compute_analytical_block_acceptance(
+        probabilities, torch.zeros_like(probabilities), 2, True
+    )
+    populated, _, _ = compute_analytical_block_acceptance(
+        probabilities, torch.ones_like(probabilities), 2, True
+    )
+
+    assert all(value.item() == 0 for value in empty.values())
+    pooled = {key: (value + populated[key]).item() for key, value in empty.items()}
+    assert normalize_counted_metrics(pooled) == {
+        "accept_rate": 0.5,
+        "accept_len": 1.75,
+    }
