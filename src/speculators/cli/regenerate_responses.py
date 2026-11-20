@@ -868,6 +868,15 @@ async def _run(  # noqa: C901
 
             _log_summary(stats)
 
+    # A run where nothing succeeded (e.g. every request 404s on a wrong
+    # --endpoint) must not look like success to the scripts chained after it.
+    if stats["ok"] == 0 and stats["errors"] > 0:
+        typer.echo(
+            f"Error: all {stats['errors']} conversations failed; see {error_outfile}",
+            err=True,
+        )
+        raise typer.Exit(code=1)
+
 
 def _validate_dataset(value: str) -> str:
     """Validate a registered preset or a local JSON/JSONL file."""
