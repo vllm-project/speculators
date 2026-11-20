@@ -1,5 +1,5 @@
 ---
-title: "Adaptive verification: oracle headroom of the per-request draft allocation, and why per-request uncertainty does not capture it (@tomasruizt)"
+title: "How much better could adaptive verification pick which drafts to verify? (@tomasruizt)"
 tags:
   - DFlash2
   - Adaptive verification
@@ -13,58 +13,107 @@ tags:
 **[@tomasruizt](https://github.com/tomasruizt)** posted on **2026-11-20**
 </div>
 
-# Adaptive verification: oracle headroom of the per-request draft allocation, and why per-request uncertainty does not capture it (@tomasruizt)
+# How much better could adaptive verification pick which drafts to verify? (@tomasruizt)
 
 Joint work with [Shubhra Pandit](https://github.com/shubhra).
 
 ## Summary
 
-Inside each step, adaptive verification (AV) gives its draft budget to the (request, position) slots with the highest survival probability, the running product of the online acceptance estimator's per-position probabilities ([vllm#52228](https://github.com/vllm-project/vllm/pull/52228)). We measured how many more tokens per step a perfect ranking would accept at the same budget, and therefore the same step cost. The oracle gains +0.4% to +3.3% where AV verifies 60% to 90% of drafts, and **+6.6% to +8.8%** where AV trims hard: Qwen3.8-27B at c256 (58% verified) and Qwen3-4B at c512 under the rejection-sampler logits cap (34% verified). No per-request uncertainty policy captures any of it (-0.5% to +0.1%). Even a per-request offset fitted in hindsight on the request's full history gains at most +0.2%. The gap is per draft, not per request.
+Adaptive verification (AV) does not verify every draft token. Each step it estimates how likely each draft is to be accepted, and sends only the most promising ones to the target model. We asked two questions:
 
-![Oracle and per-request headroom vs. the fraction of drafts verified](../../assets/research/av-allocation-oracle-headroom.png)
+1. If AV's estimate were perfect, how many more tokens would it accept per step, at the same cost?
+2. Can adding per-request uncertainty to the estimate recover some of that gain? The idea: give extra slots to requests we know little about, to find out whether their later drafts would be accepted.
 
-Each point is one model, workload and concurrency. Filled: at the budget AV chose. Hollow: at a budget forced to 25%, 50% or 75% of the drafts. Gray crosses: the hindsight per-request offset at the same budgets.
+What we found:
 
-## Motivation
+- **A perfect estimate would add little in most settings:** under 3.5% more tokens per step when AV already verifies 60% to 90% of the drafts.
+- **The gain grows when AV has to cut more drafts:** +6.6% for Qwen3.8-27B at concurrency 256, and +8.8% for Qwen3-4B at concurrency 512.
+- **Per-request uncertainty recovers none of it.** Even knowing each request's true bias in advance would gain at most +0.2%. The estimate is not systematically wrong about some requests. It is wrong about individual drafts, and those misses look random from one step to the next.
+- So, to improve AV's estimate, we need better signals about each individual draft, not uncertainty about each request.
 
-An earlier experiment by Shubhra Pandit ([shubhra/vllm#1](https://github.com/shubhra/vllm/pull/1)) added an uncertainty bonus to the estimator's logit and saw no change in throughput or acceptance length. That bonus is one value per draft position, shared by every request, and it decays with the lifetime label count of the position. With about 100 labels per position per step it drops to ~0.09 logits after the first step, so it never changed which requests get the verification slots. Per draft position, verified counts and match rates in the two arms agree within 1 to 2%.
+![Extra tokens per step from a perfect allocation, vs. the share of drafts AV verifies](../../assets/research/av-allocation-oracle-headroom.png)
 
-The open question was whether uncertainty **per request**, which changes the allocation inside a step, could help. A request that keeps getting 1 or 2 slots never reveals whether its deep drafts would have been accepted, so its estimate is never corrected. Before building such a policy we measured the upper bound.
+Each point is one model, dataset and concurrency. Filled circles use the number of drafts AV actually chose to verify. Hollow circles force that number to 25%, 50% or 75% of the drafts, to show what happens when the budget is tighter. The gray crosses (near zero) are the best per-request correction at the same budgets.
 
-## Setup
+## Background
 
-- Targets: `Qwen/Qwen3-4B` (BF16) and `Qwen/Qwen3.8-27B` (BF16). Drafters: `RedHatAI/Qwen3-4B-speculator.dflash2` (K=8) and `RedHatAI/Qwen3.8-27B-speculator.dflash2` (K=7), `"method":"dflash"`, AV on.
-- Evaluation: `RedHatAI/speculator_benchmarks`. Either one subset per run (HumanEval, math_reasoning, writing) or all 9 subsets in one seeded shuffle ("mixed", 924 prompts), so that every batch mixes code, math, writing, QA, RAG, summarization, translation and tool calls. Temperature 0, max 1,024 output tokens, 4 x c requests per concurrency (at least 128).
-- Serving: vLLM main `89e860de00` (2026-11-17) plus a trace patch, branch [`av-alloc-headroom`](https://github.com/tomasruizt/vllm/tree/av-alloc-headroom) (`3138435083`). TP1 for the 4B, TP1 and TP2 for the 27B, prefix caching off, `--max-num-seqs` equal to the highest concurrency of the run.
-- CUDA graphs cover every tested step: `max_cudagraph_capture_size = max_num_seqs x (K+1)`. The Blackwell default of 1,024 tokens sends the 4B c128 verify-all step (1,152 tokens) to eager mode.
-- Client: AIPerf 0.12.0, closed loop, one server per mode swept over the concurrencies.
-- Software and hardware: PyTorch 2.14.0+cu132, 1x or 2x NVIDIA B200 (183 GB) per server.
+How AV picks drafts today ([vllm#52228](https://github.com/vllm-project/vllm/pull/52228)): for every draft token, an online estimator predicts the chance that the target accepts it, from the drafter's own confidence. A draft only counts if all drafts before it in the same request are accepted too, so AV multiplies these chances along each request. It then verifies the B most promising drafts in the batch, where B comes from a cost model.
 
-### Method
+Shubhra first tried adding an uncertainty bonus to the estimator ([shubhra/vllm#1](https://github.com/shubhra/vllm/pull/1)) and saw no change in throughput or acceptance. That bonus was the same for every request and shrank to almost zero after the first step, so it never changed which requests got verified. A per-request version looked more promising: a request that only ever gets 1 or 2 drafts verified never shows whether its later drafts would have been accepted, so the estimator could stay wrong about it.
 
-1. **Trace.** For every verification step the patch logs each request's per-position acceptance probabilities (the ones AV ranks), its scheduled and admitted draft counts, the number of accepted drafts, and the budget AV chose.
-2. **Verify all.** With `AV_TRACE_VERIFY_ALL=1` the server still computes AV's budget but verifies every draft, so the true accepted length `a` of each request is known. At temperature 0 a width `w` would have accepted `min(w, a)`.
-3. **Replay.** At each step's budget `B`, replay allocation policies and count accepted tokens. The metric is output tokens per step (requests + accepted drafts) relative to AV's own ranking. Same `B` means the same step cost, so this is an upper bound on the throughput change.
-   - `oracle`: knows `a`, accepts `min(B, sum a)`.
-   - `calib`: AV's ranking with a per-request logit offset `u_r`, learned online by Newton steps from only the labels the policy itself verified (censored, like production). `calib_fast` forgets old labels (decay 0.8) to follow phases within a request.
-   - `UCB`: `u_r + 1.0 x sd(u_r)`, so rarely verified requests get explored. `Thompson`: `u_r` sampled from its posterior.
-   - `hindsight`: each request's offset fitted on all of its uncensored labels. Not causal, it bounds every policy that shifts one offset per request.
-4. **Check the replay.** A second server runs normal AV with the same trace. Replaying AV's ranking reproduces the widths production admitted in 99.8% to 99.96% of steps in every run.
+## How we measured it
 
-All policies stay lossless: they depend on the drafter's distribution (`q_max`) and on outcomes of earlier steps, never on the drafted token being trimmed.
+1. **Find out what would have been accepted.** We ran vLLM in a mode that verifies every draft, while still logging what AV would have chosen. At temperature 0 this tells us, for every request and step, how many drafts would have been accepted at any verification length.
+2. **Replay offline.** Step by step, with the same number of verified drafts that AV chose (so the same step cost), we compared:
+   - **AV today.**
+   - **Perfect allocation:** knows in advance how many drafts each request will accept.
+   - **Per-request strategies:** learn a correction for each request from the drafts they verified, either used directly or with exploration (UCB, Thompson sampling). Like the real system, they only learn from what they verify. All of them keep sampling lossless: they never look at the drafted token they are deciding about.
+   - **Best per-request correction:** each request's correction fitted afterwards on its complete history. No per-request strategy can beat it.
+3. **Check the replay.** On a normal AV run, replaying "AV today" reproduces AV's real decisions in 99.8% of steps or more.
 
-## Reproduction
+We report tokens produced per step, relative to AV today. The step cost is the same, so this is the most throughput a better allocation could add.
+
+## Results
+
+Mixed prompts (all 9 subsets of `RedHatAI/speculator_benchmarks`), temperature 0:
+
+| Model                      | Concurrency | Drafts AV verifies | Perfect allocation | Best per-request correction |            UCB |       Thompson |
+| -------------------------- | ----------: | -----------------: | -----------------: | --------------------------: | -------------: | -------------: |
+| Qwen3.8-27B (TP2)          |         128 |                68% |              +3.3% |                       +0.1% |          -0.1% |          -0.3% |
+| Qwen3.8-27B (TP2)          |         256 |                58% |          **+6.6%** |                       +0.1% |          -0.1% |          -0.3% |
+| Qwen3-4B                   |          64 |                28% |              +3.2% |                       +0.1% |          -0.0% |          -0.2% |
+| Qwen3-4B                   |         128 |                76% |              +0.5% |                       +0.0% |          -0.0% |          -0.1% |
+| Qwen3-4B                   |         256 |                76% |              +0.8% |                       +0.1% |          -0.0% |          -0.1% |
+| Qwen3-4B                   |         512 |                34% |          **+8.8%** |                       +0.1% |          -0.1% |          -0.4% |
+| Both, budget forced to 50% |   64 to 512 |                50% |        +9% to +11% |              +0.1% to +0.2% | -0.2% to -0.0% | -0.5% to -0.4% |
+
+The 27B served 86 and 128 requests on average at concurrency 128 and 256 (KV cache limit). The Qwen3-4B row at 512 includes vLLM's limit on how many tokens can be verified per step (see below).
+
+Earlier runs with single datasets (HumanEval, math_reasoning, writing) and with thinking off show the same pattern: +0.4% to +3% when AV verifies most drafts, up to +6.6% when it verifies fewer than half, and at most +0.3% for any per-request strategy, even with a forced budget.
+
+**Why per-request uncertainty does not help.** Compared to the estimate, requests differ only slightly in how often their drafts are accepted: a standard deviation of 1 to 5 percentage points across requests. And a request's error at one step says almost nothing about its error at the next step (correlation 0.01 to 0.05). There is nothing per request to learn or to explore.
+
+## Other things we learned
+
+- **CUDA graphs.** On Blackwell, vLLM captures graphs up to 1,024 tokens by default. A step that verifies more tokens runs without graphs and is much more expensive, which also distorts AV's cost model. We captured graphs up to `max_num_seqs x (K+1)` tokens in all runs above.
+- **A hidden cap on AV's budget.** The rejection sampler holds target logits in a 1 GB buffer, so AV can verify at most about 1 GB / (vocab size x 4 bytes) tokens per step: 1,766 for Qwen3-4B and 1,081 for Qwen3.8-27B. For Qwen3-4B at concurrency 512 this cap, not the cost model, decides how many drafts AV verifies (34% instead of 68%).
+- **The estimator stays calibrated** even though it only learns from the drafts AV verifies: predicted and observed acceptance agree within 0.6 percentage points at every position.
+- **The drafter's confidence is fully used.** A more flexible calibration of the same signal gains nothing (-0.1% to +0.0%).
+
+## Limitations
+
+- The replay assumes each request produces the same drafts it produced in the verify-all run. A different allocation would change what gets drafted next.
+- We measure tokens per step at equal cost, not end-to-end throughput.
+- Only temperature 0, B200 GPUs, DFlash2 drafters and two dense Qwen targets. We did not test DSpark or its trained confidence head, other GPUs, or MoE targets.
+
+## Next steps
+
+Test new signals about each individual draft that keep sampling lossless, for example the target model's entropy at the last accepted token (known before drafting), or the drafter's entropy and top-2 margin combined with its confidence. Evaluate them on these traces in the settings with headroom (Qwen3.8-27B at concurrency 256, Qwen3-4B at concurrency 512).
+
+## Setup and reproduction
+
+<details markdown>
+<summary>Setup</summary>
+
+- Targets: `Qwen/Qwen3-4B` and `Qwen/Qwen3.8-27B` (BF16). Drafters: `RedHatAI/Qwen3-4B-speculator.dflash2` (8 draft tokens) and `RedHatAI/Qwen3.8-27B-speculator.dflash2` (7 draft tokens), AV on.
+- Data: all 9 subsets of `RedHatAI/speculator_benchmarks` (924 prompts) shuffled with `random.Random(0)`, thinking on, max 1,024 output tokens, 4 x concurrency requests per run.
+- vLLM main `89e860de00` (2026-11-17) plus a trace patch: branch [`av-alloc-headroom`](https://github.com/tomasruizt/vllm/tree/av-alloc-headroom) (`3138435083`). `AV_TRACE_VERIFY_ALL=1` verifies every draft, `AV_TRACE_MAX_CHUNK_BYTES` lifts the 1 GB buffer limit so the verify-all runs are complete.
+- Client: AIPerf 0.12.0. Hardware: NVIDIA B200 (183 GB), PyTorch 2.14.0+cu132.
+
+</details>
+
+<details markdown>
+<summary>Commands</summary>
 
 ```bash
-# Normal AV. For the oracle trace add AV_TRACE_VERIFY_ALL=1.
-# AV_TRACE_MAX_CHUNK_BYTES lifts the 1GB rejection-sampler buffer (see Observations).
-AV_TRACE_PATH=trace.jsonl AV_TRACE_MAX_CHUNK_BYTES=8589934592 \
+AV_TRACE_PATH=trace.jsonl AV_TRACE_VERIFY_ALL=1 AV_TRACE_MAX_CHUNK_BYTES=8589934592 \
 vllm serve Qwen/Qwen3.8-27B --max-model-len 16384 --max-num-seqs 256 --tensor-parallel-size 2 \
   --max-num-batched-tokens 16384 --gpu-memory-utilization 0.85 --no-enable-prefix-caching \
   --speculative-config '{"model":"RedHatAI/Qwen3.8-27B-speculator.dflash2","num_speculative_tokens":7,"method":"dflash","enable_adaptive_verification":true}' \
   --default-chat-template-kwargs '{"enable_thinking": true}' \
   --compilation-config '{"max_cudagraph_capture_size": 2048}'
 
+AV_TRACE_PATH=trace.jsonl AV_TRACE_VERIFY_ALL=1 AV_TRACE_MAX_CHUNK_BYTES=8589934592 \
 vllm serve Qwen/Qwen3-4B --max-model-len 16384 --max-num-seqs 512 \
   --max-num-batched-tokens 16384 --gpu-memory-utilization 0.85 --no-enable-prefix-caching \
   --speculative-config '{"model":"RedHatAI/Qwen3-4B-speculator.dflash2","num_speculative_tokens":8,"method":"dflash","enable_adaptive_verification":true}' \
@@ -77,51 +126,13 @@ aiperf profile --model Qwen/Qwen3-4B --tokenizer Qwen/Qwen3-4B --url http://127.
   --extra-inputs max_tokens:1024 --extra-inputs temperature:0
 ```
 
-`mixed.jsonl` holds one `{"text": prompt}` per line: the `prompt` field of all 9 subsets of `RedHatAI/speculator_benchmarks`, shuffled with `random.Random(0)`.
+Drop `AV_TRACE_VERIFY_ALL=1` for the normal AV run that checks the replay. `mixed.jsonl` holds one `{"text": prompt}` per line.
 
-## Results
-
-Settings with headroom. Mixed workload, thinking on, full CUDA graph coverage. Tokens per step vs. AV's ranking at the same budget:
-
-| Target          | c (mean running) | Budget                    | Drafts verified |          Oracle | Hindsight offset |            calib |              UCB |         Thompson |
-| --------------- | ---------------: | ------------------------- | --------------: | --------------: | ---------------: | ---------------: | ---------------: | ---------------: |
-| Qwen3.8-27B TP2 |         128 (86) | AV                        |             68% |           +3.3% |           +0.10% |           -0.09% |           -0.09% |           -0.29% |
-| Qwen3.8-27B TP2 |        256 (128) | AV                        |             58% |       **+6.6%** |           +0.09% |           -0.12% |           -0.13% |           -0.34% |
-| Qwen3-4B        |          64 (50) | AV                        |             28% |           +3.2% |           +0.05% |           -0.04% |           -0.04% |           -0.22% |
-| Qwen3-4B        |         128 (97) | AV                        |             76% |           +0.5% |           +0.03% |           -0.02% |           -0.02% |           -0.08% |
-| Qwen3-4B        |        256 (194) | AV                        |             76% |           +0.8% |           +0.06% |           -0.02% |           -0.02% |           -0.13% |
-| Qwen3-4B        |        512 (393) | AV, cap lifted            |             68% |           +2.1% |           +0.09% |           -0.05% |           -0.07% |           -0.20% |
-| Qwen3-4B        |        512 (393) | AV, production logits cap |             34% |       **+8.8%** |           +0.12% |           -0.11% |           -0.12% |           -0.41% |
-| both            |        64 to 512 | forced to 50%             |             50% | +9.2% to +10.7% | +0.11% to +0.22% | -0.20% to -0.04% | -0.19% to -0.03% | -0.53% to -0.35% |
-
-Earlier runs, which do not change the conclusion:
-
-- Qwen3-4B, one subset per run, thinking on, c16 to c64 (default graphs): oracle +0.4% to +1.3% at c32 to c64 (AV verifies 63% to 90%), +3.9% to +6.6% at c16 (24% to 49%). Per-request policies -0.3% to +0.06%, hindsight at most +0.12%.
-- Qwen3-4B and Qwen3.8-27B (TP1), mixed, thinking off, c32 to c128: oracle +1.1% to +3.0%, hindsight at most +0.08%.
-- Qwen3.8-27B TP1, mixed, thinking on, c64 to c256: oracle +0.6% to +1.2%. The KV cache saturates at 49 to 56 running requests on average, so AV verifies 89% to 94% of drafts.
-
-Why per-request information does not help. Residual = observed minus predicted acceptance on the uncensored labels:
-
-| Workload             | sd of a request's mean residual | Split-half correlation of a request's residual | Step-to-step correlation |
-| -------------------- | ------------------------------: | ---------------------------------------------: | -----------------------: |
-| Qwen3-4B, one subset |                  0.014 to 0.033 |                                   0.10 to 0.77 |           0.014 to 0.052 |
-| Qwen3-4B, mixed      |                  0.027 to 0.046 |                                   0.24 to 0.68 |           0.027 to 0.045 |
-| Qwen3.8-27B, mixed   |                  0.024 to 0.027 |                                   0.06 to 0.28 |           0.011 to 0.025 |
-
-Requests do have a stable offset (split-half correlation up to 0.7 on mixed and writing batches), but it is a few hundredths in probability, too small to reorder the slots that decide the budget. Which draft gets rejected changes from step to step.
-
-## Observations
-
-- **Headroom tracks how hard AV trims.** At 60% to 90% verified, AV's ranking keeps 96% to 99.5% of the tokens the oracle accepts. The oracle gap peaks near a 50% budget (+9% to +11%) and shrinks again at 25%, where every policy only verifies the first, mostly accepted, positions.
-- **The rejection-sampler buffer caps the AV budget.** AV never verifies more than `2^30 / (vocab x 4)` logits per step minus one per request: 1,766 for Qwen3-4B (152K vocab) and 1,081 for Qwen3.8-27B (248K vocab). For the 4B at c512 this cap, not the cost model, sets the budget to 34% of drafts. For the 27B it binds from about 130 running requests. It also truncates a verify-all trace, so for the oracle we lifted it (`AV_TRACE_MAX_CHUNK_BYTES`) and reapplied it offline.
-- **Censoring does not bias the production estimator.** On the drafts AV verifies, predicted and observed acceptance agree within 0.006 at every position (4B, c512), and its mean predictions differ from the verify-all estimator's by at most 0.02 at deep positions. So there is no blind spot for exploration to fix.
-- **The estimator already extracts what `q_max` offers.** A per-position 20-bin recalibration of the same feature, fitted at c32 and c64 and tested at c128, changes tokens per step by -0.06% to +0.02%, while the oracle has +0.4% to +9.7% at the same budgets.
-- **The replay keeps each request's drafts as they happened under verify-all.** A different allocation would change what gets drafted later. It also measures tokens per step, not throughput: an end-to-end gain would come on top of AV's existing cost model.
-- **Next:** new lossless per-draft features, evaluated on these traces in the settings with headroom. Candidates: the target's entropy at the last accepted position (known before drafting), and the drafter's entropy and top-2 margin combined with `q_max` in one logistic model. [vllm#52228](https://github.com/vllm-project/vllm/pull/52228) compared them one at a time.
-- **Not tested:** temperature > 0, H100 or other GPUs, DFlash, DSpark and its trained confidence head, MoE targets, and end-to-end throughput of any new policy.
+</details>
 
 ## References
 
-- [vllm-project/vllm#52228](https://github.com/vllm-project/vllm/pull/52228) (online acceptance estimator), [vllm-project/vllm#51303](https://github.com/vllm-project/vllm/issues/51303) (adaptive verification tracking issue)
-- [shubhra/vllm#1](https://github.com/shubhra/vllm/pull/1) (check-count uncertainty term)
+- [vllm-project/vllm#52228](https://github.com/vllm-project/vllm/pull/52228): the online acceptance estimator
+- [vllm-project/vllm#51303](https://github.com/vllm-project/vllm/issues/51303): adaptive verification tracking issue
+- [shubhra/vllm#1](https://github.com/shubhra/vllm/pull/1): the first uncertainty experiment
 - [DFlash adaptive verification on Qwen3.5-35B-A3B: CUDA graph capture sizes](dflash-adaptive-verification-cuda-graphs-tomasruizt.md)
