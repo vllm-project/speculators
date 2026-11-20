@@ -9,6 +9,7 @@ from transformers import PretrainedConfig
 from speculators.losses import LossConfig, resolve_loss_config
 from speculators.model import DraftVocabMixin, SpeculatorModel
 from speculators.models.attention import create_float_mask
+from speculators.models.components import BackboneInputs, BlockLayout
 from speculators.models.dflash import DFlashSpeculatorConfig
 from speculators.models.dflash.attention import create_anchor_block_mask_mod
 from speculators.models.dflash.backbone import DFlashBackbone
@@ -411,28 +412,46 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
 
         return full_attn_mask, sliding_window_attn_mask, anchor_positions, anchor_valid
 
-    def _backbone_forward(
+    def _build_targets(
+        self,
+        verifier_last_hidden_states: torch.Tensor,  # [1, total_seq_len, hidden_size]
+        block_positions: torch.Tensor,  # [num_blocks * block_size]
+    ) -> torch.Tensor:  # [1, num_blocks * block_size, draft_vocab_size]
+        """Build verifier-logit targets for the selected draft block positions."""
+        total_seq_len = verifier_last_hidden_states.shape[1]
+
+        with torch.no_grad():
+            # If there are fewer block positions than base positions, compute
+            # the verifier head only for the positions used as targets.
+            if block_positions.numel() < total_seq_len:
+                target_indices = (
+                    block_positions
+                    if self.config.sample_from_anchor
+                    else (block_positions - 1) % total_seq_len
+                )
+                return self.verifier_lm_head(
+                    self.verifier_norm(verifier_last_hidden_states[:, target_indices])
+                )
+
+            verifier_logits = self.verifier_lm_head(
+                self.verifier_norm(verifier_last_hidden_states)
+            )
+            if not self.config.sample_from_anchor:
+                verifier_logits = torch.roll(verifier_logits, 1, dims=1)
+            return verifier_logits[:, block_positions]
+
+    def prepare_backbone_inputs(
         self,
         hidden_states: torch.Tensor,  # [1, total_seq_len, num_hidden*hidden_size]
         input_ids: torch.Tensor,  # [1, total_seq_len]
         loss_mask: torch.Tensor,  # [1, total_seq_len]
-        verifier_last_hidden_states: torch.Tensor,  # [1, total_seq_len, hidden_size]
         document_ids: torch.Tensor,  # [1, total_seq_len]
         position_ids: torch.Tensor | None = None,  # [1, total_seq_len]
-        materialize_logits: bool = True,
-        **kwargs,
-    ):
-        """Run the anchored-block draft transformer up to the draft logits.
-
-        Returns ``(hidden, logits, targets, aligned_loss_mask,
-        anchored_block_indices)``. DSpark reuses this and adds its Markov and
-        confidence heads before computing its own loss. With
-        ``materialize_logits=False`` the ``lm_head`` projection is skipped and
-        ``logits`` is None (the fused_linear loss projects ``hidden`` itself).
-        """
+        max_anchors: int = 512,
+    ) -> tuple[BackboneInputs, BlockLayout]:
+        """Prepare embeddings, positions, and masks for the backbone."""
         device = hidden_states.device
         total_seq_len = hidden_states.shape[1]
-        num_anchors = kwargs.pop("max_anchors", 512)
 
         if position_ids is None:
             position_ids = torch.arange(
@@ -440,10 +459,10 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
             ).unsqueeze(0)
 
         full_attn_mask, sliding_window_attn_mask, anchor_positions, anchor_valid = (
-            self._build_attention_mask(loss_mask, num_anchors, document_ids, device)
+            self._build_attention_mask(loss_mask, max_anchors, document_ids, device)
         )
 
-        mask_tokens_size = num_anchors * self.block_size
+        mask_tokens_size = max_anchors * self.block_size
 
         mask_token_ids = torch.full(
             (1, mask_tokens_size),
@@ -465,36 +484,6 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
             anchor_positions, self.block_size
         )  # shape: [num_anchors*block_size]
 
-        with torch.no_grad():
-            if anchored_block_indices.numel() < total_seq_len:
-                target_indices = (
-                    anchored_block_indices
-                    if self.config.sample_from_anchor
-                    else (anchored_block_indices - 1) % total_seq_len
-                )
-                targets = self.verifier_lm_head(
-                    self.verifier_norm(verifier_last_hidden_states[:, target_indices])
-                )
-            else:
-                verifier_logits = self.verifier_lm_head(
-                    self.verifier_norm(verifier_last_hidden_states)
-                )
-                if not self.config.sample_from_anchor:
-                    verifier_logits = torch.roll(verifier_logits, 1, dims=1)
-                targets = verifier_logits[:, anchored_block_indices]
-            # shape: [1, num_anchors*block_size, draft_vocab_size]
-
-        hidden = self.backbone(
-            noise_embedding,
-            hidden_states,
-            position_ids,
-            sliding_window_attn_mask=sliding_window_attn_mask,
-            full_attn_mask=full_attn_mask,
-            **kwargs,
-        )
-        logits = self.lm_head(hidden) if materialize_logits else None
-        # shape: [1, num_anchors*block_size, vocab_size]
-
         aligned_loss_mask = loss_mask.clone()[:, anchored_block_indices]
         # shape: [1, num_anchors*block_size]
 
@@ -509,7 +498,43 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
         if not self.config.sample_from_anchor:
             aligned_loss_mask[:, :: self.block_size] = 0
 
-        return hidden, logits, targets, aligned_loss_mask, anchored_block_indices
+        layout = BlockLayout(
+            anchor_positions,
+            anchored_block_indices,
+            aligned_loss_mask,
+            self.block_size,
+            self.config.sample_from_anchor,
+        )
+        inputs = BackboneInputs(
+            noise_embedding,
+            hidden_states,
+            position_ids,
+            sliding_window_attn_mask,
+            full_attn_mask,
+        )
+        return inputs, layout
+
+    def _backbone_forward(
+        self,
+        hidden_states: torch.Tensor,  # [1, total_seq_len, num_hidden*hidden_size]
+        input_ids: torch.Tensor,  # [1, total_seq_len]
+        loss_mask: torch.Tensor,  # [1, total_seq_len]
+        verifier_last_hidden_states: torch.Tensor,  # [1, total_seq_len, hidden_size]
+        document_ids: torch.Tensor,  # [1, total_seq_len]
+        position_ids: torch.Tensor | None = None,  # [1, total_seq_len]
+        materialize_logits: bool = True,
+        **kwargs,
+    ):
+        max_anchors = kwargs.pop("max_anchors", 512)
+        inputs, layout = self.prepare_backbone_inputs(
+            hidden_states, input_ids, loss_mask, document_ids, position_ids, max_anchors
+        )
+        hidden = self.backbone(*inputs, **kwargs)
+        logits = self.lm_head(hidden) if materialize_logits else None
+        targets = self._build_targets(
+            verifier_last_hidden_states, layout.block_positions
+        )
+        return hidden, logits, targets, layout.loss_mask, layout.block_positions
 
     @conditional_torch_compile
     def forward(
