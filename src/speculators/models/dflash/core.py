@@ -514,56 +514,79 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
         )
         return inputs, layout
 
-    def _backbone_forward(
+    @conditional_torch_compile
+    def forward(
         self,
-        hidden_states: torch.Tensor,  # [1, total_seq_len, num_hidden*hidden_size]
+        # [1, total_seq_len, num_target_layers * hidden_size]
+        hidden_states: torch.Tensor,
         input_ids: torch.Tensor,  # [1, total_seq_len]
         loss_mask: torch.Tensor,  # [1, total_seq_len]
         verifier_last_hidden_states: torch.Tensor,  # [1, total_seq_len, hidden_size]
         document_ids: torch.Tensor,  # [1, total_seq_len]
         position_ids: torch.Tensor | None = None,  # [1, total_seq_len]
-        materialize_logits: bool = True,
-        **kwargs,
-    ):
-        max_anchors = kwargs.pop("max_anchors", 512)
-        inputs, layout = self.prepare_backbone_inputs(
-            hidden_states, input_ids, loss_mask, document_ids, position_ids, max_anchors
-        )
-        hidden = self.backbone(*inputs, **kwargs)
-        logits = self.lm_head(hidden) if materialize_logits else None
-        targets = self._build_targets(
-            verifier_last_hidden_states, layout.block_positions
-        )
-        return hidden, logits, targets, layout.loss_mask, layout.block_positions
-
-    @conditional_torch_compile
-    def forward(
-        self,
-        hidden_states: torch.Tensor,  # shape: [1,total_seq_len,num_hidden*hidden_size]
-        input_ids: torch.Tensor,  # shape: [1, total_seq_len]
-        loss_mask: torch.Tensor,  # shape: [1, total_seq_len]
-        verifier_last_hidden_states: torch.Tensor,  # shape: [1, total_seq_len, hidden_size] # noqa: E501
-        document_ids: torch.Tensor,  # shape: [1, total_seq_len]
-        position_ids: torch.Tensor | None = None,  # shape: [1, total_seq_len]
         loss_config: LossConfig | None = None,
         gamma: float = 4.0,
         max_anchors: int = 512,
         per_position_loss_weight: str = "fixed-exp-decay",
         dpace_alpha: float = 0.5,
+        materialize_logits: bool = True,
+        *,
         fused_linear: bool = False,
-        **kwargs,
+        correction_kwargs=None,
+        loss_kwargs=None,
+        **backbone_kwargs,
     ):
-        hidden, logits, targets, aligned_loss_mask, _ = self._backbone_forward(
-            hidden_states,
-            input_ids,
-            loss_mask,
-            verifier_last_hidden_states,
-            document_ids,
-            position_ids,
-            materialize_logits=not fused_linear,
-            max_anchors=max_anchors,
-            **kwargs,
+        inputs, layout = self.prepare_backbone_inputs(
+            hidden_states, input_ids, loss_mask, document_ids, position_ids, max_anchors
         )
+        hidden = self.backbone(*inputs, **backbone_kwargs)
+        logits = (
+            self.lm_head(hidden) if materialize_logits and not fused_linear else hidden
+        )
+        targets = self._build_targets(
+            verifier_last_hidden_states, layout.block_positions
+        )
+        correction = self.apply_training_correction(
+            hidden,
+            logits,
+            targets,
+            layout,
+            input_ids,
+            document_ids,
+            **(correction_kwargs or {}),
+        )
+        loss, metrics = self.compute_loss_and_metrics(
+            logits,
+            targets,
+            layout,
+            correction,
+            fused_linear=fused_linear,
+            loss_config=loss_config,
+            gamma=gamma,
+            per_position_loss_weight=per_position_loss_weight,
+            dpace_alpha=dpace_alpha,
+            **(loss_kwargs or {}),
+        )
+        return None, loss, metrics
+
+    def apply_training_correction(self, *_args, **_kwargs):
+        """Prepare algorithm-specific outputs for the training loss."""
+        return None  # noqa: RET501 - plain DFlash has no correction output
+
+    def compute_loss_and_metrics(
+        self,
+        logits,
+        targets,
+        layout: BlockLayout,
+        correction,  # noqa: ARG002 - plain DFlash has no correction output
+        *,
+        fused_linear: bool = False,
+        loss_config: LossConfig | None,
+        gamma: float,
+        per_position_loss_weight: str,
+        dpace_alpha: float,
+        **_kwargs,
+    ):
         metric_kwargs = {
             "gamma": gamma,
             "loss_config": loss_config,
@@ -572,21 +595,15 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
             "sample_from_anchor": self.config.sample_from_anchor,
         }
         if fused_linear:
-            # loss_implementation="fused_linear": no [1, T, V] draft logits.
-            loss, metrics = compute_metrics_from_hidden(
-                hidden,
+            return compute_metrics_from_hidden(
+                logits,  # backbone hidden states in fused-linear mode
                 self.lm_head.weight,
                 targets,
-                aligned_loss_mask,
+                layout.loss_mask,
                 self.block_size,
                 **metric_kwargs,
             )
-            return None, loss, metrics
-        loss, metrics = compute_metrics(
-            logits,
-            targets,
-            aligned_loss_mask,
-            self.block_size,
-            **metric_kwargs,
+
+        return compute_metrics(
+            logits, targets, layout.loss_mask, self.block_size, **metric_kwargs
         )
-        return None, loss, metrics

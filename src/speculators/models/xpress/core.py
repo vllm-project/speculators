@@ -5,15 +5,11 @@ from transformers import PretrainedConfig
 
 from speculators.losses import LossConfig, resolve_loss_config
 from speculators.model import SpeculatorModel
+from speculators.models.components import BlockLayout
 from speculators.models.dflash.core import DFlashDraftModel
-from speculators.models.utils import conditional_torch_compile
 from speculators.models.xpress.config import XPressSpeculatorConfig
-from speculators.models.xpress.metrics import (
-    compute_metrics,
-)
+from speculators.models.xpress.metrics import compute_metrics
 from speculators.models.xpress.model_definitions import XPressRefinerHead
-
-_DEFAULT_LOSS_CONFIG: LossConfig | None = None
 
 __all__ = [
     "XPressDraftModel",
@@ -89,21 +85,15 @@ class XPressDraftModel(DFlashDraftModel):
         }
         return dict(shared), dict(shared)
 
-    def _draft_to_verifier_ids(self, draft_ids: torch.Tensor) -> torch.Tensor:
-        """Map draft-vocab argmax ids back to verifier-vocab ids (d2t offsets)."""
-        if self.d2t is not None:
-            return draft_ids + self.d2t[draft_ids]
-        return draft_ids
-
-    @conditional_torch_compile
     def forward(
         self,
+        # [1, total_seq_len, num_target_layers * hidden_size]
         hidden_states: torch.Tensor,
-        input_ids: torch.Tensor,
-        loss_mask: torch.Tensor,
-        verifier_last_hidden_states: torch.Tensor,
-        document_ids: torch.Tensor,
-        position_ids: torch.Tensor | None = None,
+        input_ids: torch.Tensor,  # [1, total_seq_len]
+        loss_mask: torch.Tensor,  # [1, total_seq_len]
+        verifier_last_hidden_states: torch.Tensor,  # [1, total_seq_len, hidden_size]
+        document_ids: torch.Tensor,  # [1, total_seq_len]
+        position_ids: torch.Tensor | None = None,  # [1, total_seq_len]
         loss_config: LossConfig | None = None,
         gamma: float = 4.0,
         max_anchors: int = 3072,
@@ -116,29 +106,56 @@ class XPressDraftModel(DFlashDraftModel):
         ce_from_data: bool = False,
         **kwargs,
     ):
-        (
-            hidden,
-            logits,
-            targets,
-            aligned_loss_mask,
-            anchored_block_indices,
-        ) = self._backbone_forward(
+        return super().forward(
             hidden_states,
             input_ids,
             loss_mask,
             verifier_last_hidden_states,
             document_ids,
             position_ids,
+            loss_config=loss_config,
+            gamma=gamma,
             max_anchors=max_anchors,
+            per_position_loss_weight=per_position_loss_weight,
+            dpace_alpha=dpace_alpha,
+            correction_kwargs={
+                "consistency_weight": consistency_weight,
+                "consistency_passes": consistency_passes,
+                "ce_from_data": ce_from_data,
+            },
+            loss_kwargs={
+                "consistency_weight": consistency_weight,
+                "base_anchor_weight": base_anchor_weight,
+                "base_anchor_full_weight": base_anchor_full_weight,
+            },
             **kwargs,
         )
 
-        num_blocks = max_anchors
+    def _draft_to_verifier_ids(self, draft_ids: torch.Tensor) -> torch.Tensor:
+        if self.d2t is not None:
+            return draft_ids + self.d2t[draft_ids]
+        return draft_ids
+
+    def apply_training_correction(
+        self,
+        hidden,
+        logits,
+        _targets,
+        layout,
+        input_ids,
+        document_ids,
+        consistency_weight=0.3,
+        consistency_passes=3,
+        ce_from_data=False,
+        **_kwargs,
+    ):
+        anchored_block_indices = layout.block_positions
+        num_blocks = layout.anchor_positions.numel()
         block = self.block_size
         mask_tokens_size = num_blocks * block
         block_tokens = input_ids[0, anchored_block_indices].view(num_blocks, block)
         anchor_tokens = block_tokens[:, :1]
-        anchor_pos = anchored_block_indices.view(num_blocks, block)[:, 0]
+        anchor_pos = layout.anchor_positions
         am1_pos = (anchor_pos - 1).clamp(min=0)
         am1_ok = (anchor_pos > 0) & (
             document_ids[0, am1_pos] == document_ids[0, anchor_pos]
@@ -198,7 +215,25 @@ class XPressDraftModel(DFlashDraftModel):
                 refined_j = base_block_logits + bias_j
                 round_logits.append(refined_j.view(1, mask_tokens_size, -1))
                 pred = self._draft_to_verifier_ids(refined_j.detach().argmax(dim=-1))
+        return logits_tf, round_logits, ce_data_labels, data_labels
 
+    def compute_loss_and_metrics(
+        self,
+        logits,
+        targets,
+        layout: BlockLayout,
+        correction,
+        *,
+        loss_config: LossConfig | None,
+        gamma: float,
+        per_position_loss_weight: str,
+        dpace_alpha: float,
+        consistency_weight=0.3,
+        base_anchor_weight=0.6,
+        base_anchor_full_weight=False,
+        **_kwargs,
+    ):
+        logits_tf, round_logits, ce_data_labels, data_labels = correction
         # The trainer's annealing schedule passes a 0-dim tensor so its value stays
         # out of Dynamo's guards (a per-step float would recompile this frame until it
         # hit recompile_limit and fell back to eager). Comparing a tensor here would
@@ -211,12 +246,12 @@ class XPressDraftModel(DFlashDraftModel):
             else base_anchor_weight > 0.0
         )
 
-        loss, metrics = compute_metrics(
+        return compute_metrics(
             logits_tf,
             round_logits,
             logits if base_anchor_on else None,
             targets,
-            aligned_loss_mask,
+            layout.loss_mask,
             self.block_size,
             loss_config=loss_config or resolve_loss_config('{"ce": 0.1, "tv": 0.9}'),
             gamma=gamma,
@@ -229,4 +264,3 @@ class XPressDraftModel(DFlashDraftModel):
             ce_data_labels=ce_data_labels,
             data_labels=data_labels,
         )
-        return None, loss, metrics
