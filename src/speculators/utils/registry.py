@@ -103,7 +103,7 @@ class ClassRegistryMixin:
         if not isinstance(clazz, type):
             raise TypeError(
                 "ClassRegistryMixin.register_decorator must be used as a class "
-                "decorator and without invocation."
+                "decorator and without invocation. "
                 f"Got improper clazz arg {clazz}."
             )
 
@@ -113,7 +113,7 @@ class ClassRegistryMixin:
             raise ValueError(
                 "ClassRegistryMixin.register_decorator must be used as a class "
                 "decorator and without invocation. "
-                f"Got imporoper name arg {name}."
+                f"Got improper name arg {name}."
             )
 
         # A subclass inherits its parent's registry attribute until it writes its
