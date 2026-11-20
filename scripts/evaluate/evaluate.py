@@ -15,6 +15,7 @@ from collections import Counter, defaultdict
 from datetime import UTC, datetime
 from pathlib import Path
 
+from acceptance_phases import phase_rows
 from eval_datasets.speedbench import speedbench_args
 
 from speculators.provenance import (
@@ -128,7 +129,7 @@ def write_csv(path: Path, rows: list[dict]) -> None:
 
 
 def summarize_acceptance_run(
-    report: dict, path: Path, root: Path
+    report: dict, path: Path, root: Path, specs_by_request: dict | None = None
 ) -> tuple[list[dict], list[dict], bool]:
     """Calculate one overall row and one row per prompt-length bucket."""
     metrics = []
@@ -147,6 +148,11 @@ def summarize_acceptance_run(
                 spec = None if failed else record.get("spec_decode_acceptance")
                 metrics.append(spec)
                 buckets[bucket].append(spec)
+                if specs_by_request is not None and spec:
+                    request_id = record["metadata"]["x_request_id"]
+                    if not request_id or request_id in specs_by_request:
+                        raise ValueError("missing or duplicate AIPerf request ID")
+                    specs_by_request[request_id] = spec
             except (ValueError, KeyError, TypeError) as exc:
                 logger.error("%s: %s", path, exc)
                 valid = False
@@ -175,8 +181,10 @@ def summarize_acceptance_run(
     return overall, by_length, valid
 
 
-def summarize_output_directory(output_dir: Path, mode: str) -> bool:
-    """Validate native runs and write the two additional acceptance CSVs."""
+def summarize_output_directory(
+    output_dir: Path, mode: str, *, by_phase: bool = False
+) -> bool:
+    """Validate native runs and write the requested acceptance CSVs."""
     paths = [
         path
         for path in sorted(output_dir.rglob("profile_export_aiperf.json"))
@@ -187,6 +195,7 @@ def summarize_output_directory(output_dir: Path, mode: str) -> bool:
     valid = bool(paths)
     overall_rows = []
     length_rows = []
+    reasoning_rows = []
     for path in paths:
         try:
             report = json.loads(path.read_text())
@@ -197,17 +206,29 @@ def summarize_output_directory(output_dir: Path, mode: str) -> bool:
                 logger.error("%s: incomplete run or %s request errors", path, errors)
                 valid = False
             if mode == "acceptance":
+                specs_by_request = {} if by_phase else None
                 overall, by_length, records_valid = summarize_acceptance_run(
-                    report, path, output_dir
+                    report, path, output_dir, specs_by_request
                 )
                 overall_rows.extend(overall)
                 length_rows.extend(by_length)
                 valid = valid and records_valid
+                if specs_by_request is not None:
+                    rows, phase_valid = phase_rows(
+                        report,
+                        path.with_name("profile_export_raw.jsonl"),
+                        path.parent.relative_to(output_dir).as_posix(),
+                        specs_by_request,
+                    )
+                    reasoning_rows.extend(rows)
+                    valid = valid and phase_valid
         except (OSError, ValueError, KeyError, TypeError) as exc:
             logger.error("%s: %s", path, exc)
             valid = False
     write_csv(output_dir / "acceptance.csv", overall_rows)
     write_csv(output_dir / "acceptance_by_prompt_length.csv", length_rows)
+    if by_phase:
+        write_csv(output_dir / "acceptance_by_phase.csv", reasoning_rows)
     return valid
 
 
@@ -223,6 +244,8 @@ def run_profile(args: argparse.Namespace, profile_args: list[str], output: Path)
     """Run AIPerf with preset defaults and explicit CLI overrides."""
     supplied = {arg.split("=", 1)[0].replace("--no-", "--", 1) for arg in profile_args}
     defaults = COMMON_DEFAULTS | MODE_DEFAULTS[args.mode]
+    if args.reasoning_acceptance:
+        defaults["--streaming"] = None
     if args.num_profile_runs == 1:
         defaults.pop("--no-profile-run-disable-warmup-after-first", None)
     command = ["aiperf", "profile", *profile_args]
@@ -231,6 +254,8 @@ def run_profile(args: argparse.Namespace, profile_args: list[str], output: Path)
             command.append(flag)
             if value is not None:
                 command.append(value)
+    if args.reasoning_acceptance:
+        command.extend(["--extra-inputs", "return_token_ids:true"])
     command.extend(["--output-artifact-dir", str(output)])
     (output / "aiperf_command.txt").write_text(shlex.join(command) + "\n")
     return subprocess.run(command, check=False).returncode  # noqa: S603
@@ -245,6 +270,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("mode", choices=(*MODE_DEFAULTS, "summarize"))
     parser.add_argument("--output-artifact-dir", type=Path, required=True)
     parser.add_argument(
+        "--reasoning-acceptance",
+        action="store_true",
+        help="Report reasoning and final-answer acceptance from vLLM detailed metrics.",
+    )
+    parser.add_argument(
         "--dataset",
         nargs="+",
         help=(
@@ -253,9 +283,17 @@ def main(argv: list[str] | None = None) -> int:
         ),
     )
     args, profile_args = parser.parse_known_args(argv)
+    if args.reasoning_acceptance and args.mode == "speedup":
+        parser.error(
+            "--reasoning-acceptance is available in acceptance and summarize modes."
+        )
     if args.mode == "summarize":
         return int(
-            not summarize_output_directory(args.output_artifact_dir, "acceptance")
+            not summarize_output_directory(
+                args.output_artifact_dir,
+                "acceptance",
+                by_phase=args.reasoning_acceptance,
+            )
         )
     native_only = {"--config", "-f", "--conversation-num", "--num-sessions"}
     if any(arg.split("=", 1)[0] in native_only for arg in profile_args):
@@ -267,7 +305,15 @@ def main(argv: list[str] | None = None) -> int:
     profile_parser.add_argument("--num-conversations", type=int)
     profile_parser.add_argument("--benchmark-duration", type=float)
     profile_parser.add_argument("--num-profile-runs", type=int)
+    if args.reasoning_acceptance:
+        profile_parser.add_argument("--no-streaming", action="store_true")
+        profile_parser.add_argument("--endpoint-type", default="chat")
+        profile_parser.add_argument("--export-level", default="raw")
     args, _ = profile_parser.parse_known_args(profile_args, namespace=args)
+    if args.reasoning_acceptance and (
+        args.no_streaming or args.endpoint_type != "chat" or args.export_level != "raw"
+    ):
+        parser.error("--reasoning-acceptance requires streaming chat and raw exports.")
     default_dataset = "qualitative" if args.mode == "acceptance" else "humaneval"
     datasets = list(dict.fromkeys(args.dataset or [default_dataset]))
     args.output_artifact_dir.mkdir(parents=True, exist_ok=False)
@@ -279,7 +325,9 @@ def main(argv: list[str] | None = None) -> int:
         run_args = [*profile_args, *dataset_args(dataset, args)]
         returncode = run_profile(args, run_args, output)
         exit_code = exit_code or returncode
-    valid = summarize_output_directory(args.output_artifact_dir, args.mode)
+    valid = summarize_output_directory(
+        args.output_artifact_dir, args.mode, by_phase=args.reasoning_acceptance
+    )
     return exit_code or int(not valid)
 
 
