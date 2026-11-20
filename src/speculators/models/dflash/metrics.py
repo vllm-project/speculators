@@ -11,10 +11,9 @@ from speculators.losses import (
     LossConfig,
     compound_loss,
     compound_loss_from_hidden,
-    dflash_loss_decay,
-    dpace_loss_decay,
     kl_div_loss,
 )
+from speculators.models.dflash.utils import block_positions_and_loss_decay
 from speculators.models.metrics import compute_greedy_block_metrics
 
 _DEFAULT_LOSS_CONFIG: LossConfig = {"kl_div": (kl_div_loss, 1.0)}
@@ -108,22 +107,14 @@ def _compute_metrics(
     returns the loss and both argmaxes; the rest is per-position accuracy."""
     if loss_config is None:
         loss_config = _DEFAULT_LOSS_CONFIG
-    seq_len = loss_mask.shape[1]
-    device = loss_mask.device
-    pos_idx = torch.arange(seq_len, device=device) % block_size
-    pos_idx = pos_idx.unsqueeze(0)  # shape: [1, T]
-
-    if per_position_loss_weight == "dpace":
-        decay_fn = partial(
-            dpace_loss_decay,
-            loss_mask=loss_mask,
-            block_size=block_size,
-            dpace_alpha=dpace_alpha,
-        )
-    else:
-        decay_fn = partial(
-            dflash_loss_decay, gamma=gamma, sample_from_anchor=sample_from_anchor
-        )
+    pos_idx, decay_fn = block_positions_and_loss_decay(
+        loss_mask,
+        block_size,
+        gamma=gamma,
+        per_position_loss_weight=per_position_loss_weight,
+        dpace_alpha=dpace_alpha,
+        sample_from_anchor=sample_from_anchor,
+    )
 
     # The argmaxes come from the fused loss pass when the config is all fused.
     out = loss_fn(loss_mask, pos_idx, loss_config=loss_config, decay_fn=decay_fn)

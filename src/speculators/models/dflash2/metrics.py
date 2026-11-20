@@ -1,10 +1,10 @@
 """Runtime-aligned selector loss and metrics for DFlash2.
 
-``eal`` follows the realized greedy selector path. ``accept_len`` remains the
+``eal`` follows the realized greedy selector path. ``unary_accept_len`` remains the
 analytical TV-overlap estimate over the unary logits.
 """
 
-from functools import partial
+from collections.abc import Callable
 from typing import Any
 
 import torch
@@ -12,12 +12,14 @@ from torch.nn import functional
 
 from speculators.losses import (
     LossConfig,
-    dflash_loss_decay,
-    dpace_loss_decay,
+    compound_loss,
     loss_function,
 )
-from speculators.models.dspark.metrics import compute_metrics as compute_unary_metrics
-from speculators.models.metrics import compute_greedy_block_metrics
+from speculators.models.dflash.utils import block_positions_and_loss_decay
+from speculators.models.metrics import (
+    compute_analytical_block_acceptance,
+    compute_greedy_block_metrics,
+)
 
 __all__ = [
     "compute_metrics",
@@ -95,11 +97,33 @@ def compute_selector_loss(
     The original DFlash ``loss_mask`` remains the reduction denominator. In
     strict mode, ``selector_valid_mask`` masks selector-loss positions only.
     """
-    pos_idx = (
-        torch.arange(candidate_logits.shape[1], device=candidate_logits.device)
-        % block_size
-    ).unsqueeze(0)
+    pos_idx, decay_fn = block_positions_and_loss_decay(
+        loss_mask,
+        block_size,
+        gamma=gamma,
+        per_position_loss_weight=per_position_loss_weight,
+        dpace_alpha=dpace_alpha,
+        sample_from_anchor=sample_from_anchor,
+    )
 
+    return _compute_weighted_selector_loss(
+        candidate_logits,
+        target_positions,
+        loss_mask,
+        pos_idx,
+        decay_fn,
+        selector_valid_mask,
+    )
+
+
+def _compute_weighted_selector_loss(
+    candidate_logits: torch.Tensor,
+    target_positions: torch.Tensor,
+    loss_mask: torch.Tensor,
+    pos_idx: torch.Tensor,
+    decay_fn: Callable[..., torch.Tensor],
+    selector_valid_mask: torch.Tensor | None,
+) -> torch.Tensor:
     if selector_valid_mask is None:
         selector_loss_mask = loss_mask.to(torch.bool)
     else:
@@ -113,20 +137,6 @@ def compute_selector_loss(
     ) -> torch.Tensor:
         ce = _candidate_cross_entropy(logits, positions)
         return ce * selector_loss_mask.to(ce.dtype)
-
-    if per_position_loss_weight == "dpace":
-        decay_fn = partial(
-            dpace_loss_decay,
-            loss_mask=loss_mask,
-            block_size=block_size,
-            dpace_alpha=dpace_alpha,
-        )
-    else:
-        decay_fn = partial(
-            dflash_loss_decay,
-            gamma=gamma,
-            sample_from_anchor=sample_from_anchor,
-        )
 
     return loss_function(
         candidate_logits,
@@ -164,41 +174,47 @@ def compute_metrics(
             "expected 'replace' or 'strict'."
         )
 
-    unary_loss, metrics = compute_unary_metrics(
-        unary_logits,
-        targets,
-        None,
+    pos_idx, decay_fn = block_positions_and_loss_decay(
         loss_mask,
         block_size,
-        loss_config=loss_config,
         gamma=gamma,
-        confidence_head_alpha=0.0,
         per_position_loss_weight=per_position_loss_weight,
         dpace_alpha=dpace_alpha,
         sample_from_anchor=sample_from_anchor,
-        include_greedy_metrics=False,
+    )
+    unary = compound_loss(
+        unary_logits,
+        targets,
+        loss_mask,
+        pos_idx,
+        loss_config=loss_config,
+        decay_fn=decay_fn,
+        metric_terms=("tv",),
+    )
+    unary_loss = unary.loss
+    metrics, _, _ = compute_analytical_block_acceptance(
+        1.0 - unary.metric_terms["tv"],
+        loss_mask,
+        block_size,
+        sample_from_anchor,
+        prefix="unary_",
     )
 
-    for name in ("accept_rate", "accept_len"):
-        for suffix in ("sum", "total"):
-            key = f"{name}_{suffix}"
-            metrics[f"unary_{key}"] = metrics.pop(key)
-
     selector_valid_mask = contains_target if selector_miss_policy == "strict" else None
-    selector_loss = compute_selector_loss(
+    selector_loss = _compute_weighted_selector_loss(
         candidate_logits,
         target_positions,
         loss_mask,
-        block_size,
-        gamma=gamma,
-        per_position_loss_weight=per_position_loss_weight,
-        dpace_alpha=dpace_alpha,
-        sample_from_anchor=sample_from_anchor,
-        selector_valid_mask=selector_valid_mask,
+        pos_idx,
+        decay_fn,
+        selector_valid_mask,
     )
     loss = unary_loss + selector_loss_alpha * selector_loss
 
     one = torch.ones((), device=unary_logits.device)
+    for term_name, term_val in unary.term_losses.items():
+        metrics[f"{term_name}_sum"] = term_val
+        metrics[f"{term_name}_total"] = one.clone()
     metrics["unary_loss_sum"] = unary_loss.detach().clone()
     metrics["unary_loss_total"] = one
     metrics["selector_loss_sum"] = selector_loss.detach().clone()

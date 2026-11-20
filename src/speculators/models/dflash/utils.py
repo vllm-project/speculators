@@ -1,6 +1,10 @@
 """Utility functions for DFlash draft model."""
 
+from functools import partial
+
 import torch
+
+from speculators.losses import dflash_loss_decay, dpace_loss_decay
 
 
 def get_base_indices_for_anchored_blocks(
@@ -74,3 +78,30 @@ def rename_checkpoint_key(key: str, prefixes: dict[str, str]) -> str:
         if key.startswith(prefix):
             return f"{target}.{key.removeprefix(prefix)}"
     return key
+
+
+def block_positions_and_loss_decay(
+    loss_mask: torch.Tensor,
+    block_size: int,
+    *,
+    gamma: float,
+    per_position_loss_weight: str,
+    dpace_alpha: float,
+    sample_from_anchor: bool,
+):
+    """Build slot indices and the configured loss-decay function."""
+    pos_idx = (
+        torch.arange(loss_mask.shape[1], device=loss_mask.device) % block_size
+    ).unsqueeze(0)
+    if per_position_loss_weight == "dpace":
+        decay_fn = partial(
+            dpace_loss_decay,
+            loss_mask=loss_mask,
+            block_size=block_size,
+            dpace_alpha=dpace_alpha,
+        )
+    else:
+        decay_fn = partial(
+            dflash_loss_decay, gamma=gamma, sample_from_anchor=sample_from_anchor
+        )
+    return pos_idx, decay_fn
