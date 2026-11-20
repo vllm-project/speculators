@@ -44,7 +44,7 @@ CASES = [
 
 
 def _run(cfg):
-    inputs = make_inputs(cfg, DEVICE, seed=1)
+    inputs = make_inputs(cfg, DEVICE or "cpu", seed=1)
     loss, metrics = loss_head(cfg, inputs)
     loss.backward()
     return loss, metrics, [t.grad for t in inputs.trainable()]
@@ -93,7 +93,7 @@ def _dspark(head_type):
         torch.nn.init.normal_(model.lm_head.weight, std=0.3)
         model.verifier_lm_head.weight.copy_(model.lm_head.weight)
         torch.nn.init.ones_(model.verifier_norm.weight)
-    return model.to(DEVICE).train()
+    return model.to(device=DEVICE).train()  # type: ignore[call-arg]
 
 
 def _model_step(model, implementation, spec, weighting, targets):
