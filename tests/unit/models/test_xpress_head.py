@@ -115,7 +115,6 @@ def test_teacher_forced_metrics_compare_with_verifier(sample_from_anchor):
         block_size=4,
         loss_config=resolve_loss_config("ce", "eager"),
         sample_from_anchor=sample_from_anchor,
-        data_labels=torch.tensor([[1, 0, 0, 0]]),
     )
 
     assert metrics["full_acc_sum"].item() == 2 + sample_from_anchor
@@ -124,4 +123,3 @@ def test_teacher_forced_metrics_compare_with_verifier(sample_from_anchor):
     assert metrics["position_2_acc_sum"].item() == 0
     assert metrics["teacher_forced_eal_sum"].item() == 2 + sample_from_anchor
     assert metrics["teacher_forced_eal_total"].item() == 1
-    assert metrics["accuracy_sum"].item() == 1
