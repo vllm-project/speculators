@@ -230,8 +230,8 @@ class DataArgs(_Group):
     )
     max_anchors: int = Field(
         default=512,
-        description="Maximum anchor positions for DFlash-family and P-EAGLE training "
-        "(default: 512).",
+        description="Maximum anchor positions per packed document for DFlash-family "
+        "training, and per packed sequence for P-EAGLE (default: 512).",
     )
 
     @field_validator("hidden_states_dtype")

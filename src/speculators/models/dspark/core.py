@@ -97,7 +97,7 @@ class DSparkDraftModel(DFlashDraftModel):
         implementation = kwargs.get("loss_implementation", "fused")
         loss_config = resolve_loss_config(kwargs["loss_fn"], implementation)
         gamma = kwargs.get("dflash_decay_gamma", 4.0)
-        max_anchors = kwargs.get("max_anchors", 3072)
+        max_anchors = kwargs.get("max_anchors", 512)
         confidence_head_alpha = kwargs.get("confidence_head_alpha", 1.0)
         per_position_loss_weight = kwargs.get(
             "per_position_loss_weight", "fixed-exp-decay"
@@ -113,7 +113,7 @@ class DSparkDraftModel(DFlashDraftModel):
         }
         return dict(shared), dict(shared)
 
-    @conditional_torch_compile
+    @conditional_torch_compile(dynamic=False)
     def forward(
         self,
         hidden_states: torch.Tensor,  # [1, total_seq_len, num_hidden*hidden_size]
@@ -124,7 +124,7 @@ class DSparkDraftModel(DFlashDraftModel):
         position_ids: torch.Tensor | None = None,  # [1, total_seq_len]
         loss_config: LossConfig | None = None,
         gamma: float = 4.0,
-        max_anchors: int = 3072,
+        max_anchors: int = 512,
         confidence_head_alpha: float = 1.0,
         per_position_loss_weight: str = "fixed-exp-decay",
         dpace_alpha: float = 0.5,
@@ -144,9 +144,9 @@ class DSparkDraftModel(DFlashDraftModel):
         )
 
         # DSpark: add the Markov logit bias and predict per-position confidence.
-        num_blocks = max_anchors
         block = self.block_size
-        mask_tokens_size = num_blocks * block
+        mask_tokens_size = anchored_block_indices.numel()
+        num_blocks = mask_tokens_size // block
         # Ground-truth block tokens (verifier vocab); position 0 is the anchor.
         block_tokens = input_ids[0, anchored_block_indices].view(num_blocks, block)
         if self.config.sample_from_anchor:
