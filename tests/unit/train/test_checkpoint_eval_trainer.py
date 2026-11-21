@@ -1,12 +1,12 @@
 """Checkpoint-boundary tests without loading or training a language model."""
 
+import json
 import logging
 import os
 import signal
 import sys
 from datetime import timedelta
 from pathlib import Path
-from types import SimpleNamespace
 from typing import Any, cast
 
 import pytest
@@ -35,6 +35,10 @@ def _trainer(tmp_path: Path, command: str | None = None, *, save_best=False) -> 
     )
     trainer.is_distributed = False
     trainer.rank = 0
+    trainer.current_epoch = 0
+    trainer.train_epoch = lambda _epoch: None
+    trainer.val_loader = []
+    trainer.val_epoch = lambda _epoch: {"loss_epoch": 0.5}
     trainer.global_step = 17
     trainer.best_val_loss = float("inf")
     trainer.schedulers = []
@@ -44,16 +48,11 @@ def _trainer(tmp_path: Path, command: str | None = None, *, save_best=False) -> 
 
     def save(_model, _optimizers, epoch):
         path = tmp_path / str(epoch)
-        path.mkdir(exist_ok=True)
+        path.mkdir(parents=True, exist_ok=True)
         (path / "config.json").write_text("{}")
 
-    trainer.checkpointer = SimpleNamespace(
-        path=tmp_path,
-        save_checkpoint=save,
-        save_val_metrics=lambda *a: None,
-        update_best_symlink=lambda *a: None,
-        cleanup_keep_only_best=lambda *a, **kw: None,
-    )
+    trainer.checkpointer = SingleGPUCheckpointer(tmp_path)
+    trainer.checkpointer.save_checkpoint = save
     return cast("Trainer", trainer)
 
 
@@ -78,8 +77,8 @@ def test_evaluates_complete_checkpoint_once_and_logs_its_training_step(
 ):
     trainer = _trainer(tmp_path, evaluator)
     with caplog.at_level(logging.INFO, logger="speculators.metrics"):
-        trainer.maybe_save_checkpoint(0, local_step=3)
-        trainer.maybe_save_checkpoint(0)
+        trainer.run_training()
+        trainer._evaluate_checkpoint(0)
     results = list((tmp_path / "serving_eval").glob("*/metrics.json"))
     assert len(results) == 1
     records = [
@@ -90,39 +89,79 @@ def test_evaluates_complete_checkpoint_once_and_logs_its_training_step(
     assert records[0].step == 17
 
 
-def test_best_only_checkpoint_also_evaluated(tmp_path, evaluator):
-    trainer = _trainer(tmp_path, evaluator, save_best=True)
-    trainer.maybe_save_checkpoint(0)
-    assert not (tmp_path / "serving_eval").exists()
-    trainer.maybe_update_best(0, {"loss_epoch": 0.5})
-    assert len(list((tmp_path / "serving_eval").glob("*/metrics.json"))) == 1
-
-
 def test_best_retention_preserves_metrics_and_failed_evaluation_logs(
     tmp_path, evaluator
 ):
-    trainer = _trainer(tmp_path, evaluator, save_best=True)
-    real_checkpointer = SingleGPUCheckpointer(tmp_path)
-    cast(
-        "Any", trainer.checkpointer
-    ).cleanup_keep_only_best = real_checkpointer.cleanup_keep_only_best
-    historical = tmp_path / "serving_eval" / "old"
+    root = tmp_path / "checkpoints"
+    trainer = _trainer(root, evaluator, save_best=True)
+    historical = root / "serving_eval" / "old"
     historical.mkdir(parents=True)
     (historical / "metrics.json").write_text('{"acceptance_length": 2}')
-    failed = tmp_path / "serving_eval" / "failed"
+    failed = root / "serving_eval" / "failed"
     failed.mkdir()
     (failed / "evaluator.log").write_text("previous failure")
 
-    trainer.maybe_update_best(0, {"loss_epoch": 0.5})
+    trainer.run_training()
 
     assert (historical / "metrics.json").exists()
     assert (failed / "evaluator.log").read_text() == "previous failure"
-    assert len(list((tmp_path / "serving_eval").glob("*/metrics.json"))) == 2
+    assert len(list((root / "serving_eval").glob("*/metrics.json"))) == 2
+
+
+@pytest.mark.parametrize("save_best", [False, True], ids=["periodic", "best-only"])
+def test_resume_after_interrupted_epoch_evaluation(tmp_path, monkeypatch, save_best):
+    root = tmp_path / "checkpoints"
+    script = tmp_path / "interrupt_eval.py"
+    script.write_text(
+        "import os, signal, time\nfrom pathlib import Path\n"
+        "if Path(os.environ['SPECULATORS_EVAL_CHECKPOINT']).name == '1':\n"
+        "    os.kill(os.getppid(), signal.SIGTERM)\n"
+        "    time.sleep(30)\n"
+        "out = Path(os.environ['SPECULATORS_EVAL_OUTPUT_DIR'])\n"
+        "out.joinpath('metrics.json').write_text('{\"mal\": 2}')\n"
+    )
+    trained, validated = [], []
+
+    def run(resume):
+        trainer = _trainer(root, f'"{sys.executable}" "{script}"', save_best=save_best)
+        trainer.config = trainer.config._replace(num_epochs=3)
+        trainer.resume_from_checkpoint = resume
+        trainer.setup_trainer()
+
+        def train_epoch(epoch):
+            trained.append(epoch)
+            trainer.global_step += 1
+
+        def val_epoch(epoch):
+            validated.append(epoch)
+            return {"loss_epoch": [0.8, 0.2, 0.5][epoch]}
+
+        monkeypatch.setattr(trainer, "train_epoch", train_epoch)
+        monkeypatch.setattr(trainer, "val_epoch", val_epoch)
+        if resume:
+            assert (trainer.current_epoch, trainer.global_step) == (2, 2)
+            assert trainer.best_val_loss == 0.2
+        trainer.run_training()
+        return trainer.checkpointer
+
+    checkpointer = run(resume=False)
+    assert (root / "interrupted").is_dir()
+    assert checkpointer.read_best_epoch() == 1
+    assert checkpointer.load_best_val_loss() == 0.2
+    assert (root / "0").is_dir() == (not save_best)
+    checkpointer = run(resume=True)
+    assert trained == validated == [0, 1, 2]
+    assert checkpointer.read_best_epoch() == 1
+    steps = sorted(
+        json.loads(p.read_text())["step"]
+        for p in (root / "serving_eval").glob("*/evaluation.json")
+    )
+    assert steps == ([1, 2] if save_best else [1, 2, 3])
 
 
 def test_disabled_and_interrupted_saves_never_run_evaluator(tmp_path, evaluator):
     trainer = _trainer(tmp_path)
-    trainer.maybe_save_checkpoint(0)
+    trainer.run_training()
     trainer.config = trainer.config._replace(checkpoint_eval_command=evaluator)
     trainer.maybe_save_checkpoint("interrupted")
     assert not (tmp_path / "serving_eval").exists()
@@ -134,7 +173,8 @@ def test_evaluation_failure_preserves_checkpoint_and_training_continues(
     script = tmp_path / "fail.py"
     script.write_text("raise SystemExit(7)")
     trainer = _trainer(tmp_path, f"{sys.executable} {script}")
-    trainer.maybe_save_checkpoint(0)
+    trainer.val_loader = None
+    trainer.run_training()
     assert (tmp_path / "0" / "training_state.json").exists()
     assert "evaluation failed" in caplog.text.lower()
     assert not any(
@@ -157,13 +197,14 @@ def test_metric_backend_errors_are_isolated_but_training_interrupts_propagate(
     handler = FailingBackend()
     logger.addHandler(handler)
     trainer = _trainer(tmp_path, evaluator)
+    trainer.maybe_save_checkpoint(0)
     try:
         with caplog.at_level(logging.INFO, logger="speculators.metrics"):
             if isinstance(error, TrainingInterruptedError):
                 with pytest.raises(TrainingInterruptedError):
-                    trainer.maybe_save_checkpoint(0)
+                    trainer._evaluate_checkpoint(0)
             else:
-                trainer.maybe_save_checkpoint(0)
+                trainer._evaluate_checkpoint(0)
                 assert "evaluation failed" in caplog.text.lower()
         assert (tmp_path / "0" / "training_state.json").exists()
     finally:

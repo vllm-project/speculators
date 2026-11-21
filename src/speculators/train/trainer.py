@@ -274,7 +274,7 @@ class Trainer:
             else SingleGPUCheckpointer
         )
         self.checkpointer: BaseCheckpointer = checkpointer_class(self.config.save_path)
-        self._last_checkpoint_eval: tuple[str, int] | None = None
+        self._last_checkpoint_eval: tuple[int, int] | None = None
 
         self.setup_trainer()
         self.setup_model()
@@ -701,7 +701,8 @@ class Trainer:
                 and num_steps - local_step >= step_interval * MIN_STEP_PCT
                 # Avoid saving back to back ay the end of each epoch
             ):
-                self.maybe_save_checkpoint(epoch, local_step=local_step)
+                if self.maybe_save_checkpoint(epoch, local_step=local_step):
+                    self._evaluate_checkpoint(epoch)
                 # Exclude checkpoint I/O and evaluation from the next batch.
                 t_before_fetch = time.perf_counter()
 
@@ -768,7 +769,8 @@ class Trainer:
 
         return val_metrics
 
-    def maybe_save_checkpoint(self, epoch: int | str, local_step: int = 0):
+    def maybe_save_checkpoint(self, epoch: int | str, local_step: int = 0) -> bool:
+        """Return whether this call saved a checkpoint."""
         if epoch != "interrupted" and (
             self.config.save_best
             or (
@@ -778,7 +780,7 @@ class Trainer:
                 and (epoch + 1) % self.config.checkpoint_freq != 0
             )
         ):
-            return
+            return False
 
         root_logger.info(f"Saving checkpoint to {self.checkpointer.path / str(epoch)}")
         self.checkpointer.save_checkpoint(self.model, self.optimizers, epoch)
@@ -799,14 +801,12 @@ class Trainer:
                         old.unlink()
                 link_name.symlink_to(target)
         root_logger.info(f"Checkpoint saved to {self.checkpointer.path / str(epoch)}")
-        self._evaluate_checkpoint(epoch)
+        return True
 
-    def _evaluate_checkpoint(self, epoch: int | str) -> None:
+    def _evaluate_checkpoint(self, epoch: int) -> None:
         command = self.config.checkpoint_eval_command
-        if not command or epoch == "interrupted":
-            return
-        key = (str(epoch), self.global_step)
-        if self._last_checkpoint_eval == key:
+        key = (epoch, self.global_step)
+        if not command or self._last_checkpoint_eval == key:
             return
         self._last_checkpoint_eval = key
         group = dist.group.WORLD if self.is_distributed else None
@@ -842,11 +842,12 @@ class Trainer:
                     exc_info=True,
                 )
 
-    def maybe_update_best(self, epoch: int, val_metrics: dict | None):
+    def maybe_update_best(self, epoch: int, val_metrics: dict | None) -> bool:
+        """Update the best checkpoint and return whether this call saved weights."""
         if val_metrics is None or "loss_epoch" not in val_metrics:
-            return
+            return False
         if val_metrics["loss_epoch"] >= self.best_val_loss:
-            return
+            return False
 
         if self.config.save_best:
             self.checkpointer.save_checkpoint(self.model, self.optimizers, epoch)
@@ -855,11 +856,10 @@ class Trainer:
             # maybe_save_checkpoint returns early when save_best is set, so the
             # end-of-epoch cursor has to be written here or resume restarts at 0.
             self._save_training_state(epoch, 0)
-            self._evaluate_checkpoint(epoch)
         elif self.config.checkpoint_freq >= 1 and not (
             epoch == 0 or (epoch + 1) % int(self.config.checkpoint_freq) == 0
         ):
-            return
+            return False
 
         self.best_val_loss = val_metrics["loss_epoch"]
         self.checkpointer.save_val_metrics(epoch, val_metrics)
@@ -869,6 +869,7 @@ class Trainer:
         )
         if self.config.save_best:
             self.checkpointer.cleanup_keep_only_best(best_epoch=epoch)
+        return self.config.save_best
 
     @with_graceful_shutdown()
     def run_training(self):
@@ -881,7 +882,7 @@ class Trainer:
             if self.is_distributed:
                 dist.barrier()
 
-            self.maybe_save_checkpoint(epoch)
+            checkpoint_saved = self.maybe_save_checkpoint(epoch)
 
             if self.is_distributed:
                 dist.barrier()
@@ -898,7 +899,11 @@ class Trainer:
             if self.is_distributed:
                 dist.barrier()
 
-            self.maybe_update_best(epoch, val_metrics)
+            best_checkpoint_saved = self.maybe_update_best(epoch, val_metrics)
 
             if self.is_distributed:
                 dist.barrier()
+
+            # Resume skips this epoch, so finish validation and best updates first.
+            if checkpoint_saved or best_checkpoint_saved:
+                self._evaluate_checkpoint(epoch)
