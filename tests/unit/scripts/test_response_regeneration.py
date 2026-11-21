@@ -163,6 +163,42 @@ _EXTRACT_CASES = [
     pytest.param(
         {
             "messages": [
+                {"role": "developer", "content": "You are a coding tutor."},
+                {"role": "user", "content": "Hello"},
+                {"role": "assistant", "content": "<original answer to drop>"},
+            ]
+        },
+        "prompt",
+        [
+            {"role": "developer", "content": "You are a coding tutor."},
+            {"role": "user", "content": "Hello"},
+        ],
+        id="developer_prompt_preserved",
+    ),
+    pytest.param(
+        {
+            "conversations": [
+                {"from": "developer", "value": "Be concise."},
+                {"from": "human", "value": "Hi"},
+                {"from": "gpt", "value": "<original answer to drop>"},
+            ]
+        },
+        "prompt",
+        [
+            {"role": "developer", "content": "Be concise."},
+            {"role": "user", "content": "Hi"},
+        ],
+        id="developer_from_value_preserved",
+    ),
+    pytest.param(
+        {"messages": [{"role": "developer", "content": "D"}], "prompt": "P"},
+        "prompt",
+        [{"role": "user", "content": "P"}],
+        id="developer_only_falls_back_to_prompt",
+    ),
+    pytest.param(
+        {
+            "messages": [
                 {"role": "user", "content": ""},
                 {"role": "user", "content": "u"},
             ]
@@ -825,6 +861,39 @@ def test_regenerate_plain_conversation_is_unchanged_and_sends_no_tools():
     assert samples[0]["metadata"]["is_tool_call"] is False
     # Tool-free path must not advertise tools to the endpoint.
     assert "tools" not in sent[0]
+
+
+def test_regenerate_conversation_preserves_developer_prefix():
+    item = {
+        "idx": 0,
+        "primary_id": "dev0",
+        "turns": [
+            {"role": "developer", "content": "You are a coding tutor."},
+            {"role": "user", "content": "Hello"},
+            {"role": "developer", "content": "Be terse."},
+            {"role": "user", "content": "Bye"},
+        ],
+    }
+    responses = [
+        _response(prompt_token_ids=[1, 2], token_ids=[3], content="Hi!"),
+        _response(prompt_token_ids=[1, 2, 3, 4, 5], token_ids=[6], content="Done."),
+    ]
+    samples, truncated, sent = _regen(item, responses)
+
+    assert not truncated
+    assert len(samples) == 2
+    assert len(sent) == 2
+    assert sent[0]["messages"] == [
+        {"role": "developer", "content": "You are a coding tutor."},
+        {"role": "user", "content": "Hello"},
+    ]
+    assert sent[1]["messages"] == [
+        {"role": "developer", "content": "You are a coding tutor."},
+        {"role": "user", "content": "Hello"},
+        {"role": "assistant", "content": "Hi!"},
+        {"role": "developer", "content": "Be terse."},
+        {"role": "user", "content": "Bye"},
+    ]
 
 
 def test_regenerate_splices_cached_result_after_regenerated_call():
