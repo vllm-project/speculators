@@ -110,6 +110,29 @@ def _maybe_apply_mrope_full_head_hack(
         )
 
 
+# Verifier config attribute names for the final-norm epsilon, in lookup order.
+# NemotronH and Falcon use ``layer_norm_epsilon``; Nemotron and LFM2 ``norm_eps``;
+# Cohere, Phi, StableLM and GPT-NeoX ``layer_norm_eps``; Starcoder2 ``norm_epsilon``.
+_NORM_EPS_ATTRS = (
+    "rms_norm_eps",
+    "layer_norm_epsilon",
+    "norm_eps",
+    "layer_norm_eps",
+    "norm_epsilon",
+)
+
+
+def _resolve_norm_eps(verifier_config: PretrainedConfig) -> float:
+    for attr in _NORM_EPS_ATTRS:
+        eps = getattr(verifier_config, attr, None)
+        if eps is not None:
+            return float(eps)
+    raise AttributeError(
+        f"{type(verifier_config).__name__} has none of {list(_NORM_EPS_ATTRS)}; "
+        "pass --draft-config to set the draft rms_norm_eps explicitly."
+    )
+
+
 def create_transformer_layer_config(  # noqa: C901
     verifier_name_or_path: str,
     num_layers: int,
@@ -223,7 +246,7 @@ def create_transformer_layer_config(  # noqa: C901
         hidden_act=hidden_act,
         max_position_embeddings=verifier_config.max_position_embeddings,
         initializer_range=verifier_config.initializer_range,
-        rms_norm_eps=verifier_config.rms_norm_eps,
+        rms_norm_eps=_resolve_norm_eps(verifier_config),
         head_dim=head_dim,
         tie_word_embeddings=False,
         sliding_window=sliding_window,
@@ -395,6 +418,51 @@ def _generate_vocab_mappings(args: argparse.Namespace, data_path: Path):
     return d2t, t2d, draft_vocab_size
 
 
+def _resolve_vocab_mappings(args: argparse.Namespace):
+    """Resolve ``(d2t, t2d, draft_vocab_size)`` on one rank.
+
+    Returns ``(result, error)``. A missing mapping is returned as an error
+    message rather than raised, so the caller can share it with every rank.
+    """
+    if args.d2t_path or args.t2d_path:
+        return _load_mappings(args.d2t_path, args.t2d_path, args.draft_vocab_size), None
+
+    data_path = Path(args.data_path)
+    if args.draft_vocab_size is not None:
+        default_t2d_path = data_path / f"t2d-{args.draft_vocab_size}.npy"
+        default_d2t_path = data_path / f"d2t-{args.draft_vocab_size}.npy"
+        if default_t2d_path.exists() and default_d2t_path.exists():
+            result = _load_mappings(
+                default_d2t_path, default_t2d_path, args.draft_vocab_size
+            )
+            return result, None
+
+        result = _generate_vocab_mappings(args, data_path)
+        if result is not None:
+            return result, None
+
+        # Falling back to the full vocab here would silently train a different
+        # model than the one asked for.
+        token_freq_path = args.token_freq_path or data_path / "token_freq.pt"
+        return None, (
+            f"--draft-vocab-size {args.draft_vocab_size} needs a vocab mapping, "
+            f"but neither '{default_d2t_path}' / '{default_t2d_path}' nor the "
+            f"token frequencies at '{token_freq_path}' exist. Re-run "
+            "`speculators prepare-data` with --no-skip-token-freq, or pass "
+            "--token-freq-path or --d2t-path/--t2d-path. Omit --draft-vocab-size "
+            "to train with the full verifier vocab."
+        )
+
+    logger.info("No --draft-vocab-size given; using the full verifier vocab")
+    verifier_config = AutoConfig.from_pretrained(
+        args.verifier_name_or_path,
+        trust_remote_code=args.trust_remote_code,
+    )
+    if hasattr(verifier_config, "text_config"):
+        verifier_config = verifier_config.text_config
+    return (None, None, verifier_config.vocab_size), None
+
+
 def parse_vocab_mappings(args: argparse.Namespace):
     if (args.d2t_path or args.t2d_path) and not (args.d2t_path and args.t2d_path):
         raise ValueError(
@@ -403,44 +471,19 @@ def parse_vocab_mappings(args: argparse.Namespace):
             f"d2t={'provided' if args.d2t_path is not None else 'not provided'}"
         )
 
-    result = None
+    result, error = None, None
     if not is_distributed() or get_rank() == 0:
-        if args.d2t_path or args.t2d_path:
-            result = _load_mappings(args.d2t_path, args.t2d_path, args.draft_vocab_size)
-        else:
-            data_path = Path(args.data_path)
-            if args.draft_vocab_size is not None:
-                default_t2d_path = data_path / f"t2d-{args.draft_vocab_size}.npy"
-                default_d2t_path = data_path / f"d2t-{args.draft_vocab_size}.npy"
-                if default_t2d_path.exists() and default_d2t_path.exists():
-                    result = _load_mappings(
-                        default_d2t_path, default_t2d_path, args.draft_vocab_size
-                    )
-                else:
-                    result = _generate_vocab_mappings(args, data_path)
+        result, error = _resolve_vocab_mappings(args)
 
-            if result is None:
-                token_freq_path = args.token_freq_path or data_path / "token_freq.pt"
-                token_freq_path = Path(token_freq_path)
-
-                logger.warning(
-                    "No vocab mappings found, and can't generate new ones because "
-                    f"either token_freq_path='{token_freq_path}' doesn't exist or "
-                    "--draft-vocab-size is None. Using full verifier vocab"
-                )
-                # When vocab mapping is not provided, use the full verifier vocab
-                verifier_config = AutoConfig.from_pretrained(
-                    args.verifier_name_or_path,
-                    trust_remote_code=args.trust_remote_code,
-                )
-                if hasattr(verifier_config, "text_config"):
-                    verifier_config = verifier_config.text_config
-                result = None, None, verifier_config.vocab_size
-
+    # Only rank 0 resolves the mapping, so its error is broadcast and raised on
+    # every rank; raising on rank 0 alone would leave the others blocked here.
     if is_distributed():
-        payload = [result]
+        payload = [result, error]
         dist.broadcast_object_list(payload, src=0)
-        result = payload[0]
+        result, error = payload
+
+    if error is not None:
+        raise ValueError(error)
     return result
 
 
@@ -513,26 +556,15 @@ def build_draft_model(
                 t2d=t2d,
                 d2t=d2t,
                 verifier_name_or_path=args.verifier_name_or_path,
-                draft_attn_impl=(
-                    args.draft_attn_impl if args.speculator_type != "mtp" else None
-                ),
+                draft_attn_impl=args.draft_attn_impl,
             )
-        if args.speculator_type != "mtp":
-            # _attn_implementation is never serialized by HF configs, so re-apply
-            # the CLI selection before construction -- mirroring from_training_args.
-            # MTP is skipped: its from_training_args never sets the field and its
-            # __init__ resolves its own default ("sdpa") when it is absent.
-            config = model_class.config_class.from_pretrained(args.from_pretrained)
-            config.transformer_layer_config._attn_implementation = args.draft_attn_impl  # noqa: SLF001
-            return model_class.from_pretrained(
-                args.from_pretrained,
-                config=config,
-                t2d=t2d,
-                d2t=d2t,
-                verifier=args.verifier_name_or_path,
-            )
+        # _attn_implementation is never serialized by HF configs, so re-apply
+        # the CLI selection before construction -- mirroring from_training_args.
+        config = model_class.config_class.from_pretrained(args.from_pretrained)
+        config.transformer_layer_config._attn_implementation = args.draft_attn_impl  # noqa: SLF001
         return model_class.from_pretrained(
             args.from_pretrained,
+            config=config,
             t2d=t2d,
             d2t=d2t,
             verifier=args.verifier_name_or_path,
@@ -593,6 +625,7 @@ def build_draft_model(
 
 
 def main(cfg: TrainConfig):  # noqa: C901
+    """Build the configured model, data loaders, and trainer, then run training."""
     # Phase-1 adapter: the model layer still consumes a flat vars(args)-shaped
     # dict via **kwargs, so flatten the typed config back into a namespace here.
     # New code should read cfg.<group>.<field> directly and must NOT add new
@@ -636,11 +669,6 @@ def main(cfg: TrainConfig):  # noqa: C901
     hidden_states_dtype = getattr(torch, args.hidden_states_dtype)
 
     if args.speculator_type == "mtp":
-        if args.draft_attn_impl != "simple_flex_attention":
-            raise ValueError(
-                "--draft-attn-impl is not configurable for MTP. "
-                "Must be left with the default value ('simple_flex_attention')."
-            )
         # MTP reuses the verifier's own decoder as the draft and extracts the
         # native MTP head weights from the verifier, so there are no vocab
         # mappings or draft mask token to resolve from the CLI. This works both
@@ -731,6 +759,7 @@ def main(cfg: TrainConfig):  # noqa: C901
         num_target_layers=num_target_layers,
         num_workers=args.num_workers,
         prefetch_factor=args.prefetch_factor,
+        max_transfer_workers=args.max_transfer_workers,
         preprocess=preprocess,
         train_data_ratio=args.train_data_ratio,
         seed=args.seed,
@@ -764,6 +793,7 @@ def main(cfg: TrainConfig):  # noqa: C901
         hidden_states_dtype=hidden_states_dtype,
         log_freq=args.log_freq,
         fsdp_shard=args.fsdp_shard,
+        fsdp_replicate_frozen=args.fsdp_replicate_frozen,
         gradient_checkpointing=args.gradient_checkpointing,
         max_steps=args.max_steps,
     )

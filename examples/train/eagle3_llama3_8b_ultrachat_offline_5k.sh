@@ -86,7 +86,8 @@ speculators prepare-data \
     --render-endpoint "http://localhost:${VLLM_PORT}" \
     --max-samples "$MAX_SAMPLES" \
     --output "$OUTPUT_DIR" \
-    --seq-length "$SEQ_LENGTH"
+    --seq-length "$SEQ_LENGTH" \
+    --no-skip-token-freq
 
 # Step 3: Generate hidden states
 echo "=== Step 3: Generating hidden states ==="

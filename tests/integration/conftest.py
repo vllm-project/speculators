@@ -15,10 +15,8 @@ from speculators.models.eagle3 import Eagle3SpeculatorConfig
 from speculators.models.eagle3.core import Eagle3DraftModel
 from speculators.models.mtp import MTPSpeculatorConfig
 from speculators.models.mtp.core import MTPDraftModel
-from speculators.models.peagle.config import PEagleSpeculatorConfig
-from speculators.models.peagle.core import PEagleDraftModel
 from speculators.proposals.greedy import GreedyTokenProposalConfig
-from speculators.train.data import CollateFn
+from speculators.train.data import _add_document_ids, _pad_samples, create_empty_batch
 
 # ---------------------------------------------------------------------------
 # Tiny verifier configs
@@ -165,50 +163,11 @@ def make_dflash_model(
     return model.to(device=device, dtype=dtype)  # type: ignore[call-arg]
 
 
-def make_peagle_model(
-    *,
-    draft_vocab_size: int = 64,
-    num_depths: int = 4,
-    norm_before_fc: bool = False,
-    fc_norm: bool = False,
-    norm_output: bool = False,
-    draft_attn_impl: str | None = None,
-    device: str = "cuda:0",
-    dtype: torch.dtype = torch.bfloat16,
-) -> PEagleDraftModel:
-    """Create a tiny PEagle model with real initialized weights."""
-    transformer_config = copy.deepcopy(TINY_LLAMA_CONFIG)
-    transformer_config._attn_implementation = draft_attn_impl or "simple_flex_attention"
-    config = PEagleSpeculatorConfig(
-        transformer_layer_config=transformer_config,
-        draft_vocab_size=draft_vocab_size,
-        norm_before_residual=False,
-        norm_before_fc=norm_before_fc,
-        fc_norm=fc_norm,
-        norm_output=norm_output,
-        embed_requires_grad=True,
-        mask_token_id=0,
-        speculators_config=SpeculatorsConfig(
-            algorithm="peagle",
-            proposal_methods=[GreedyTokenProposalConfig(speculative_tokens=num_depths)],
-            default_proposal_method="greedy",
-            verifier=VerifierConfig(
-                name_or_path=None,
-                architectures=["LlamaForCausalLM"],
-            ),
-        ),
-    )
-    model = PEagleDraftModel(config)
-    _fill_nan_weights(model)
-    return model.to(device=device, dtype=dtype)  # type: ignore[call-arg]
-
-
 def make_mtp_model(
     *,
     num_speculative_steps: int = 3,
     device: str = "cuda:0",
     dtype: torch.dtype = torch.bfloat16,
-    torch_compile: bool = True,
 ) -> MTPDraftModel:
     """Create a tiny MTP model mirroring Qwen3.5-0.8B architecture."""
     from transformers.models.qwen3_5.configuration_qwen3_5 import (  # noqa: PLC0415
@@ -233,13 +192,7 @@ def make_mtp_model(
     )
     model = MTPDraftModel(config)
     _fill_nan_weights(model)
-    model = model.to(device=device, dtype=dtype)  # type: ignore[call-arg]
-    if not torch_compile:
-        import types  # noqa: PLC0415
-
-        orig = model.forward._torchdynamo_orig_callable
-        model.forward = types.MethodType(orig, model)
-    return model
+    return model.to(device=device, dtype=dtype)  # type: ignore[call-arg]
 
 
 # ---------------------------------------------------------------------------
@@ -260,7 +213,7 @@ def make_sample(
 ) -> dict[str, torch.Tensor]:
     """Generate a single synthetic sample (no batch dim, seq_len on dim 0).
 
-    Matches the per-sample format produced by BaseDataset.__getitem__:
+    Matches the per-sample format produced by SpeculatorsDataset.__getitem__:
         hidden_states: [seq_len, hidden_multiplier * hidden_size]
         input_ids: [seq_len]
         verifier_last_hidden_states: [seq_len, hidden_size]
@@ -313,10 +266,7 @@ def make_batch(
     preprocess: Callable | None = None,
     device: str = "cuda:0",
 ) -> dict[str, torch.Tensor]:
-    """Collate a list of samples into a single batch using the real collate_fn.
-
-    Uses ``CollateFn`` from ``speculators.train.data`` to pack and pad
-    samples exactly the way the training pipeline does.
+    """Pack synthetic samples using the dataset's batching operations.
 
     Args:
         max_len: Target sequence length to pad/truncate to.
@@ -330,13 +280,18 @@ def make_batch(
     Returns:
         Dict with keys matching model forward() signatures, all on ``device``.
     """
-    collate_fn = CollateFn(
-        max_len=max_len,
-        hidden_size=hidden_size,
-        num_target_layers=num_target_layers,
-        preprocess=preprocess,
-    )
-    batch = collate_fn(samples)
+    valid_samples = [preprocess(sample) if preprocess else sample for sample in samples]
+    if valid_samples:
+        batch = _pad_samples(valid_samples, max_len, torch.bfloat16)
+        _add_document_ids(batch, max_len)
+    else:
+        batch = create_empty_batch(
+            max_len,
+            hidden_size,
+            num_target_layers,
+            dtype=torch.bfloat16,
+        )
+    batch["error_records"] = 0
     return {
         k: v.to(device) if isinstance(v, torch.Tensor) else v for k, v in batch.items()
     }
@@ -361,14 +316,6 @@ def eagle3_model():
 @pytest.fixture
 def dflash_model():
     model = make_dflash_model()
-    yield model
-    del model
-    torch.cuda.empty_cache()
-
-
-@pytest.fixture
-def peagle_model():
-    model = make_peagle_model()
     yield model
     del model
     torch.cuda.empty_cache()

@@ -86,6 +86,7 @@ def test_resume_after_checkpoint_best(tmp_path: Path):
         MODEL,
         "hf:inference-optimization/speculators-ci-datasets:smoke_regen",
         data_path,
+        skip_token_freq=False,  # training passes --draft-vocab-size
     )
 
     # Step 2: Generate hidden states offline

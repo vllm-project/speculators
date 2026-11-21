@@ -141,3 +141,160 @@ def test_zero_step_ms_returns_zero_throughput():
     assert profile is not None
     assert profile["tokens_per_s"] == 0.0
     assert profile["fetch_frac"] == 0.0
+
+
+class _FakeDevice:
+    def __init__(self, device_type: str):
+        self.type = device_type
+
+
+class _StubBackend:
+    """Minimal stub backend module exposing ``memory_allocated``."""
+
+    def __init__(self, mem_bytes: int) -> None:
+        self._mem_bytes = mem_bytes
+
+    def memory_allocated(self) -> int:
+        return self._mem_bytes
+
+
+class _EmptyBackend:
+    """Stub backend with no ``memory_allocated`` attribute."""
+
+
+def test_memory_fallback_uses_backend_native_api():
+    """Generic accelerator API raises RuntimeError; falls back to backend-native.
+
+    This is a backend-agnostic fallback: when torch.accelerator.memory_allocated()
+    fails on any device type, the code tries torch.<device_type>.memory_allocated()
+    instead.  We simulate this on a CPU-only CI by patching the accelerator
+    APIs and injecting a stub backend module.
+    """
+    stub_backend = _StubBackend(mem_bytes=42 * 1024**2)  # 42 MiB
+
+    fake_device = _FakeDevice("fake_device")
+
+    with (
+        patch(
+            "speculators.train.trainer.torch.accelerator.is_available",
+            return_value=True,
+        ),
+        patch(
+            "speculators.train.trainer.torch.accelerator.current_accelerator",
+            return_value=fake_device,
+        ),
+        patch(
+            "speculators.train.trainer.torch.accelerator.memory_allocated",
+            side_effect=RuntimeError("Allocator is not a DeviceAllocator"),
+        ),
+        patch(
+            "speculators.train.trainer.torch.fake_device",
+            stub_backend,
+            create=True,
+        ),
+        patch("speculators.train.trainer.torch.accelerator.synchronize"),
+        patch(
+            "speculators.train.trainer.time.perf_counter",
+            return_value=1.0,
+        ),
+    ):
+        timer = _StepTimer(enabled=True)
+        timer.mark("fwd")
+
+    assert timer._memory["fwd"] == 42.0
+
+
+def test_memory_fallback_skips_when_backend_missing():
+    """Generic API raises RuntimeError and no backend module exists -> skip."""
+    fake_device = _FakeDevice("privateuse1")
+
+    with (
+        patch(
+            "speculators.train.trainer.torch.accelerator.is_available",
+            return_value=True,
+        ),
+        patch(
+            "speculators.train.trainer.torch.accelerator.current_accelerator",
+            return_value=fake_device,
+        ),
+        patch(
+            "speculators.train.trainer.torch.accelerator.memory_allocated",
+            side_effect=RuntimeError("not a DeviceAllocator"),
+        ),
+        patch("speculators.train.trainer.torch.accelerator.synchronize"),
+        patch(
+            "speculators.train.trainer.time.perf_counter",
+            return_value=1.0,
+        ),
+    ):
+        timer = _StepTimer(enabled=True)
+        timer.mark("fwd")
+
+    assert "fwd" not in timer._memory
+
+
+def test_memory_fallback_skips_when_backend_lacks_memory_allocated():
+    """Backend module exists but has no memory_allocated -> skip silently."""
+    # _EmptyBackend has no memory_allocated attribute, so hasattr returns False
+    # and the trainer skips memory recording for this step.
+    stub_backend = _EmptyBackend()
+
+    fake_device = _FakeDevice("fake_device")
+
+    with (
+        patch(
+            "speculators.train.trainer.torch.accelerator.is_available",
+            return_value=True,
+        ),
+        patch(
+            "speculators.train.trainer.torch.accelerator.current_accelerator",
+            return_value=fake_device,
+        ),
+        patch(
+            "speculators.train.trainer.torch.accelerator.memory_allocated",
+            side_effect=RuntimeError("not a DeviceAllocator"),
+        ),
+        patch(
+            "speculators.train.trainer.torch.fake_device",
+            stub_backend,
+            create=True,
+        ),
+        patch("speculators.train.trainer.torch.accelerator.synchronize"),
+        patch(
+            "speculators.train.trainer.time.perf_counter",
+            return_value=1.0,
+        ),
+    ):
+        timer = _StepTimer(enabled=True)
+        timer.mark("fwd")
+
+    assert "fwd" not in timer._memory
+
+
+def test_memory_happy_path_still_works():
+    """Generic accelerator API succeeds (CUDA-like) - memory recorded normally."""
+    fake_device = _FakeDevice("cuda")
+
+    with (
+        patch(
+            "speculators.train.trainer.torch.accelerator.is_available",
+            return_value=True,
+        ),
+        patch(
+            "speculators.train.trainer.torch.accelerator.current_accelerator",
+            return_value=fake_device,
+        ),
+        patch(
+            "speculators.train.trainer.torch.accelerator.memory_allocated",
+            return_value=100 * 1024**2,
+        ),
+        patch("speculators.train.trainer.torch.accelerator.synchronize"),
+        patch(
+            "speculators.train.trainer.time.perf_counter",
+            return_value=1.0,
+        ),
+    ):
+        timer = _StepTimer(enabled=True)
+        timer.mark("fwd")
+
+    assert timer._memory["fwd"] == 100.0

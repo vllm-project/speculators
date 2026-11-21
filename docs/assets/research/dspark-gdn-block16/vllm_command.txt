@@ -1,0 +1,53 @@
+Source: https://github.com/vllm-project/vllm/commit/555978f8cf2cd21b22adba5d09d5f6e9df357714 (PR #60229 snapshot from 2026-10-27), without local source changes. Check out this commit and install its Python source with compatible precompiled extensions before running the commands below.
+
+Qwen3.8-27B BF16 + RadixArk DSpark v2, K15, target width16, TP2, 2 B300 GPUs per method.
+
+Timed fixed/baseline/AV methods ran concurrently on GPUs0,1 /2,3 /4,5, respectively. Diagnostic and matched c1 profiles used GPUs6,7. One persistent server per method, prefix caching disabled. Profiling hooks were absent from timed servers.
+
+Different GPU pairs and shared host resources mean measured speedups may include hardware-placement and contention effects. A sequential comparison on the same pair would separate those effects from the decoding method.
+
+Fixed GPU clocks dropped under high-concurrency load (minimum1485MHz across c64 cells), whereas baseline and AV stayed2032MHz. Matched Nsight trace passes on GPUs6,7 stayed2032MHz. One fixed events-only sample on GPU7 was1897MHz. Non-numeric clock readings during startup were recorded as unavailable, with zero unavailable samples during matched profile requests.
+
+Pinned model downloads into a writable shared cache:
+
+export HF_HUB_CACHE=/path/to/writable/shared/hf-cache
+
+export TARGET_MODEL_DIR=$(hf download Qwen/Qwen3.8-27B --revision 1d4bf0f2ff6012fd82039f2fa52739d0dd7c60c0 --quiet)
+
+export DRAFT_MODEL_DIR=$(hf download RadixArk/Qwen3.8-27B-DSpark --revision b9a5dbdf03bc999c6c73c426b19c2d9041cea393 --quiet)
+
+Place NVIDIA SPEED-Bench throughput_1k JSONL at throughput_1k.jsonl. Software: Python 3.12.13, PyTorch 2.13.0+cu130, CUDA 13.0, Transformers 5.17.0, Triton 3.7.1, AIPerf 0.13.0. Installed precompiled vLLM extensions (0.30.1rc1.dev17+g8d3f2b65c.precompiled) were reused.
+
+Server commands below reserve independent GPU pairs. Start them in separate terminals, then run each matching benchmark config. Ports8796/8797/8798 isolate the methods.
+
+
+
+FIXED
+
+chg run --gpu-ids 0,1 -- env VLLM_USE_V2_MODEL_RUNNER=1 VLLM_ADAPTIVE_VERIFICATION_PROFILE_CONTEXT_LEN=1024 vllm serve Qwen/Qwen3.8-27B --revision 1d4bf0f2ff6012fd82039f2fa52739d0dd7c60c0 --served-model-name qwen --language-model-only --max-model-len 8192 --tensor-parallel-size 2 --max-num-seqs 128 --max-num-batched-tokens 8192 --gpu-memory-utilization 0.92 --no-enable-prefix-caching --disable-uvicorn-access-log --host 127.0.0.1 --port 8796 --compilation-config '{"cudagraph_capture_sizes": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 48, 64, 80, 96, 112, 128, 144, 160, 176, 192, 208, 224, 240, 256, 272, 288, 304, 320, 336, 352, 368, 384, 400, 416, 432, 448, 464, 480, 496, 512, 768, 1024, 1280, 1536, 1792, 2048, 3072, 4096]}' --speculative-config '{"method": "dspark", "model": "RadixArk/Qwen3.8-27B-DSpark", "num_speculative_tokens": 15, "draft_sample_method": "probabilistic", "enable_adaptive_verification": false, "revision": "b9a5dbdf03bc999c6c73c426b19c2d9041cea393"}'
+
+TMPDIR=/tmp aiperf profile --config fixed-sweep.yaml
+
+
+
+BASELINE
+
+chg run --gpu-ids 2,3 -- env VLLM_USE_V2_MODEL_RUNNER=1 VLLM_ADAPTIVE_VERIFICATION_PROFILE_CONTEXT_LEN=1024 vllm serve Qwen/Qwen3.8-27B --revision 1d4bf0f2ff6012fd82039f2fa52739d0dd7c60c0 --served-model-name qwen --language-model-only --max-model-len 8192 --tensor-parallel-size 2 --max-num-seqs 128 --max-num-batched-tokens 8192 --gpu-memory-utilization 0.92 --no-enable-prefix-caching --disable-uvicorn-access-log --host 127.0.0.1 --port 8797 --compilation-config '{"cudagraph_capture_sizes": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 48, 64, 80, 96, 112, 128, 144, 160, 176, 192, 208, 224, 240, 256, 272, 288, 304, 320, 336, 352, 368, 384, 400, 416, 432, 448, 464, 480, 496, 512, 768, 1024, 1280, 1536, 1792, 2048, 3072, 4096]}'
+
+TMPDIR=/tmp aiperf profile --config baseline-sweep.yaml
+
+
+
+ADAPTIVE
+
+chg run --gpu-ids 4,5 -- env VLLM_USE_V2_MODEL_RUNNER=1 VLLM_ADAPTIVE_VERIFICATION_PROFILE_CONTEXT_LEN=1024 vllm serve Qwen/Qwen3.8-27B --revision 1d4bf0f2ff6012fd82039f2fa52739d0dd7c60c0 --served-model-name qwen --language-model-only --max-model-len 8192 --tensor-parallel-size 2 --max-num-seqs 128 --max-num-batched-tokens 8192 --gpu-memory-utilization 0.92 --no-enable-prefix-caching --disable-uvicorn-access-log --host 127.0.0.1 --port 8798 --compilation-config '{"cudagraph_capture_sizes": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 48, 64, 80, 96, 112, 128, 144, 160, 176, 192, 208, 224, 240, 256, 272, 288, 304, 320, 336, 352, 368, 384, 400, 416, 432, 448, 464, 480, 496, 512, 768, 1024, 1280, 1536, 1792, 2048, 3072, 4096]}' --speculative-config '{"method": "dspark", "model": "RadixArk/Qwen3.8-27B-DSpark", "num_speculative_tokens": 15, "draft_sample_method": "probabilistic", "enable_adaptive_verification": true, "revision": "b9a5dbdf03bc999c6c73c426b19c2d9041cea393"}'
+
+TMPDIR=/tmp aiperf profile --config adaptive-sweep.yaml
+
+
+
+Metrics: tables/CSV use medians across3repeats, plot lines use means. Steady throughput excludes initial fill and final drain, with output token counts distributed evenly across streamed chunks. TPOT averages requests submitted inside the steady window. AL=1+accepted_draft_tokens/speculative_steps over the full client measurement interval.
+
+GSM8K uses the first 100 test questions and first 5 training examples, concurrency 16, seed 42, temperature 0, max_tokens 1024, thinking disabled. All three methods scored 99/100, with identical numeric answers on all 100 questions. See eval_command.txt and eval_gsm8k.py.txt for reproduction.
+
+The precompiled installation must include the vendored FlashMLA interface. Use short per-server temporary directories, such as /tmp/gdn-8796, to stay within the 107-character IPC socket-path limit.

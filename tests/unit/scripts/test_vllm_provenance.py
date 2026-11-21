@@ -61,6 +61,7 @@ class TestSaveVllmCommand:
         _save_vllm_command(tmp_path, ["cmd"], "abc123", "", "0.1.0")
         content = (tmp_path / "vllm_command.txt").read_text()
         assert "(dirty)" not in content
+        assert "diff unavailable" not in content
 
 
 class TestSaveVllmPatch:
@@ -74,6 +75,7 @@ class TestSaveVllmPatch:
         _save_vllm_patch(tmp_path, "/path/to/vllm", "abc123", "", "0.1.0")
         content = (tmp_path / "vllm.patch").read_text()
         assert "# repo: /path/to/vllm (abc123)" in content
+        assert "# git diff failed" not in content
 
     def test_wheel_install_fallback(self, tmp_path: Path):
         _save_vllm_patch(tmp_path, None, "unknown", "", "0.5.0")
@@ -185,6 +187,27 @@ class TestSaveVllmProvenance:
         assert not (prov_dir / "vllm_command.txt").exists()
         assert (prov_dir / "vllm.patch").exists()
         assert (prov_dir / "checkpoint_sha256.txt").exists()
+
+    def test_failed_diff_is_not_recorded_as_clean(self, tmp_path: Path):
+        prov_dir = tmp_path / "provenance"
+        with (
+            patch("launch_vllm._find_vllm_repo", return_value="/path/to/vllm"),
+            patch("launch_vllm._git_sha", return_value="abc123"),
+            patch("launch_vllm.git_diff", return_value=None),
+        ):
+            _save_vllm_provenance(["python", "serve"], str(prov_dir), "org/model")
+
+        command = (prov_dir / "vllm_command.txt").read_text()
+        sha_line = next(
+            line for line in command.splitlines() if line.startswith("# Git SHA:")
+        )
+        assert sha_line == "# Git SHA: abc123 (diff unavailable)"
+        assert "(dirty)" not in sha_line
+
+        patch_text = (prov_dir / "vllm.patch").read_text()
+        assert "# repo: /path/to/vllm (abc123)" in patch_text
+        assert "# git diff failed" in patch_text.splitlines()
+        assert patch_text.strip() != "# repo: /path/to/vllm (abc123)"
 
 
 class TestRenderSetupGating:

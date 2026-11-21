@@ -97,16 +97,71 @@ def load_checkpoint_config(checkpoint_dir: Path) -> dict:
         return json.load(f)
 
 
+def _load_sharded_weights(
+    checkpoint_dir: Path, index_path: Path
+) -> dict[str, torch.Tensor]:
+    """
+    Load and merge a sharded checkpoint described by an `*.index.json` file.
+
+    :param checkpoint_dir: Path to checkpoint directory
+    :param index_path: Path to the `*.index.json` describing the shards
+    :return: Dictionary mapping weight names to tensors
+    :raises ValueError: If the index has no `weight_map` or a mapped weight is absent
+    :raises FileNotFoundError: If a referenced shard file is missing
+    """
+    logger.debug(f"Loading sharded checkpoint from index: {index_path}")
+    with index_path.open() as f:
+        index = json.load(f)
+    weight_map = index.get("weight_map")
+    if not weight_map:
+        raise ValueError(f"Index file {index_path} does not contain a 'weight_map'.")
+
+    is_safetensors = index_path.name.endswith("safetensors.index.json")
+    shard_to_keys: dict[str, list[str]] = {}
+    for key, shard_name in weight_map.items():
+        shard_to_keys.setdefault(shard_name, []).append(key)
+
+    weights: dict[str, torch.Tensor] = {}
+    for shard_name, keys in shard_to_keys.items():
+        shard_path = checkpoint_dir / shard_name
+        if not shard_path.exists():
+            raise FileNotFoundError(
+                f"Shard '{shard_name}' referenced by {index_path.name} "
+                f"is missing at {shard_path}."
+            )
+        if is_safetensors:
+            with safe_open(str(shard_path), framework="pt") as f:
+                missing = set(keys) - set(f.keys())
+                if missing:
+                    raise ValueError(
+                        f"Shard {shard_name} is missing indexed weight(s): "
+                        f"{sorted(missing)[:3]}"
+                    )
+                for key in keys:
+                    weights[key] = f.get_tensor(key)
+        else:
+            shard_weights = torch.load(
+                shard_path, map_location="cpu", weights_only=True
+            )
+            missing = set(keys) - set(shard_weights)
+            if missing:
+                raise ValueError(
+                    f"Shard {shard_name} is missing indexed weight(s): "
+                    f"{sorted(missing)[:3]}"
+                )
+            weights.update({key: shard_weights[key] for key in keys})
+    return weights
+
+
 def load_checkpoint_weights(checkpoint_dir: Path) -> dict[str, torch.Tensor]:
     """
     Load model weights from a checkpoint directory.
 
-    Supports both safetensors and PyTorch bin formats.
+    Supports single-file and sharded safetensors and PyTorch bin checkpoints.
 
     :param checkpoint_dir: Path to checkpoint directory
     :return: Dictionary mapping weight names to tensors
     :raises FileNotFoundError: If no weights are found
-    :raises NotImplementedError: If checkpoint is sharded
 
     :Example:
 
@@ -125,20 +180,17 @@ def load_checkpoint_weights(checkpoint_dir: Path) -> dict[str, torch.Tensor]:
                 weights[key] = f.get_tensor(key)
         return weights
 
+    index_path = checkpoint_dir / "model.safetensors.index.json"
+    if index_path.exists():
+        return _load_sharded_weights(checkpoint_dir, index_path)
+
     pytorch_path = checkpoint_dir / "pytorch_model.bin"
     if pytorch_path.exists():
         logger.debug(f"Loading PyTorch weights from: {pytorch_path}")
-        return torch.load(pytorch_path, map_location="cpu")
+        return torch.load(pytorch_path, map_location="cpu", weights_only=True)
 
-    index_paths = [
-        checkpoint_dir / "model.safetensors.index.json",
-        checkpoint_dir / "pytorch_model.bin.index.json",
-    ]
-    for index_path in index_paths:
-        if index_path.exists():
-            raise NotImplementedError(
-                f"Sharded checkpoint detected: {index_path}. "
-                "Please use a single-file checkpoint."
-            )
+    index_path = checkpoint_dir / "pytorch_model.bin.index.json"
+    if index_path.exists():
+        return _load_sharded_weights(checkpoint_dir, index_path)
 
     raise FileNotFoundError(f"No weights found at {checkpoint_dir}")

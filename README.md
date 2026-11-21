@@ -2,7 +2,7 @@
 
 ![Speculators logo](./docs/assets/branding/speculators-logo-white.svg#gh-dark-mode-only) ![Speculators logo](./docs/assets/branding/speculators-logo-black.svg#gh-light-mode-only)
 
-[![License](https://img.shields.io/github/license/vllm-project/speculators.svg)](https://github.com/vllm-project/speculators/blob/main/LICENSE) [![Python Versions](https://img.shields.io/badge/Python-3.11--3.13-orange)](https://pypi.org/project/speculators/) [![docs](https://img.shields.io/badge/docs-Speculators-blue)](https://docs.vllm.ai/projects/speculators/en/latest/) [![PyPI](https://img.shields.io/pypi/v/speculators.svg)](https://pypi.org/project/speculators/) [![tests](https://badge.buildkite.com/ec24a960c7238e18953364f4e7117a5301185b37e60283b5b0.svg?branch=main)](https://buildkite.com/vllm/speculators)
+[![License](https://img.shields.io/github/license/vllm-project/speculators.svg)](https://github.com/vllm-project/speculators/blob/main/LICENSE) [![Python Versions](https://img.shields.io/badge/Python-3.11--3.13-orange)](https://pypi.org/project/speculators/) [![docs](https://img.shields.io/badge/docs-Speculators-blue)](https://docs.vllm.ai/projects/speculators/en/latest/) [![dashboard](https://img.shields.io/badge/dashboard-Speculators-blueviolet)](https://neuralmagic.github.io/speculators-dashboard/) [![PyPI](https://img.shields.io/pypi/v/speculators.svg)](https://pypi.org/project/speculators/) [![tests](https://badge.buildkite.com/ec24a960c7238e18953364f4e7117a5301185b37e60283b5b0.svg?branch=main)](https://buildkite.com/vllm/speculators)
 
 </div>
 
@@ -31,6 +31,10 @@ ______________________________________________________________________
 
 ______________________________________________________________________
 
+## Find a Trained Speculator
+
+Looking for a ready-to-use speculator? Browse trained models and their evaluation results on the [Speculators Dashboard](https://neuralmagic.github.io/speculators-dashboard/).
+
 ## 🚀 What's New!
 
 Big updates have landed in Speculators! To get a more in-depth look, check out the [Speculators documentation](https://docs.vllm.ai/projects/speculators/en/latest/).
@@ -55,10 +59,6 @@ ______________________________________________________________________
 
 > [!TIP]
 > Read more about Speculators features in this [vLLM blog post](https://blog.vllm.ai/2025/12/13/speculators-v030.html).
-
-## Supported Models
-
-Browse trained speculators and their evaluation results on the [Speculators dashboard](https://neuralmagic.github.io/speculators-dashboard/).
 
 ## vLLM Inference
 

@@ -1,16 +1,12 @@
 """Unit tests for the DSpark loss and metrics."""
 
-from functools import partial
-
 import pytest
 import torch
 from torch.nn.functional import binary_cross_entropy_with_logits
 
 from speculators.losses import resolve_loss_config
-from speculators.losses.eager import tv_loss
-from speculators.models.dspark.metrics import compute_metrics as _compute_metrics
+from speculators.models.dspark.metrics import compute_metrics
 
-compute_metrics = partial(_compute_metrics, tv_loss_fn=tv_loss)
 _DEFAULT_LOSS = resolve_loss_config('{"ce": 0.1, "tv": 0.9}', "eager")
 
 

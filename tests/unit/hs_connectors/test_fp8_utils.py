@@ -7,6 +7,7 @@ from hs_connectors.fp8_utils import (
     dequantize_fp8_tensor,
     quantize_tensor_to_fp8,
 )
+from hs_connectors.mooncake_store import NonFiniteTensorError
 
 
 def test_quantize_round_trip_is_close():
@@ -94,3 +95,25 @@ def test_scale_is_per_token_over_2d_input():
     _, scales = quantize_tensor_to_fp8(hidden_states)
     assert scales.shape == (2, 1)
     assert scales[0].item() != scales[1].item()
+
+
+def test_quantize_rejects_tensor_containing_inf():
+    """One Inf sample must fail before any FP8 tensor is returned."""
+    hidden_states = torch.zeros(4, 2, 8, dtype=torch.bfloat16)
+    hidden_states[1, 0, 0] = torch.inf
+
+    with pytest.raises(NonFiniteTensorError, match="Non-finite producer tensor"):
+        quantize_tensor_to_fp8(hidden_states)
+
+
+def test_large_finite_absmax_quantizes_without_nan():
+    """Scaling maps amax onto fp8 max; the cast must still be finite."""
+    large = torch.finfo(torch.float32).max
+    hidden_states = torch.tensor([[[-large, large / 2, 1.0, -0.25]]])
+    assert hidden_states.abs().amax().item() == large
+
+    fp8_hs, scales = quantize_tensor_to_fp8(hidden_states)
+    restored = dequantize_fp8_tensor(fp8_hs, scales, dtype=torch.float32)
+
+    assert torch.isfinite(fp8_hs.float()).all()
+    assert torch.isfinite(restored).all()

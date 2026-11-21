@@ -19,9 +19,19 @@ DEFAULT_REQUEST_TIMEOUT = 120  # seconds
 DEFAULT_MAX_RETRIES = 3
 RETRY_BACKOFF_BASE = 2  # seconds
 
+# Transient statuses worth retrying: request timeout, conflict, too-early, and
+# rate limiting, plus all 5xx. Other non-2xx replies (e.g. 400/401/404) are
+# permanent config/client errors and fail fast.
+SERVER_ERROR_STATUS = 500
+RETRYABLE_HTTP_STATUSES = {408, 409, 425, 429}
+
 
 class InvalidResponseError(Exception):
     pass
+
+
+def is_retryable_status(status: int) -> bool:
+    return status >= SERVER_ERROR_STATUS or status in RETRYABLE_HTTP_STATUSES
 
 
 def _handle_retry_error(
@@ -30,9 +40,14 @@ def _handle_retry_error(
     """Handle a retry-eligible error.
 
     Returns backoff seconds if the caller should retry, or ``None`` on the
-    final attempt.  Raises ``InvalidResponseError`` immediately.
+    final attempt.  Raises ``InvalidResponseError`` and permanent HTTP errors
+    from the OpenAI client (e.g. 400/404) immediately.
     """
     if isinstance(error, InvalidResponseError):
+        raise error
+    if isinstance(error, openai.APIStatusError) and not is_retryable_status(
+        error.status_code
+    ):
         raise error
     if attempt < total_attempts:
         backoff = RETRY_BACKOFF_BASE**attempt
@@ -44,7 +59,7 @@ def _handle_retry_error(
             backoff,
         )
         return backoff
-    logger.error("Request timed out after %d attempts: %s", total_attempts, error)
+    logger.error("Request failed after %d attempts: %s", total_attempts, error)
     return None
 
 
@@ -128,6 +143,51 @@ class ClientItem(TypedDict):
     messages: NotRequired[list[ChatCompletionMessageParam]]
     """If provided, pass `messages` to Chat Completions API
     instead of passing `token_ids` to Completions API."""
+
+
+def has_multimodal_content(messages: list[dict]) -> bool:
+    """True when any turn carries non-text content (images, video, audio).
+
+    Turns store ``content`` as a plain string or, after ``_adapt_conv_for_vllm``,
+    as a list of typed parts, e.g. ``[{"type": "text", ...}, {"type": "image_url",
+    ...}]``. Only a part whose type is not ``text`` makes the turn multimodal.
+    """
+    return any(
+        isinstance(m.get("content"), list)
+        and any(part.get("type") != "text" for part in m["content"])
+        for m in messages
+    )
+
+
+def validate_vllm_model(
+    endpoint: str,
+    requested_model: str,
+) -> None:
+    """Validate that a vLLM endpoint exposes the requested model.
+
+    This synchronous startup check is intended to run in the training process
+    before DataLoader workers are created. Generation workers do not repeat
+    endpoint discovery.
+    """
+    client = openai.OpenAI(
+        base_url=endpoint,
+        api_key="EMPTY",
+        max_retries=0,
+    )
+    try:
+        list_models = client.models.list()
+        if not list_models.data:
+            raise RuntimeError("No models found on the vLLM server")
+        model_id = list_models.data[0].id
+        if requested_model != model_id:
+            raise ValueError(
+                f"An explicit model name was passed ({requested_model}) which "
+                f"doesn't match found model_id {model_id}."
+                "Please make sure --endpoint is set to the correct vllm "
+                "instance."
+            )
+    finally:
+        client.close()
 
 
 async def _poll_lock_async(fd, poll_interval):

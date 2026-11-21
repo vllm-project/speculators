@@ -28,7 +28,7 @@ speculators prepare-data \
   --max-samples 5000
 ```
 
-`--render-endpoint` is not needed when every input row already contains `input_ids` and `loss_mask`.
+`--render-endpoint` is not needed when every input row already contains `input_ids` and `loss_mask`. For conversation inputs, launch the rendering vLLM server with `--max-model-len` greater than `prepare-data --seq-length` so the render endpoint has room for an output token. If the server reports `max_tokens must be at least 1`, increase `--max-model-len`, relaunch vLLM, and rerun `prepare-data`.
 
 ## Arguments
 
@@ -53,6 +53,8 @@ speculators prepare-data \
 - **`--max-samples`** (int, default: `None`) Maximum number of samples to process. If `None`, processes all samples.
 
 - **`--token-freq-path`** (str, default: `{output}/token_freq.pt`) Path to save token frequency distribution. Defaults to `token_freq.pt` in the output directory.
+
+- **`--skip-token-freq` / `--no-skip-token-freq`** (default: skip) Whether to skip computing the token frequency distribution. Pass `--no-skip-token-freq` if you will train with a reduced draft vocab (`speculators train --draft-vocab-size`), which builds its vocab mapping from this file.
 
 - **`--render-endpoint`** (str, default: `None`) Base URL of the target model's running vLLM server (e.g. `http://localhost:8000`). The instance launched for hidden-state extraction ([launch_vllm.py](launch_vllm.md)) serves this too, so no second server is needed. Pass the base URL only: `/v1/chat/completions/render` is appended to it, so the `/v1`-suffixed form that [data_generation_offline.py](data_generation_offline.md) `--endpoint` takes will 404. Required for natural-language conversations; omit it when every input already contains `input_ids` and `loss_mask`.
 

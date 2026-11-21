@@ -1,0 +1,9 @@
+{
+  "gdn_ms_per_rank_step": {
+    "adaptive": 0.4778555996653031,
+    "fixed": 1.1086305450278164
+  },
+  "gdn_saving_ms_per_rank_step": 0.6307749453625133,
+  "target_saving_ms_per_step": 1.3303677093430792,
+  "gdn_fraction_of_target_saving": 0.4741357903778219
+}

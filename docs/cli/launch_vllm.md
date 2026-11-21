@@ -20,7 +20,7 @@ python scripts/launch_vllm.py meta-llama/Llama-3.1-8B-Instruct
 
 - **`--target-layer-ids`** (int list, default: auto-select) Space-separated list of integer layer IDs from which to capture hidden states. Note: if `--include-last-layer` is enabled (default), the model's last layer will be appended to this list. Default: `[2, num_layers//2, num_layers-3]`
 
-  **Important:** If set, you must also pass the same layer ids to the training script using `--target-layer-ids`, **excluding** the final layer — training takes the auxiliary layers only. For the [full example](#full-example) below, that is `--target-layer-ids 5 20 40`.
+  **Important:** If set, you must also pass the same layer ids to the training script using `--target-layer-ids`. For the [full example](#full-example) below, that is `--target-layer-ids 5 20 40`.
 
 - **`--include-last-layer` / `--no-include-last-layer`** (flag, default: `True`) Append the last layer (`num_hidden_layers`) to `target_layer_ids` for verifier hidden states extraction.
 

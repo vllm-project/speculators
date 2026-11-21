@@ -54,7 +54,8 @@ speculators prepare-data \
     --data "$DATASET" \
     --output "$OUTPUT_DIR" \
     --max-samples "$MAX_SAMPLES" \
-    --seq-length "$SEQ_LENGTH"
+    --seq-length "$SEQ_LENGTH" \
+    --no-skip-token-freq
 
 # Step 2: Launch vLLM server in the background
 echo "=== Step 2: Launching vLLM server ==="

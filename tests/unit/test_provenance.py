@@ -100,7 +100,24 @@ class TestGitDiff:
 
     def test_fallback_on_oserror(self):
         with patch("speculators.provenance.subprocess.run", side_effect=OSError):
-            assert git_diff(Path("/tmp")) == ""
+            assert git_diff(Path("/tmp")) is None
+
+    def test_nonzero_returncode_returns_none(self):
+        completed = subprocess.CompletedProcess(
+            ["git", "diff", "HEAD"],
+            1,
+            stdout="diff --git a/f b/f\n",
+            stderr="fatal: not a git repository",
+        )
+        with patch("speculators.provenance.subprocess.run", return_value=completed):
+            assert git_diff(Path("/tmp")) is None
+
+    def test_timeout_returns_none(self):
+        with patch(
+            "speculators.provenance.subprocess.run",
+            side_effect=subprocess.TimeoutExpired("git", 30),
+        ):
+            assert git_diff(Path("/tmp")) is None
 
 
 class TestRunGit:

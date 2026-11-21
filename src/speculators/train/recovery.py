@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, TypeVar
@@ -10,7 +11,7 @@ import torch.distributed as dist
 from speculators.train.distributed import get_local_rank, get_rank, is_distributed
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Sequence
+    from collections.abc import Awaitable, Callable, Sequence
 
 logger = logging.getLogger("speculators")
 
@@ -110,6 +111,42 @@ class GenerationRecoveryGuard:
             return result
 
         raise RuntimeError("Generation retry loop completed without a result")
+
+    async def run_async(
+        self,
+        operation: Callable[[], Awaitable[T]],
+        *,
+        description: str,
+    ) -> T | SampleUnavailable:
+        """Run an async operation until it succeeds or all attempts fail."""
+        total_attempts = self.retries + 1
+        for attempt in range(1, total_attempts + 1):
+            try:
+                result = await operation()
+            except asyncio.CancelledError:
+                raise
+            except Exception as error:  # noqa: BLE001 - worker recovery boundary
+                if attempt == total_attempts:
+                    return self._record_exhausted(
+                        description,
+                        attempt=attempt,
+                        total_attempts=total_attempts,
+                        error=error,
+                    )
+                logger.warning(
+                    "%s (attempt %d/%d): %s: %s",
+                    description,
+                    attempt,
+                    total_attempts,
+                    type(error).__name__,
+                    error,
+                )
+                continue
+
+            self._record_success()
+            return result
+
+        raise RuntimeError("Async generation retry loop completed without a result")
 
     def _record_exhausted(
         self,

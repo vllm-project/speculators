@@ -98,7 +98,7 @@ def compute_metrics(  # noqa: C901
         """compound loss with the CE component optionally re-pointed at the
         DATA tokens instead of the teacher argmax."""
         if ce_labels is None:
-            return compound_loss(
+            out = compound_loss(
                 lgts,
                 targets,
                 loss_mask,
@@ -106,8 +106,9 @@ def compute_metrics(  # noqa: C901
                 loss_config=loss_config,
                 decay_fn=term_decay_fn,
             )
-        soft, terms = (
-            compound_loss(
+            return out.loss, out.term_losses
+        if _cfg_soft:
+            out = compound_loss(
                 lgts,
                 targets,
                 loss_mask,
@@ -115,9 +116,9 @@ def compute_metrics(  # noqa: C901
                 loss_config=_cfg_soft,
                 decay_fn=term_decay_fn,
             )
-            if _cfg_soft
-            else (lgts.new_zeros((), dtype=torch.float32), {})
-        )
+            soft, terms = out.loss, out.term_losses
+        else:
+            soft, terms = lgts.new_zeros((), dtype=torch.float32), {}
         ce = _hard_label_ce(lgts, ce_labels, loss_mask, pos_idx, term_decay_fn)
         terms = dict(terms)
         if _cfg_soft and not terms:

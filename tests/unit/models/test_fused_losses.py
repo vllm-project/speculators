@@ -128,6 +128,53 @@ def test_fused_matches_eager(name, eager_fn, fused_name):
 
 
 @requires_accelerator
+@pytest.mark.parametrize("max_block", ["first", "last"], ids=["early-max", "late-max"])
+@pytest.mark.parametrize(
+    ("name", "eager_fn", "fused_name"),
+    [
+        ("kl_div", eager.kl_div_loss, "fused_kl_div_loss"),
+        ("rkl", eager.reverse_kl_div_loss, "fused_reverse_kl_div_loss"),
+    ],
+    ids=["kl_div", "rkl"],
+)
+def test_single_pass_rescales_a_late_max(name, eager_fn, fused_name, max_block):
+    """The single pass must rescale its numerator when the running max grows.
+
+    kl_div and rkl stream the row once, accumulating
+    ``sum(exp(y - m) * (y - x))`` against a *running* max rather than the
+    final one. A row whose largest logit sits in the last block forces every
+    earlier partial sum to be rescaled; dropping that rescale (or applying it
+    to the sum-exp only) leaves the early-max row correct and this one wrong
+    by the ratio of the two maxima.
+    """
+    fused_losses = pytest.importorskip("speculators.losses.fused")
+
+    torch.manual_seed(5)
+    # Wider than the largest tile, so the max lands in a different block than
+    # the first positions the accumulator sees.
+    logits = torch.randn(1, 4, 151936, device=DEVICE) * 3
+    targets = torch.randn(1, 4, 151936, device=DEVICE) * 3
+    spike = 0 if max_block == "first" else -1
+    # Neighbour inside the *same* block, so the early-max leg really does see
+    # both maxima up front (spike - 1 would wrap to the final block).
+    neighbor = 1 if max_block == "first" else -2
+    # Spike both directions' maxima, with a large (y - x) at that index.
+    targets[0, :, spike] = 60.0
+    logits[0, :, spike] = -60.0
+    logits[0, :, neighbor] = 60.0
+    targets[0, :, neighbor] = -60.0
+
+    _assert_fused_matches_eager(
+        eager_fn,
+        getattr(fused_losses, fused_name),
+        logits,
+        targets,
+        LOSS_TOL,
+        GRAD_TOL,
+    )
+
+
+@requires_accelerator
 @pytest.mark.parametrize(
     ("name", "eager_fn", "fused_name"), CASES, ids=[c[0] for c in CASES]
 )
@@ -264,34 +311,41 @@ def test_autotuner_never_picks_a_spilling_tile():
         for config in fused_losses._tile_configs()
         if config.kwargs["BLOCK_SIZE"] <= cap
     }
+    # 32 warps is 1024 threads on NVIDIA but 2048 on AMD's 64-wide
+    # wavefronts, past the 1024-thread program limit.
+    warp_size = 64 if getattr(torch.version, "hip", None) is not None else 32
     widened = sorted(
         offered
         | {
             (block, warps)
             for block in _SPILLING_BLOCK_SIZES
             for warps in (4, 8, 16, 32)
-            if block <= cap
+            if block <= cap and warps * warp_size <= 1024
         }
     )
 
     rows, vocab = _SWEEP_ROWS, _SWEEP_VOCAB
     logits = torch.randn(rows, vocab, device="cuda", dtype=torch.bfloat16)
     targets = torch.randn(rows, vocab, device="cuda", dtype=torch.bfloat16)
-    loss = torch.empty(rows, device="cuda", dtype=torch.float32)
+    loss = torch.empty(fused_losses._N_TERMS, rows, device="cuda", dtype=torch.float32)
+    argmax = torch.empty(2, rows, device="cuda", dtype=torch.int64)
     stats = torch.empty(fused_losses._N_STATS, rows, device="cuda", dtype=torch.float32)
     grad_in = torch.empty_like(logits)
-    grad_out = torch.ones(rows, device="cuda", dtype=torch.float32)
-    op = fused_losses._OP_KL.value
+    grad_out = torch.ones_like(loss)
+    terms = fused_losses._BITS["kl_div"]
 
     def run_forward(block, warps):
         return fused_losses.loss_forward_kernel.fn[(rows,)](
             logits,
             targets,
             loss,
+            loss.stride(0),
+            argmax,
+            argmax.stride(0),
             stats,
             stats.stride(0),
             vocab,
-            OP=op,
+            TERMS=terms,
             BLOCK_SIZE=block,
             num_warps=warps,
         )
@@ -302,10 +356,11 @@ def test_autotuner_never_picks_a_spilling_tile():
             targets,
             grad_in,
             grad_out,
+            grad_out.stride(0),
             stats,
             stats.stride(0),
             vocab,
-            OP=op,
+            TERMS=terms,
             BLOCK_SIZE=block,
             num_warps=warps,
         )

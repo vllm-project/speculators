@@ -181,7 +181,9 @@ class Eagle3Converter:
                 rope_theta=eagle_config.get("rope_theta", 10000.0),
                 rope_scaling=eagle_config.get("rope_scaling"),
             ),
-            **build_llama_config_dtype_kwarg(eagle_config.get("torch_dtype")),
+            **build_llama_config_dtype_kwarg(
+                eagle_config.get("torch_dtype") or eagle_config.get("dtype")
+            ),
         )
 
     def _save_converted_checkpoint(
@@ -220,7 +222,11 @@ class Eagle3Converter:
         if unexpected_keys:
             logger.warning(f"Unexpected keys in checkpoint: {unexpected_keys}")
 
-        weights_dtype = getattr(config.transformer_layer_config, "torch_dtype", None)
+        tl_config = config.transformer_layer_config
+        # transformers 5 keeps ``torch_dtype`` only as a deprecated alias.
+        weights_dtype = getattr(tl_config, "dtype", None) or getattr(
+            tl_config, "torch_dtype", None
+        )
         # .to() wont convert d2t/t2d buffers as they are not fp tensors
         model.to(dtype=weights_dtype)  # type: ignore[call-arg]
         model.save_pretrained(str(output_dir))  # type: ignore[attr-defined]

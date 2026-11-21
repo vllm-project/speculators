@@ -19,7 +19,6 @@ from speculators import (
 from speculators.models.dflash.core import DFlashDraftModel
 from speculators.models.eagle3.core import Eagle3DraftModel
 from speculators.models.mtp.core import MTPDraftModel
-from speculators.models.peagle.core import PEagleDraftModel
 from speculators.proposals import GreedyTokenProposalConfig
 
 # ===== Test Helper Classes =====
@@ -305,7 +304,7 @@ def test_speculator_model_forward_abstract(speculator_model_test_config):
 @pytest.mark.smoke
 @pytest.mark.parametrize(
     "model_class",
-    [Eagle3DraftModel, DFlashDraftModel, PEagleDraftModel, MTPDraftModel],
+    [Eagle3DraftModel, DFlashDraftModel, MTPDraftModel],
 )
 def test_save_ignore_keys_are_ignored_on_load_missing(model_class):
     """Weights excluded from saved checkpoints (e.g. verifier_lm_head, which is

@@ -434,7 +434,6 @@ def test_selector_loss_alpha_zero_preserves_unary_objective():
     unary_logits[0, 2, (target_ids[0, 2] + 2) % 7] = 5.0
     unary_logits.requires_grad_()
     loss_config = resolve_loss_config("ce", "eager")
-    tv_loss_fn = resolve_loss_config("tv", "eager")["tv"][0]
 
     expected, unary_metrics = compute_unary_metrics(
         unary_logits,
@@ -443,7 +442,6 @@ def test_selector_loss_alpha_zero_preserves_unary_objective():
         loss_mask,
         4,
         loss_config=loss_config,
-        tv_loss_fn=tv_loss_fn,
         gamma=4.0,
         confidence_head_alpha=0.0,
         per_position_loss_weight="fixed-exp-decay",
@@ -469,7 +467,6 @@ def test_selector_loss_alpha_zero_preserves_unary_objective():
         block_size=4,
         top_k=selector.top_k,
         loss_config=loss_config,
-        tv_loss_fn=tv_loss_fn,
         selector_loss_alpha=0.0,
     )
 
@@ -483,6 +480,46 @@ def test_selector_loss_alpha_zero_preserves_unary_objective():
     assert unary_metrics["eal_sum"].item() == 1.0
     torch.testing.assert_close(
         metrics["accept_len_sum"], unary_metrics["accept_len_sum"]
+    )
+
+
+def test_candidate_target_mass_matches_dense_reference():
+    """Chunk boundaries and a partial final chunk preserve FP32 target mass."""
+    num_rows = 2052
+    generator = torch.Generator().manual_seed(7)
+    targets = torch.randn(1, num_rows, 17, generator=generator, dtype=torch.bfloat16)
+    unary_logits = torch.randn(targets.shape, generator=generator, dtype=torch.bfloat16)
+    candidate_ids, target_positions, contains_target = selector_training_candidates(
+        unary_logits.topk(2, dim=-1).indices, targets.argmax(dim=-1)
+    )
+    loss_mask = torch.ones(1, num_rows)
+    loss_mask[:, ::3] = 0
+    _, metrics = compute_dflash2_metrics(
+        unary_logits=unary_logits,
+        targets=targets,
+        training_candidate_ids=candidate_ids,
+        candidate_logits=unary_logits.gather(-1, candidate_ids),
+        target_positions=target_positions,
+        contains_target=contains_target,
+        loss_mask=loss_mask,
+        block_size=4,
+        top_k=2,
+        loss_config=resolve_loss_config("ce", "eager"),
+    )
+    expected_mass = torch.exp(
+        torch.logsumexp(targets.gather(-1, candidate_ids).float(), dim=-1)
+        - torch.logsumexp(targets.float(), dim=-1)
+    )
+    actual = metrics["unary_candidate_target_mass_at_2_sum"]
+    assert actual.dtype == torch.float32
+    assert actual.device == targets.device
+    assert not actual.requires_grad
+    torch.testing.assert_close(
+        actual, (expected_mass * loss_mask).sum(), rtol=0, atol=0
+    )
+    torch.testing.assert_close(
+        metrics["unary_candidate_target_mass_at_2_total"],
+        loss_mask.to(unary_logits.dtype).sum(),
     )
 
 
@@ -561,7 +598,6 @@ def test_compute_metrics_rejects_unknown_selector_miss_policy():
         loss_mask,
     ) = _selector_objective_inputs()
     loss_config = resolve_loss_config("ce", "eager")
-    tv_loss_fn = resolve_loss_config("tv", "eager")["tv"][0]
     candidate_ids = unary_logits.topk(selector.top_k, dim=-1).indices
     training_candidate_ids, target_positions, contains_target = (
         selector_training_candidates(candidate_ids, target_ids)
@@ -582,7 +618,6 @@ def test_compute_metrics_rejects_unknown_selector_miss_policy():
             block_size=4,
             top_k=selector.top_k,
             loss_config=loss_config,
-            tv_loss_fn=tv_loss_fn,
             selector_miss_policy="bogus",
         )
 
@@ -659,13 +694,11 @@ def test_tiny_gpu_forward_backward_reaches_all_new_parameters():
         "document_ids": torch.zeros(1, seq_len, device="cuda", dtype=torch.long),
     }
     eager_kl = resolve_loss_config("kl_div", "eager")
-    eager_tv = resolve_loss_config("tv", "eager")["tv"][0]
 
     _, loss, _ = model(  # type: ignore[call-arg]
         **inputs,
         max_anchors=4,
         loss_config=eager_kl,
-        tv_loss_fn=eager_tv,
     )
     assert torch.isfinite(loss)
     loss.backward()

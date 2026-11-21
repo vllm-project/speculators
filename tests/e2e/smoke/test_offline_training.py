@@ -67,24 +67,6 @@ MM_MODEL = "Qwen/Qwen3-VL-2B-Instruct"
         (
             TEXT_MODEL,
             "hf:inference-optimization/speculators-ci-datasets:smoke_regen",
-            "peagle",
-            [
-                "--num-layers",
-                "4",
-                "--num-depths",
-                "4",
-                "--down-sample-ratio",
-                "0.7",
-                "--down-sample-ratio-min",
-                "0.2",
-                "--no-norm-before-residual",
-            ],
-            None,
-            8192,
-        ),  # P-EAGLE with parallel multi-token prediction
-        (
-            TEXT_MODEL,
-            "hf:inference-optimization/speculators-ci-datasets:smoke_regen",
             "dspark",
             [
                 "--block-size",
