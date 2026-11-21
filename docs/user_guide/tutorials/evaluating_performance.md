@@ -2,6 +2,8 @@
 
 The evaluator uses AIPerf 0.13.0 for dataset loading, requests, concurrency sweeps, native reports, and plotting. Our adapters prepare SPEED-Bench, preserve MRCR histories, and summarize acceptance statistics.
 
+To run a serving evaluation when training saves a checkpoint, see [serving evaluation during training](../serving_evaluation.md).
+
 ## Install
 
 From the repository root, use a client environment with Python 3.11–3.13:

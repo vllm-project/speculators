@@ -444,6 +444,19 @@ class TrainerArgs(_Group):
         description="Stop training after this many optimizer steps (counted across "
         "epochs). Useful for quick smoke runs. Default: run all epochs to completion.",
     )
+    checkpoint_eval_command: str | None = Field(
+        default=None,
+        description="Optional external serving evaluator command to run on rank 0 "
+        "after checkpoint saves. Receives SPECULATORS_EVAL_CHECKPOINT, "
+        "SPECULATORS_EVAL_STEP and SPECULATORS_EVAL_OUTPUT_DIR; writes metrics.json.",
+    )
+    checkpoint_eval_timeout: float = Field(
+        default=300.0,
+        gt=0,
+        allow_inf_nan=False,
+        description="Maximum seconds for checkpoint evaluation, including startup. "
+        "Other ranks wait outside training collectives. Default: 300.",
+    )
 
     @field_validator("checkpoint_freq")
     @classmethod
