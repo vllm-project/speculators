@@ -758,6 +758,10 @@ class Trainer:
                 accumulated = _all_reduce_metrics(accumulated)
             # Summed over ranks already, so no further world_size divide below.
             total_counted = accumulated.pop("__counted_batches").item()
+            # If no batch had supervised tokens there is nothing to measure, so
+            # report no metrics rather than a made-up value: 0.0 would win
+            # checkpoint_best and NaN fails the `>=` check in maybe_update_best,
+            # while a missing loss_epoch is already skipped there.
             if total_counted > 0:
                 val_metrics = {
                     k: v.item() / total_counted for k, v in accumulated.items()
