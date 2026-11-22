@@ -715,6 +715,11 @@ class Trainer:
 
         accumulated: dict[str, torch.Tensor] = {}
         num_batches = len(val_loader)
+        # Batches whose samples all failed are padding-only (all-zero loss_mask).
+        # Every model reports loss_total = 1 per batch, so averaging them in adds
+        # 0 to the loss and pulls loss_epoch toward 0. They still run the forward
+        # pass (ranks stay in step and keep the same metric keys) but get weight 0.
+        counted_batches = torch.zeros(())
         recovery = BatchRecoveryCoordinator("validation")
         for i, batch in enumerate(val_loader):
             self._maybe_val_sync(i)
@@ -736,19 +741,29 @@ class Trainer:
                     **gpu_batch, **(self.config.val_call_kwargs or {})
                 )
 
+            loss_mask = batch.get("loss_mask")
+            weight = float(not isinstance(loss_mask, torch.Tensor) or loss_mask.any())
+            counted_batches += weight
             for k, v in metrics.items():
+                weighted = v.float() * weight
                 acc = accumulated.get(k)
-                accumulated[k] = v.float() if acc is None else acc + v.float()
+                accumulated[k] = weighted if acc is None else acc + weighted
 
         val_metrics: dict[str, float] = {}
         if accumulated:
+            accumulated["__counted_batches"] = counted_batches.to(
+                next(iter(accumulated.values())).device
+            )
             if self.is_distributed:
                 accumulated = _all_reduce_metrics(accumulated)
-            val_metrics = {k: v.item() for k, v in accumulated.items()}
+            # Summed over ranks already, so no further world_size divide below.
+            total_counted = accumulated.pop("__counted_batches").item()
+            if total_counted > 0:
+                val_metrics = {
+                    k: v.item() / total_counted for k, v in accumulated.items()
+                }
 
-        world_size = dist.get_world_size() if self.is_distributed else 1
-        val_metrics = {k: v / num_batches for k, v in val_metrics.items()}
-        val_metrics = normalize_counted_metrics(val_metrics, world_size)
+        val_metrics = normalize_counted_metrics(val_metrics)
         val_metrics = {f"{k}_epoch": v for k, v in val_metrics.items()}
 
         metric_logger.info(
