@@ -780,7 +780,6 @@ Each of these runs the full pipeline end to end:
 
 - [`eagle3_qwen3_8b_ultrachat_online_5k.sh`](https://github.com/vllm-project/speculators/blob/main/examples/train/eagle3_qwen3_8b_ultrachat_online_5k.sh) -- Eagle-3, online
 - [`eagle3_llama3_8b_ultrachat_offline_5k.sh`](https://github.com/vllm-project/speculators/blob/main/examples/train/eagle3_llama3_8b_ultrachat_offline_5k.sh) -- Eagle-3, offline
-- [`peagle_qwen3_8b_ultrachat_online_5k.sh`](https://github.com/vllm-project/speculators/blob/main/examples/train/peagle_qwen3_8b_ultrachat_online_5k.sh) -- P-EAGLE
 - [`dflash_qwen3_8b_ultrachat_online_5k.sh`](https://github.com/vllm-project/speculators/blob/main/examples/train/dflash_qwen3_8b_ultrachat_online_5k.sh) -- DFlash, online
 - [`dflash_qwen3_8b_ultrachat_online_5k_bestpractices.sh`](https://github.com/vllm-project/speculators/blob/main/examples/train/dflash_qwen3_8b_ultrachat_online_5k_bestpractices.sh) -- DFlash, online, with the [best-practices recipe](https://github.com/vllm-project/speculators/issues/979) (D-PACE, block_size=16)
 - [`dflash2_qwen3_8b_ultrachat_online_5k.sh`](https://github.com/vllm-project/speculators/blob/main/examples/train/dflash2_qwen3_8b_ultrachat_online_5k.sh) -- DFlash2, online

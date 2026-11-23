@@ -5,12 +5,15 @@
 /src/speculators/convert/ @shanjiaz @fynnsu @rahul-tuli
 /src/speculators/convert/mtp/ @rahul-tuli @fynnsu
 /src/speculators/convert/eagle/ @shanjiaz @fynnsu
-/src/speculators/data_generation/ @shanjiaz @fynnsu @rahul-tuli
+/src/speculators/data_generation/ @shanjiaz @fynnsu @rahul-tuli @WindChimeRan
 /src/speculators/models/ @fynnsu @shanjiaz @rahul-tuli @orestis-z
 /src/speculators/models/mtp/ @rahul-tuli @fynnsu
 /src/speculators/models/peagle/ @orestis-z @shanjiaz
 /src/speculators/models/eagle3/ @fynnsu @shanjiaz @orestis-z
 /src/speculators/models/dflash/ @fynnsu @shanjiaz @orestis-z
+/src/speculators/models/dflash2/ @fynnsu @shanjiaz
+/src/speculators/models/dspark/ @fynnsu @shanjiaz
+/src/speculators/models/xpress/ @fynnsu @shanjiaz
 /src/speculators/train/ @fynnsu @shanjiaz
 
 /tests/ @fynnsu @shanjiaz @rahul-tuli @orestis-z
@@ -23,6 +26,9 @@
 /tests/e2e/smoke/ @shanjiaz @rahul-tuli @dsikka
 
 /scripts/ @fynnsu @shanjiaz @rahul-tuli @orestis-z
+/scripts/evaluate/ @shanjiaz @orestis-z
+/scripts/response-regeneration/ @shanjiaz @WindChimeRan
+/scripts/benchmark.py @orestis-z
 
 /hs_connectors/ @fynnsu @shanjiaz
 

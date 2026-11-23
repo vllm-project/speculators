@@ -631,7 +631,6 @@ def _capture_full_attention_indices(
         ("dspark", [], []),
         ("dflash", [1], [1]),
         ("eagle3", [], []),
-        ("peagle", [], []),
         ("eagle3", [0, 2], [0, 2]),
     ],
 )

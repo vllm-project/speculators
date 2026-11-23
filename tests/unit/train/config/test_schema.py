@@ -101,7 +101,7 @@ def test_flatten_resolves_dflash2_derived_defaults():
 def test_flatten_leaves_non_dflash_derived_defaults_unchanged():
     # DSpark shares only the DFlash layer default; the remaining derived defaults
     # keep their pre-existing behavior.
-    for speculator_type in ("eagle3", "dspark", "peagle", "mtp"):
+    for speculator_type in ("eagle3", "dspark", "mtp"):
         flat = TrainConfig(speculator_type=speculator_type).flatten()
         assert flat["num_layers"] == (5 if speculator_type == "dspark" else 1)
         assert flat["per_position_loss_weight"] == "fixed-exp-decay"

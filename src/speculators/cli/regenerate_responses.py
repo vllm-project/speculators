@@ -23,6 +23,7 @@ from speculators.data_generation.configs import DATASET_CONFIGS, DatasetConfig
 from speculators.data_generation.vllm_client import (
     DEFAULT_MAX_RETRIES,
     InvalidResponseError,
+    is_retryable_status,
     with_retries,
 )
 
@@ -275,13 +276,6 @@ def build_detokenizer(model: str) -> Callable[[list[int]], str]:
     return detokenize
 
 
-# Transient statuses worth retrying: request timeout, conflict, too-early, and
-# rate limiting, plus all 5xx. Other non-2xx replies (e.g. 400/401/404) are
-# permanent config/client errors and fail fast.
-SERVER_ERROR_STATUS = 500
-RETRYABLE_HTTP_STATUSES = {408, 409, 425, 429}
-
-
 @with_retries
 async def _post_chat(
     session: aiohttp.ClientSession,
@@ -302,10 +296,7 @@ async def _post_chat(
             body = (await response.text())[:500]
             message = f"HTTP {response.status} from {endpoint}: {body}"
             # Retry transient statuses (408/409/425/429/5xx); fail fast otherwise.
-            if (
-                response.status >= SERVER_ERROR_STATUS
-                or response.status in RETRYABLE_HTTP_STATUSES
-            ):
+            if is_retryable_status(response.status):
                 raise RuntimeError(message)
             raise InvalidResponseError(message)
         return await response.json()

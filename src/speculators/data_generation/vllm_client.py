@@ -19,9 +19,19 @@ DEFAULT_REQUEST_TIMEOUT = 120  # seconds
 DEFAULT_MAX_RETRIES = 3
 RETRY_BACKOFF_BASE = 2  # seconds
 
+# Transient statuses worth retrying: request timeout, conflict, too-early, and
+# rate limiting, plus all 5xx. Other non-2xx replies (e.g. 400/401/404) are
+# permanent config/client errors and fail fast.
+SERVER_ERROR_STATUS = 500
+RETRYABLE_HTTP_STATUSES = {408, 409, 425, 429}
+
 
 class InvalidResponseError(Exception):
     pass
+
+
+def is_retryable_status(status: int) -> bool:
+    return status >= SERVER_ERROR_STATUS or status in RETRYABLE_HTTP_STATUSES
 
 
 def _handle_retry_error(
@@ -30,9 +40,14 @@ def _handle_retry_error(
     """Handle a retry-eligible error.
 
     Returns backoff seconds if the caller should retry, or ``None`` on the
-    final attempt.  Raises ``InvalidResponseError`` immediately.
+    final attempt.  Raises ``InvalidResponseError`` and permanent HTTP errors
+    from the OpenAI client (e.g. 400/404) immediately.
     """
     if isinstance(error, InvalidResponseError):
+        raise error
+    if isinstance(error, openai.APIStatusError) and not is_retryable_status(
+        error.status_code
+    ):
         raise error
     if attempt < total_attempts:
         backoff = RETRY_BACKOFF_BASE**attempt
@@ -44,7 +59,7 @@ def _handle_retry_error(
             backoff,
         )
         return backoff
-    logger.error("Request timed out after %d attempts: %s", total_attempts, error)
+    logger.error("Request failed after %d attempts: %s", total_attempts, error)
     return None
 
 
