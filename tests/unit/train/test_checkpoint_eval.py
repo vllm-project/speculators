@@ -12,7 +12,11 @@ from pathlib import Path
 import pytest
 
 from speculators.train import checkpoint_eval
-from speculators.train.checkpoint_eval import run_checkpoint_eval
+from speculators.train.checkpoint_eval import (
+    AsyncCheckpointEvaluator,
+    run_checkpoint_eval,
+    snapshot_checkpoint,
+)
 
 
 def _command(tmp_path: Path, body: str) -> str:
@@ -193,6 +197,144 @@ out.joinpath("metrics.json").write_text('{{"mean_acceptance_length": 2}}')
                 return
             time.sleep(0.02)
         pytest.fail(f"evaluator leaked worker {pid}")
+    finally:
+        with suppress(ProcessLookupError):
+            os.kill(pid, signal.SIGKILL)
+
+
+def test_snapshot_checkpoint_copies_weights_and_skips_optimizer_state(tmp_path):
+    source = tmp_path / "epoch0"
+    (source / "tokenizer").mkdir(parents=True)
+    weights = source / "model.safetensors"
+    weights.write_bytes(b"draft-weights-v1")
+    (source / "config.json").write_text('{"step": 1}')
+    (source / "tokenizer" / "vocab.txt").write_text("tok")
+    (source / "optimizer_state_dict.pt").write_bytes(b"huge-optimizer")
+    (source / "scheduler_state_dict.pt").write_bytes(b"scheduler")
+
+    snap = snapshot_checkpoint(source, tmp_path / "snapshot")
+
+    assert (snap / "model.safetensors").stat().st_ino != weights.stat().st_ino
+    assert (snap / "tokenizer" / "vocab.txt").read_text() == "tok"
+    assert not (snap / "optimizer_state_dict.pt").exists()
+    assert not (snap / "scheduler_state_dict.pt").exists()
+
+    # In-place overwrites or removals of the source must not affect the snapshot.
+    weights.unlink()
+    (source / "config.json").write_text('{"step": 2}')
+    assert (snap / "model.safetensors").read_bytes() == b"draft-weights-v1"
+    assert (snap / "config.json").read_text() == '{"step": 1}'
+
+
+def test_async_evaluator_latest_wins_supersedes_pending_and_cleans_snapshots(tmp_path):
+    step1_started = tmp_path / "step1.started"
+    release_step1 = tmp_path / "step1.release"
+    command = _command(
+        tmp_path,
+        f"""
+import json, os, time
+from pathlib import Path
+step = int(os.environ["SPECULATORS_EVAL_STEP"])
+ckpt = Path(os.environ["SPECULATORS_EVAL_CHECKPOINT"])
+tag = json.loads((ckpt / "config.json").read_text())["step"]
+assert tag == step
+if step == 1:
+    Path({str(step1_started)!r}).touch()
+    deadline = time.monotonic() + 10
+    while not Path({str(release_step1)!r}).exists() and time.monotonic() < deadline:
+        time.sleep(0.02)
+out = Path(os.environ["SPECULATORS_EVAL_OUTPUT_DIR"])
+(out / "metrics.json").write_text(json.dumps({{"mal": float(step)}}))
+""",
+    )
+    snaps = {}
+    for step in (1, 2, 3):
+        snap = tmp_path / "snaps" / f"step_{step}"
+        snap.mkdir(parents=True)
+        (snap / "config.json").write_text(json.dumps({"step": step}))
+        snaps[step] = snap
+
+    evaluator = AsyncCheckpointEvaluator(command, timeout=15)
+    evaluator.submit(
+        snaps[1], tmp_path / "out1", step=1, epoch=0, cleanup_checkpoint=True
+    )
+    deadline = time.monotonic() + 10
+    while not step1_started.exists() and time.monotonic() < deadline:
+        time.sleep(0.02)
+    assert step1_started.exists()
+
+    # Submit step 2 then step 3 while step 1 is active: step 2 is superseded
+    # and its temporary snapshot is removed immediately.
+    evaluator.submit(
+        snaps[2], tmp_path / "out2", step=2, epoch=0, cleanup_checkpoint=True
+    )
+    evaluator.submit(
+        snaps[3], tmp_path / "out3", step=3, epoch=0, cleanup_checkpoint=True
+    )
+    assert not snaps[2].exists()
+    assert snaps[3].exists()
+
+    release_step1.touch()
+    results = evaluator.drain()
+
+    assert [(r.step, r.metrics) for r in results] == [
+        (1, {"mal": 1.0}),
+        (3, {"mal": 3.0}),
+    ]
+    assert not snaps[1].exists()
+    assert not snaps[3].exists()
+    assert (tmp_path / "out1" / "metrics.json").exists()
+    assert not (tmp_path / "out2").exists()
+    assert (tmp_path / "out3" / "metrics.json").exists()
+
+
+@pytest.mark.skipif(os.name != "posix", reason="process groups require POSIX")
+def test_async_evaluator_cancel_kills_running_process_group_and_drops_pending(tmp_path):
+    child_pid_file = tmp_path / "child.pid"
+    command = _command(
+        tmp_path,
+        f"""
+import os, subprocess, sys, time
+from pathlib import Path
+code = (
+    "import signal, time; "
+    "signal.signal(signal.SIGTERM, signal.SIG_IGN); time.sleep(60)"
+)
+child = subprocess.Popen([sys.executable, "-c", code])
+Path({str(child_pid_file)!r}).write_text(str(child.pid))
+time.sleep(60)
+""",
+    )
+    snap1 = tmp_path / "snap1"
+    snap2 = tmp_path / "snap2"
+    snap1.mkdir()
+    snap2.mkdir()
+
+    evaluator = AsyncCheckpointEvaluator(command, timeout=60)
+    evaluator.submit(snap1, tmp_path / "out1", step=1, epoch=0, cleanup_checkpoint=True)
+    deadline = time.monotonic() + 10
+    while not child_pid_file.exists() and time.monotonic() < deadline:
+        time.sleep(0.02)
+    assert child_pid_file.exists()
+    evaluator.submit(snap2, tmp_path / "out2", step=2, epoch=0, cleanup_checkpoint=True)
+
+    evaluator.cancel()
+
+    assert not snap1.exists()
+    assert not snap2.exists()
+    pid = int(child_pid_file.read_text())
+    deadline = time.monotonic() + 5
+    try:
+        while time.monotonic() < deadline:
+            stat = Path(f"/proc/{pid}/stat")
+            if stat.exists() and stat.read_text().split()[2] == "Z":
+                return
+            try:
+                os.kill(pid, 0)
+            except ProcessLookupError:
+                return
+            time.sleep(0.02)
+        pytest.fail(f"async evaluator leaked worker {pid}")
     finally:
         with suppress(ProcessLookupError):
             os.kill(pid, signal.SIGKILL)

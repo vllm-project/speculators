@@ -40,6 +40,23 @@ def read_acceptance(path: Path) -> dict[str, float]:
     return metrics
 
 
+def ensure_port_available(port: int, timeout: float = 5.0) -> None:
+    """Reject a live server on *port*, tolerating TIME_WAIT and brief teardown."""
+    deadline = time.monotonic() + timeout
+    while True:
+        with socket.socket() as probe:
+            # Allow rebinding a TIME_WAIT port from the previous evaluation
+            # while still rejecting an active listener on 127.0.0.1:port.
+            probe.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            try:
+                probe.bind(("127.0.0.1", port))
+                return
+            except OSError:
+                if time.monotonic() >= deadline:
+                    raise
+        time.sleep(0.1)
+
+
 def wait_ready(
     process: subprocess.Popen, url: str, timeout: float, expected_model: str
 ) -> None:
@@ -99,8 +116,7 @@ def main() -> None:
     url = f"http://127.0.0.1:{args.port}"
     served_model = f"speculators-eval-{uuid4().hex}"
     # Do not accidentally benchmark a pre-existing server at the requested port.
-    with socket.socket() as probe:
-        probe.bind(("127.0.0.1", args.port))
+    ensure_port_available(args.port)
 
     serve = [
         sys.executable,

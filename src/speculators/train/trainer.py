@@ -1,8 +1,10 @@
 import json
 import logging
+import shutil
 import time
 import warnings
 from collections.abc import Callable
+from contextlib import suppress
 from pathlib import Path
 from typing import Literal, NamedTuple
 from uuid import uuid4
@@ -23,7 +25,11 @@ from transformers import (
 )
 
 from speculators.model import SpeculatorModel
-from speculators.train.checkpoint_eval import run_checkpoint_eval
+from speculators.train.checkpoint_eval import (
+    AsyncCheckpointEvaluator,
+    run_checkpoint_eval,
+    snapshot_checkpoint,
+)
 from speculators.train.checkpointer import (
     BaseCheckpointer,
     DistributedCheckpointer,
@@ -206,6 +212,8 @@ class TrainerConfig(NamedTuple):
     max_steps: int | None = None
     checkpoint_eval_command: str | None = None
     checkpoint_eval_timeout: float = 300.0
+    checkpoint_eval_steps: int | None = None
+    checkpoint_eval_mode: Literal["async", "sync"] = "async"
 
 
 def _resolve_scheduler_steps(
@@ -275,6 +283,7 @@ class Trainer:
         )
         self.checkpointer: BaseCheckpointer = checkpointer_class(self.config.save_path)
         self._last_checkpoint_eval: tuple[int, int] | None = None
+        self._checkpoint_evaluator: AsyncCheckpointEvaluator | None = None
 
         self.setup_trainer()
         self.setup_model()
@@ -688,6 +697,8 @@ class Trainer:
             if step_callback is not None:
                 step_callback()
 
+            t_before_fetch = self._maybe_eval_step(epoch, t_before_fetch)
+
             if (
                 self.config.max_steps is not None
                 and self.global_step >= self.config.max_steps
@@ -701,7 +712,10 @@ class Trainer:
                 and num_steps - local_step >= step_interval * MIN_STEP_PCT
                 # Avoid saving back to back ay the end of each epoch
             ):
-                if self.maybe_save_checkpoint(epoch, local_step=local_step):
+                if (
+                    self.maybe_save_checkpoint(epoch, local_step=local_step)
+                    and self.config.checkpoint_eval_steps is None
+                ):
                     self._evaluate_checkpoint(epoch)
                 # Exclude checkpoint I/O and evaluation from the next batch.
                 t_before_fetch = time.perf_counter()
@@ -803,44 +817,169 @@ class Trainer:
         root_logger.info(f"Checkpoint saved to {self.checkpointer.path / str(epoch)}")
         return True
 
-    def _evaluate_checkpoint(self, epoch: int) -> None:
+    def _get_async_evaluator(self, command: str) -> AsyncCheckpointEvaluator:
+        evaluator = getattr(self, "_checkpoint_evaluator", None)
+        if evaluator is None:
+            evaluator = AsyncCheckpointEvaluator(
+                command, self.config.checkpoint_eval_timeout
+            )
+            self._checkpoint_evaluator = evaluator
+        return evaluator
+
+    def _maybe_eval_step(self, epoch: int, t_before_fetch: float) -> float:
+        self._flush_checkpoint_eval_results()
+        steps = self.config.checkpoint_eval_steps
+        if (
+            self.config.checkpoint_eval_command
+            and steps is not None
+            and self.global_step % steps == 0
+        ):
+            self._evaluate_checkpoint(epoch, weights_only=True)
+            return time.perf_counter()
+        return t_before_fetch
+
+    def _log_checkpoint_eval_metrics(
+        self,
+        metrics: dict[str, float],
+        epoch: int,
+        step: int,
+        output: Path,
+    ) -> None:
+        try:
+            metric_logger.info(
+                {"serving_eval": metrics, "epoch": epoch},
+                extra={"step": step},
+            )
+        except TrainingInterruptedError:
+            raise
+        except Exception:  # noqa: BLE001
+            root_logger.warning(
+                "Checkpoint evaluation failed; continuing training. Artifacts: %s",
+                output,
+                exc_info=True,
+            )
+
+    def _flush_checkpoint_eval_results(self) -> None:
+        evaluator = getattr(self, "_checkpoint_evaluator", None)
+        if evaluator is None or self.rank != 0:
+            return
+        for result in evaluator.poll_results():
+            self._log_checkpoint_eval_metrics(
+                result.metrics, result.epoch, result.step, result.output_dir
+            )
+
+    def _drain_checkpoint_eval(self) -> None:
+        evaluator = getattr(self, "_checkpoint_evaluator", None)
+        if evaluator is None or self.rank != 0:
+            return
+        self._checkpoint_evaluator = None
+        for result in evaluator.drain():
+            self._log_checkpoint_eval_metrics(
+                result.metrics, result.epoch, result.step, result.output_dir
+            )
+
+    def _cancel_checkpoint_eval(self) -> None:
+        evaluator = getattr(self, "_checkpoint_evaluator", None)
+        if evaluator is None or self.rank != 0:
+            return
+        self._checkpoint_evaluator = None
+        evaluator.cancel()
+
+    def _run_sync_checkpoint_eval(
+        self,
+        command: str,
+        checkpoint: Path,
+        output: Path,
+        epoch: int,
+        *,
+        cleanup_checkpoint: bool,
+    ) -> None:
+        group = dist.group.WORLD if self.is_distributed else None
+        try:
+            with checkpoint_eval_rendezvous(
+                group, self.config.checkpoint_eval_timeout
+            ) as check:
+                if self.rank != 0:
+                    return
+                try:
+                    metrics = run_checkpoint_eval(
+                        command,
+                        checkpoint,
+                        output,
+                        self.global_step,
+                        self.config.checkpoint_eval_timeout,
+                        check_interrupted=check,
+                    )
+                    self._log_checkpoint_eval_metrics(
+                        metrics, epoch, self.global_step, output
+                    )
+                except TrainingInterruptedError:
+                    raise
+                except Exception:  # noqa: BLE001
+                    root_logger.warning(
+                        "Checkpoint evaluation failed; continuing training. "
+                        "Artifacts: %s",
+                        output,
+                        exc_info=True,
+                    )
+        finally:
+            if cleanup_checkpoint and self.rank == 0:
+                shutil.rmtree(checkpoint, ignore_errors=True)
+                with suppress(OSError):
+                    checkpoint.parent.rmdir()
+
+    def _evaluate_checkpoint(self, epoch: int, *, weights_only: bool = False) -> None:
         command = self.config.checkpoint_eval_command
         key = (epoch, self.global_step)
         if not command or self._last_checkpoint_eval == key:
             return
         self._last_checkpoint_eval = key
-        group = dist.group.WORLD if self.is_distributed else None
-        with checkpoint_eval_rendezvous(
-            group, self.config.checkpoint_eval_timeout
-        ) as check:
+
+        run_id = f"step_{self.global_step}_{uuid4().hex}"
+        eval_root = self.checkpointer.path / "serving_eval"
+        output = eval_root / run_id
+        snapshot_dir = eval_root / "_snapshots" / run_id
+        cleanup_checkpoint = False
+
+        if weights_only:
+            # Lightweight export: model weights + config only (no optimizer state).
+            self.checkpointer.save_model(self.model, snapshot_dir)
+            checkpoint = snapshot_dir
+            cleanup_checkpoint = True
+        else:
+            checkpoint = self.checkpointer.path / str(epoch)
+
+        if self.config.checkpoint_eval_mode == "async":
             if self.rank != 0:
                 return
-            output = (
-                self.checkpointer.path
-                / "serving_eval"
-                / f"step_{self.global_step}_{uuid4().hex}"
+            if not weights_only:
+                try:
+                    checkpoint = snapshot_checkpoint(checkpoint, snapshot_dir)
+                    cleanup_checkpoint = True
+                except Exception:  # noqa: BLE001
+                    root_logger.warning(
+                        "Checkpoint evaluation snapshot failed; continuing training. "
+                        "Checkpoint: %s",
+                        checkpoint,
+                        exc_info=True,
+                    )
+                    return
+            self._get_async_evaluator(command).submit(
+                checkpoint,
+                output,
+                self.global_step,
+                epoch,
+                cleanup_checkpoint=cleanup_checkpoint,
             )
-            try:
-                metrics = run_checkpoint_eval(
-                    command,
-                    self.checkpointer.path / str(epoch),
-                    output,
-                    self.global_step,
-                    self.config.checkpoint_eval_timeout,
-                    check_interrupted=check,
-                )
-                metric_logger.info(
-                    {"serving_eval": metrics, "epoch": epoch},
-                    extra={"step": self.global_step},
-                )
-            except TrainingInterruptedError:
-                raise
-            except Exception:  # noqa: BLE001
-                root_logger.warning(
-                    "Checkpoint evaluation failed; continuing training. Artifacts: %s",
-                    output,
-                    exc_info=True,
-                )
+            return
+
+        self._run_sync_checkpoint_eval(
+            command,
+            checkpoint,
+            output,
+            epoch,
+            cleanup_checkpoint=cleanup_checkpoint,
+        )
 
     def maybe_update_best(self, epoch: int, val_metrics: dict | None) -> bool:
         """Update the best checkpoint and return whether this call saved weights."""
@@ -874,36 +1013,53 @@ class Trainer:
     @with_graceful_shutdown()
     def run_training(self):
         n_epochs = self.config.num_epochs
-        for epoch in range(self.current_epoch, n_epochs):
-            root_logger.info(f"Training epoch {epoch + 1}/{n_epochs} started")
-            self.train_epoch(epoch)
-            root_logger.info(f"Training epoch {epoch + 1}/{n_epochs} completed")
+        try:
+            for epoch in range(self.current_epoch, n_epochs):
+                root_logger.info(f"Training epoch {epoch + 1}/{n_epochs} started")
+                self.train_epoch(epoch)
+                root_logger.info(f"Training epoch {epoch + 1}/{n_epochs} completed")
+                self._flush_checkpoint_eval_results()
 
-            if self.is_distributed:
-                dist.barrier()
+                if self.is_distributed:
+                    dist.barrier()
 
-            checkpoint_saved = self.maybe_save_checkpoint(epoch)
+                checkpoint_saved = self.maybe_save_checkpoint(epoch)
 
-            if self.is_distributed:
-                dist.barrier()
+                if self.is_distributed:
+                    dist.barrier()
 
-            val_metrics = None
+                val_metrics = None
 
-            if self.val_loader is None:
-                root_logger.warning("No val loader, skipping validation epoch")
-            else:
-                root_logger.info(f"Validation epoch {epoch + 1}/{n_epochs} started")
-                val_metrics = self.val_epoch(epoch)
-                root_logger.info(f"Validation epoch {epoch + 1}/{n_epochs} completed")
+                if self.val_loader is None:
+                    root_logger.warning("No val loader, skipping validation epoch")
+                else:
+                    root_logger.info(f"Validation epoch {epoch + 1}/{n_epochs} started")
+                    val_metrics = self.val_epoch(epoch)
+                    root_logger.info(
+                        f"Validation epoch {epoch + 1}/{n_epochs} completed"
+                    )
 
-            if self.is_distributed:
-                dist.barrier()
+                if self.is_distributed:
+                    dist.barrier()
 
-            best_checkpoint_saved = self.maybe_update_best(epoch, val_metrics)
+                best_checkpoint_saved = self.maybe_update_best(epoch, val_metrics)
 
-            if self.is_distributed:
-                dist.barrier()
+                if self.is_distributed:
+                    dist.barrier()
 
-            # Resume skips this epoch, so finish validation and best updates first.
-            if checkpoint_saved or best_checkpoint_saved:
-                self._evaluate_checkpoint(epoch)
+                # Resume skips this epoch, so finish validation and best updates first.
+                if (
+                    checkpoint_saved or best_checkpoint_saved
+                ) and self.config.checkpoint_eval_steps is None:
+                    self._evaluate_checkpoint(epoch)
+        except BaseException:
+            self._cancel_checkpoint_eval()
+            raise
+
+        try:
+            self._drain_checkpoint_eval()
+        except TrainingInterruptedError:
+            root_logger.warning(
+                "Interrupted while draining final serving evaluation; "
+                "training checkpoints are already saved."
+            )

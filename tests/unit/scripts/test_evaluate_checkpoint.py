@@ -182,3 +182,15 @@ def test_adapter_passes_checkpoint_algorithm_and_unique_model_to_existing_tools(
     assert json.loads(output.joinpath("metrics.json").read_text()) == {
         "gsm8k/acceptance_length": 3.25
     }
+
+
+def test_ensure_port_available_rejects_live_listener_and_allows_released_port(adapter):
+    server = HTTPServer(("127.0.0.1", 0), BaseHTTPRequestHandler)
+    port = server.server_port
+    try:
+        with pytest.raises(OSError):
+            adapter.ensure_port_available(port, timeout=0.1)
+    finally:
+        server.server_close()
+
+    adapter.ensure_port_available(port, timeout=1.0)

@@ -11,7 +11,7 @@ import logging
 import os
 import time
 from contextlib import contextmanager
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import torch
 import torch.distributed as dist
@@ -24,6 +24,26 @@ if TYPE_CHECKING:
     from collections.abc import Callable, Iterator
 
 logger = logging.getLogger("speculators")
+
+
+def _wait_for_eval_acks(
+    store: Any,
+    ack_key: str,
+    world_size: int,
+    check_interrupted: Callable[[], None],
+) -> None:
+    """Wait for every rank to observe eval completion or an interrupt."""
+    acked = store.add(ack_key, 1)
+    deadline = time.monotonic() + store.timeout.total_seconds()
+    while acked < world_size:
+        check_interrupted()
+        if time.monotonic() >= deadline:
+            raise TimeoutError(
+                "Peers did not acknowledge checkpoint evaluation completion"
+            )
+        time.sleep(0.05)
+        acked = int(store.get(ack_key))
+    check_interrupted()
 
 
 @contextmanager
@@ -40,12 +60,14 @@ def checkpoint_eval_rendezvous(
         yield None
         return
 
-    store = group.get_group_store()
+    store: Any = group.get_group_store()
     rank = group.rank()
+    world_size = group.size()
     # Each rank enters once per saved checkpoint. An ordinal in the job store
     # also disambiguates a second training run that reuses the group/step.
     sequence = store.add(f"speculators/serving_eval/rank/{rank}", 1)
     key = f"speculators/serving_eval/result/{sequence}"
+    ack_key = f"speculators/serving_eval/ack/{sequence}"
 
     def check_interrupted() -> None:
         if store.check([key]) and store.get(key) == b"interrupted":
@@ -69,6 +91,10 @@ def checkpoint_eval_rendezvous(
             raise TrainingInterruptedError(
                 "Checkpoint evaluation interrupted by a peer"
             )
+        # Wait for all ranks to observe completion before anyone re-enters
+        # training collectives, so a peer interrupted while waking up still
+        # diverts other ranks into the interrupted-checkpoint path.
+        _wait_for_eval_acks(store, ack_key, world_size, check_interrupted)
     except BaseException:
         store.set(key, b"interrupted")
         raise

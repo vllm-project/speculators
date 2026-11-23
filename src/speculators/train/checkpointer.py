@@ -123,6 +123,16 @@ class BaseCheckpointer:
     ):
         raise NotImplementedError
 
+    @abstractmethod
+    def save_model(
+        self,
+        model: PreTrainedModel,
+        output_dir: Path,
+        float_dtype: torch.dtype = torch.bfloat16,
+    ) -> None:
+        """Export model weights and config only, without optimizer state."""
+        raise NotImplementedError
+
     def _get_previous_epoch(self) -> int:
         if not self.path.exists():
             return -1
@@ -341,6 +351,28 @@ class SingleGPUCheckpointer(BaseCheckpointer):
         for opt, state_dict in zip(optimizers, loaded_list, strict=True):
             opt.load_state_dict(convert_float_dtype(state_dict, dtype))
 
+    @staticmethod
+    def _write_model(
+        model: PreTrainedModel,
+        output_dir: Path,
+        float_dtype: torch.dtype,
+    ) -> None:
+        raw_model: PreTrainedModel = (
+            model.module if isinstance(model, DistributedDataParallel) else model
+        )  # type: ignore[assignment]
+        model_state_dict = convert_float_dtype(raw_model.state_dict(), float_dtype)
+        raw_model.save_pretrained(output_dir, state_dict=model_state_dict)
+        patch_config_dtype(output_dir / "config.json", float_dtype)
+
+    @_rank0_only
+    def save_model(
+        self,
+        model: PreTrainedModel,
+        output_dir: Path,
+        float_dtype: torch.dtype = torch.bfloat16,
+    ) -> None:
+        self._write_model(model, output_dir, float_dtype)
+
     @_rank0_only
     def save_checkpoint(
         self,
@@ -349,12 +381,7 @@ class SingleGPUCheckpointer(BaseCheckpointer):
         epoch: int | str,
         float_dtype: torch.dtype = torch.bfloat16,
     ):
-        raw_model: PreTrainedModel = (
-            model.module if isinstance(model, DistributedDataParallel) else model
-        )  # type: ignore[assignment]
-        model_state_dict = convert_float_dtype(raw_model.state_dict(), float_dtype)
-        raw_model.save_pretrained(self.path / str(epoch), state_dict=model_state_dict)
-        patch_config_dtype(self.path / str(epoch) / "config.json", float_dtype)
+        self._write_model(model, self.path / str(epoch), float_dtype)
 
         optimizers = _as_list(optimizer)
         state_dicts = [
@@ -416,6 +443,23 @@ class DistributedCheckpointer(BaseCheckpointer):
             for state in opt.state.values():
                 if "step" in state and isinstance(state["step"], torch.Tensor):
                     state["step"] = state["step"].float()
+
+        dist.barrier()
+
+    def save_model(
+        self,
+        model: PreTrainedModel,
+        output_dir: Path,
+        float_dtype: torch.dtype = torch.bfloat16,
+    ) -> None:
+        model_state_dict = get_model_state_dict(
+            model, options=StateDictOptions(full_state_dict=True, cpu_offload=True)
+        )
+        model_state_dict = convert_float_dtype(model_state_dict, float_dtype)
+
+        if get_rank() == 0:
+            model.save_pretrained(output_dir, state_dict=model_state_dict)
+            patch_config_dtype(output_dir / "config.json", float_dtype)
 
         dist.barrier()
 

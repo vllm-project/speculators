@@ -5,6 +5,7 @@ import logging
 import os
 import signal
 import sys
+import time
 from datetime import timedelta
 from pathlib import Path
 from typing import Any, cast
@@ -14,16 +15,29 @@ import torch
 import torch.distributed as dist
 import torch.multiprocessing as mp
 
-from speculators.train.checkpointer import SingleGPUCheckpointer
+import speculators.train.checkpointer as checkpointer_mod
+import speculators.train.distributed as distributed_mod
+from speculators.train.checkpointer import (
+    DistributedCheckpointer,
+    SingleGPUCheckpointer,
+)
 from speculators.train.config import TrainConfig
 from speculators.train.graceful_shutdown import (
     TrainingInterruptedError,
     with_graceful_shutdown,
 )
+from speculators.train.logger import WandbHandler
 from speculators.train.trainer import Trainer, TrainerConfig
 
 
-def _trainer(tmp_path: Path, command: str | None = None, *, save_best=False) -> Trainer:
+def _trainer(
+    tmp_path: Path,
+    command: str | None = None,
+    *,
+    save_best=False,
+    checkpoint_eval_mode="async",
+    checkpoint_eval_steps=None,
+) -> Trainer:
     trainer = cast("Any", object.__new__(Trainer))
     trainer.config = TrainerConfig(
         lr=1e-3,
@@ -31,6 +45,8 @@ def _trainer(tmp_path: Path, command: str | None = None, *, save_best=False) -> 
         save_path=str(tmp_path),
         checkpoint_eval_command=command,
         checkpoint_eval_timeout=10,
+        checkpoint_eval_steps=checkpoint_eval_steps,
+        checkpoint_eval_mode=checkpoint_eval_mode,
         save_best=save_best,
     )
     trainer.is_distributed = False
@@ -45,14 +61,23 @@ def _trainer(tmp_path: Path, command: str | None = None, *, save_best=False) -> 
     trainer.optimizers = []
     trainer.model = None
     trainer._last_checkpoint_eval = None
+    trainer._checkpoint_evaluator = None
 
     def save(_model, _optimizers, epoch):
         path = tmp_path / str(epoch)
         path.mkdir(parents=True, exist_ok=True)
         (path / "config.json").write_text("{}")
 
+    def save_model(_model, output_dir, float_dtype=torch.bfloat16):
+        output_dir.mkdir(parents=True, exist_ok=True)
+        (output_dir / "config.json").write_text(
+            json.dumps({"step": trainer.global_step})
+        )
+        (output_dir / "model.safetensors").write_bytes(b"weights")
+
     trainer.checkpointer = SingleGPUCheckpointer(tmp_path)
     trainer.checkpointer.save_checkpoint = save
+    trainer.checkpointer.save_model = save_model
     return cast("Trainer", trainer)
 
 
@@ -123,7 +148,12 @@ def test_resume_after_interrupted_epoch_evaluation(tmp_path, monkeypatch, save_b
     trained, validated = [], []
 
     def run(resume):
-        trainer = _trainer(root, f'"{sys.executable}" "{script}"', save_best=save_best)
+        trainer = _trainer(
+            root,
+            f'"{sys.executable}" "{script}"',
+            save_best=save_best,
+            checkpoint_eval_mode="sync",
+        )
         trainer.config = trainer.config._replace(num_epochs=3)
         trainer.resume_from_checkpoint = resume
         trainer.setup_trainer()
@@ -196,7 +226,7 @@ def test_metric_backend_errors_are_isolated_but_training_interrupts_propagate(
     logger = logging.getLogger("speculators.metrics")
     handler = FailingBackend()
     logger.addHandler(handler)
-    trainer = _trainer(tmp_path, evaluator)
+    trainer = _trainer(tmp_path, evaluator, checkpoint_eval_mode="sync")
     trainer.maybe_save_checkpoint(0)
     try:
         with caplog.at_level(logging.INFO, logger="speculators.metrics"):
@@ -220,10 +250,16 @@ def test_evaluator_config_resolves_from_cli_and_roundtrips():
             "python eval.py",
             "--checkpoint-eval-timeout",
             "42",
+            "--checkpoint-eval-steps",
+            "250",
+            "--checkpoint-eval-mode",
+            "sync",
         ]
     )
     assert cfg.trainer.checkpoint_eval_command == "python eval.py"
     assert cfg.trainer.checkpoint_eval_timeout == 42
+    assert cfg.trainer.checkpoint_eval_steps == 250
+    assert cfg.trainer.checkpoint_eval_mode == "sync"
     assert TrainConfig.from_flat(cfg.flatten()).trainer == cfg.trainer
 
 
@@ -232,6 +268,14 @@ def test_rejects_invalid_evaluation_timeout(timeout):
     with pytest.raises(SystemExit):
         TrainConfig.resolve(
             ["--verifier-name-or-path", "target", "--checkpoint-eval-timeout", timeout]
+        )
+
+
+@pytest.mark.parametrize("steps", ["0", "-5"])
+def test_rejects_invalid_evaluation_steps(steps):
+    with pytest.raises(SystemExit):
+        TrainConfig.resolve(
+            ["--verifier-name-or-path", "target", "--checkpoint-eval-steps", steps]
         )
 
 
@@ -246,7 +290,9 @@ def _distributed_failed_eval(rank, root):
     )
     try:
         script = path / "invalid.py"
-        trainer = _trainer(path, f"{sys.executable} {script}")
+        trainer = _trainer(
+            path, f"{sys.executable} {script}", checkpoint_eval_mode="sync"
+        )
         trainer.rank = rank
         trainer.is_distributed = True
         trainer._evaluate_checkpoint(0)
@@ -283,7 +329,11 @@ def _distributed_evaluation(rank, root, ready):
         timeout=timedelta(seconds=2),
     )
     try:
-        trainer = _trainer(path, f"{sys.executable} {path / 'evaluate.py'}")
+        trainer = _trainer(
+            path,
+            f"{sys.executable} {path / 'evaluate.py'}",
+            checkpoint_eval_mode="sync",
+        )
         trainer.is_distributed = True
         trainer.rank = rank
 
@@ -338,3 +388,470 @@ def test_distributed_slow_evaluation_and_graceful_shutdown(tmp_path, interrupt_r
         assert (tmp_path / f"rank{rank}.resumed").exists() == (interrupt_rank is None)
     metrics = list((tmp_path / "serving_eval").glob("*/metrics.json"))
     assert len(metrics) == (1 if interrupt_rank is None else 0)
+
+
+def _distributed_done_interrupt_race(rank, root, ready):
+    path = Path(root)
+    ready.wait(timeout=60)
+    dist.init_process_group(
+        "gloo",
+        init_method=f"file://{path / 'rendezvous'}",
+        rank=rank,
+        world_size=3,
+        timeout=timedelta(seconds=3),
+    )
+    real_sleep = distributed_mod.time.sleep
+    try:
+        trainer = _trainer(
+            path,
+            f"{sys.executable} {path / 'evaluate.py'}",
+            checkpoint_eval_mode="sync",
+        )
+        trainer.is_distributed = True
+        trainer.rank = rank
+
+        def save(_model, _optimizers, epoch):
+            assert epoch == "interrupted"
+            count = torch.ones(1)
+            dist.all_reduce(count)
+            assert count.item() == 3
+            (path / f"rank{rank}.saved").touch()
+
+        cast("Any", trainer.checkpointer).save_checkpoint = save
+
+        if rank == 2:
+            assert dist.group.WORLD is not None
+            store = dist.group.WORLD.get_group_store()
+            result_key = "speculators/serving_eval/result/1"
+            ack_key = "speculators/serving_eval/ack/1"
+            signaled = False
+
+            def interrupt_after_done(seconds: Any) -> None:
+                nonlocal signaled
+                if not signaled:
+                    (path / "rank2.waiting").touch()
+                    while not store.check([result_key]):
+                        real_sleep(0.01)
+                    assert store.get(result_key) == b"done"
+                    # Let rank 0 publish b"done" and rank 1 acknowledge before
+                    # rank 2 is interrupted prior to acknowledging completion.
+                    ack_wait = time.monotonic() + 1.0
+                    while time.monotonic() < ack_wait and (
+                        not store.check([ack_key]) or int(store.get(ack_key)) < 2
+                    ):
+                        real_sleep(0.01)
+                    signaled = True
+                    os.kill(os.getpid(), signal.SIGTERM)
+                real_sleep(seconds)
+
+            cast("Any", distributed_mod.time).sleep = interrupt_after_done
+
+        @with_graceful_shutdown(timeout=10)
+        def train(t):
+            dist.barrier()
+            t._evaluate_checkpoint(0)
+            (path / f"rank{rank}.resumed").touch()
+            dist.barrier()
+
+        train(trainer)
+    finally:
+        distributed_mod.time.sleep = real_sleep
+        dist.destroy_process_group()
+
+
+def test_distributed_completion_interrupt_race_keeps_all_ranks_in_sync(tmp_path):
+    script = tmp_path / "evaluate.py"
+    waiting = tmp_path / "rank2.waiting"
+    script.write_text(
+        "import os, time\nfrom pathlib import Path\n"
+        f"waiting = Path({str(waiting)!r})\n"
+        "deadline = time.monotonic() + 10\n"
+        "while not waiting.exists() and time.monotonic() < deadline:\n"
+        "    time.sleep(0.01)\n"
+        "assert waiting.exists()\n"
+        "out = Path(os.environ['SPECULATORS_EVAL_OUTPUT_DIR'])\n"
+        "out.joinpath('metrics.json').write_text('{\"mal\": 2}')\n"
+    )
+    ready = mp.get_context("spawn").Barrier(3)
+    mp.spawn(_distributed_done_interrupt_race, args=(str(tmp_path), ready), nprocs=3)
+    for rank in (0, 1, 2):
+        assert (tmp_path / f"rank{rank}.saved").exists()
+        assert not (tmp_path / f"rank{rank}.resumed").exists()
+
+
+def test_async_eval_runs_without_blocking_training_and_survives_pruning(
+    tmp_path, monkeypatch, caplog
+):
+    root = tmp_path / "checkpoints"
+    eval0_started = tmp_path / "eval0.started"
+    epoch1_pruned = tmp_path / "epoch1.pruned"
+    script = tmp_path / "async_eval.py"
+    script.write_text(
+        f"""
+import json, os, time
+from pathlib import Path
+step = int(os.environ["SPECULATORS_EVAL_STEP"])
+ckpt = Path(os.environ["SPECULATORS_EVAL_CHECKPOINT"])
+if step == 1:
+    Path({str(eval0_started)!r}).touch()
+    # Stay active until epoch 1 trains AND prunes checkpoints/0 on disk.
+    deadline = time.monotonic() + 10
+    while not Path({str(epoch1_pruned)!r}).exists() and time.monotonic() < deadline:
+        time.sleep(0.02)
+    assert Path({str(epoch1_pruned)!r}).exists()
+assert (ckpt / "config.json").exists()
+out = Path(os.environ["SPECULATORS_EVAL_OUTPUT_DIR"])
+(out / "metrics.json").write_text(json.dumps({{"mal": float(step) + 0.5}}))
+"""
+    )
+
+    trainer = _trainer(
+        root,
+        f'"{sys.executable}" "{script}"',
+        save_best=True,
+        checkpoint_eval_mode="async",
+    )
+    trainer.config = trainer.config._replace(num_epochs=2)
+    trainer.global_step = 0
+
+    def train_epoch(epoch):
+        if epoch == 1:
+            # Wait briefly for epoch 0's background evaluator to start; epoch 1
+            # begins even though epoch 0's evaluation has not finished yet.
+            deadline = time.monotonic() + 10
+            while not eval0_started.exists() and time.monotonic() < deadline:
+                time.sleep(0.02)
+            assert eval0_started.exists()
+        trainer.global_step += 1
+
+    def val_epoch(epoch):
+        return {"loss_epoch": [0.8, 0.2][epoch]}
+
+    orig_cleanup = trainer.checkpointer.cleanup_keep_only_best
+
+    def cleanup_and_mark(best_epoch):
+        orig_cleanup(best_epoch)
+        if best_epoch == 1:
+            assert not (root / "0").exists()
+            epoch1_pruned.touch()
+
+    monkeypatch.setattr(trainer, "train_epoch", train_epoch)
+    monkeypatch.setattr(trainer, "val_epoch", val_epoch)
+    monkeypatch.setattr(
+        trainer.checkpointer, "cleanup_keep_only_best", cleanup_and_mark
+    )
+
+    with caplog.at_level(logging.INFO, logger="speculators.metrics"):
+        trainer.run_training()
+
+    records = [
+        (r.step, r.msg["serving_eval"])
+        for r in caplog.records
+        if isinstance(r.msg, dict) and "serving_eval" in r.msg
+    ]
+    assert records == [(1, {"mal": 1.5}), (2, {"mal": 2.5})]
+    snapshots = root / "serving_eval" / "_snapshots"
+    assert not snapshots.exists() or not any(snapshots.iterdir())
+
+
+def test_weights_only_step_eval_exports_model_without_optimizer(
+    tmp_path, monkeypatch, caplog
+):
+    root = tmp_path / "checkpoints"
+    script = tmp_path / "step_eval.py"
+    script.write_text(
+        """
+import json, os
+from pathlib import Path
+ckpt = Path(os.environ["SPECULATORS_EVAL_CHECKPOINT"])
+assert (ckpt / "model.safetensors").exists()
+assert not (ckpt / "optimizer_state_dict.pt").exists()
+cfg = json.loads((ckpt / "config.json").read_text())
+step = int(os.environ["SPECULATORS_EVAL_STEP"])
+assert cfg["step"] == step
+out = Path(os.environ["SPECULATORS_EVAL_OUTPUT_DIR"])
+(out / "metrics.json").write_text(json.dumps({"mal": float(step)}))
+"""
+    )
+
+    trainer = _trainer(
+        root,
+        f'"{sys.executable}" "{script}"',
+        checkpoint_eval_steps=2,
+        checkpoint_eval_mode="async",
+    )
+    trainer.config = trainer.config._replace(num_epochs=1)
+    trainer.global_step = 0
+    save_model_calls: list[int] = []
+    orig_save_model = trainer.checkpointer.save_model
+
+    def track_save_model(model, output_dir, float_dtype=torch.bfloat16):
+        save_model_calls.append(trainer.global_step)
+        orig_save_model(model, output_dir, float_dtype)
+
+    monkeypatch.setattr(trainer.checkpointer, "save_model", track_save_model)
+
+    def fake_train_epoch(epoch):
+        for _ in range(4):
+            trainer.global_step += 1
+            trainer._flush_checkpoint_eval_results()
+            if (
+                trainer.config.checkpoint_eval_command
+                and trainer.config.checkpoint_eval_steps is not None
+                and trainer.global_step % trainer.config.checkpoint_eval_steps == 0
+            ):
+                trainer._evaluate_checkpoint(epoch, weights_only=True)
+
+    monkeypatch.setattr(trainer, "train_epoch", fake_train_epoch)
+
+    with caplog.at_level(logging.INFO, logger="speculators.metrics"):
+        trainer.run_training()
+
+    assert save_model_calls == [2, 4]
+    records = [
+        (r.step, r.msg["serving_eval"])
+        for r in caplog.records
+        if isinstance(r.msg, dict) and "serving_eval" in r.msg
+    ]
+    assert records == [(2, {"mal": 2.0}), (4, {"mal": 4.0})]
+    # Decoupled step eval must not re-evaluate at epoch end.
+    assert len(list((root / "serving_eval").glob("step_*/metrics.json"))) == 2
+    snapshots = root / "serving_eval" / "_snapshots"
+    assert not snapshots.exists() or not any(snapshots.iterdir())
+
+
+def _distributed_async_sigterm(rank, root, ready):
+    path = Path(root)
+    ready.wait(timeout=60)
+    dist.init_process_group(
+        "gloo",
+        init_method=f"file://{path / 'rendezvous'}",
+        rank=rank,
+        world_size=2,
+        timeout=timedelta(seconds=5),
+    )
+    try:
+        trainer = _trainer(
+            path,
+            f"{sys.executable} {path / 'evaluate.py'}",
+            checkpoint_eval_mode="async",
+        )
+        trainer.is_distributed = True
+        trainer.rank = rank
+        trainer.config = trainer.config._replace(num_epochs=2)
+        trainer.global_step = 0
+
+        def save(_model, _optimizers, epoch):
+            if epoch == "interrupted":
+                count = torch.ones(1)
+                dist.all_reduce(count)
+                assert count.item() == 2
+                (path / f"rank{rank}.saved").touch()
+                return
+            out = path / str(epoch)
+            out.mkdir(parents=True, exist_ok=True)
+            (out / "config.json").write_text("{}")
+
+        cast("Any", trainer.checkpointer).save_checkpoint = save
+
+        def train_epoch(epoch):
+            trainer.global_step += 1
+            if epoch == 1:
+                deadline = time.monotonic() + 10
+                while not (path / "child.pid").exists() and time.monotonic() < deadline:
+                    time.sleep(0.02)
+                assert (path / "child.pid").exists()
+                dist.barrier()
+                os.kill(os.getpid(), signal.SIGTERM)
+
+        cast("Any", trainer).train_epoch = train_epoch
+        trainer.run_training()
+    finally:
+        dist.destroy_process_group()
+
+
+@pytest.mark.skipif(os.name != "posix", reason="process groups require POSIX")
+def test_distributed_async_sigterm_cancels_eval_and_saves_interrupted(tmp_path):
+    child_pid_file = tmp_path / "child.pid"
+    script = tmp_path / "evaluate.py"
+    script.write_text(
+        f"""
+import subprocess, sys, time
+from pathlib import Path
+code = (
+    "import signal, time; "
+    "signal.signal(signal.SIGTERM, signal.SIG_IGN); time.sleep(60)"
+)
+child = subprocess.Popen([sys.executable, "-c", code])
+Path({str(child_pid_file)!r}).write_text(str(child.pid))
+time.sleep(60)
+"""
+    )
+    ready = mp.get_context("spawn").Barrier(2)
+    mp.spawn(_distributed_async_sigterm, args=(str(tmp_path), ready), nprocs=2)
+
+    for rank in (0, 1):
+        assert (tmp_path / f"rank{rank}.saved").exists()
+    pid = int(child_pid_file.read_text())
+    deadline = time.monotonic() + 5
+    while time.monotonic() < deadline:
+        stat = Path(f"/proc/{pid}/stat")
+        if stat.exists() and stat.read_text().split()[2] == "Z":
+            return
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            return
+        time.sleep(0.02)
+    pytest.fail(f"distributed async cancel leaked worker {pid}")
+
+
+def test_wandb_handler_preserves_out_of_order_async_serving_eval_step():
+    class FakeRun:
+        def __init__(self):
+            self.config: dict[str, Any] = {}
+            self.defined: list[tuple[str, str | None]] = []
+            self.logged: list[tuple[dict[str, Any], int | None]] = []
+
+        def define_metric(self, name: str, *, step_metric: str | None = None) -> None:
+            self.defined.append((name, step_metric))
+
+        def log(self, data: dict[str, Any], step: int | None = None) -> None:
+            self.logged.append((dict(data), step))
+
+    handler = WandbHandler()
+    fake_run = FakeRun()
+    handler._run = cast("Any", fake_run)
+
+    rec_train = logging.LogRecord(
+        "speculators.metrics",
+        logging.INFO,
+        "",
+        0,
+        {"train": {"loss": 1.0}, "epoch": 1},
+        None,
+        None,
+    )
+    rec_train.step = 20
+    handler.emit(rec_train)
+
+    rec_eval_late = logging.LogRecord(
+        "speculators.metrics",
+        logging.INFO,
+        "",
+        0,
+        {"serving_eval": {"gsm8k/mal": 3.25}, "epoch": 0},
+        None,
+        None,
+    )
+    rec_eval_late.step = 10
+    handler.emit(rec_eval_late)
+
+    rec_eval_final = logging.LogRecord(
+        "speculators.metrics",
+        logging.INFO,
+        "",
+        0,
+        {"serving_eval": {"gsm8k/mal": 3.5}, "epoch": 1},
+        None,
+        None,
+    )
+    rec_eval_final.step = 20
+    handler.emit(rec_eval_final)
+
+    assert fake_run.defined == [
+        ("serving_eval/step", None),
+        ("serving_eval/*", "serving_eval/step"),
+    ]
+    assert fake_run.logged == [
+        ({"train/loss": 1.0, "epoch": 1}, 20),
+        ({"serving_eval/gsm8k/mal": 3.25, "serving_eval/step": 10}, 20),
+        (
+            {
+                "serving_eval/gsm8k/mal": 3.5,
+                "epoch": 1,
+                "serving_eval/step": 20,
+            },
+            20,
+        ),
+    ]
+
+
+def test_single_gpu_checkpointer_save_model_writes_weights_only(tmp_path):
+    class TinyModel(torch.nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.weight = torch.nn.Parameter(torch.ones(2, 2, dtype=torch.float32))
+
+        def save_pretrained(self, save_directory, state_dict=None):
+            out = Path(save_directory)
+            out.mkdir(parents=True, exist_ok=True)
+            assert state_dict is not None
+            assert state_dict["weight"].dtype == torch.bfloat16
+            (out / "model.safetensors").write_bytes(b"bf16-weights")
+            (out / "config.json").write_text(json.dumps({"dtype": "float32"}))
+
+    cp = SingleGPUCheckpointer(tmp_path)
+    out = tmp_path / "serving_eval" / "_snapshots" / "step_4"
+    cp.save_model(cast("Any", TinyModel()), out)
+
+    assert (out / "model.safetensors").exists()
+    assert json.loads((out / "config.json").read_text())["dtype"] == "bfloat16"
+    assert not (out / "optimizer_state_dict.pt").exists()
+    assert not (out / "scheduler_state_dict.pt").exists()
+
+
+def _distributed_save_model_worker(rank, root, ready):
+    path = Path(root)
+    ready.wait(timeout=60)
+    dist.init_process_group(
+        "gloo",
+        init_method=f"file://{path / 'rendezvous'}",
+        rank=rank,
+        world_size=2,
+        timeout=timedelta(seconds=10),
+    )
+    try:
+        orig_get_rank = checkpointer_mod.get_rank
+        checkpointer_mod.get_rank = dist.get_rank
+        try:
+
+            class TinyDistributedModel(torch.nn.Module):
+                def __init__(self):
+                    super().__init__()
+                    self.weight = torch.nn.Parameter(
+                        torch.full((2, 2), float(rank + 1), dtype=torch.float32)
+                    )
+
+                def save_pretrained(self, save_directory, state_dict=None):
+                    assert rank == 0
+                    out_dir = Path(save_directory)
+                    out_dir.mkdir(parents=True, exist_ok=True)
+                    assert state_dict is not None
+                    assert state_dict["weight"].dtype == torch.bfloat16
+                    (out_dir / "model.safetensors").write_bytes(b"dist-bf16-weights")
+                    (out_dir / "config.json").write_text(
+                        json.dumps({"dtype": "float32"})
+                    )
+
+            cp = DistributedCheckpointer(path)
+            out = path / "serving_eval" / "_snapshots" / "step_8"
+            cp.save_model(cast("Any", TinyDistributedModel()), out)
+            (path / f"rank{rank}.done").touch()
+        finally:
+            checkpointer_mod.get_rank = orig_get_rank
+    finally:
+        dist.destroy_process_group()
+
+
+def test_distributed_checkpointer_save_model_writes_weights_only_on_rank0(tmp_path):
+    ready = mp.get_context("spawn").Barrier(2)
+    mp.spawn(_distributed_save_model_worker, args=(str(tmp_path), ready), nprocs=2)
+
+    out = tmp_path / "serving_eval" / "_snapshots" / "step_8"
+    for rank in (0, 1):
+        assert (tmp_path / f"rank{rank}.done").exists()
+    assert (out / "model.safetensors").exists()
+    assert json.loads((out / "config.json").read_text())["dtype"] == "bfloat16"
+    assert not (out / "optimizer_state_dict.pt").exists()
+    assert not (out / "scheduler_state_dict.pt").exists()
