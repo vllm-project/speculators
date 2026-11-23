@@ -70,23 +70,21 @@ def _accumulate_metrics(
 
 
 class _StepTimer:
-    # Each mark()/now() forces an accelerator.synchronize to capture true GPU time.
-    # This serialises the CUDA pipeline, so profiled steps are slower; keep
-    # log_freq > 1 in perf-sensitive runs.
-    # Caveat: with log_freq > 1, "start" falls back to an unsynchronized
-    # timestamp from the end of the previous *unlogged* step, so start-relative
-    # fields (fetch_ms, step_ms, queue_ms) also absorb any GPU backlog still
-    # draining from that step. Phase-relative fields (fwd/bwd/opt/h2d/clip_ms)
-    # are unaffected, as every mark synchronizes.
+    # Profile a complete optimizer update, including every accumulation microbatch.
+    # Synchronization makes phase timings explicit but adds profiling overhead.
     def __init__(self, enabled: bool = False):
         self.enabled = enabled
         self._marks: dict[str, float] = {}
         self._memory: dict[str, float] = {}
+        self._microbatch_ms: dict[str, float] = {}
+        self._num_tokens = 0
 
     def reset(self, enabled: bool) -> None:
         self.enabled = enabled
         self._marks.clear()
         self._memory.clear()
+        self._microbatch_ms.clear()
+        self._num_tokens = 0
 
     def mark(self, name: str) -> None:
         if self.enabled:
@@ -132,26 +130,50 @@ class _StepTimer:
         torch.accelerator.synchronize()
         return time.perf_counter()
 
-    def profile(self, num_tokens: int) -> dict | None:
+    def add_microbatch(self, document_ids: torch.Tensor | None = None) -> None:
+        """Sum the phases of the most recently completed microbatch."""
+        if not self.enabled:
+            return
+        m = self._marks
+        if document_ids is not None:
+            self._num_tokens += int((document_ids != -1).sum().item())
+        phases = {
+            "queue_ms": m["queue"] - m["fetch_start"],
+            "h2d_ms": m["fetch"] - m["pre_h2d"],
+            "fetch_ms": m["fetch"] - m["fetch_start"],
+            "fwd_ms": m["fwd"] - m["fetch"],
+            "bwd_ms": (m["backward"] if "backward" in m else m["pre_clip"]) - m["fwd"],
+        }
+        for key, seconds in phases.items():
+            self._microbatch_ms[key] = (
+                self._microbatch_ms.get(key, 0.0) + seconds * 1000
+            )
+
+    def profile(self, num_tokens: int | None = None) -> dict | None:
         if not self.enabled:
             return None
         m = self._marks
-        fetch_ms = (m["fetch"] - m["start"]) * 1000
+        # Retain support for a single set of marks for standalone timer callers.
+        if not self._microbatch_ms:
+            self.mark_value("fetch_start", m["start"])
+            self.add_microbatch()
+        if num_tokens is None:
+            num_tokens = self._num_tokens
         step_ms = (m["opt"] - m["start"]) * 1000
         result: dict = {
-            "fetch_ms": fetch_ms,
-            "fwd_ms": (m["fwd"] - m["fetch"]) * 1000,
-            "bwd_ms": (m["bwd"] - m["fwd"]) * 1000,
+            **self._microbatch_ms,
+            "clip_ms": (m["bwd"] - m["pre_clip"]) * 1000,
             "opt_ms": (m["opt"] - m["bwd"]) * 1000,
             "step_ms": step_ms,
             "tokens_per_s": num_tokens / (step_ms / 1000) if step_ms > 0 else 0.0,
-            "fetch_frac": fetch_ms / step_ms if step_ms > 0 else 0.0,
-            "queue_ms": (m["queue"] - m["start"]) * 1000,
-            "h2d_ms": (m["fetch"] - m["pre_h2d"]) * 1000,
-            "clip_ms": (m["bwd"] - m["pre_clip"]) * 1000,
+            "fetch_frac": self._microbatch_ms["fetch_ms"] / step_ms
+            if step_ms > 0
+            else 0.0,
+            "scope": "per_rank",
         }
         if self._memory:
             result["memory_mb"] = dict(self._memory)
+            result["memory_kind"] = "allocated_samples"
         return result
 
 
@@ -687,21 +709,23 @@ class Trainer:
         # Last microbatch index that completes a full accumulation window; any
         # trailing microbatches that can't fill a window are dropped.
         last_boundary = opt_steps_per_epoch * accum
-        t_before_fetch = time.perf_counter()
         timer = _StepTimer()
         recovery = BatchRecoveryCoordinator("training")
         remaining_steps = max(0, last_boundary - skip_steps)
         accumulated: dict[str, torch.Tensor] = {}
-        for local_step_rel, batch in enumerate(
-            islice(train_loader, remaining_steps), 1
-        ):
+        batches = iter(islice(train_loader, remaining_steps))
+        for local_step_rel in range(1, remaining_steps + 1):
             # local_step is 1-based index into the *full* epoch (not the slice).
             local_step = local_step_rel + skip_steps
             is_window_start = (local_step - 1) % accum == 0
             is_boundary = local_step % accum == 0
-            timer.reset(is_boundary and self.global_step % self.config.log_freq == 0)
-
-            timer.mark_value("start", t_before_fetch)
+            if is_window_start:
+                timer.reset(self.global_step % self.config.log_freq == 0)
+                timer.mark("start")
+                accumulated.clear()
+                self._optimizers_zero_grad()
+            timer.mark("fetch_start")
+            batch = next(batches)
             will_stop = (
                 is_boundary
                 and self.config.max_steps is not None
@@ -724,21 +748,22 @@ class Trainer:
                 for k, v in batch.items()
             }
 
-            if is_window_start:
-                accumulated.clear()
-                self._optimizers_zero_grad()
+            timer.mark("fetch")
             # DDP requires both forward and backward inside no_sync.
             with self._maybe_no_sync(is_boundary):
                 with torch.autocast(
                     self.device_type, dtype=self.config.hidden_states_dtype
                 ):
-                    timer.mark("fetch")
                     _draft_tokens, loss, metrics = self.model(
                         **gpu_batch, **(self.config.train_call_kwargs or {})
                     )
                 timer.mark("fwd")
                 (loss / accum).backward()
 
+            timer.mark("backward")
+            # pre_clip remains separate so token counting and metric aggregation
+            # are excluded from the clipping measurement.
+            timer.add_microbatch(gpu_batch["document_ids"])
             metrics["error_records_sum"] = torch.full(
                 (), batch["error_records"], dtype=torch.float32, device=loss.device
             )
@@ -751,7 +776,6 @@ class Trainer:
             _accumulate_metrics(accumulated, metrics)
 
             if not is_boundary:
-                t_before_fetch = time.perf_counter()
                 continue
 
             timer.mark("pre_clip")
@@ -764,12 +788,9 @@ class Trainer:
             self._schedulers_step()
             timer.mark("opt")
 
-            t_before_fetch = timer.now() or time.perf_counter()
-
             profile = None
             if timer.enabled:
-                num_tokens = int((gpu_batch["document_ids"] != -1).sum().item())
-                profile = timer.profile(num_tokens)
+                profile = timer.profile()
                 if self.is_distributed:
                     accumulated = _all_reduce_metrics(accumulated)
 
