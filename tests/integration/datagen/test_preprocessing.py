@@ -10,6 +10,7 @@ import pytest
 from datasets import Dataset as HFDataset
 from PIL import Image
 
+from speculators.data_generation import preprocessing
 from speculators.data_generation.configs import (
     DATASET_CONFIGS,
     _normalize_nemotron,
@@ -64,6 +65,76 @@ def test_normalize_conversation_with_system():
     assert result[0]["role"] == "system"
     assert result[1]["role"] == "user"
     assert result[2]["role"] == "assistant"
+
+
+@pytest.mark.sanity
+def test_normalize_conversation_with_developer(monkeypatch):
+    """Test normalizing conversation preserves developer role in both schemas."""
+    monkeypatch.setattr(preprocessing, "_warned_roles", set())
+
+    conv = [
+        {"role": "developer", "content": "You are a coding tutor."},
+        {"role": "user", "content": "Hello"},
+        {"role": "assistant", "content": "Hi!"},
+    ]
+    result = _normalize_conversation(conv)
+
+    assert result == [
+        {"role": "developer", "content": "You are a coding tutor."},
+        {"role": "user", "content": "Hello"},
+        {"role": "assistant", "content": "Hi!"},
+    ]
+    assert "developer" not in preprocessing._warned_roles
+
+    sharegpt_conv = [
+        {"from": "developer", "value": "Be concise."},
+        {"from": "human", "value": "Hi"},
+        {"from": "gpt", "value": "Hello"},
+    ]
+    assert _normalize_conversation(sharegpt_conv) == [
+        {"role": "developer", "content": "Be concise."},
+        {"role": "user", "content": "Hi"},
+        {"role": "assistant", "content": "Hello"},
+    ]
+
+
+@pytest.mark.sanity
+def test_render_boundary_rows_keeps_developer_turn_unsupervised(monkeypatch):
+    """Developer turns remain context and never become supervised assistant rows."""
+    role_ids = {"system": 1, "developer": 2, "user": 3, "assistant": 4}
+
+    def fake_encode(
+        conv_prefix,
+        render_endpoint,
+        *,
+        add_generation_prompt,
+        max_length=None,
+        tools=None,
+    ):
+        tokens = []
+        for idx, turn in enumerate(conv_prefix):
+            if turn["role"] == "assistant":
+                tokens.append(99)
+            tokens.extend([idx, role_ids[turn["role"]]])
+        if add_generation_prompt:
+            tokens.append(99)
+        return tokens
+
+    monkeypatch.setattr(preprocessing, "_encode_render", fake_encode)
+
+    normalized = _normalize_conversation(
+        [
+            {"role": "system", "content": "S"},
+            {"role": "developer", "content": "D"},
+            {"role": "user", "content": "U"},
+            {"role": "assistant", "content": "A"},
+        ]
+    )
+    rows = preprocessing._render_boundary_rows(normalized, "http://unused", 64)
+
+    assert len(rows) == 1
+    assert rows[0]["conv"][1] == {"role": "developer", "content": "D"}
+    assert rows[0]["loss_mask"] == [0, 0, 0, 0, 0, 0, 0, 1, 1]
 
 
 @pytest.mark.sanity
