@@ -1,12 +1,17 @@
 from pathlib import Path
+from types import SimpleNamespace
+from typing import cast
 
 import pytest
 import torch
+from torch import nn
 from transformers import get_linear_schedule_with_warmup
 
+import speculators.train.trainer as trainer_module
 from speculators.train.checkpointer import SingleGPUCheckpointer
 from speculators.train.config import TrainConfig
 from speculators.train.trainer import (
+    Trainer,
     TrainerConfig,
     _resolve_scheduler_steps,
 )
@@ -163,3 +168,24 @@ def test_scheduler_resume_restores_optimizer_learning_rate(tmp_path: Path):
 
     assert resumed_scheduler.get_last_lr()[0] == pytest.approx(expected_lr)
     assert resumed_optimizer.param_groups[0]["lr"] == pytest.approx(expected_lr)
+
+
+def test_maybe_no_sync_fsdp2_toggles_sync_at_boundary(monkeypatch) -> None:
+    class FakeFSDPModule(nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.sync_values: list[bool] = []
+
+        def set_requires_gradient_sync(
+            self, requires_gradient_sync: bool, *, recurse: bool = True
+        ) -> None:
+            assert recurse
+            self.sync_values.append(requires_gradient_sync)
+
+    monkeypatch.setattr(trainer_module, "FSDPModule", FakeFSDPModule)
+    model = FakeFSDPModule()
+
+    trainer = cast("Trainer", SimpleNamespace(model=model))
+    Trainer._maybe_no_sync(trainer, False)
+    Trainer._maybe_no_sync(trainer, True)
+    assert model.sync_values == [False, True]

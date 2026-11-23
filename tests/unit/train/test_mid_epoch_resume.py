@@ -4,13 +4,17 @@ import json
 import tempfile
 from collections.abc import Callable
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Protocol, cast
 
 import pytest
 import torch
+import torch.distributed as dist
 from torch import nn
+from torch.nn.parallel import DistributedDataParallel
 from torch.utils.data import DataLoader, Dataset
 
+import speculators.train.trainer as trainer_module
 from speculators.model import SpeculatorModel
 from speculators.train.checkpointer import (
     DistributedCheckpointer,
@@ -452,3 +456,176 @@ def test_save_best_persists_accumulation_and_resume_step(tmp_path, resume_accum)
         assert resumed.current_epoch == 1
         assert resumed.global_step == 7
         assert resumed._resume_local_step == 0
+
+
+@pytest.fixture
+def single_process_group(tmp_path):
+    dist.init_process_group(
+        backend="gloo",
+        init_method=(tmp_path / "rendezvous").as_uri(),
+        rank=0,
+        world_size=1,
+    )
+    try:
+        yield
+    finally:
+        dist.destroy_process_group()
+
+
+def test_step_checkpoint_cadence_uses_optimizer_steps() -> None:
+    """Mid-epoch checkpoints fire on the optimizer-step cadence and stay aligned to
+    accumulation boundaries. With 100 microbatches, accum=4, checkpoint_freq=0.5 the
+    interval is 12 optimizer steps, so the only qualifying save is at optimizer step
+    12 (microbatch 48); step 24 is dropped by the end-of-epoch guard."""
+    num_steps, accum = 100, 4
+    opt_steps_per_epoch = num_steps // accum  # 25
+    step_interval = max(1, round(opt_steps_per_epoch * 0.5))  # 12
+
+    saved: list[int] = []
+    stand_in = cast(
+        "Trainer",
+        SimpleNamespace(
+            config=SimpleNamespace(save_best=False, gradient_accumulation_steps=accum),
+            maybe_save_checkpoint=lambda epoch, local_step: saved.append(local_step),
+        ),
+    )
+    for local_step in range(accum, num_steps + 1, accum):
+        Trainer._maybe_save_step_checkpoint(
+            stand_in,
+            0,
+            local_step,
+            opt_steps_per_epoch,
+            step_interval,
+        )
+
+    assert saved == [48]
+
+
+@pytest.mark.parametrize("resume", [False, True, "fast"])
+def test_accumulation_resume_matches_large_batch_update(
+    single_process_group, monkeypatch, tmp_path, resume
+):
+    """Compare uninterrupted and resumed accumulation against large-batch updates."""
+    accum, updates = 4, 2
+
+    class Model(nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.weight = nn.Parameter(torch.tensor(0.25))
+            self.forwards = 0
+
+        def forward(self, x, error_records, document_ids):
+            self.forwards += 1
+            return (
+                None,
+                (self.weight * (x / 10)).square().mean(),
+                {
+                    "accuracy_sum": x.sum(),
+                    "accuracy_total": x.square().sum(),
+                    "plain_metric": x.mean(),
+                },
+            )
+
+    monkeypatch.setattr(torch.accelerator, "synchronize", lambda: None)
+    logged = []
+    monkeypatch.setattr(
+        trainer_module.metric_logger, "info", lambda data, **kw: logged.append(data)
+    )
+    monkeypatch.setattr(trainer_module, "tqdm", lambda loader, **kw: loader)
+    model = Model()
+    ddp = DistributedDataParallel(model)
+    syncs = []
+
+    def count_sync(state, bucket):
+        syncs.append(1)
+        future: torch.futures.Future[torch.Tensor] = torch.futures.Future()
+        future.set_result(bucket.buffer())
+        return future
+
+    ddp.register_comm_hook(None, count_sync)
+    trainer = Trainer.__new__(Trainer)
+    trainer.model = cast("SpeculatorModel", ddp)
+    trainer.config = TrainerConfig(
+        lr=0.01,
+        num_epochs=1,
+        save_path="unused",
+        gradient_accumulation_steps=accum,
+        log_freq=1,
+        hidden_states_dtype=torch.bfloat16,
+    )
+
+    class Loader:
+        def __init__(self):
+            self.batch_sampler = (
+                SimpleNamespace(
+                    _generate_batches=lambda epoch: [[i] for i in range(1, 10)],
+                    _cached_generated_batches=None,
+                )
+                if resume == "fast"
+                else None
+            )
+
+        def __len__(self):
+            return 9
+
+        def __iter__(self):
+            cached = getattr(self.batch_sampler, "_cached_generated_batches", None)
+            values = [batch[0] for batch in cached[1]] if cached else range(1, 10)
+            for i in values:
+                yield {
+                    "x": torch.full((2,), float(i)),
+                    "document_ids": torch.zeros(2, dtype=torch.long),
+                    "error_records": i,
+                }
+
+    trainer.train_loader = cast("DataLoader", Loader())
+    trainer.rank = 0
+    trainer.local_rank = "cpu"  # type: ignore[assignment]  # Exercise the loop on CPU.
+    trainer.device_type = "cpu"
+    trainer.is_distributed = False
+    trainer.global_step = 0
+    trainer.optimizers = [torch.optim.SGD(model.parameters(), lr=0.01)]
+    trainer.schedulers = []
+    callbacks = []
+    if resume:
+        # Interrupt after one full window and persist real trainer resume metadata.
+        trainer.config = trainer.config._replace(max_steps=1)
+        trainer.train_epoch(
+            0, step_callback=lambda: callbacks.append(trainer.global_step)
+        )
+        trainer.checkpointer = SimpleNamespace(
+            path=tmp_path,
+            previous_epoch=0,
+            prev_path=tmp_path / "0",
+            load_best_val_loss=lambda: None,
+        )
+        trainer._save_training_state(0, local_step=4)
+        trainer.config = trainer.config._replace(
+            max_steps=None, resume_from_checkpoint=True
+        )
+        trainer.resume_from_checkpoint = True
+        trainer.global_step = 0
+        trainer.setup_trainer()
+        assert trainer.current_epoch == 0
+        assert trainer._resume_local_step == 4
+        assert trainer.global_step == 1
+    trainer.train_epoch(0, step_callback=lambda: callbacks.append(trainer.global_step))
+    assert model.forwards == updates * accum
+    assert len(syncs) == updates
+    assert trainer.global_step == updates
+    assert callbacks == list(range(1, updates + 1))
+    assert len(logged) == updates
+
+    reference_weight = nn.Parameter(torch.tensor(0.25))
+    reference_optimizer = torch.optim.SGD([reference_weight], lr=0.01)
+    for update, record in enumerate(logged):
+        values = torch.arange(update * accum + 1, (update + 1) * accum + 1).float()
+        reference_optimizer.zero_grad()
+        (reference_weight * (values / 10)).square().mean().backward()
+        reference_optimizer.step()
+        assert record["train"]["accuracy"] == pytest.approx(
+            (values.sum() / values.square().sum()).item()
+        )
+        assert record["train"]["plain_metric"] == pytest.approx(values.mean().item())
+        assert record["train"]["error_records"] == pytest.approx(values.mean().item())
+    torch.testing.assert_close(model.weight, reference_weight)

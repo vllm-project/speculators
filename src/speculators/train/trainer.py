@@ -643,8 +643,8 @@ class Trainer:
         for scheduler in self.schedulers:
             scheduler.step()
 
-    def _prepare_resume_skip(self, epoch: int) -> int:
-        """Prepare fast-skip state for mid-epoch resume and return skipped steps."""
+    def _prepare_resume_skip(self, epoch: int) -> tuple[int, int]:
+        """Return completed microbatches and how many the loader must discard."""
         skip_steps = 0
         if epoch == getattr(self, "current_epoch", epoch):
             skip_steps = getattr(self, "_resume_local_step", 0)
@@ -654,10 +654,12 @@ class Trainer:
         # Fast-skip: slice the sampler's pre-generated batch list so we never
         # call __getitem__ (and thus never call vLLM) for skipped batches.
         sampler = self.train_loader.batch_sampler
-        has_fast_skip_api = hasattr(sampler, "_generate_batches") and hasattr(
+        can_skip_batches = hasattr(sampler, "_generate_batches") and hasattr(
             sampler, "_cached_generated_batches"
         )
-        if skip_steps > 0 and has_fast_skip_api:
+        batches_to_discard = skip_steps
+        if skip_steps > 0 and can_skip_batches:
+            batches_to_discard = 0
             all_batches = sampler._generate_batches(epoch)  # type: ignore[union-attr]  # noqa: SLF001
             remaining = all_batches[skip_steps:]
             # Temporarily override the sampler cache with the sliced list.
@@ -675,7 +677,7 @@ class Trainer:
                 "Sampler lacks fast-skip API; resume will replay "
                 f"{skip_steps} batches from the start of the epoch."
             )
-        return skip_steps
+        return skip_steps, batches_to_discard
 
     def train_epoch(
         self,
@@ -691,7 +693,7 @@ class Trainer:
         num_steps = len(self.train_loader)
 
         # Determine how many batches to skip for mid-epoch resume.
-        skip_steps = self._prepare_resume_skip(epoch)
+        skip_steps, batches_to_discard = self._prepare_resume_skip(epoch)
 
         train_loader = self.train_loader
         if self.rank == 0:
@@ -713,7 +715,11 @@ class Trainer:
         recovery = BatchRecoveryCoordinator("training")
         remaining_steps = max(0, last_boundary - skip_steps)
         accumulated: dict[str, torch.Tensor] = {}
-        batches = iter(islice(train_loader, remaining_steps))
+        batches = iter(
+            islice(
+                train_loader, batches_to_discard, batches_to_discard + remaining_steps
+            )
+        )
         for local_step_rel in range(1, remaining_steps + 1):
             # local_step is 1-based index into the *full* epoch (not the slice).
             local_step = local_step_rel + skip_steps
