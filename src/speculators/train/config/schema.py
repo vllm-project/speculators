@@ -444,6 +444,32 @@ class TrainerArgs(_Group):
         description="Stop training after this many optimizer steps (counted across "
         "epochs). Useful for quick smoke runs. Default: run all epochs to completion.",
     )
+    checkpoint_eval_command: str | None = Field(
+        default=None,
+        description="Optional external serving evaluator command to run on rank 0. "
+        "Receives SPECULATORS_EVAL_CHECKPOINT, SPECULATORS_EVAL_STEP and "
+        "SPECULATORS_EVAL_OUTPUT_DIR; writes metrics.json.",
+    )
+    checkpoint_eval_timeout: float = Field(
+        default=300.0,
+        gt=0,
+        allow_inf_nan=False,
+        description="Maximum seconds for checkpoint evaluation, including startup. "
+        "Default: 300.",
+    )
+    checkpoint_eval_steps: int | None = Field(
+        default=None,
+        gt=0,
+        description="Run serving evaluation every N optimizer steps using a "
+        "lightweight weights-only export (skipping optimizer/scheduler state). "
+        "When unset, evaluates each saved training checkpoint.",
+    )
+    checkpoint_eval_mode: Literal["async", "sync"] = Field(
+        default="async",
+        description="Whether serving evaluation runs asynchronously in a rank-0 "
+        "background thread ('async', default) or pauses training until complete "
+        "('sync').",
+    )
 
     @field_validator("checkpoint_freq")
     @classmethod

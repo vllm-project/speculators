@@ -796,6 +796,10 @@ def main(cfg: TrainConfig):  # noqa: C901
         fsdp_replicate_frozen=args.fsdp_replicate_frozen,
         gradient_checkpointing=args.gradient_checkpointing,
         max_steps=args.max_steps,
+        checkpoint_eval_command=cfg.trainer.checkpoint_eval_command,
+        checkpoint_eval_timeout=cfg.trainer.checkpoint_eval_timeout,
+        checkpoint_eval_steps=cfg.trainer.checkpoint_eval_steps,
+        checkpoint_eval_mode=cfg.trainer.checkpoint_eval_mode,
     )
     trainer = Trainer(draft_model, trainer_config, train_loader, val_loader)
 

@@ -9,13 +9,96 @@ from __future__ import annotations
 
 import logging
 import os
+import time
+from contextlib import contextmanager
+from typing import TYPE_CHECKING, Any
 
 import torch
 import torch.distributed as dist
 from torch.distributed import ProcessGroup
 from torch.distributed.fsdp import MixedPrecisionPolicy, fully_shard
 
+from speculators.train.graceful_shutdown import TrainingInterruptedError
+
+if TYPE_CHECKING:
+    from collections.abc import Callable, Iterator
+
 logger = logging.getLogger("speculators")
+
+
+def _wait_for_eval_acks(
+    store: Any,
+    ack_key: str,
+    world_size: int,
+    check_interrupted: Callable[[], None],
+) -> None:
+    """Wait for every rank to observe eval completion or an interrupt."""
+    acked = store.add(ack_key, 1)
+    deadline = time.monotonic() + store.timeout.total_seconds()
+    while acked < world_size:
+        check_interrupted()
+        if time.monotonic() >= deadline:
+            raise TimeoutError(
+                "Peers did not acknowledge checkpoint evaluation completion"
+            )
+        time.sleep(0.05)
+        acked = int(store.get(ack_key))
+    check_interrupted()
+
+
+@contextmanager
+def checkpoint_eval_rendezvous(
+    group: ProcessGroup | None, timeout: float
+) -> Iterator[Callable[[], None] | None]:
+    """Let rank 0 evaluate while peers wait outside training collectives.
+
+    The store belongs to the training job, but checking a key does not enqueue
+    collective work. A SIGTERM on any rank cancels the evaluator and sends
+    every rank through the existing interrupted-checkpoint path.
+    """
+    if group is None:
+        yield None
+        return
+
+    store: Any = group.get_group_store()
+    rank = group.rank()
+    world_size = group.size()
+    # Each rank enters once per saved checkpoint. An ordinal in the job store
+    # also disambiguates a second training run that reuses the group/step.
+    sequence = store.add(f"speculators/serving_eval/rank/{rank}", 1)
+    key = f"speculators/serving_eval/result/{sequence}"
+    ack_key = f"speculators/serving_eval/ack/{sequence}"
+
+    def check_interrupted() -> None:
+        if store.check([key]) and store.get(key) == b"interrupted":
+            raise TrainingInterruptedError(
+                "Checkpoint evaluation interrupted by a peer"
+            )
+
+    try:
+        if rank != 0:
+            # Allow the store's usual rendezvous timeout for rank 0 to finish
+            # writing weights and publishing results, in addition to evaluation.
+            deadline = time.monotonic() + timeout + store.timeout.total_seconds()
+            while not store.check([key]):
+                if time.monotonic() >= deadline:
+                    raise TimeoutError("Rank 0 did not finish checkpoint evaluation")
+                time.sleep(0.25)
+            check_interrupted()
+        yield check_interrupted
+        # A peer may have interrupted just as the command returned.
+        if rank == 0 and store.compare_set(key, b"", b"done") == b"interrupted":
+            raise TrainingInterruptedError(
+                "Checkpoint evaluation interrupted by a peer"
+            )
+        # Wait for all ranks to observe completion before anyone re-enters
+        # training collectives, so a peer interrupted while waking up still
+        # diverts other ranks into the interrupted-checkpoint path.
+        _wait_for_eval_acks(store, ack_key, world_size, check_interrupted)
+    except BaseException:
+        store.set(key, b"interrupted")
+        raise
+
 
 # ---------------------------------------------------------------------------
 # Module-level state

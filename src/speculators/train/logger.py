@@ -436,6 +436,7 @@ class WandbHandler(logging.Handler):
 
         self._package_name = "wandb"
         self._run: Run | None = None
+        self._defined_step_metrics = False
 
     def _setup(self):
         try:
@@ -471,6 +472,34 @@ class WandbHandler(logging.Handler):
         if getattr(record, "hparams", None):
             for k, v in flat_dict.items():
                 self._run.config[k] = v
+            return
+
+        if step is not None and hasattr(self._run, "define_metric"):
+            # Use dedicated x-axes with monotonic internal W&B history steps so
+            # asynchronous serving_eval results arriving out of order (including
+            # multiple results at the same training step) are never dropped or
+            # overwritten, and never reject later training/validation logs.
+            if not self._defined_step_metrics:
+                self._run.define_metric("trainer/step")
+                self._run.define_metric(
+                    "*", step_metric="trainer/step", step_sync=False
+                )
+                self._run.define_metric("serving_eval/step")
+                self._run.define_metric(
+                    "serving_eval/*",
+                    step_metric="serving_eval/step",
+                    step_sync=False,
+                )
+                self._defined_step_metrics = True
+            if any(k.startswith("serving_eval/") for k in flat_dict):
+                eval_dict = {
+                    k: v for k, v in flat_dict.items() if k.startswith("serving_eval/")
+                }
+                eval_dict["serving_eval/step"] = step
+                self._run.log(eval_dict)
+                return
+            flat_dict["trainer/step"] = step
+            self._run.log(flat_dict)
             return
 
         self._run.log(flat_dict, step=step)
