@@ -50,10 +50,10 @@ This work started from Shubhra's experiment with an uncertainty term per draft p
    - **AV today.**
    - **Perfect allocation:** knows in advance how many drafts each request will accept.
    - **Per-request strategies:** learn a correction for each request from the drafts they verified, either used directly or with exploration (UCB, Thompson sampling). Like the real system, they only learn from what they verify. All of them keep sampling lossless: they never look at the drafted token they are deciding about.
-   - **Best per-request correction:** each request's correction fitted afterwards on its complete history. No per-request strategy can beat it.
+   - **Best per-request correction:** each request's correction fitted afterward on its complete history. No strategy that applies one fixed correction per request can beat it. A strategy that tracks how a request's acceptance changes over time could in principle do better, but the step-to-step residuals below leave little room for that.
 3. **Check the replay.** On a normal AV run, replaying "AV today" reproduces AV's real decisions in 99.8% of steps or more.
 
-We report tokens produced per step, relative to AV today. The step cost is the same, so this is the most throughput a better allocation could add.
+We report tokens produced per step, relative to AV today. AV's cost model prices a step by its number of tokens, so all strategies have the same modeled cost. The real cost can still differ a little, because attention work depends on which requests (and context lengths) get the drafts. So read the gains as tokens per step, an estimate of the throughput gain rather than a strict bound.
 
 ## Results
 
@@ -94,7 +94,15 @@ Few lossless signals are left to try. The candidates are other summaries of the 
 
 ## Setup and reproduction
 
-The traces and replay results are in [this folder](https://drive.google.com/drive/folders/1yZevVELISE4LHjLY8VqcnVd1Hdg7j8-Y). To rerun the analysis, unzip the data and run `replay.py` and `build_report.py` from [vllm-scripts](https://github.com/tomasruizt/vllm-scripts/tree/master/experiments/av_alloc_headroom).
+The traces and replay results are in [this folder](https://drive.google.com/drive/folders/1yZevVELISE4LHjLY8VqcnVd1Hdg7j8-Y). The analysis code is in [vllm-scripts](https://github.com/tomasruizt/vllm-scripts/tree/715b3fa/experiments/av_alloc_headroom) (commit `715b3fa`). To rerun the replay on one run of the data release:
+
+```bash
+git clone https://github.com/tomasruizt/vllm-scripts && cd vllm-scripts/experiments/av_alloc_headroom
+unzip av-alloc-headroom-data.zip  # extracts to data-release/
+python replay.py data-release/traces/av-alloc-27b-tp2-nocap-20261120
+```
+
+This checks the replay against the normal AV run (when the run has one), writes `replay.parquet` and `residuals.parquet` next to the traces, and prints the gain of every strategy per dataset and concurrency at the budget AV chose (the rows of the table above). `build_report.py` then combines the runs (read from `results/<run>/`) into `replay_results.parquet` and draws the figure.
 
 <details markdown>
 <summary>Setup</summary>
@@ -130,7 +138,7 @@ aiperf profile --model Qwen/Qwen3-4B --tokenizer Qwen/Qwen3-4B --url http://127.
   --extra-inputs max_tokens:1024 --extra-inputs temperature:0
 ```
 
-Drop `AV_TRACE_VERIFY_ALL=1` for the normal AV run that checks the replay. `mixed.jsonl` holds one `{"text": prompt}` per line.
+Drop `AV_TRACE_VERIFY_ALL=1` for the normal AV run that checks the replay. `mixed.jsonl` holds one `{"text": prompt}` per line, written by `python make_prompts.py prompts mixed` (all 9 subsets, shuffled with `random.Random(0)`). The `Makefile` in the same folder runs the whole sweep: `make launch watch fetch-results analyze`.
 
 </details>
 
