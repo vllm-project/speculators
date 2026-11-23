@@ -157,7 +157,7 @@ _EXTRACT_CASES = [
     pytest.param(
         {"messages": [{"role": "system", "content": "S"}], "prompt": "P"},
         "prompt",
-        [{"role": "user", "content": "P"}],
+        [{"role": "system", "content": "S"}, {"role": "user", "content": "P"}],
         id="system_only_falls_back_to_prompt",
     ),
     pytest.param(
@@ -193,7 +193,7 @@ _EXTRACT_CASES = [
     pytest.param(
         {"messages": [{"role": "developer", "content": "D"}], "prompt": "P"},
         "prompt",
-        [{"role": "user", "content": "P"}],
+        [{"role": "developer", "content": "D"}, {"role": "user", "content": "P"}],
         id="developer_only_falls_back_to_prompt",
     ),
     pytest.param(
@@ -1115,3 +1115,30 @@ def test_tools_and_results_are_read_from_the_normalized_row():
     assert tool_results == [("sunny", [])]
     # the raw row hides the conversation behind `input`: results would be lost
     assert extract_conversation(row, None)[1] == []
+
+
+@pytest.mark.parametrize("prompt", ["P", "", None, []])
+@pytest.mark.parametrize("schema", ["messages", "conversations"])
+def test_instruction_fallback_preserves_roles_and_discards_tool_results(prompt, schema):
+    messages = [
+        {"role": "system", "content": "S"},
+        {"role": "developer", "content": "D"},
+        {"role": "assistant", "content": "old"},
+        {"role": "tool", "content": "stale"},
+    ]
+    if schema == "conversations":
+        messages = [{"from": m["role"], "value": m["content"]} for m in messages]
+    turns, results = extract_conversation(
+        {schema: messages, "prompt": prompt}, "prompt"
+    )
+    expected = (
+        [
+            {"role": "system", "content": "S"},
+            {"role": "developer", "content": "D"},
+            {"role": "user", "content": "P"},
+        ]
+        if prompt == "P"
+        else []
+    )
+    assert turns == expected
+    assert results == []

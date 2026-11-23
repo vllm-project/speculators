@@ -77,8 +77,8 @@ def extract_conversation(
     ``(content, tool_names)`` pair, where ``tool_names`` are the tools that
     result answers (read from its ``<tool_response>`` payload) -- used to guard
     the positional splice against a call for a different tool. Rows without a
-    usable conversation fall back to a single ``prompt_field`` user turn and
-    carry no results.
+    usable user turn retain instruction turns and append a ``prompt_field``
+    user turn when available, carrying no cached tool results.
     """
     turns: list[dict[str, Any]] = []
     results: list[tuple[Any, list[str]]] = []
@@ -97,7 +97,7 @@ def extract_conversation(
     # no usable user turn: fall back to the prompt_field
     prompt = row.get(prompt_field) if prompt_field else None
     if isinstance(prompt, str) and prompt:
-        return [{"role": "user", "content": prompt}], []
+        return [*turns, {"role": "user", "content": prompt}], []
     return [], []
 
 
