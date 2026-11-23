@@ -531,7 +531,6 @@ def test_accumulation_resume_matches_large_batch_update(
     monkeypatch.setattr(
         trainer_module.metric_logger, "info", lambda data, **kw: logged.append(data)
     )
-    monkeypatch.setattr(trainer_module, "tqdm", lambda loader, **kw: loader)
     model = Model()
     ddp = DistributedDataParallel(model)
     syncs = []

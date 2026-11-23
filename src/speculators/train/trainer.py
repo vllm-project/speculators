@@ -696,9 +696,6 @@ class Trainer:
         skip_steps, batches_to_discard = self._prepare_resume_skip(epoch)
 
         train_loader = self.train_loader
-        if self.rank == 0:
-            train_loader = tqdm(train_loader, desc=f"Epoch {epoch}")  # type: ignore[assignment]
-
         accum = self.config.gradient_accumulation_steps
         opt_steps_per_epoch = _optimizer_steps_per_epoch(num_steps, accum)
         # Sub-epoch checkpoint cadence is measured in optimizer steps so it aligns
@@ -714,6 +711,9 @@ class Trainer:
         timer = _StepTimer()
         recovery = BatchRecoveryCoordinator("training")
         remaining_steps = max(0, last_boundary - skip_steps)
+        progress = tqdm(
+            total=remaining_steps, desc=f"Epoch {epoch}", disable=self.rank != 0
+        )
         accumulated: dict[str, torch.Tensor] = {}
         batches = iter(
             islice(
@@ -780,6 +780,7 @@ class Trainer:
                 device=loss.device,
             )
             _accumulate_metrics(accumulated, metrics)
+            progress.update(1)
 
             if not is_boundary:
                 continue
@@ -834,6 +835,8 @@ class Trainer:
                 opt_steps_per_epoch,
                 step_interval,
             )
+
+        progress.close()
 
     def _maybe_val_sync(self, batch_index: int) -> None:
         if not self.is_distributed or _VAL_SYNC_INTERVAL <= 0:

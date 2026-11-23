@@ -220,7 +220,6 @@ def test_profiler_measures_complete_accumulation_windows(monkeypatch):
     monkeypatch.setattr(trainer_module.time, "perf_counter", lambda: elapsed)
     monkeypatch.setattr(torch.accelerator, "synchronize", lambda: None)
     monkeypatch.setattr(torch.accelerator, "is_available", lambda: False)
-    monkeypatch.setattr(trainer_module, "tqdm", lambda loader, **kw: loader)
     monkeypatch.setattr(torch.nn.utils, "clip_grad_norm_", lambda *a: advance(4))
     logged = []
     monkeypatch.setattr(
