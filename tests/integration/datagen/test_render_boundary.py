@@ -374,6 +374,36 @@ def test_preprocess_aborts_when_render_route_disappears(monkeypatch, status):
     assert len(requests) == 3  # two valid renders, then one permanent route failure
 
 
+def test_preprocess_aborts_when_render_server_context_is_too_short(monkeypatch):
+    # vLLM answers this 400 when the prompt, truncated to --seq-length, fills
+    # the server's --max-model-len: every conversation that long fails the
+    # same way until vLLM is relaunched with a larger --max-model-len.
+    requests = []
+
+    def handle(request):
+        body = json.loads(request.content)
+        requests.append(body)
+        if body["messages"][0]["content"] == "long":
+            return httpx.Response(400, text="max_tokens must be at least 1, got 0.")
+        ids = [1, 2] if body["add_generation_prompt"] else [1, 2, 3]
+        return httpx.Response(200, json={"token_ids": ids})
+
+    conversations = [
+        [{"role": "user", "content": text}, {"role": "assistant", "content": "ok"}]
+        for text in ["good", "long", "good"]
+    ]
+    with httpx.Client(transport=httpx.MockTransport(handle)) as client:
+        monkeypatch.setattr(render_client, "_client", client)
+        monkeypatch.setattr(render_client, "_client_pid", os.getpid())
+        with pytest.raises(render_client.RenderContextLimitError):
+            preprocessing._preprocess_batch(
+                {"conversations": conversations}, False, "http://render.test", 2048
+            )
+    # The first conversation's two renders, then the second conversation fails
+    # and the third is never sent.
+    assert len(requests) == 3
+
+
 @pytest.mark.parametrize("status", [200, 400, 422])
 def test_preprocess_keeps_conversation_specific_render_error_policy(
     monkeypatch, status

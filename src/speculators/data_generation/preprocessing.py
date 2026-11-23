@@ -16,6 +16,7 @@ from transformers import (
 
 from speculators.data_generation.logging_utils import PipelineLogger
 from speculators.data_generation.render_client import (
+    RenderContextLimitError,
     RenderRouteError,
     render_conversation,
 )
@@ -371,7 +372,9 @@ def _render_conversation_rows(
             max_length,
             tools=parsed_tools,
         )
-    except RenderRouteError:
+    # Server misconfiguration: stop so the user fixes the server and reruns,
+    # instead of dropping every conversation it affects.
+    except (RenderRouteError, RenderContextLimitError):
         raise
     # One row the render endpoint or boundary derivation can't handle must
     # not kill the run. The failure modes can't be enumerated -- templates

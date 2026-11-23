@@ -55,6 +55,11 @@ class RenderRouteError(InvalidResponseError):
     """The configured server does not expose a usable render route."""
 
 
+class RenderContextLimitError(InvalidResponseError):
+    """The render server's ``--max-model-len`` equals ``--seq-length``, so a
+    prompt of ``--seq-length`` tokens leaves no room for an output token."""
+
+
 @with_retries
 def render_conversation(
     endpoint: str,
@@ -99,7 +104,7 @@ def render_conversation(
         and "max_tokens must be at least 1" in resp.text
         and truncate_prompt_tokens is not None
     ):
-        raise InvalidResponseError(
+        raise RenderContextLimitError(
             f"Render endpoint returned {resp.status_code}: {resp.text}. "
             "Relaunch vLLM with --max-model-len greater than "
             f"--seq-length ({truncate_prompt_tokens}), then rerun prepare-data."
