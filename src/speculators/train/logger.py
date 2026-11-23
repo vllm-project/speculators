@@ -436,8 +436,7 @@ class WandbHandler(logging.Handler):
 
         self._package_name = "wandb"
         self._run: Run | None = None
-        self._max_step: int | None = None
-        self._defined_serving_eval_step = False
+        self._defined_step_metrics = False
 
     def _setup(self):
         try:
@@ -475,29 +474,34 @@ class WandbHandler(logging.Handler):
                 self._run.config[k] = v
             return
 
-        if step is not None and any(k.startswith("serving_eval/") for k in flat_dict):
-            if not self._defined_serving_eval_step and hasattr(
-                self._run, "define_metric"
-            ):
+        if step is not None and hasattr(self._run, "define_metric"):
+            # Use dedicated x-axes with monotonic internal W&B history steps so
+            # asynchronous serving_eval results arriving out of order (including
+            # multiple results at the same training step) are never dropped or
+            # overwritten, and never reject later training/validation logs.
+            if not self._defined_step_metrics:
+                self._run.define_metric("trainer/step")
+                self._run.define_metric(
+                    "*", step_metric="trainer/step", step_sync=False
+                )
                 self._run.define_metric("serving_eval/step")
                 self._run.define_metric(
-                    "serving_eval/*", step_metric="serving_eval/step"
+                    "serving_eval/*",
+                    step_metric="serving_eval/step",
+                    step_sync=False,
                 )
-                self._defined_serving_eval_step = True
-            flat_dict["serving_eval/step"] = step
-            if self._max_step is not None and step < self._max_step:
-                # W&B drops records whose step is older than the last logged step.
-                # Log at self._max_step (without advancing W&B's step counter) and
-                # keep only serving_eval/* keys so backfilled records cannot
-                # clobber later training scalars like epoch.
+                self._defined_step_metrics = True
+            if any(k.startswith("serving_eval/") for k in flat_dict):
                 eval_dict = {
                     k: v for k, v in flat_dict.items() if k.startswith("serving_eval/")
                 }
-                self._run.log(eval_dict, step=self._max_step)
+                eval_dict["serving_eval/step"] = step
+                self._run.log(eval_dict)
                 return
+            flat_dict["trainer/step"] = step
+            self._run.log(flat_dict)
+            return
 
-        if step is not None:
-            self._max_step = step
         self._run.log(flat_dict, step=step)
 
 

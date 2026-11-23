@@ -1,9 +1,11 @@
 """Checkpoint-boundary tests without loading or training a language model."""
 
+import importlib
 import json
 import logging
 import os
 import signal
+import struct
 import sys
 import time
 from datetime import timedelta
@@ -15,6 +17,7 @@ import torch
 import torch.distributed as dist
 import torch.multiprocessing as mp
 
+import speculators.train.checkpoint_eval as checkpoint_eval_mod
 import speculators.train.checkpointer as checkpointer_mod
 import speculators.train.distributed as distributed_mod
 from speculators.train.checkpointer import (
@@ -706,15 +709,104 @@ time.sleep(60)
     pytest.fail(f"distributed async cancel leaked worker {pid}")
 
 
+def test_snapshot_interrupt_propagates_and_cleans_partial_snapshot(
+    tmp_path, monkeypatch
+):
+    root = tmp_path / "checkpoints"
+    trainer = _trainer(
+        root,
+        f"{sys.executable} -c pass",
+        checkpoint_eval_mode="async",
+    )
+    trainer.global_step = 3
+    (root / "0").mkdir(parents=True)
+    (root / "0" / "a.txt").write_text("ok")
+    (root / "0" / "b.safetensors").write_bytes(b"weights")
+    saved_interrupted: list[int | str] = []
+    orig_save = trainer.checkpointer.save_checkpoint
+
+    def track_save(model, optimizers, epoch):
+        saved_interrupted.append(epoch)
+        orig_save(model, optimizers, epoch)
+
+    monkeypatch.setattr(trainer.checkpointer, "save_checkpoint", track_save)
+    monkeypatch.setattr(trainer, "train_epoch", lambda _epoch: None)
+    monkeypatch.setattr(trainer, "val_epoch", lambda _epoch: None)
+
+    orig_copy2 = checkpoint_eval_mod.shutil.copy2
+    copied = 0
+
+    def interrupt_on_second(src, dst, *args, **kwargs):
+        nonlocal copied
+        copied += 1
+        if copied == 2:
+            raise TrainingInterruptedError("SIGTERM during snapshot")
+        return orig_copy2(src, dst, *args, **kwargs)
+
+    monkeypatch.setattr(checkpoint_eval_mod.shutil, "copy2", interrupt_on_second)
+
+    trainer.run_training()
+
+    assert "interrupted" in saved_interrupted
+    assert not (root / "serving_eval" / "_snapshots").exists()
+
+
+def test_snapshot_io_error_warns_cleans_partial_snapshot_and_continues(
+    tmp_path, monkeypatch, caplog
+):
+    root = tmp_path / "checkpoints"
+    trainer = _trainer(
+        root,
+        f"{sys.executable} -c pass",
+        checkpoint_eval_mode="async",
+    )
+    trainer.global_step = 3
+    (root / "0").mkdir(parents=True)
+    (root / "0" / "a.txt").write_text("ok")
+    (root / "0" / "b.safetensors").write_bytes(b"weights")
+    orig_copy2 = checkpoint_eval_mod.shutil.copy2
+    copied = 0
+
+    def fail_on_second(src, dst, *args, **kwargs):
+        nonlocal copied
+        copied += 1
+        if copied == 2:
+            raise OSError("disk full")
+        return orig_copy2(src, dst, *args, **kwargs)
+
+    monkeypatch.setattr(checkpoint_eval_mod.shutil, "copy2", fail_on_second)
+
+    with caplog.at_level(logging.WARNING, logger="speculators"):
+        trainer._evaluate_checkpoint(0)
+
+    assert any("snapshot failed" in r.getMessage() for r in caplog.records)
+    assert not (root / "serving_eval" / "_snapshots").exists()
+
+
+def _log_record(payload: dict[str, Any], step: int | None) -> logging.LogRecord:
+    rec = logging.LogRecord(
+        "speculators.metrics", logging.INFO, "", 0, payload, None, None
+    )
+    if step is not None:
+        rec.step = step
+    return rec
+
+
 def test_wandb_handler_preserves_out_of_order_async_serving_eval_step():
     class FakeRun:
         def __init__(self):
             self.config: dict[str, Any] = {}
-            self.defined: list[tuple[str, str | None]] = []
+            self.defined: list[tuple[str, str | None, bool | None]] = []
             self.logged: list[tuple[dict[str, Any], int | None]] = []
 
-        def define_metric(self, name: str, *, step_metric: str | None = None) -> None:
-            self.defined.append((name, step_metric))
+        def define_metric(
+            self,
+            name: str,
+            *,
+            step_metric: str | None = None,
+            step_sync: bool | None = None,
+        ) -> None:
+            self.defined.append((name, step_metric, step_sync))
 
         def log(self, data: dict[str, Any], step: int | None = None) -> None:
             self.logged.append((dict(data), step))
@@ -723,57 +815,124 @@ def test_wandb_handler_preserves_out_of_order_async_serving_eval_step():
     fake_run = FakeRun()
     handler._run = cast("Any", fake_run)
 
-    rec_train = logging.LogRecord(
-        "speculators.metrics",
-        logging.INFO,
-        "",
-        0,
-        {"train": {"loss": 1.0}, "epoch": 1},
-        None,
-        None,
-    )
-    rec_train.step = 20
-    handler.emit(rec_train)
-
-    rec_eval_late = logging.LogRecord(
-        "speculators.metrics",
-        logging.INFO,
-        "",
-        0,
-        {"serving_eval": {"gsm8k/mal": 3.25}, "epoch": 0},
-        None,
-        None,
-    )
-    rec_eval_late.step = 10
-    handler.emit(rec_eval_late)
-
-    rec_eval_final = logging.LogRecord(
-        "speculators.metrics",
-        logging.INFO,
-        "",
-        0,
-        {"serving_eval": {"gsm8k/mal": 3.5}, "epoch": 1},
-        None,
-        None,
-    )
-    rec_eval_final.step = 20
-    handler.emit(rec_eval_final)
+    handler.emit(_log_record({"train": {"loss": 1.0}, "epoch": 1}, 20))
+    handler.emit(_log_record({"serving_eval": {"gsm8k/mal": 2.0}, "epoch": 0}, 10))
+    handler.emit(_log_record({"serving_eval": {"gsm8k/mal": 3.0}, "epoch": 0}, 15))
+    handler.emit(_log_record({"val": {"loss": 0.5}, "epoch": 1}, 20))
+    handler.emit(_log_record({"train": {"loss": 0.9}, "epoch": 1}, 21))
+    handler.emit(_log_record({"serving_eval": {"gsm8k/mal": 3.5}, "epoch": 1}, 21))
 
     assert fake_run.defined == [
-        ("serving_eval/step", None),
-        ("serving_eval/*", "serving_eval/step"),
+        ("trainer/step", None, None),
+        ("*", "trainer/step", False),
+        ("serving_eval/step", None, None),
+        ("serving_eval/*", "serving_eval/step", False),
     ]
     assert fake_run.logged == [
-        ({"train/loss": 1.0, "epoch": 1}, 20),
-        ({"serving_eval/gsm8k/mal": 3.25, "serving_eval/step": 10}, 20),
-        (
-            {
-                "serving_eval/gsm8k/mal": 3.5,
-                "epoch": 1,
-                "serving_eval/step": 20,
-            },
-            20,
-        ),
+        ({"train/loss": 1.0, "epoch": 1, "trainer/step": 20}, None),
+        ({"serving_eval/gsm8k/mal": 2.0, "serving_eval/step": 10}, None),
+        ({"serving_eval/gsm8k/mal": 3.0, "serving_eval/step": 15}, None),
+        ({"val/loss": 0.5, "epoch": 1, "trainer/step": 20}, None),
+        ({"train/loss": 0.9, "epoch": 1, "trainer/step": 21}, None),
+        ({"serving_eval/gsm8k/mal": 3.5, "serving_eval/step": 21}, None),
+    ]
+
+    # Backends without define_metric (e.g. Trackio) keep explicit step logging.
+    class LegacyRun:
+        def __init__(self):
+            self.logged: list[tuple[dict[str, Any], int | None]] = []
+
+        def log(self, data: dict[str, Any], step: int | None = None) -> None:
+            self.logged.append((dict(data), step))
+
+    legacy = WandbHandler()
+    legacy_run = LegacyRun()
+    legacy._run = cast("Any", legacy_run)
+    legacy.emit(_log_record({"train": {"loss": 1.0}}, 7))
+    assert legacy_run.logged == [({"train/loss": 1.0}, 7)]
+
+
+def _iter_wandb_record_bytes(data: bytes):
+    assert data[:4] == b":W&B"
+    pos, block = 7, 32768
+    buf = bytearray()
+    while pos + 7 <= len(data):
+        rem = block - (pos % block)
+        if rem < 7:
+            pos += rem
+            continue
+        _, length, rtype = struct.unpack("<IHB", data[pos : pos + 7])
+        pos += 7
+        chunk = data[pos : pos + length]
+        pos += length
+        if rtype == 1:
+            yield chunk
+        elif rtype == 2:
+            buf = bytearray(chunk)
+        elif rtype == 3:
+            buf.extend(chunk)
+        elif rtype == 4:
+            buf.extend(chunk)
+            yield bytes(buf)
+            buf = bytearray()
+        elif rtype == 0:
+            pos += block - (pos % block)
+
+
+def _parse_wandb_offline_history(wandb_file: Path) -> list[dict[str, Any]]:
+    pb = importlib.import_module("wandb.proto.wandb_internal_pb2")
+    rows: list[dict[str, Any]] = []
+    for payload in _iter_wandb_record_bytes(wandb_file.read_bytes()):
+        rec = pb.Record()
+        rec.ParseFromString(payload)
+        if rec.HasField("history"):
+            row: dict[str, Any] = {}
+            for item in rec.history.item:
+                key = item.key or "/".join(item.nested_key)
+                if not key.startswith("_"):
+                    row[key] = json.loads(item.value_json)
+            rows.append(row)
+    return rows
+
+
+def test_wandb_handler_offline_run_preserves_out_of_order_serving_eval(tmp_path):
+    wandb = pytest.importorskip("wandb")
+
+    handler = WandbHandler(
+        run_name="async-serving-eval-offline",
+        log_dir=tmp_path,
+        project="speculators-test",
+        mode="offline",
+        settings=wandb.Settings(silent=True),
+    )
+    run = handler._setup()
+    handler._run = run
+    run_dir = Path(run.dir)
+    try:
+        handler.emit(_log_record({"train": {"loss": 1.0}, "epoch": 1}, 20))
+        handler.emit(_log_record({"serving_eval": {"gsm8k/mal": 2.0}, "epoch": 0}, 10))
+        handler.emit(_log_record({"serving_eval": {"gsm8k/mal": 3.0}, "epoch": 0}, 15))
+        handler.emit(_log_record({"val": {"loss": 0.5}, "epoch": 1}, 20))
+        handler.emit(_log_record({"train": {"loss": 0.9}, "epoch": 1}, 21))
+        handler.emit(_log_record({"serving_eval": {"gsm8k/mal": 3.5}, "epoch": 1}, 21))
+    finally:
+        run.finish()
+
+    for log_name in ("debug.log", "debug-internal.log"):
+        log_path = run_dir / "logs" / log_name
+        if log_path.exists():
+            text = log_path.read_text()
+            assert "Steps must be monotonically increasing" not in text
+
+    wandb_file = next(run_dir.parent.glob("*.wandb"))
+    rows = _parse_wandb_offline_history(wandb_file)
+    assert rows == [
+        {"train/loss": 1, "epoch": 1, "trainer/step": 20},
+        {"serving_eval/gsm8k/mal": 2, "serving_eval/step": 10},
+        {"serving_eval/gsm8k/mal": 3, "serving_eval/step": 15},
+        {"val/loss": 0.5, "epoch": 1, "trainer/step": 20},
+        {"train/loss": 0.9, "epoch": 1, "trainer/step": 21},
+        {"serving_eval/gsm8k/mal": 3.5, "serving_eval/step": 21},
     ]
 
 

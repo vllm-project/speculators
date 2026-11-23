@@ -943,7 +943,14 @@ class Trainer:
 
         if weights_only:
             # Lightweight export: model weights + config only (no optimizer state).
-            self.checkpointer.save_model(self.model, snapshot_dir)
+            try:
+                self.checkpointer.save_model(self.model, snapshot_dir)
+            except BaseException:
+                if self.rank == 0:
+                    shutil.rmtree(snapshot_dir, ignore_errors=True)
+                    with suppress(OSError):
+                        snapshot_dir.parent.rmdir()
+                raise
             checkpoint = snapshot_dir
             cleanup_checkpoint = True
         else:
@@ -956,6 +963,8 @@ class Trainer:
                 try:
                     checkpoint = snapshot_checkpoint(checkpoint, snapshot_dir)
                     cleanup_checkpoint = True
+                except TrainingInterruptedError:
+                    raise
                 except Exception:  # noqa: BLE001
                     root_logger.warning(
                         "Checkpoint evaluation snapshot failed; continuing training. "

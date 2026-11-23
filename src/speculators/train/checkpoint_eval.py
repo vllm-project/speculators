@@ -67,19 +67,26 @@ def snapshot_checkpoint(source: Path, dest: Path) -> Path:
     source = source.resolve()
     dest = dest.resolve()
     dest.mkdir(parents=True, exist_ok=False)
-    for root, dirs, files in os.walk(source):
-        rel = Path(root).relative_to(source)
-        target_dir = dest / rel
-        target_dir.mkdir(parents=True, exist_ok=True)
-        # Skip symlinked directories so a snapshot stays within the checkpoint.
-        dirs[:] = [d for d in dirs if not (Path(root) / d).is_symlink()]
-        for name in files:
-            if rel == Path() and name in _SNAPSHOT_SKIP_FILES:
-                continue
-            src_file = Path(root) / name
-            if src_file.is_symlink() or not src_file.is_file():
-                continue
-            shutil.copy2(src_file, target_dir / name)
+    try:
+        for root, dirs, files in os.walk(source):
+            rel = Path(root).relative_to(source)
+            target_dir = dest / rel
+            target_dir.mkdir(parents=True, exist_ok=True)
+            # Skip symlinked directories so a snapshot stays within the checkpoint.
+            dirs[:] = [d for d in dirs if not (Path(root) / d).is_symlink()]
+            for name in files:
+                if rel == Path() and name in _SNAPSHOT_SKIP_FILES:
+                    continue
+                src_file = Path(root) / name
+                if src_file.is_symlink() or not src_file.is_file():
+                    continue
+                shutil.copy2(src_file, target_dir / name)
+    except BaseException:
+        shutil.rmtree(dest, ignore_errors=True)
+        if dest.parent.name == "_snapshots":
+            with suppress(OSError):
+                dest.parent.rmdir()
+        raise
     return dest
 
 

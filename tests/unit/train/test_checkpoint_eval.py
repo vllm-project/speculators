@@ -226,6 +226,33 @@ def test_snapshot_checkpoint_copies_weights_and_skips_optimizer_state(tmp_path):
     assert (snap / "config.json").read_text() == '{"step": 1}'
 
 
+def test_snapshot_checkpoint_cleans_up_partial_destination_on_error(
+    tmp_path, monkeypatch
+):
+    source = tmp_path / "epoch0"
+    source.mkdir()
+    (source / "a.txt").write_text("ok")
+    (source / "b.safetensors").write_bytes(b"weights")
+    dest = tmp_path / "_snapshots" / "step_1"
+    orig_copy2 = checkpoint_eval.shutil.copy2
+    copied = 0
+
+    def fail_on_second(src, dst, *args, **kwargs):
+        nonlocal copied
+        copied += 1
+        if copied == 2:
+            raise OSError("disk full")
+        return orig_copy2(src, dst, *args, **kwargs)
+
+    monkeypatch.setattr(checkpoint_eval.shutil, "copy2", fail_on_second)
+
+    with pytest.raises(OSError, match="disk full"):
+        snapshot_checkpoint(source, dest)
+
+    assert not dest.exists()
+    assert not dest.parent.exists()
+
+
 def test_async_evaluator_latest_wins_supersedes_pending_and_cleans_snapshots(tmp_path):
     step1_started = tmp_path / "step1.started"
     release_step1 = tmp_path / "step1.release"

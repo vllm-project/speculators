@@ -47,7 +47,7 @@ Write a nonempty mapping of finite numeric scalars to `$SPECULATORS_EVAL_OUTPUT_
 {"gsm8k/acceptance_length": 3.25, "gsm8k/acceptance_rate_pos_1_pct": 87.5}
 ```
 
-The trainer records these as `serving_eval/gsm8k/acceptance_length` and `serving_eval/gsm8k/acceptance_rate_pos_1_pct` at the checkpoint's optimizer step. TensorBoard and MLflow log out-of-order steps natively; for Weights & Biases, asynchronous results that finish after later training steps are logged against a dedicated `serving_eval/step` x-axis so they are never dropped.
+The trainer records these as `serving_eval/gsm8k/acceptance_length` and `serving_eval/gsm8k/acceptance_rate_pos_1_pct` at the checkpoint's optimizer step. TensorBoard and MLflow log out-of-order steps natively; for Weights & Biases, training/validation metrics use `trainer/step` and `serving_eval/*` metrics use a dedicated `serving_eval/step` x-axis (with `step_sync=False`) on monotonic internal history steps so out-of-order asynchronous results are never dropped or overwritten.
 
 Each invocation retains `evaluation.json` (checkpoint, step and command), `evaluator.log`, `metrics.json`, and any evaluator artifacts under `<save_path>/serving_eval/`. These history directories are preserved even when later sub-epoch saves overwrite `<save_path>/<epoch>/`, `save_best: true` prunes non-best epochs, or temporary async snapshots are cleaned up; rely on the launcher's `drafter_checkpoint_sha256.txt` provenance to verify weight identity. By default the launcher hashes local verifier and drafter weights on every evaluation. Pass `--no-hash-checkpoints` to the example to avoid re-hashing unchanged local verifier weights and record file sizes and modification times for both models instead.
 
