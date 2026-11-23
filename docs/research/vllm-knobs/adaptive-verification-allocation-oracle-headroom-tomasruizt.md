@@ -21,7 +21,7 @@ Joint work with [Shubhra Pandit](https://github.com/shubhra).
 
 Adaptive verification (AV) does not verify every draft token. Each step it estimates how likely each draft is to be accepted, and sends only the most promising ones to the target model. We asked two questions:
 
-1. If AV's estimate were perfect, how many more tokens would it accept per step, at the same cost?
+1. If AV's estimate were perfect, how many more tokens would it accept per step, with the same number of verified drafts?
 2. Can adding per-request uncertainty to the estimate recover some of that gain? The idea: give extra slots to requests we know little about, to find out whether their later drafts would be accepted.
 
 What we found:
@@ -46,7 +46,7 @@ This work started from Shubhra's experiment with an uncertainty term per draft p
 ## How we measured it
 
 1. **Find out what would have been accepted.** We ran vLLM in a mode that verifies every draft, while still logging what AV would have chosen. At temperature 0 this tells us, for every request and step, how many drafts would have been accepted at any verification length.
-2. **Replay offline.** Step by step, with the same number of verified drafts that AV chose (so the same step cost), we compared:
+2. **Replay offline.** Step by step, with the same number of verified drafts that AV chose (so the same modeled step cost), we compared:
    - **AV today.**
    - **Perfect allocation:** knows in advance how many drafts each request will accept.
    - **Per-request strategies:** learn a correction for each request from the drafts they verified, either used directly or with exploration (UCB, Thompson sampling). Like the real system, they only learn from what they verify. All of them keep sampling lossless: they never look at the drafted token they are deciding about.
@@ -85,7 +85,7 @@ Earlier runs with single datasets (HumanEval, math_reasoning, writing) and with 
 ## Limitations
 
 - The replay assumes each request produces the same drafts it produced in the verify-all run. A different allocation would change what gets drafted next.
-- We measure tokens per step at equal cost, not end-to-end throughput.
+- We measure tokens per step at equal modeled cost, not end-to-end throughput.
 - Only temperature 0, B200 GPUs, DFlash2 drafters and two dense Qwen targets. We did not test DSpark or its trained confidence head, other GPUs, or MoE targets.
 
 ## Next steps
