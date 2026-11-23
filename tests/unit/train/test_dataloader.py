@@ -1,7 +1,12 @@
 """Unit tests for training dataloader setup."""
 
+import pickle
+from pathlib import Path
 from unittest.mock import Mock
 
+import pytest
+
+from hs_connectors import FileTransfer, FP8Transfer, HiddenStatesTransfer
 from speculators.train import dataloader
 
 
@@ -41,3 +46,91 @@ def test_worker_init_skips_device_binding_without_accelerator(monkeypatch):
     set_num_threads.assert_called_once_with(1)
     is_available.assert_called_once_with()
     set_device_index.assert_not_called()
+
+
+def test_worker_init_skips_device_binding_when_not_pinned(monkeypatch):
+    """CPU-only backends must not select the rank's device: a non-zero
+    ``set_device_index`` creates a CUDA context in every worker."""
+    set_device_index = Mock()
+
+    monkeypatch.setenv("LOCAL_RANK", "3")
+    monkeypatch.setattr(dataloader.torch, "set_num_threads", Mock())
+    monkeypatch.setattr(
+        dataloader.torch.accelerator, "is_available", Mock(return_value=True)
+    )
+    monkeypatch.setattr(
+        dataloader.torch.accelerator, "set_device_index", set_device_index
+    )
+
+    dataloader._worker_init_fn(worker_id=0, pin_device=False)
+
+    set_device_index.assert_not_called()
+
+
+@pytest.mark.parametrize("pin_device", [True, False])
+def test_setup_dataloader_forwards_pin_device_to_spawned_workers(
+    monkeypatch, pin_device
+):
+    """The worker init must carry ``pin_device`` and survive pickling, since
+    workers start with the ``spawn`` context."""
+    monkeypatch.setattr(dataloader, "get_dp_size", lambda: 1)
+    monkeypatch.setattr(dataloader, "get_dp_rank", lambda: 0)
+    dataset = Mock(approx_lengths=[4, 4])
+
+    loader = dataloader._setup_dataloader(
+        dataset, total_seq_len=8, num_workers=2, pin_device=pin_device
+    )
+
+    worker_init_fn = pickle.loads(pickle.dumps(loader.worker_init_fn))  # noqa: S301
+    assert worker_init_fn.func is dataloader._worker_init_fn
+    assert worker_init_fn.keywords == {"pin_device": pin_device}
+
+
+@pytest.mark.parametrize(
+    ("transfer", "expected_pin"),
+    [
+        (None, False),
+        (FileTransfer(Path("hs")), False),
+        (FP8Transfer(Path("hs")), False),
+        (Mock(spec=HiddenStatesTransfer), True),
+    ],
+    ids=["default-file", "file", "fp8", "other"],
+)
+def test_loaders_pin_workers_unless_transfer_loads_to_cpu(
+    monkeypatch, transfer, expected_pin
+):
+    """File-based transfers load to CPU, so their workers skip the device pin;
+    any other transfer keeps it for both the train and val loaders."""
+    setup_calls = []
+    monkeypatch.setattr(
+        dataloader,
+        "ArrowDataset",
+        Mock(return_value=Mock(datapath=Path("data"))),
+    )
+    monkeypatch.setattr(dataloader, "SpeculatorsDataset", Mock())
+    monkeypatch.setattr(
+        dataloader,
+        "_setup_dataloader",
+        lambda *args, **kwargs: setup_calls.append(kwargs["pin_device"]),
+    )
+
+    dataloader.create_train_val_loaders(
+        data_path="data",
+        total_seq_len=8,
+        hidden_states_dtype=dataloader.torch.bfloat16,
+        transfer=transfer,
+        vllm_endpoint="",
+        on_missing="raise",
+        verifier_name_or_path="",
+        request_timeout=None,
+        max_retries=0,
+        generation_validation_retries=0,
+        max_consecutive_generation_failures=1,
+        hidden_size=4,
+        num_target_layers=1,
+        num_workers=2,
+        prefetch_factor=2,
+        preprocess=None,
+    )
+
+    assert setup_calls == [expected_pin, expected_pin]

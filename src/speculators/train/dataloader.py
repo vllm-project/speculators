@@ -6,6 +6,7 @@ from typing import TYPE_CHECKING, Any, Literal
 if TYPE_CHECKING:
     from collections.abc import Callable
 
+import functools
 import os
 
 import torch
@@ -49,11 +50,18 @@ def _limit_worker_threads() -> None:
     os.environ.setdefault("MKL_NUM_THREADS", "1")
 
 
-def _worker_init_fn(worker_id: int) -> None:  # noqa: ARG001
+def _worker_init_fn(worker_id: int, pin_device: bool = True) -> None:  # noqa: ARG001
+    """Initialize a DataLoader worker.
+
+    ``pin_device`` binds the worker to its rank's accelerator so backends that
+    use the device in workers (e.g. Mooncake) don't all land on device 0.
+    Selecting a non-zero device creates a context (~0.5 GiB) in the worker, so
+    backends that only load to CPU skip it.
+    """
     torch.set_num_threads(1)
 
     local_rank = int(os.environ.get("LOCAL_RANK", "0"))
-    if torch.accelerator.is_available():
+    if pin_device and torch.accelerator.is_available():
         torch.accelerator.set_device_index(local_rank)
 
 
@@ -68,6 +76,7 @@ def _setup_dataloader(
     prefetch_factor: int | None = 4,
     max_batches: int | None = None,
     seed: int = 0,
+    pin_device: bool = True,
 ) -> DataLoader:
     batch_sampler = MultipackDistributedBatchSamplerV2(
         batch_max_length=total_seq_len,
@@ -87,7 +96,11 @@ def _setup_dataloader(
         collate_fn=identity_fn,
         persistent_workers=use_workers,
         multiprocessing_context="spawn" if use_workers else None,
-        worker_init_fn=_worker_init_fn if use_workers else None,
+        worker_init_fn=(
+            functools.partial(_worker_init_fn, pin_device=pin_device)
+            if use_workers
+            else None
+        ),
     )
 
 
@@ -182,6 +195,8 @@ def create_train_val_loaders(
         preprocess=preprocess,
     )
 
+    # FileTransfer workers load hidden states to CPU only.
+    pin_device = not isinstance(source_transfer, FileTransfer)
     train_loader = _setup_dataloader(
         train_dataset,
         total_seq_len,
@@ -189,12 +204,14 @@ def create_train_val_loaders(
         prefetch_factor=prefetch_factor,
         max_batches=max_train_batches,
         seed=seed,
+        pin_device=pin_device,
     )
     val_loader = _setup_dataloader(
         val_dataset,
         total_seq_len,
         num_workers=num_workers,
         prefetch_factor=prefetch_factor,
+        pin_device=pin_device,
     )
 
     return train_loader, val_loader
