@@ -16,6 +16,8 @@ from transformers.models.deepseek_v3.modeling_deepseek_v3 import (
 )
 from transformers.models.qwen3.configuration_qwen3 import Qwen3Config
 
+from speculators import SpeculatorsConfig, VerifierConfig
+from speculators.losses import resolve_loss_config
 from speculators.models.dflash import DFlashSpeculatorConfig
 from speculators.models.dflash.config import (
     GLM5_DSPARK_MODEL_TYPE,
@@ -34,6 +36,7 @@ from speculators.models.dflash.model_definitions import (
 from speculators.models.dspark import DSparkSpeculatorConfig
 from speculators.models.dspark.core import DSparkDraftModel
 from speculators.models.utils import mla_kwargs_from_verifier
+from speculators.proposals.greedy import GreedyTokenProposalConfig
 from speculators.train.cli import (
     _apply_glm5_lora_rank_overrides,
     create_transformer_layer_config,
@@ -65,6 +68,25 @@ def _tiny_glm5_config(**overrides) -> Glm5DSparkDecoderConfig:
     kwargs = dict(TINY_GLM5_KWARGS)
     kwargs.update(overrides)
     return Glm5DSparkDecoderConfig(**kwargs)
+
+
+def _speculators_config(verifier: str = "some-verifier") -> SpeculatorsConfig:
+    """Minimal speculators_config for save/load tests.
+
+    Production configs always carry one (``from_training_args`` builds it),
+    and ``model_dump``/``save_pretrained`` round-trips emit the field, so
+    configs constructed without it fail validation on reload (the field
+    defaults to an unvalidated ``None``).
+    """
+    return SpeculatorsConfig(
+        algorithm="dspark",
+        proposal_methods=[GreedyTokenProposalConfig(speculative_tokens=1)],
+        default_proposal_method="greedy",
+        verifier=VerifierConfig(
+            name_or_path=verifier,
+            architectures=["GlmMoeDsaForCausalLM"],
+        ),
+    )
 
 
 def test_autoconfig_registers_glm5():
@@ -124,7 +146,9 @@ def test_glm5_config_defaults_lock_576d_page_spec():
 
 
 def test_glm5_config_defaults_are_dense_only():
-    cfg = _tiny_glm5_config(num_hidden_layers=3)
+    # layer_types must track num_hidden_layers (newer transformers validates
+    # the pair at construction).
+    cfg = _tiny_glm5_config(num_hidden_layers=3, layer_types=["full_attention"] * 3)
     assert cfg.n_routed_experts == 0
     assert cfg.n_shared_experts == 0
     assert cfg.num_experts_per_tok == 0
@@ -381,6 +405,11 @@ def _make_dflash_glm5() -> DFlashDraftModel:
     model = DFlashDraftModel(config)
     torch.nn.init.normal_(model.verifier_lm_head.weight)
     torch.nn.init.ones_(model.verifier_norm.weight)
+    # embed_tokens and lm_head are verifier-owned and stay NaN until
+    # load_verifier_weights; re-init them so the forward test runs without a
+    # verifier checkpoint.
+    torch.nn.init.normal_(model.embed_tokens.weight)
+    torch.nn.init.normal_(model.lm_head.weight)
     return model.eval()
 
 
@@ -428,6 +457,8 @@ def test_glm5_dflash_forward_finite_loss():
             verifier_last_hidden_states=verifier_last,
             document_ids=document_ids,
             max_anchors=2,
+            # eager losses keep the test Triton-free (fused kernels need it).
+            loss_config=resolve_loss_config("kl_div", "eager"),
         )
     assert torch.isfinite(loss)
     assert metrics is not None
@@ -442,6 +473,7 @@ def test_glm5_dspark_config_roundtrip():
         aux_hidden_state_layer_ids=[0, 1],
         mask_token_id=0,
         markov_rank=8,
+        speculators_config=_speculators_config(),
     )
     dumped = config.model_dump()
     reloaded = DSparkSpeculatorConfig(**dumped)
@@ -449,6 +481,7 @@ def test_glm5_dspark_config_roundtrip():
     assert reloaded.transformer_layer_config.model_type == "glm5_dspark"
     assert reloaded.transformer_layer_config.q_lora_rank == 16
     assert reloaded.transformer_layer_config.kv_lora_rank == 8
+    assert reloaded.speculators_config.verifier.name_or_path == "some-verifier"
 
 
 def test_glm5_dspark_builds_mla_layers():
@@ -477,6 +510,7 @@ def test_glm5_dspark_save_pretrained_export_contract(tmp_path):
         mask_token_id=0,
         markov_rank=8,
         enable_confidence_head=False,
+        speculators_config=_speculators_config(),
     )
     model = DSparkDraftModel(config)
     out = tmp_path / "glm5_dspark"

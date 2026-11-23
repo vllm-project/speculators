@@ -619,6 +619,10 @@ def _capture_full_attention_indices(
         mask_token_id=None,
         trust_remote_code=False,
         draft_mrope_full_head_hack=True,
+        # production args come from TrainConfig.flatten(), which always
+        # carries the glm5 LoRA-rank overrides (None when unset).
+        q_lora_rank=None,
+        kv_lora_rank=None,
     )
     build_draft_model(args, _FakeModel, None, None, 128)  # type: ignore[arg-type]
     return captured["full_attention_indices"]

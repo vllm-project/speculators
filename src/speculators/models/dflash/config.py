@@ -52,8 +52,6 @@ class Glm5DSparkDecoderConfig(DeepseekV3Config):
         if "first_k_dense_replace" not in kwargs:
             # Every draft layer is dense: no layer index reaches the MoE range.
             self.first_k_dense_replace = self.num_hidden_layers
-        # Point head_dim at the rotary slice (upstream DeepseekV3Config does
-        # the same), so the shared rotary init reads the right width.
         self.head_dim = self.qk_rope_head_dim
 
 
