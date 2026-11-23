@@ -593,12 +593,8 @@ def test_accumulation_resume_matches_large_batch_update(
         trainer.train_epoch(
             0, step_callback=lambda: callbacks.append(trainer.global_step)
         )
-        trainer.checkpointer = SimpleNamespace(
-            path=tmp_path,
-            previous_epoch=0,
-            prev_path=tmp_path / "0",
-            load_best_val_loss=lambda: None,
-        )
+        (tmp_path / "0").mkdir()
+        trainer.checkpointer = SingleGPUCheckpointer(tmp_path)
         trainer._save_training_state(0, local_step=4)
         trainer.config = trainer.config._replace(
             max_steps=None, resume_from_checkpoint=True
