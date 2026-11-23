@@ -1,8 +1,10 @@
+import contextlib
 import json
 import logging
 import time
 import warnings
 from collections.abc import Callable
+from itertools import islice
 from pathlib import Path
 from typing import Literal, NamedTuple
 
@@ -12,6 +14,7 @@ from torch.distributed.checkpoint.state_dict import (
     StateDictOptions,
     set_model_state_dict,
 )
+from torch.distributed.fsdp import FSDPModule
 from torch.nn.parallel import DistributedDataParallel
 from torch.utils.data import DataLoader
 from tqdm import TqdmExperimentalWarning
@@ -56,24 +59,32 @@ def _all_reduce_metrics(metrics: dict[str, torch.Tensor]) -> dict[str, torch.Ten
     return dict(zip(keys, stacked, strict=True))
 
 
+def _accumulate_metrics(
+    accumulated: dict[str, torch.Tensor], metrics: dict[str, torch.Tensor]
+) -> None:
+    """Add detached metric sums and counts without retaining computation graphs."""
+    for key, value in metrics.items():
+        detached = value.detach().float()
+        previous = accumulated.get(key)
+        accumulated[key] = detached if previous is None else previous + detached
+
+
 class _StepTimer:
-    # Each mark()/now() forces an accelerator.synchronize to capture true GPU time.
-    # This serialises the CUDA pipeline, so profiled steps are slower; keep
-    # log_freq > 1 in perf-sensitive runs.
-    # Caveat: with log_freq > 1, "start" falls back to an unsynchronized
-    # timestamp from the end of the previous *unlogged* step, so start-relative
-    # fields (fetch_ms, step_ms, queue_ms) also absorb any GPU backlog still
-    # draining from that step. Phase-relative fields (fwd/bwd/opt/h2d/clip_ms)
-    # are unaffected, as every mark synchronizes.
+    # Profile a complete optimizer update, including every accumulation microbatch.
+    # Synchronization makes phase timings explicit but adds profiling overhead.
     def __init__(self, enabled: bool = False):
         self.enabled = enabled
         self._marks: dict[str, float] = {}
         self._memory: dict[str, float] = {}
+        self._microbatch_ms: dict[str, float] = {}
+        self._num_tokens = 0
 
     def reset(self, enabled: bool) -> None:
         self.enabled = enabled
         self._marks.clear()
         self._memory.clear()
+        self._microbatch_ms.clear()
+        self._num_tokens = 0
 
     def mark(self, name: str) -> None:
         if self.enabled:
@@ -119,26 +130,50 @@ class _StepTimer:
         torch.accelerator.synchronize()
         return time.perf_counter()
 
-    def profile(self, num_tokens: int) -> dict | None:
+    def add_microbatch(self, document_ids: torch.Tensor | None = None) -> None:
+        """Sum the phases of the most recently completed microbatch."""
+        if not self.enabled:
+            return
+        m = self._marks
+        if document_ids is not None:
+            self._num_tokens += int((document_ids != -1).sum().item())
+        phases = {
+            "queue_ms": m["queue"] - m["fetch_start"],
+            "h2d_ms": m["fetch"] - m["pre_h2d"],
+            "fetch_ms": m["fetch"] - m["fetch_start"],
+            "fwd_ms": m["fwd"] - m["fetch"],
+            "bwd_ms": (m["backward"] if "backward" in m else m["pre_clip"]) - m["fwd"],
+        }
+        for key, seconds in phases.items():
+            self._microbatch_ms[key] = (
+                self._microbatch_ms.get(key, 0.0) + seconds * 1000
+            )
+
+    def profile(self, num_tokens: int | None = None) -> dict | None:
         if not self.enabled:
             return None
         m = self._marks
-        fetch_ms = (m["fetch"] - m["start"]) * 1000
+        # Retain support for a single set of marks for standalone timer callers.
+        if not self._microbatch_ms:
+            self.mark_value("fetch_start", m["start"])
+            self.add_microbatch()
+        if num_tokens is None:
+            num_tokens = self._num_tokens
         step_ms = (m["opt"] - m["start"]) * 1000
         result: dict = {
-            "fetch_ms": fetch_ms,
-            "fwd_ms": (m["fwd"] - m["fetch"]) * 1000,
-            "bwd_ms": (m["bwd"] - m["fwd"]) * 1000,
+            **self._microbatch_ms,
+            "clip_ms": (m["bwd"] - m["pre_clip"]) * 1000,
             "opt_ms": (m["opt"] - m["bwd"]) * 1000,
             "step_ms": step_ms,
             "tokens_per_s": num_tokens / (step_ms / 1000) if step_ms > 0 else 0.0,
-            "fetch_frac": fetch_ms / step_ms if step_ms > 0 else 0.0,
-            "queue_ms": (m["queue"] - m["start"]) * 1000,
-            "h2d_ms": (m["fetch"] - m["pre_h2d"]) * 1000,
-            "clip_ms": (m["bwd"] - m["pre_clip"]) * 1000,
+            "fetch_frac": self._microbatch_ms["fetch_ms"] / step_ms
+            if step_ms > 0
+            else 0.0,
+            "scope": "per_rank",
         }
         if self._memory:
             result["memory_mb"] = dict(self._memory)
+            result["memory_kind"] = "allocated_samples"
         return result
 
 
@@ -198,6 +233,17 @@ class TrainerConfig(NamedTuple):
     fsdp_replicate_frozen: bool = False
     gradient_checkpointing: bool = False
     max_steps: int | None = None
+    gradient_accumulation_steps: int = 1
+
+
+def _optimizer_steps_per_epoch(num_batches: int, accum: int) -> int:
+    """Number of optimizer steps taken in one epoch under gradient accumulation.
+
+    Each optimizer step consumes ``accum`` microbatches; the trailing partial
+    window (``num_batches % accum`` microbatches) is dropped. Single source of
+    truth for the drop-remainder policy.
+    """
+    return num_batches // accum
 
 
 def _resolve_scheduler_steps(
@@ -209,18 +255,28 @@ def _resolve_scheduler_steps(
     Explicit ``scheduler_warmup_steps`` wins; otherwise ``scheduler_warmup_ratio``
     (a fraction of total steps, validated to ``[0, 1]``) is used; otherwise the
     default of 1% of the resolved total steps. ``scheduler_total_steps`` defaults
-    to ``max_steps`` when set, else ``num_epochs * train_loader_len``.
+    to ``max_steps`` when set, else ``num_epochs`` times the number of complete
+    accumulation windows per epoch.
     """
-    default_total_steps = config.num_epochs * train_loader_len
+    steps_per_epoch = _optimizer_steps_per_epoch(
+        train_loader_len, config.gradient_accumulation_steps
+    )
+    default_total_steps = config.num_epochs * steps_per_epoch
     # max_steps bounds the training loop, so the LR schedule must decay over the
     # same horizon; otherwise the LR endpoint is never reached.
     if config.max_steps is not None:
         default_total_steps = config.max_steps
-    scheduler_total_steps = (
-        config.scheduler_total_steps
-        if config.scheduler_total_steps is not None
-        else default_total_steps
-    )
+    if config.scheduler_total_steps is not None:
+        scheduler_total_steps = config.scheduler_total_steps
+        if config.gradient_accumulation_steps > 1:
+            warnings.warn(
+                "--scheduler-total-steps is measured in optimizer steps and is not "
+                "divided by --gradient-accumulation-steps; pass the intended number "
+                "of optimizer updates.",
+                stacklevel=2,
+            )
+    else:
+        scheduler_total_steps = default_total_steps
 
     if config.scheduler_warmup_steps is not None:
         scheduler_warmup_steps = config.scheduler_warmup_steps
@@ -256,6 +312,16 @@ class Trainer:
         self.rank = get_rank()
         self.train_loader = train_loader
         self.val_loader = val_loader
+
+        accum = config.gradient_accumulation_steps
+        if accum < 1:
+            raise ValueError(f"gradient_accumulation_steps must be >= 1, got {accum}.")
+        if _optimizer_steps_per_epoch(len(train_loader), accum) == 0:
+            raise ValueError(
+                f"gradient_accumulation_steps={accum} exceeds the number of "
+                f"batches per epoch ({len(train_loader)}); no optimizer step would "
+                "ever run. Lower gradient_accumulation_steps or add more data."
+            )
         self.is_distributed = is_distributed()
         self.resume_from_checkpoint = config.resume_from_checkpoint
         acc = torch.accelerator.current_accelerator()
@@ -280,6 +346,7 @@ class Trainer:
                 "epoch": epoch,
                 "local_step": local_step,
                 "global_step": self.global_step,
+                "gradient_accumulation_steps": self.config.gradient_accumulation_steps,
             }
             p = self._training_state_path(epoch)
             p.parent.mkdir(parents=True, exist_ok=True)
@@ -305,6 +372,16 @@ class Trainer:
                 # Check if this was a mid-epoch checkpoint — if so, resume
                 # from within that epoch rather than jumping to the next one.
                 state = self._load_training_state()
+                # Accumulation windows are aligned to the saved microbatch index, so
+                # resuming with a different accum would misalign them; reject it.
+                saved_accum = state.get("gradient_accumulation_steps", 1)
+                if state and saved_accum != self.config.gradient_accumulation_steps:
+                    raise ValueError(
+                        "Cannot resume: checkpoint was trained with "
+                        f"gradient_accumulation_steps={saved_accum}, but this run "
+                        f"uses {self.config.gradient_accumulation_steps}. "
+                        "They must match to resume."
+                    )
                 is_mid_epoch = (
                     state
                     and state.get("epoch") == self.checkpointer.previous_epoch
@@ -514,6 +591,46 @@ class Trainer:
         if self.resume_from_checkpoint and self.checkpointer.previous_epoch != -1:
             self.checkpointer.load_scheduler_state_dict(self.schedulers)
 
+    def _maybe_no_sync(self, is_boundary: bool):
+        """Skip gradient synchronization on non-boundary accumulation micro-steps.
+
+        DDP uses its ``no_sync`` context. FSDP2 toggles gradient synchronization on
+        the root ``FSDPModule`` (recursing into child FSDP modules) and returns a
+        no-op context. Disabling FSDP2 synchronization retains unsharded gradients
+        until the boundary and can therefore increase peak memory. A raw single-GPU
+        module always returns a no-op context.
+        """
+        if isinstance(self.model, FSDPModule):
+            self.model.set_requires_gradient_sync(is_boundary)
+            return contextlib.nullcontext()
+        if isinstance(self.model, DistributedDataParallel) and not is_boundary:
+            return self.model.no_sync()
+        return contextlib.nullcontext()
+
+    def _maybe_save_step_checkpoint(
+        self,
+        epoch: int,
+        local_step: int,
+        opt_steps_per_epoch: int,
+        step_interval: int | None,
+    ) -> None:
+        """Save a mid-epoch checkpoint at the configured optimizer-step cadence.
+
+        Cadence is measured in optimizer steps so it aligns with accumulation-window
+        boundaries; saves too close to the end of the epoch are skipped. ``local_step``
+        (a microbatch index on a window boundary) is what gets persisted, so resume
+        lands on a fresh window start.
+        """
+        if step_interval is None or self.config.save_best:
+            return
+        opt_step = local_step // self.config.gradient_accumulation_steps
+        if (
+            opt_step % step_interval == 0
+            and opt_steps_per_epoch - opt_step >= step_interval * MIN_STEP_PCT
+            # Avoid saving back to back at the end of each epoch
+        ):
+            self.maybe_save_checkpoint(epoch, local_step=local_step)
+
     def _optimizers_zero_grad(self):
         for opt in self.optimizers:
             opt.zero_grad()
@@ -526,8 +643,8 @@ class Trainer:
         for scheduler in self.schedulers:
             scheduler.step()
 
-    def _prepare_resume_skip(self, epoch: int) -> int:
-        """Prepare fast-skip state for mid-epoch resume and return skipped steps."""
+    def _prepare_resume_skip(self, epoch: int) -> tuple[int, int]:
+        """Return completed microbatches and how many the loader must discard."""
         skip_steps = 0
         if epoch == getattr(self, "current_epoch", epoch):
             skip_steps = getattr(self, "_resume_local_step", 0)
@@ -537,10 +654,12 @@ class Trainer:
         # Fast-skip: slice the sampler's pre-generated batch list so we never
         # call __getitem__ (and thus never call vLLM) for skipped batches.
         sampler = self.train_loader.batch_sampler
-        has_fast_skip_api = hasattr(sampler, "_generate_batches") and hasattr(
+        can_skip_batches = hasattr(sampler, "_generate_batches") and hasattr(
             sampler, "_cached_generated_batches"
         )
-        if skip_steps > 0 and has_fast_skip_api:
+        batches_to_discard = skip_steps
+        if skip_steps > 0 and can_skip_batches:
+            batches_to_discard = 0
             all_batches = sampler._generate_batches(epoch)  # type: ignore[union-attr]  # noqa: SLF001
             remaining = all_batches[skip_steps:]
             # Temporarily override the sampler cache with the sliced list.
@@ -558,7 +677,7 @@ class Trainer:
                 "Sampler lacks fast-skip API; resume will replay "
                 f"{skip_steps} batches from the start of the epoch."
             )
-        return skip_steps
+        return skip_steps, batches_to_discard
 
     def train_epoch(
         self,
@@ -574,29 +693,48 @@ class Trainer:
         num_steps = len(self.train_loader)
 
         # Determine how many batches to skip for mid-epoch resume.
-        skip_steps = self._prepare_resume_skip(epoch)
+        skip_steps, batches_to_discard = self._prepare_resume_skip(epoch)
 
         train_loader = self.train_loader
-        if self.rank == 0:
-            train_loader = tqdm(train_loader, desc=f"Epoch {epoch}")  # type: ignore[assignment]
-
+        accum = self.config.gradient_accumulation_steps
+        opt_steps_per_epoch = _optimizer_steps_per_epoch(num_steps, accum)
+        # Sub-epoch checkpoint cadence is measured in optimizer steps so it aligns
+        # with accumulation-window boundaries (microbatch counts would rarely match).
         step_interval = (
-            max(1, round(num_steps * self.config.checkpoint_freq))
+            max(1, round(opt_steps_per_epoch * self.config.checkpoint_freq))
             if self.config.checkpoint_freq < 1
             else None
         )
-        t_before_fetch = time.perf_counter()
+        # Last microbatch index that completes a full accumulation window; any
+        # trailing microbatches that can't fill a window are dropped.
+        last_boundary = opt_steps_per_epoch * accum
         timer = _StepTimer()
         recovery = BatchRecoveryCoordinator("training")
-        remaining_steps = len(self.train_loader)
-        for local_step_rel, batch in enumerate(train_loader, 1):
+        remaining_steps = max(0, last_boundary - skip_steps)
+        progress = tqdm(
+            total=remaining_steps, desc=f"Epoch {epoch}", disable=self.rank != 0
+        )
+        accumulated: dict[str, torch.Tensor] = {}
+        batches = iter(
+            islice(
+                train_loader, batches_to_discard, batches_to_discard + remaining_steps
+            )
+        )
+        for local_step_rel in range(1, remaining_steps + 1):
             # local_step is 1-based index into the *full* epoch (not the slice).
             local_step = local_step_rel + skip_steps
-            timer.reset(self.global_step % self.config.log_freq == 0)
-
-            timer.mark_value("start", t_before_fetch)
+            is_window_start = (local_step - 1) % accum == 0
+            is_boundary = local_step % accum == 0
+            if is_window_start:
+                timer.reset(self.global_step % self.config.log_freq == 0)
+                timer.mark("start")
+                accumulated.clear()
+                self._optimizers_zero_grad()
+            timer.mark("fetch_start")
+            batch = next(batches)
             will_stop = (
-                self.config.max_steps is not None
+                is_boundary
+                and self.config.max_steps is not None
                 and self.global_step + 1 >= self.config.max_steps
             )
             timer.mark("queue")
@@ -616,20 +754,22 @@ class Trainer:
                 for k, v in batch.items()
             }
 
-            with torch.autocast(
-                self.device_type, dtype=self.config.hidden_states_dtype
-            ):
-                timer.mark("fetch")
-                _draft_tokens, loss, metrics = self.model(
-                    **gpu_batch, **(self.config.train_call_kwargs or {})
-                )
+            timer.mark("fetch")
+            # DDP requires both forward and backward inside no_sync.
+            with self._maybe_no_sync(is_boundary):
+                with torch.autocast(
+                    self.device_type, dtype=self.config.hidden_states_dtype
+                ):
+                    _draft_tokens, loss, metrics = self.model(
+                        **gpu_batch, **(self.config.train_call_kwargs or {})
+                    )
+                timer.mark("fwd")
+                (loss / accum).backward()
 
-            timer.mark("fwd")
-            self._optimizers_zero_grad()
-            loss.backward()
-            timer.mark("pre_clip")
-            torch.nn.utils.clip_grad_norm_(self.model.parameters(), 1.0)
-
+            timer.mark("backward")
+            # pre_clip remains separate so token counting and metric aggregation
+            # are excluded from the clipping measurement.
+            timer.add_microbatch(gpu_batch["document_ids"])
             metrics["error_records_sum"] = torch.full(
                 (), batch["error_records"], dtype=torch.float32, device=loss.device
             )
@@ -639,25 +779,29 @@ class Trainer:
                 dtype=torch.float32,
                 device=loss.device,
             )
+            _accumulate_metrics(accumulated, metrics)
+            progress.update(1)
 
+            if not is_boundary:
+                continue
+
+            timer.mark("pre_clip")
+            torch.nn.utils.clip_grad_norm_(self.model.parameters(), 1.0)
             timer.mark("bwd")
             self._optimizers_step()
-
             current_lrs = {
                 type(opt).__name__: opt.param_groups[0]["lr"] for opt in self.optimizers
             }
             self._schedulers_step()
             timer.mark("opt")
-            t_before_fetch = timer.now() or time.perf_counter()
 
             profile = None
             if timer.enabled:
-                num_tokens = int((gpu_batch["document_ids"] != -1).sum().item())
-                profile = timer.profile(num_tokens)
+                profile = timer.profile()
                 if self.is_distributed:
-                    metrics = _all_reduce_metrics(metrics)
+                    accumulated = _all_reduce_metrics(accumulated)
 
-                metrics = {k: v.item() for k, v in metrics.items()}
+                metrics = {k: v.item() / accum for k, v in accumulated.items()}
                 world_size = dist.get_world_size() if self.is_distributed else 1
                 metrics = normalize_counted_metrics(metrics, world_size)
                 lr_info = (
@@ -685,14 +829,14 @@ class Trainer:
             ):
                 break
 
-            if (
-                step_interval is not None
-                and not self.config.save_best
-                and local_step % step_interval == 0
-                and num_steps - local_step >= step_interval * MIN_STEP_PCT
-                # Avoid saving back to back ay the end of each epoch
-            ):
-                self.maybe_save_checkpoint(epoch, local_step=local_step)
+            self._maybe_save_step_checkpoint(
+                epoch,
+                local_step,
+                opt_steps_per_epoch,
+                step_interval,
+            )
+
+        progress.close()
 
     def _maybe_val_sync(self, batch_index: int) -> None:
         if not self.is_distributed or _VAL_SYNC_INTERVAL <= 0:
@@ -736,9 +880,7 @@ class Trainer:
                     **gpu_batch, **(self.config.val_call_kwargs or {})
                 )
 
-            for k, v in metrics.items():
-                acc = accumulated.get(k)
-                accumulated[k] = v.float() if acc is None else acc + v.float()
+            _accumulate_metrics(accumulated, metrics)
 
         val_metrics: dict[str, float] = {}
         if accumulated:
@@ -801,7 +943,7 @@ class Trainer:
                 self.checkpointer.save_scheduler_state_dict(self.schedulers, epoch)
             # maybe_save_checkpoint returns early when save_best is set, so the
             # end-of-epoch cursor has to be written here or resume restarts at 0.
-            self._save_training_state(epoch, 0)
+            self._save_training_state(epoch, local_step=0)
         elif self.config.checkpoint_freq >= 1 and not (
             epoch == 0 or (epoch + 1) % int(self.config.checkpoint_freq) == 0
         ):

@@ -75,7 +75,7 @@ from speculators.train.distributed import (
 from speculators.train.logger import setup_root_logger
 from speculators.train.trainer import Trainer, TrainerConfig
 
-BENCHMARK_VERSION = "1.3"
+BENCHMARK_VERSION = "1.4"
 
 # Rows shown in the --profile kernel breakdown tables and the compare diff.
 KERNEL_TOP_N = 20
@@ -1032,8 +1032,8 @@ def _print_memory_comparison(baseline, candidate):
 
 # The phases a step is drawn as, in the order they happen. ``fetch_ms`` is
 # deliberately absent: it spans queue + H2D, so charting it alongside them
-# would double-count the wait. ``bwd_ms`` likewise contains ``clip_ms``, which
-# the builders below subtract out before plotting.
+# would double-count the wait. Backward and gradient clipping are measured
+# separately and can be stacked directly.
 _PHASE_COLORS = {
     "queue_ms": "#636EFA",
     "h2d_ms": "#AB63FA",
@@ -1065,17 +1065,10 @@ _MEMORY_MARK_LABELS = {
 
 
 def _phase_series(per_step) -> list[tuple[str, str, list[float]]]:
-    """Per-step series for every drawn phase, with grad clip split out of bwd.
-
-    The trainer times ``bwd_ms`` from the end of forward to the end of the
-    clip, so the clip sits inside it; stacking both as measured would count it
-    twice.
-    """
+    """Per-step series for nonoverlapping phases, plus unmeasured overhead."""
     series = []
     for key, label in _PHASE_LABELS.items():
-        if key == "bwd_ms":
-            values = [s["bwd_ms"] - s["clip_ms"] for s in per_step]
-        elif key == "other_ms":
+        if key == "other_ms":
             # The named phases do not tile the step: the trainer times
             # ``queue_ms`` to the end of the queue wait but starts ``h2d_ms``
             # at ``pre_h2d``, so the recovery bookkeeping in between belongs to
@@ -1088,6 +1081,7 @@ def _phase_series(per_step) -> list[tuple[str, str, list[float]]]:
                         + s["h2d_ms"]
                         + s["fwd_ms"]
                         + s["bwd_ms"]
+                        + s["clip_ms"]
                         + s["opt_ms"]
                     ),
                     0.0,

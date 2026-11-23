@@ -1,9 +1,15 @@
 import logging
 import queue
 from logging.handlers import QueueHandler, QueueListener
+from typing import cast
 
 import pytest
+import torch
+from torch import nn
+from torch.utils.data import DataLoader
 
+import speculators.train.trainer as trainer_module
+from speculators.model import SpeculatorModel
 from speculators.train.logger import (
     FormatDictFilter,
     IsRank0Filter,
@@ -12,6 +18,7 @@ from speculators.train.logger import (
     setup_metric_logger,
     setup_root_logger,
 )
+from speculators.train.trainer import Trainer, TrainerConfig
 
 
 def _record(**extra):
@@ -173,3 +180,86 @@ def test_closing_the_console_handler_drains_the_queue():
 
     assert capture.lines == ["train/loss=1.500"]
     assert handler._listener is None
+
+
+def test_profiler_measures_complete_accumulation_windows(monkeypatch):
+    # Advance time for actual work, independently of the timer's mark calls.
+    elapsed = 0.0
+
+    def advance(seconds):
+        nonlocal elapsed
+        elapsed += seconds
+
+    class Model(nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.weight = nn.Parameter(torch.tensor(0.25))
+
+        def forward(self, document_ids, error_records):
+            advance(2)
+            loss = self.weight.square()
+            loss.register_hook(lambda gradient: (advance(3), gradient)[1])
+            return None, loss, {}
+
+    class Loader:
+        batch_sampler = None
+
+        def __len__(self):
+            return 8
+
+        def __iter__(self):
+            for valid_tokens in [1, 2, 3, 4, 4, 4, 4, 4]:
+                advance(1)
+                yield {
+                    "document_ids": torch.tensor(
+                        [0] * valid_tokens + [-1] * (4 - valid_tokens)
+                    ),
+                    "error_records": 0,
+                }
+
+    monkeypatch.setattr(trainer_module.time, "perf_counter", lambda: elapsed)
+    monkeypatch.setattr(torch.accelerator, "synchronize", lambda: None)
+    monkeypatch.setattr(torch.accelerator, "is_available", lambda: False)
+    monkeypatch.setattr(torch.nn.utils, "clip_grad_norm_", lambda *a: advance(4))
+    logged = []
+    monkeypatch.setattr(
+        trainer_module.metric_logger, "info", lambda record, **kw: logged.append(record)
+    )
+
+    trainer = Trainer.__new__(Trainer)
+    trainer.model = cast("SpeculatorModel", Model())
+    trainer.config = TrainerConfig(
+        lr=0.01,
+        num_epochs=1,
+        save_path="unused",
+        gradient_accumulation_steps=4,
+        log_freq=1,
+    )
+    trainer.train_loader = cast("DataLoader", Loader())
+    trainer.rank = 0
+    trainer.local_rank = "cpu"  # type: ignore[assignment]
+    trainer.device_type = "cpu"
+    trainer.is_distributed = False
+    trainer.global_step = 0
+    trainer.optimizers = [torch.optim.SGD(trainer.model.parameters(), lr=0.01)]
+    trainer.schedulers = []
+    optimizer_step = trainer._optimizers_step
+
+    def timed_optimizer_step():
+        advance(5)
+        optimizer_step()
+
+    monkeypatch.setattr(trainer, "_optimizers_step", timed_optimizer_step)
+    trainer.train_epoch(0)
+
+    assert trainer.global_step == 2
+    assert len(logged) == 2
+    for record, tokens in zip(logged, [10, 16], strict=True):
+        profile = record["profile"]
+        assert profile["fetch_ms"] == pytest.approx(4_000)
+        assert profile["fwd_ms"] == pytest.approx(8_000)
+        assert profile["bwd_ms"] == pytest.approx(12_000)
+        assert profile["clip_ms"] == pytest.approx(4_000)
+        assert profile["opt_ms"] == pytest.approx(5_000)
+        assert profile["step_ms"] == pytest.approx(33_000)
+        assert profile["tokens_per_s"] == pytest.approx(tokens / 33)
