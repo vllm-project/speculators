@@ -225,6 +225,7 @@ def _encode_render(
     add_generation_prompt: bool,
     max_length: int,
     tools: list[dict] | None = None,
+    reasoning_effort: str | None = None,
 ) -> list[int]:
     """Render a conversation prefix via vLLM, bounded to the training window."""
     messages = _adapt_conv_for_vllm(conv_prefix)
@@ -233,6 +234,7 @@ def _encode_render(
         messages,
         add_generation_prompt=add_generation_prompt,
         tools=tools,
+        reasoning_effort=reasoning_effort,
         truncate_prompt_tokens=max_length,
         truncation_side="right",
     )
@@ -253,6 +255,7 @@ def _render_boundary_rows(
     max_length: int,
     *,
     tools: list[dict] | None = None,
+    reasoning_effort: str | None = None,
 ) -> list[BoundaryRow]:
     """Build one training row per assistant turn, masked at its render boundary.
 
@@ -284,6 +287,7 @@ def _render_boundary_rows(
             add_generation_prompt=True,
             max_length=max_length,
             tools=tools,
+            reasoning_effort=reasoning_effort,
         )
         if len(prompt_ids) >= max_length:
             # Not a break: templates that strip history reasoning (Qwen3,
@@ -296,6 +300,7 @@ def _render_boundary_rows(
             add_generation_prompt=False,
             max_length=max_length,
             tools=tools,
+            reasoning_effort=reasoning_effort,
         )
         if full_ids[: len(prompt_ids)] == prompt_ids:
             boundary = len(prompt_ids)
@@ -309,6 +314,7 @@ def _render_boundary_rows(
                 add_generation_prompt=False,
                 max_length=max_length,
                 tools=tools,
+                reasoning_effort=reasoning_effort,
             )
             if full_ids[: len(hist_ids)] != hist_ids or boundary < len(hist_ids):
                 raise BoundaryUnstableError(
@@ -356,6 +362,7 @@ def _render_conversation_rows(
     idx: int,
     render_endpoint: str,
     max_length: int,
+    reasoning_effort: str | None = None,
 ) -> list[BoundaryRow] | None:
     """Render one valid conversation; return ``None`` when it is unusable."""
     if not conv or not isinstance(conv, list):
@@ -372,6 +379,7 @@ def _render_conversation_rows(
             render_endpoint,
             max_length,
             tools=parsed_tools,
+            reasoning_effort=reasoning_effort,
         )
     except RenderRouteError:
         raise
@@ -413,6 +421,7 @@ def _append_boundary_rows(
     rows: list[BoundaryRow],
     max_length: int,
     minimum_valid_tokens: int | None,
+    reasoning_effort: str | None = None,
 ) -> tuple[int, int, int]:
     """Append rendered rows and return kept, unsupervised, and
     maybe-truncated counts.
@@ -441,6 +450,7 @@ def _append_boundary_rows(
                 messages = _adapt_conv_for_vllm(row["conv"])
                 results["messages"].append(messages)
                 results["is_multimodal"].append(has_multimodal_content(messages))
+                results["reasoning_effort"].append(reasoning_effort)
 
     return num_kept, num_unsupervised, num_maybe_truncated
 
@@ -493,6 +503,23 @@ def _passthrough_pretokenized(
     return results
 
 
+def _metadata_reasoning_effort(metadata: object) -> str | None:
+    """Read the generation-time ``reasoning_effort`` off a row's metadata.
+
+    ``regenerate-responses`` records it in ``metadata.sampling_params``;
+    replaying it on the render keeps the token stream identical to the prompt
+    the target model actually saw for templates that encode effort in the
+    prompt, instead of the template default.
+    """
+    if not isinstance(metadata, dict):
+        return None
+    params = metadata.get("sampling_params")
+    if not isinstance(params, dict):
+        return None
+    effort = params.get("reasoning_effort")
+    return effort if isinstance(effort, str) and effort else None
+
+
 def _preprocess_batch(
     examples: dict,
     is_multimodal: bool,
@@ -517,10 +544,13 @@ def _preprocess_batch(
     conversations: list[list[dict]] = examples.get("conversations", [])
 
     # MM inputs are extracted via the Chat Completions API, which needs the
-    # original messages -- token ids alone cannot carry the images.
+    # original messages -- token ids alone cannot carry the images. The row's
+    # reasoning_effort rides along so the extraction re-render matches the
+    # stored input_ids for effort-encoding templates.
     if is_multimodal:
         results["messages"] = []
         results["is_multimodal"] = []
+        results["reasoning_effort"] = []
 
     if not conversations:
         log.warning(f"No conversations key found. Keys: {list(examples.keys())}")
@@ -534,6 +564,8 @@ def _preprocess_batch(
         )
         tools_col = None
 
+    metadata_col = examples.get("metadata")
+
     num_unsupervised = 0
     num_maybe_truncated = 0
     num_convs_in = 0
@@ -541,12 +573,18 @@ def _preprocess_batch(
 
     for idx, conv in enumerate(conversations):
         conv_tools = tools_col[idx] if tools_col is not None else None
+        reasoning_effort = (
+            _metadata_reasoning_effort(metadata_col[idx])
+            if metadata_col is not None and idx < len(metadata_col)
+            else None
+        )
         rows = _render_conversation_rows(
             conv,
             conv_tools,
             idx,
             render_endpoint,
             max_length,
+            reasoning_effort=reasoning_effort,
         )
         if rows is None:
             continue
@@ -557,6 +595,7 @@ def _preprocess_batch(
             rows,
             max_length,
             minimum_valid_tokens,
+            reasoning_effort=reasoning_effort,
         )
         num_unsupervised += row_unsupervised
         num_maybe_truncated += row_maybe_truncated
@@ -666,7 +705,11 @@ def _drop_unused_messages(dataset: HFDataset) -> HFDataset:
     drop = ["is_multimodal"]
     if not any(dataset["is_multimodal"]):
         log.info("No multimodal rows: not storing the messages column")
-        drop.append("messages")
+        drop.extend(
+            col
+            for col in ("messages", "reasoning_effort")
+            if col in dataset.column_names
+        )
     return dataset.remove_columns(drop)
 
 

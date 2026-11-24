@@ -16,6 +16,7 @@ class DatasetRecord:
     seq_len: int
     storage_index: int
     messages: list[dict[str, Any]] | None = None
+    reasoning_effort: str | None = None
 
     @classmethod
     def from_arrow_row(
@@ -28,6 +29,7 @@ class DatasetRecord:
             seq_len=int(row["seq_len"]),
             storage_index=storage_index,
             messages=row.get("messages"),
+            reasoning_effort=row.get("reasoning_effort"),
         )
 
 
