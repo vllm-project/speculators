@@ -749,7 +749,7 @@ def _make_per_step(n=4):
             "step": i,
             "fetch_ms": 7.0,
             "fwd_ms": 30.0,
-            "bwd_ms": 62.0,  # includes clip_ms, as the trainer reports it
+            "bwd_ms": 60.0,  # backward excludes the separately measured clip
             "opt_ms": 8.0,
             "step_ms": 107.0,
             "tokens_per_s": 1000.0 + i,
@@ -843,17 +843,25 @@ class TestReportPaths:
 
 
 class TestPhaseMeans:
-    def test_clip_is_subtracted_from_backward(self):
+    def test_backward_and_clip_are_separate_phases(self):
         means = {
             label: mean for _, label, mean, _ in _get_phase_means(_make_per_step())
         }
-        assert means["Backward"] == pytest.approx(60.0)  # 62 reported - 2 clip
+        assert means["Backward"] == pytest.approx(60.0)
         assert means["Grad clip"] == pytest.approx(2.0)
+        assert means["Other"] == pytest.approx(0.0)
 
-    def test_phases_sum_to_the_step(self):
+    @pytest.mark.parametrize("overhead_ms", [0.0, 3.0])
+    def test_phases_sum_to_the_step(self, overhead_ms):
         per_step = _make_per_step()
-        total = sum(mean for _, _, mean, _ in _get_phase_means(per_step))
+        for step in per_step:
+            step["step_ms"] += overhead_ms
+        phases = _get_phase_means(per_step)
+        total = sum(mean for _, _, mean, _ in phases)
         assert total == pytest.approx(per_step[0]["step_ms"])
+        assert next(mean for _, label, mean, _ in phases if label == "Other") == (
+            pytest.approx(overhead_ms)
+        )
 
 
 class TestKernelPie:

@@ -128,6 +128,8 @@ def _normalize_conversation(
             role = "assistant"
         elif role == "system":
             role = "system"
+        elif role == "developer":
+            role = "developer"
         elif role == "tool":
             role = "tool"
         else:

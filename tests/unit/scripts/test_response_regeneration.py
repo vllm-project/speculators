@@ -157,8 +157,44 @@ _EXTRACT_CASES = [
     pytest.param(
         {"messages": [{"role": "system", "content": "S"}], "prompt": "P"},
         "prompt",
-        [{"role": "user", "content": "P"}],
+        [{"role": "system", "content": "S"}, {"role": "user", "content": "P"}],
         id="system_only_falls_back_to_prompt",
+    ),
+    pytest.param(
+        {
+            "messages": [
+                {"role": "developer", "content": "You are a coding tutor."},
+                {"role": "user", "content": "Hello"},
+                {"role": "assistant", "content": "<original answer to drop>"},
+            ]
+        },
+        "prompt",
+        [
+            {"role": "developer", "content": "You are a coding tutor."},
+            {"role": "user", "content": "Hello"},
+        ],
+        id="developer_prompt_preserved",
+    ),
+    pytest.param(
+        {
+            "conversations": [
+                {"from": "developer", "value": "Be concise."},
+                {"from": "human", "value": "Hi"},
+                {"from": "gpt", "value": "<original answer to drop>"},
+            ]
+        },
+        "prompt",
+        [
+            {"role": "developer", "content": "Be concise."},
+            {"role": "user", "content": "Hi"},
+        ],
+        id="developer_from_value_preserved",
+    ),
+    pytest.param(
+        {"messages": [{"role": "developer", "content": "D"}], "prompt": "P"},
+        "prompt",
+        [{"role": "developer", "content": "D"}, {"role": "user", "content": "P"}],
+        id="developer_only_falls_back_to_prompt",
     ),
     pytest.param(
         {
@@ -827,6 +863,39 @@ def test_regenerate_plain_conversation_is_unchanged_and_sends_no_tools():
     assert "tools" not in sent[0]
 
 
+def test_regenerate_conversation_preserves_developer_prefix():
+    item = {
+        "idx": 0,
+        "primary_id": "dev0",
+        "turns": [
+            {"role": "developer", "content": "You are a coding tutor."},
+            {"role": "user", "content": "Hello"},
+            {"role": "developer", "content": "Be terse."},
+            {"role": "user", "content": "Bye"},
+        ],
+    }
+    responses = [
+        _response(prompt_token_ids=[1, 2], token_ids=[3], content="Hi!"),
+        _response(prompt_token_ids=[1, 2, 3, 4, 5], token_ids=[6], content="Done."),
+    ]
+    samples, truncated, sent = _regen(item, responses)
+
+    assert not truncated
+    assert len(samples) == 2
+    assert len(sent) == 2
+    assert sent[0]["messages"] == [
+        {"role": "developer", "content": "You are a coding tutor."},
+        {"role": "user", "content": "Hello"},
+    ]
+    assert sent[1]["messages"] == [
+        {"role": "developer", "content": "You are a coding tutor."},
+        {"role": "user", "content": "Hello"},
+        {"role": "assistant", "content": "Hi!"},
+        {"role": "developer", "content": "Be terse."},
+        {"role": "user", "content": "Bye"},
+    ]
+
+
 def test_regenerate_splices_cached_result_after_regenerated_call():
     item = {
         "idx": 1,
@@ -1046,3 +1115,30 @@ def test_tools_and_results_are_read_from_the_normalized_row():
     assert tool_results == [("sunny", [])]
     # the raw row hides the conversation behind `input`: results would be lost
     assert extract_conversation(row, None)[1] == []
+
+
+@pytest.mark.parametrize("prompt", ["P", "", None, []])
+@pytest.mark.parametrize("schema", ["messages", "conversations"])
+def test_instruction_fallback_preserves_roles_and_discards_tool_results(prompt, schema):
+    messages = [
+        {"role": "system", "content": "S"},
+        {"role": "developer", "content": "D"},
+        {"role": "assistant", "content": "old"},
+        {"role": "tool", "content": "stale"},
+    ]
+    if schema == "conversations":
+        messages = [{"from": m["role"], "value": m["content"]} for m in messages]
+    turns, results = extract_conversation(
+        {schema: messages, "prompt": prompt}, "prompt"
+    )
+    expected = (
+        [
+            {"role": "system", "content": "S"},
+            {"role": "developer", "content": "D"},
+            {"role": "user", "content": "P"},
+        ]
+        if prompt == "P"
+        else []
+    )
+    assert turns == expected
+    assert results == []
