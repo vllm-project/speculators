@@ -1154,12 +1154,15 @@ def test_instruction_fallback_preserves_roles_and_discards_tool_results(prompt, 
 # ---------------------------------------------------------------------------
 
 
-async def _run_against_404_server(tmp_path, monkeypatch, *, resume):
+async def _run_against_404_server(
+    tmp_path, monkeypatch, *, resume, row=None, language_filter=None
+):
     # The tokenizer is only used for the review-only `text` field.
     monkeypatch.setattr(regen_module, "build_detokenizer", lambda _: str)
+    row = {"prompt": "hi"} if row is None else row
     dataset = tmp_path / "prompts.jsonl"
     dataset.write_text(
-        "".join(json.dumps({"id": f"p{i}", "prompt": "hi"}) + "\n" for i in range(3))
+        "".join(json.dumps({"id": f"p{i}", **row}) + "\n" for i in range(3))
     )
     outfile = tmp_path / "out.jsonl"
     if resume:
@@ -1186,7 +1189,7 @@ async def _run_against_404_server(tmp_path, monkeypatch, *, resume):
             sampling_params={},
             outfile=str(outfile),
             resume=resume,
-            language_filter=None,
+            language_filter=language_filter,
             max_retries=0,
             reasoning_effort_dist=None,
             temperature_dist=None,
@@ -1214,3 +1217,30 @@ def test_run_with_nothing_left_to_do_exits_cleanly(tmp_path, monkeypatch):
     )
 
     assert error_file.read_text() == ""
+
+
+@pytest.mark.parametrize(
+    ("row", "language_filter"),
+    [
+        ({"instruction": "hi"}, None),  # no column the prompt can come from
+        ({"prompt": "hi"}, "EN"),  # rows have no language field
+    ],
+)
+def test_run_exits_nonzero_when_no_row_is_sent(
+    tmp_path, monkeypatch, row, language_filter
+):
+    # Every row is skipped before a request, so the output stays empty.
+    with pytest.raises(typer.Exit) as exc_info:
+        asyncio.run(
+            _run_against_404_server(
+                tmp_path,
+                monkeypatch,
+                resume=False,
+                row=row,
+                language_filter=language_filter,
+            )
+        )
+
+    assert exc_info.value.exit_code == 1
+    assert (tmp_path / "out.jsonl").read_text() == ""
+    assert (tmp_path / "out.errors.jsonl").read_text() == ""

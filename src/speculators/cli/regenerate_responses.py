@@ -798,6 +798,7 @@ async def _run(  # noqa: C901
 
             rng = random.Random(seed)
             processed_count = 0
+            already_done = 0
             for index, row in enumerate(hf_dataset):
                 if limit is not None and processed_count >= limit:
                     break
@@ -812,6 +813,7 @@ async def _run(  # noqa: C901
 
                 primary_id = _primary_identifier(row)
                 if primary_id in seen_ids:
+                    already_done += 1
                     continue
 
                 # Broken input tool schema: record and skip (don't crash the run).
@@ -870,12 +872,18 @@ async def _run(  # noqa: C901
             _log_summary(stats)
 
     # A run where nothing succeeded (e.g. every request 404s on a wrong
-    # --endpoint) must not look like success to the scripts chained after it.
-    if stats["ok"] == 0 and stats["errors"] > 0:
-        typer.echo(
-            f"Error: all {stats['errors']} conversations failed; see {error_outfile}",
-            err=True,
-        )
+    # --endpoint, or no row had a usable prompt) must not look like success to
+    # the scripts chained after it. A --resume run with nothing left to do is
+    # still a success.
+    if stats["ok"] == 0 and (stats["errors"] > 0 or already_done == 0):
+        if stats["errors"] > 0:
+            reason = f"all {stats['errors']} conversations failed; see {error_outfile}"
+        else:
+            reason = (
+                "no rows were regenerated; check that the dataset has a usable "
+                "prompt and that --language-filter matches it"
+            )
+        typer.echo(f"Error: {reason}", err=True)
         raise typer.Exit(code=1)
 
 
