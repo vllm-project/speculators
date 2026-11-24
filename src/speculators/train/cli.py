@@ -392,8 +392,8 @@ def load_draft_transformer_layer_config(
     if not model_type:
         raise ValueError(
             "--draft-config must define a 'model_type' (e.g. 'llama' for "
-            "eagle3, 'qwen3' or 'glm5' for dflash/dspark); none was found "
-            f"in the config loaded from '{draft_config}'."
+            "eagle3, 'qwen3' or 'glm5_dspark' for dflash/dspark); none was "
+            f"found in the config loaded from '{draft_config}'."
         )
     config_class: type[PretrainedConfig] = type(AutoConfig.for_model(model_type))
     draft_config_obj = config_class.from_dict(config_dict)
