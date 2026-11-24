@@ -400,6 +400,44 @@ def test_preprocess_keeps_conversation_specific_render_error_policy(
     assert result["loss_mask"][0].tolist() == [False, False, True]
 
 
+@pytest.mark.sanity
+def test_preprocess_batch_accepts_messages_column(monkeypatch):
+    """_preprocess_batch reads the prompts from a ``messages`` column too."""
+
+    def handle(request):
+        """Answer render calls: prompt-only prefix, then the full ids."""
+
+        body = json.loads(request.content)
+        ids = [1, 2] if body["add_generation_prompt"] else [1, 2, 3]
+        return httpx.Response(200, json={"token_ids": ids})
+
+    messages = [
+        [{"role": "user", "content": "hi"}, {"role": "assistant", "content": "ok"}]
+    ]
+    with httpx.Client(transport=httpx.MockTransport(handle)) as client:
+        monkeypatch.setattr(render_client, "_client", client)
+        monkeypatch.setattr(render_client, "_client_pid", os.getpid())
+        result = preprocessing._preprocess_batch(
+            {"messages": messages}, False, "http://render.test", 2048
+        )
+    assert len(result["input_ids"]) == 1
+    assert result["input_ids"][0].tolist() == [1, 2, 3]
+    assert result["loss_mask"][0].tolist() == [False, False, True]
+
+
+@pytest.mark.sanity
+def test_load_hf_dataset_accepts_messages_only_column(monkeypatch):
+    """_load_hf_dataset passes a dataset that only has a ``messages`` column."""
+
+    class _StubDataset:
+        column_names = ["messages"]
+
+    monkeypatch.setattr(preprocessing, "load_dataset", lambda *a, **kw: _StubDataset())
+    dataset, normalize_fn = preprocessing._load_hf_dataset("hf:some/data")
+    assert dataset.column_names == ["messages"]
+    assert normalize_fn is None
+
+
 class _ProcessorMixinStub(ProcessorMixin):
     """Routes preprocessing down the multimodal path; never called."""
 
