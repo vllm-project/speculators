@@ -109,6 +109,8 @@ To automatically fix style issues, use:
 make style
 ```
 
+Both targets include tracked and new, unignored Markdown files in the current checkout, using Git's standard ignore rules.
+
 ### Pre-commit Hooks
 
 We provide [pre-commit](https://pre-commit.com/) hooks that run the same linting, formatting, and type checks as `make quality` (plus a DCO sign-off hook) before each commit, so problems are caught locally instead of in CI. After installing the `[dev]` dependencies, enable them once per clone:
