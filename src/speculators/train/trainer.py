@@ -150,6 +150,7 @@ class _StepTimer:
             )
 
     def profile(self, num_tokens: int | None = None) -> dict | None:
+        """Return per-rank timings and sampled allocated memory."""
         if not self.enabled:
             return None
         m = self._marks
@@ -169,11 +170,9 @@ class _StepTimer:
             "fetch_frac": self._microbatch_ms["fetch_ms"] / step_ms
             if step_ms > 0
             else 0.0,
-            "scope": "per_rank",
         }
         if self._memory:
             result["memory_mb"] = dict(self._memory)
-            result["memory_kind"] = "allocated_samples"
         return result
 
 
