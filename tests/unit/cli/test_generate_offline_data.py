@@ -98,6 +98,7 @@ def _run_worker(
                 hidden_states_output_dir=output_dir,
                 validate_outputs=validate_outputs,
                 request_timeout=None,
+                lock_timeout=10.0,
                 max_retries=0,
                 fail_on_error=False,
                 skipped_indices=skipped_indices,
