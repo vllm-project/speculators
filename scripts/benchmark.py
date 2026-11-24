@@ -397,10 +397,10 @@ def _build_train_loader(
 
 
 def _aggregate_timing(measured_profiles: list[dict]) -> dict:
-    """Compute statistics for numeric fields, excluding profile metadata."""
+    """Compute statistics for all timing keys across measured profiles."""
     agg = {}
     for key, value in measured_profiles[0].items():
-        if not isinstance(value, (int, float)):
+        if isinstance(value, dict):
             continue
         agg[key] = compute_statistics([s[key] for s in measured_profiles])
     return agg

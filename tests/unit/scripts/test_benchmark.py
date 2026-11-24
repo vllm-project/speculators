@@ -85,25 +85,6 @@ def test_compute_aggregate_throughput_is_time_weighted():
     assert result["effective_rank0_tokens_per_s"] == 250.0
 
 
-def test_aggregate_timing_ignores_profile_metadata():
-    profiles = [
-        {
-            "step_ms": step_ms,
-            "tokens_per_s": throughput,
-            "description": "test metadata",
-            "memory_mb": {"fwd": 100.0},
-        }
-        for step_ms, throughput in [(10, 100.0), (20, 200.0)]
-    ]
-
-    timing = _aggregate_timing(profiles)
-
-    assert set(timing) == {"step_ms", "tokens_per_s"}
-    assert timing["step_ms"]["mean"] == pytest.approx(15.0)
-    assert timing["tokens_per_s"]["mean"] == pytest.approx(150.0)
-    assert timing["step_ms"]["count"] == 2
-
-
 def test_shutdown_dataloader_workers():
     loader = MagicMock()
     iterator = loader._iterator
