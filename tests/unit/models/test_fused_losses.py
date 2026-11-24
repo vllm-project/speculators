@@ -327,11 +327,12 @@ def test_autotuner_never_picks_a_spilling_tile():
     rows, vocab = _SWEEP_ROWS, _SWEEP_VOCAB
     logits = torch.randn(rows, vocab, device="cuda", dtype=torch.bfloat16)
     targets = torch.randn(rows, vocab, device="cuda", dtype=torch.bfloat16)
-    loss = torch.empty(fused_losses._N_TERMS, rows, device="cuda", dtype=torch.float32)
-    stats = torch.empty(fused_losses._N_STATS, rows, device="cuda", dtype=torch.float32)
+    loss = torch.empty(fused_losses.N_TERMS, rows, device="cuda", dtype=torch.float32)
+    argmax = torch.empty(2, rows, device="cuda", dtype=torch.int64)
+    stats = torch.empty(fused_losses.N_STATS, rows, device="cuda", dtype=torch.float32)
     grad_in = torch.empty_like(logits)
     grad_out = torch.ones_like(loss)
-    terms = fused_losses._BITS["kl_div"]
+    terms = fused_losses.TERM_BITS["kl_div"]
 
     def run_forward(block, warps):
         return fused_losses.loss_forward_kernel.fn[(rows,)](
@@ -339,6 +340,8 @@ def test_autotuner_never_picks_a_spilling_tile():
             targets,
             loss,
             loss.stride(0),
+            argmax,
+            argmax.stride(0),
             stats,
             stats.stride(0),
             vocab,

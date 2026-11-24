@@ -88,7 +88,6 @@ def test_dspark_default_uses_kl(monkeypatch):
     train_kw, val_kw = DSparkDraftModel.get_trainer_kwargs(**vars(args))
     assert "kl_div" in train_kw["loss_config"]
     assert train_kw["loss_config"]["kl_div"][0] is losses.kl_div_loss
-    assert train_kw["tv_loss_fn"] is losses.tv_loss
     assert "kl_div" in val_kw["loss_config"]
     assert train_kw["confidence_head_alpha"] == 1.0
     assert val_kw["confidence_head_alpha"] == 1.0
@@ -98,8 +97,6 @@ def test_dspark_explicit_eager(monkeypatch):
     args = _parse(monkeypatch, ["--loss-implementation", "eager"])
     train_kw, val_kw = DSparkDraftModel.get_trainer_kwargs(**vars(args))
     assert train_kw["loss_config"]["kl_div"][0] is eager.kl_div_loss
-    assert train_kw["tv_loss_fn"] is eager.tv_loss
-    assert val_kw["tv_loss_fn"] is eager.tv_loss
 
 
 def test_dspark_compound_loss(monkeypatch):
@@ -275,3 +272,23 @@ def test_eagle3_flex_rejects_unaligned_total_seq_len(monkeypatch, total_seq_len)
 def test_unaligned_total_seq_len_allowed_elsewhere(monkeypatch, extra):
     args = _parse(monkeypatch, extra)
     assert args.total_seq_len == int(extra[1])
+
+
+# ---------------------------------------------------------------------------
+# Gradient accumulation
+# ---------------------------------------------------------------------------
+
+
+def test_gradient_accumulation_steps_default(monkeypatch):
+    args = _parse(monkeypatch, [])
+    assert args.gradient_accumulation_steps == 1
+
+
+def test_gradient_accumulation_steps_explicit(monkeypatch):
+    args = _parse(monkeypatch, ["--gradient-accumulation-steps", "8"])
+    assert args.gradient_accumulation_steps == 8
+
+
+def test_gradient_accumulation_steps_rejects_zero(monkeypatch):
+    with pytest.raises(SystemExit):
+        _parse(monkeypatch, ["--gradient-accumulation-steps", "0"])

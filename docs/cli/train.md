@@ -111,6 +111,8 @@ torchrun --standalone --nproc_per_node=4 -m speculators.train \
 
 - **`--lr`** (float, default: `1e-3`) Learning rate.
 
+- **`--gradient-accumulation-steps`** (int, default: `1`) Accumulate gradients over N microbatches before updating the model, giving an effective batch size of `per-microbatch batch size × N` without extra activation memory per microbatch. Must be ≥ 1. One optimizer update and one LR scheduler advance occur after each complete group of N microbatches. `global_step`, `--log-freq`, and sub-epoch `--checkpoint-freq` count these optimizer updates, not individual microbatches. An explicit `--scheduler-total-steps` also means optimizer updates and is not divided by N; a warning calls this out. Trailing microbatches that do not complete a group are dropped each epoch, and N must not change when resuming. On multi-GPU DDP and FSDP2, gradient synchronization is skipped until the final microbatch in each group. With FSDP2 this can increase peak memory because unsharded gradients are retained until that boundary.
+
 - **`--train-data-ratio`** (float, default: `0.9`) Ratio of data to use for training, the rest of the provided data will be used for validation.
 
 - **`--no-resume-from-checkpoint`** (flag) Disable automatic checkpoint resumption. Without this flag, this script will automatically load the latest checkpoint in `{save-path}` if one exists.
@@ -128,6 +130,8 @@ torchrun --standalone --nproc_per_node=4 -m speculators.train \
 - **`--deterministic-cuda`** (flag) Enable deterministic CUDA operations. May impact performance.
 
 - **`--loss-fn`** (str, default: `"ce"` for dflash, `"kl_div"` otherwise) Loss function specification. Pass a name for a single loss (`kl_div`, `rkl`, `jsd`, `ce`, `tv`, `nla`, `lk_hybrid`) or a JSON dict for a weighted combination, e.g. `'{"ce": 0.1, "tv": 0.9}'`. Required to be `ce` when `--per-position-loss-weight dpace` is used.
+
+- **`--loss-implementation`** (str, default: `"fused"`) Loss implementation: `fused` (Triton kernels), `eager` (for compatibility and numerical validation; may OOM with DFlash-family models), or `fused_linear` (DFlash only; computes the loss from hidden states without materializing the draft logits, see [Loss Functions](../user_guide/loss_functions.md#memory-efficient-dflash-loss)).
 
 ### Optimizer Arguments
 
@@ -251,7 +255,7 @@ All speculator types (except `mtp`) use sliding window attention on all draft la
 
 - **`--scheduler-warmup-ratio`** (float, default: `None`) Warmup as a fraction of total scheduler steps, in `[0, 1]`. Ignored (with a warning) when `--scheduler-warmup-steps` is also set.
 
-- **`--scheduler-total-steps`** (int, default: `None`) Total number of training steps for the scheduler.
+- **`--scheduler-total-steps`** (int, default: `None`) Total number of optimizer updates over which the scheduler runs. With gradient accumulation, this value is not divided by `--gradient-accumulation-steps`.
 
 - **`--scheduler-num-cosine-cycles`** (float, default: `0.5`) Number of cosine cycles for cosine scheduler.
 

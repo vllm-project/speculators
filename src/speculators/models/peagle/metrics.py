@@ -47,9 +47,10 @@ def compute_metrics(
     orig_positions = anchor_pos + depth  # [total_sampled]
     sampled_loss_mask = loss_mask[:, orig_positions]  # [1, total_sampled]
 
-    loss, term_losses = compound_loss(
+    out = compound_loss(
         logits, targets, sampled_loss_mask, depth.unsqueeze(0), loss_config=loss_config
     )
+    loss, term_losses = out.loss, out.term_losses
 
     with torch.no_grad():
         pred_ids = torch.argmax(logits, dim=-1)

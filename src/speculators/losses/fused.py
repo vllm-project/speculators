@@ -30,6 +30,7 @@ lineage); TV gradient sign convention matches Liger ops/tvd.py.
 # ruff: noqa: N803, N806
 
 from collections.abc import Sequence
+from dataclasses import dataclass
 
 import torch
 import triton
@@ -84,22 +85,23 @@ _LOG2 = tl.constexpr(0.6931471805599453)
 # a constexpr object as an autograd.Function argument and would graph-break;
 # the ``TERMS: tl.constexpr`` parameter re-wraps it in the kernel.
 TERM_SLOTS = {"kl_div": 0, "rkl": 1, "jsd": 2, "ce": 3, "tv": 4}
-_N_TERMS = len(TERM_SLOTS)
-_BITS = {name: 1 << slot for name, slot in TERM_SLOTS.items()}
-_KL = tl.constexpr(_BITS["kl_div"])
-_RKL = tl.constexpr(_BITS["rkl"])
-_JSD = tl.constexpr(_BITS["jsd"])
-_CE = tl.constexpr(_BITS["ce"])
-_TV = tl.constexpr(_BITS["tv"])
+N_TERMS = len(TERM_SLOTS)
+TERM_BITS = {name: 1 << slot for name, slot in TERM_SLOTS.items()}
+_KL = tl.constexpr(TERM_BITS["kl_div"])
+_RKL = tl.constexpr(TERM_BITS["rkl"])
+_JSD = tl.constexpr(TERM_BITS["jsd"])
+_CE = tl.constexpr(TERM_BITS["ce"])
+_TV = tl.constexpr(TERM_BITS["tv"])
 # Terms that need the target softmax; CE needs only the target argmax.
-_DIST_MASK = _BITS["kl_div"] | _BITS["rkl"] | _BITS["jsd"] | _BITS["tv"]
-_DIST = tl.constexpr(_DIST_MASK)
+DIST_MASK = TERM_BITS["kl_div"] | TERM_BITS["rkl"] | TERM_BITS["jsd"] | TERM_BITS["tv"]
+_DIST = tl.constexpr(DIST_MASK)
 
-# stats [_N_STATS, n_rows], fp32: [0]/[1] draft row max / sum-exp, [2]/[3]
+# stats [N_STATS, n_rows], fp32: [0]/[1] draft row max / sum-exp, [2]/[3]
 # the same for targets (distribution terms only), [4] rkl row loss L, [5] jsd
 # KL(dp || mix), [6] ce target argmax as float32 (exact: vocab < 2**24),
 # [7] tv s_s. Rows of terms not in TERMS are left unwritten.
-_N_STATS = 8
+N_STATS = 8
+
 
 # Named losses and the primitive terms each is composed from.
 LOSS_TERMS: dict[str, tuple[str, ...]] = {
@@ -178,6 +180,8 @@ def loss_forward_kernel(  # noqa: C901 -- constexpr TERMS branches
     targets_ptr,
     loss_ptr,
     loss_row,
+    argmax_ptr,
+    argmax_row,
     stats_ptr,
     stats_row,
     n_cols,
@@ -193,9 +197,10 @@ def loss_forward_kernel(  # noqa: C901 -- constexpr TERMS branches
     logits_ptr += pid * n_cols
     targets_ptr += pid * n_cols
 
-    # Pass 1: online max (m) and sum-exp (z) of the draft row, plus the target
-    # row's (distribution terms) and its first-index argmax (CE), in one stream.
-    # KL and RKL finish here too: with tp = e^(y - m_t) / z_t,
+    # Pass 1: online max (m) and sum-exp (z) of the draft row, the target
+    # row's (distribution terms), and the first-index argmax of both rows, in
+    # one stream of each. KL and RKL finish here too: with
+    # tp = e^(y - m_t) / z_t,
     #
     #   KL(tp || dp) = sum tp (y - x) + lse_d - lse_t = s_kl / z_t + lse_d - lse_t,
     #   s_kl = sum e^(y - m_t) (y - x),
@@ -209,15 +214,21 @@ def loss_forward_kernel(  # noqa: C901 -- constexpr TERMS branches
     z_t = 0.0
     s_kl = 0.0
     s_rkl = 0.0
-    best_val = float("-inf")
-    best_idx = 0
+    best_idx_d = 0
+    best_idx_t = 0
     for i in range(0, n_cols, BLOCK_SIZE):
         offsets = i + tl.arange(0, BLOCK_SIZE)
         mask = offsets < n_cols
+        # Masked lanes load as -inf, so they never win a max or an argmax.
+        # The running max doubles as the argmax's best value: ties keep the
+        # first index within a block and strict > the earliest block, as
+        # torch.argmax does.
         x = tl.load(logits_ptr + offsets, mask=mask, other=float("-inf")).cast(
             tl.float32
         )
-        m_new = tl.maximum(m_d, tl.max(tl.where(mask, x, float("-inf"))))
+        block_max_d, block_arg_d = tl.max(x, axis=0, return_indices=True)
+        best_idx_d = tl.where(block_max_d > m_d, i + block_arg_d, best_idx_d)
+        m_new = tl.maximum(m_d, block_max_d)
         scale_d = tl.exp(m_d - m_new)
         ex = tl.where(mask, tl.exp(x - m_new), 0.0)
         z_d = z_d * scale_d + tl.sum(ex)
@@ -225,34 +236,31 @@ def loss_forward_kernel(  # noqa: C901 -- constexpr TERMS branches
         y = tl.load(targets_ptr + offsets, mask=mask, other=float("-inf")).cast(
             tl.float32
         )
+        block_max_t, block_arg_t = tl.max(y, axis=0, return_indices=True)
+        best_idx_t = tl.where(block_max_t > m_t, i + block_arg_t, best_idx_t)
+        m_new_t = tl.maximum(m_t, block_max_t)
         if TERMS & _DIST:
-            m_new_t = tl.maximum(m_t, tl.max(tl.where(mask, y, float("-inf"))))
             scale_t = tl.exp(m_t - m_new_t)
             ey = tl.where(mask, tl.exp(y - m_new_t), 0.0)
             z_t = z_t * scale_t + tl.sum(ey)
-            m_t = m_new_t
             # Masked lanes: ey / ex are 0 but (y - x) is nan; where drops them.
             if TERMS & _KL:
                 s_kl = s_kl * scale_t + tl.sum(tl.where(mask, ey * (y - x), 0.0))
             if TERMS & _RKL:
                 s_rkl = s_rkl * scale_d + tl.sum(tl.where(mask, ex * (x - y), 0.0))
-        if TERMS & _CE:
-            block_max = tl.max(y)
-            block_arg = tl.argmax(y, axis=0)
-            # strict > keeps the first occurrence, the torch.argmax convention
-            update = block_max > best_val
-            best_idx = tl.where(update, i + block_arg, best_idx)
-            best_val = tl.where(update, block_max, best_val)
+        m_t = m_new_t
 
     lse_d = m_d + tl.log(z_d)
     tl.store(stats_ptr + 0 * stats_row + pid, m_d)
     tl.store(stats_ptr + 1 * stats_row + pid, z_d)
+    # mypy reads traced Triton code as Python and types the indices as int
+    tl.store(argmax_ptr + 0 * argmax_row + pid, best_idx_d.to(tl.int64))  # type: ignore[attr-defined]
+    tl.store(argmax_ptr + 1 * argmax_row + pid, best_idx_t.to(tl.int64))  # type: ignore[attr-defined]
 
     if TERMS & _CE:
-        logit_at_target = tl.load(logits_ptr + best_idx).cast(tl.float32)
+        logit_at_target = tl.load(logits_ptr + best_idx_t).cast(tl.float32)
         tl.store(loss_ptr + 3 * loss_row + pid, lse_d - logit_at_target)
-        # mypy reads traced Triton code as Python and types best_idx as int
-        tl.store(stats_ptr + 6 * stats_row + pid, best_idx.to(tl.float32))  # type: ignore[attr-defined]
+        tl.store(stats_ptr + 6 * stats_row + pid, best_idx_t.to(tl.float32))  # type: ignore[attr-defined]
 
     if TERMS & _DIST:
         lse_t = m_t + tl.log(z_t)
@@ -388,45 +396,57 @@ def loss_backward_kernel(  # noqa: C901 -- constexpr TERMS branches
 
 
 class _FusedLoss(torch.autograd.Function):
-    """Shared autograd wrapper; ``terms`` is the primitive-term bitmask.
+    """Shared autograd wrapper over the term bitmasks.
 
-    Returns ``[_N_TERMS, B, T]`` fp32 per-position losses indexed by
-    ``TERM_SLOTS``; slots of terms not in the mask are uninitialized and must
-    not be read. Targets intentionally receive no gradient; use the eager
-    implementation when target gradients are required.
+    ``terms`` selects what the forward computes; ``grad_terms`` (a subset)
+    selects what backward differentiates. Terms outside ``grad_terms`` are
+    metric-only: computed in the same pass, never differentiated.
+
+    Returns ``[N_TERMS, B, T]`` fp32 per-position losses indexed by
+    ``TERM_SLOTS`` (slots outside ``terms`` are uninitialized and must not be
+    read) and ``[2, B, T]`` int64 first-index argmax of logits and targets
+    (non-differentiable). Targets intentionally receive no gradient; use the
+    eager implementation when target gradients are required.
     """
 
     @staticmethod
-    def forward(ctx, logits, targets, terms):
+    def forward(ctx, logits, targets, terms, grad_terms):
         B, T, V = logits.shape
         logits_flat = logits.contiguous().view(B * T, V)
         targets_flat = targets.contiguous().view(B * T, V)
-        losses = torch.empty(_N_TERMS, B * T, device=logits.device, dtype=torch.float32)
-        stats = torch.empty(_N_STATS, B * T, device=logits.device, dtype=torch.float32)
+        losses = torch.empty(N_TERMS, B * T, device=logits.device, dtype=torch.float32)
+        argmax = torch.empty(2, B * T, device=logits.device, dtype=torch.int64)
+        stats = torch.empty(N_STATS, B * T, device=logits.device, dtype=torch.float32)
         loss_forward_kernel[(B * T,)](
             logits_flat,
             targets_flat,
             losses,
             losses.stride(0),
+            argmax,
+            argmax.stride(0),
             stats,
             stats.stride(0),
             V,
             TERMS=terms,
         )
-        # CE backward only needs the target argmax cached in stats, so a
-        # CE-only launch releases the targets after forward.
+        # CE backward only needs the target argmax cached in stats, so when CE
+        # is the only differentiated term the targets are released after
+        # forward.
         ctx.save_for_backward(
-            logits_flat, targets_flat if terms & _DIST_MASK else None, stats
+            logits_flat, targets_flat if grad_terms & DIST_MASK else None, stats
         )
-        ctx.terms = terms
+        ctx.mark_non_differentiable(argmax)
+        ctx.grad_terms = grad_terms
         ctx.shape = (B, T, V)
-        return losses.view(_N_TERMS, B, T)
+        return losses.view(N_TERMS, B, T), argmax.view(2, B, T)
 
     @staticmethod
-    def backward(ctx, grad_output):
+    def backward(ctx, grad_output, _grad_argmax):
         logits_flat, targets_flat, stats = ctx.saved_tensors
+        if ctx.grad_terms == 0:
+            return None, None, None, None
         B, T, V = ctx.shape
-        grad_out = grad_output.contiguous().view(_N_TERMS, B * T)
+        grad_out = grad_output.contiguous().view(N_TERMS, B * T)
         grad_in = torch.empty_like(logits_flat)
         loss_backward_kernel[(B * T,)](
             logits_flat,
@@ -437,12 +457,19 @@ class _FusedLoss(torch.autograd.Function):
             stats,
             stats.stride(0),
             V,
-            TERMS=ctx.terms,
+            TERMS=ctx.grad_terms,
         )
-        return grad_in.view(B, T, V), None, None
+        return grad_in.view(B, T, V), None, None, None
 
 
 _NLA_EPS = 1e-5
+
+
+def terms_mask(terms: Sequence[str]) -> int:
+    mask = 0
+    for term in terms:
+        mask |= TERM_BITS[term]
+    return mask
 
 
 def fused_terms(
@@ -453,14 +480,12 @@ def fused_terms(
     One forward kernel pass computes them all and one backward pass writes a
     single combined gradient. Names are keys of ``TERM_SLOTS``.
     """
-    mask = 0
-    for term in terms:
-        mask |= _BITS[term]
-    losses = _FusedLoss.apply(logits, targets, mask)
+    mask = terms_mask(terms)
+    losses, _ = _FusedLoss.apply(logits, targets, mask, mask)
     return {term: losses[TERM_SLOTS[term]] for term in terms}
 
 
-def _compose(
+def compose_loss(
     name: str, terms: dict[str, torch.Tensor], eta: float = 3.0
 ) -> torch.Tensor:
     """Build a named loss from its primitive terms (see ``LOSS_TERMS``)."""
@@ -474,6 +499,50 @@ def _compose(
     return terms[name]
 
 
+@dataclass
+class FusedOutputs:
+    """Everything one fused kernel call produces for a loss config."""
+
+    losses: dict[str, torch.Tensor]
+    """Per-position ``[B, T]`` loss per requested name (differentiable)."""
+    metrics: dict[str, torch.Tensor]
+    """Per-position ``[B, T]`` primitive terms requested as metrics (detached)."""
+    pred_ids: torch.Tensor
+    """``[B, T]`` int64 ``argmax(logits, -1)``, first index on ties."""
+    target_ids: torch.Tensor
+    """``[B, T]`` int64 ``argmax(targets, -1)``, first index on ties."""
+
+
+def fused_compound(
+    logits: torch.Tensor,
+    targets: torch.Tensor,
+    names: Sequence[str],
+    metric_terms: Sequence[str] = (),
+) -> FusedOutputs:
+    """Named losses, metric-only terms and both argmaxes from one kernel call.
+
+    ``names`` are keys of ``LOSS_TERMS``; the union of their primitive terms
+    is differentiated. ``metric_terms`` are primitive terms (keys of
+    ``TERM_SLOTS``) that are computed in the same pass but never
+    differentiated, e.g. TV for an acceptance-rate metric; a metric term that
+    is also a loss term reuses that output.
+    """
+    loss_terms = sorted(
+        {t for name in names for t in LOSS_TERMS[name]}, key=lambda t: TERM_BITS[t]
+    )
+    grad_mask = terms_mask(loss_terms)
+    losses, argmax = _FusedLoss.apply(
+        logits, targets, grad_mask | terms_mask(metric_terms), grad_mask
+    )
+    terms = {t: losses[TERM_SLOTS[t]] for t in loss_terms}
+    return FusedOutputs(
+        losses={name: compose_loss(name, terms) for name in names},
+        metrics={t: losses[TERM_SLOTS[t]].detach() for t in metric_terms},
+        pred_ids=argmax[0],
+        target_ids=argmax[1],
+    )
+
+
 def fused_compound_losses(
     logits: torch.Tensor, targets: torch.Tensor, names: Sequence[str]
 ) -> dict[str, torch.Tensor]:
@@ -482,11 +551,7 @@ def fused_compound_losses(
     ``names`` are keys of ``LOSS_TERMS``; the union of their primitive terms
     is computed in a single forward pass.
     """
-    needed = sorted(
-        {t for name in names for t in LOSS_TERMS[name]}, key=lambda t: _BITS[t]
-    )
-    terms = fused_terms(logits, targets, needed)
-    return {name: _compose(name, terms) for name in names}
+    return fused_compound(logits, targets, names).losses
 
 
 def fused_kl_div_loss(logits, targets):
@@ -516,7 +581,7 @@ def fused_tv_loss(logits, targets):
 
 def fused_nla_loss(logits, targets):
     """Per-position negative-log-acceptance ``[1, T] = -log(alpha)``; composes on TV."""
-    return _compose("nla", fused_terms(logits, targets, ("tv",)))
+    return compose_loss("nla", fused_terms(logits, targets, ("tv",)))
 
 
 def fused_lk_hybrid_loss(logits, targets, eta: float = 3.0):
@@ -524,4 +589,4 @@ def fused_lk_hybrid_loss(logits, targets, eta: float = 3.0):
     composed as in ``lk_hybrid_loss`` (blend weight detached).
     """
     terms = fused_terms(logits, targets, ("kl_div", "tv"))
-    return _compose("lk_hybrid", terms, eta=eta)
+    return compose_loss("lk_hybrid", terms, eta=eta)

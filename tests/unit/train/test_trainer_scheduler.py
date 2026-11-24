@@ -1,12 +1,17 @@
 from pathlib import Path
+from types import SimpleNamespace
+from typing import cast
 
 import pytest
 import torch
+from torch import nn
 from transformers import get_linear_schedule_with_warmup
 
+import speculators.train.trainer as trainer_module
 from speculators.train.checkpointer import SingleGPUCheckpointer
 from speculators.train.config import TrainConfig
 from speculators.train.trainer import (
+    Trainer,
     TrainerConfig,
     _resolve_scheduler_steps,
 )
@@ -26,6 +31,15 @@ def test_scheduler_steps_default_to_one_percent_of_training_steps():
 
     assert total_steps == 100
     assert warmup_steps == 1
+
+
+def test_scheduler_steps_drop_remainder_with_gradient_accumulation():
+    # 21 // 4 == 5 (the trailing microbatch is dropped), so 5 epochs * 5 == 25.
+    _, total_steps = _resolve_scheduler_steps(
+        make_config(gradient_accumulation_steps=4), 21
+    )
+
+    assert total_steps == 25
 
 
 def test_scheduler_total_steps_only_defaults_warmup_to_one_percent_of_total():
@@ -52,6 +66,15 @@ def test_max_steps_sets_scheduler_total_steps():
     assert warmup_steps == 0  # 1% of 30
 
 
+def test_max_steps_wins_over_gradient_accumulation_default():
+    _, total_steps = _resolve_scheduler_steps(
+        make_config(max_steps=30, gradient_accumulation_steps=4),
+        20,
+    )
+
+    assert total_steps == 30
+
+
 def test_scheduler_total_steps_override_wins_over_max_steps():
     warmup_steps, total_steps = _resolve_scheduler_steps(
         make_config(max_steps=30, scheduler_total_steps=250),
@@ -60,6 +83,20 @@ def test_scheduler_total_steps_override_wins_over_max_steps():
 
     assert total_steps == 250
     assert warmup_steps == 2  # 1% of 250
+
+
+def test_explicit_scheduler_total_steps_warns_with_gradient_accumulation():
+    with pytest.warns(UserWarning, match="measured in optimizer steps"):
+        warmup_steps, total_steps = _resolve_scheduler_steps(
+            make_config(
+                scheduler_total_steps=250,
+                gradient_accumulation_steps=4,
+            ),
+            20,
+        )
+
+    assert total_steps == 250
+    assert warmup_steps == 2
 
 
 def test_scheduler_warmup_ratio_uses_scheduler_total_steps():
@@ -131,3 +168,24 @@ def test_scheduler_resume_restores_optimizer_learning_rate(tmp_path: Path):
 
     assert resumed_scheduler.get_last_lr()[0] == pytest.approx(expected_lr)
     assert resumed_optimizer.param_groups[0]["lr"] == pytest.approx(expected_lr)
+
+
+def test_maybe_no_sync_fsdp2_toggles_sync_at_boundary(monkeypatch) -> None:
+    class FakeFSDPModule(nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.sync_values: list[bool] = []
+
+        def set_requires_gradient_sync(
+            self, requires_gradient_sync: bool, *, recurse: bool = True
+        ) -> None:
+            assert recurse
+            self.sync_values.append(requires_gradient_sync)
+
+    monkeypatch.setattr(trainer_module, "FSDPModule", FakeFSDPModule)
+    model = FakeFSDPModule()
+
+    trainer = cast("Trainer", SimpleNamespace(model=model))
+    Trainer._maybe_no_sync(trainer, False)
+    Trainer._maybe_no_sync(trainer, True)
+    assert model.sync_values == [False, True]

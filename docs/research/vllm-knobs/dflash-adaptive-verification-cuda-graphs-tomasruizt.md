@@ -102,11 +102,11 @@ Mean ITL at c128 (AV off / on): 39.66 / 33.09 ms with default graphs, 33.30 / 27
 
 Default CUDA graph capture sizes:
 
-![Throughput versus interactivity, default CUDA graph capture sizes](../assets/research/dflash-av-qwen35-default-graphs.png)
+![Throughput versus interactivity, default CUDA graph capture sizes](../../assets/research/dflash-av-qwen35-default-graphs.png)
 
 Extended CUDA graph capture sizes:
 
-![Throughput versus interactivity, extended CUDA graph capture sizes](../assets/research/dflash-av-qwen35-extended-graphs.png)
+![Throughput versus interactivity, extended CUDA graph capture sizes](../../assets/research/dflash-av-qwen35-extended-graphs.png)
 
 ## Observations
 

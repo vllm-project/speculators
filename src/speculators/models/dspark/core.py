@@ -1,4 +1,3 @@
-from collections.abc import Callable
 from typing import ClassVar
 
 import torch
@@ -8,7 +7,6 @@ from speculators.losses import (
     LossConfig,
     kl_div_loss,
     resolve_loss_config,
-    tv_loss,
 )
 from speculators.model import SpeculatorModel
 from speculators.models.dflash.core import DFlashDraftModel
@@ -98,7 +96,6 @@ class DSparkDraftModel(DFlashDraftModel):
         """Resolve DSpark's compound loss from ``--loss-fn``."""
         implementation = kwargs.get("loss_implementation", "fused")
         loss_config = resolve_loss_config(kwargs["loss_fn"], implementation)
-        tv_loss_fn = resolve_loss_config("tv", implementation)["tv"][0]
         gamma = kwargs.get("dflash_decay_gamma", 4.0)
         max_anchors = kwargs.get("max_anchors", 3072)
         confidence_head_alpha = kwargs.get("confidence_head_alpha", 1.0)
@@ -108,7 +105,6 @@ class DSparkDraftModel(DFlashDraftModel):
         dpace_alpha = kwargs.get("dpace_alpha", 0.5)
         shared = {
             "loss_config": loss_config,
-            "tv_loss_fn": tv_loss_fn,
             "gamma": gamma,
             "max_anchors": max_anchors,
             "confidence_head_alpha": confidence_head_alpha,
@@ -127,7 +123,6 @@ class DSparkDraftModel(DFlashDraftModel):
         document_ids: torch.Tensor,  # [1, total_seq_len]
         position_ids: torch.Tensor | None = None,  # [1, total_seq_len]
         loss_config: LossConfig | None = None,
-        tv_loss_fn: Callable[[torch.Tensor, torch.Tensor], torch.Tensor] = tv_loss,
         gamma: float = 4.0,
         max_anchors: int = 3072,
         confidence_head_alpha: float = 1.0,
@@ -202,7 +197,6 @@ class DSparkDraftModel(DFlashDraftModel):
             aligned_loss_mask,
             self.block_size,
             loss_config=loss_config or _DEFAULT_LOSS_CONFIG,
-            tv_loss_fn=tv_loss_fn,
             gamma=gamma,
             confidence_head_alpha=confidence_head_alpha,
             per_position_loss_weight=per_position_loss_weight,
