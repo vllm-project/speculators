@@ -310,8 +310,8 @@ class LossArgs(_Group):
         default="fused",
         description="Loss implementation to use; eager is for compatibility and "
         "numerical validation and may OOM with DFlash-family models. "
-        "fused_linear (DFlash, DSpark) computes the loss from hidden states in row "
-        "chunks without materializing the draft logits.",
+        "fused_linear (DFlash, and DSpark with markov_rank > 0) computes the loss "
+        "from hidden states in row chunks without materializing the draft logits.",
     )
     fused_linear_logits: Literal["input", "float32"] = Field(
         default="input",

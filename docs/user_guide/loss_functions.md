@@ -2,7 +2,7 @@
 
 The training loss controls what the draft model is optimized for. Select it with `--loss-fn` in [`speculators train`](../cli/train.md), which accepts either a single loss name or a JSON dict for a weighted combination. It applies to Eagle-3, P-EAGLE, DFlash, and DSpark. MTP uses its own multi-step cross-entropy loss and ignores this flag.
 
-The fused Triton implementation is the default. Use `--loss-implementation eager` for compatibility or numerical validation; eager losses may OOM with DFlash or DSpark. DFlash can also use `--loss-implementation fused_linear`, which never materializes the draft logits (see [Memory-Efficient DFlash Loss](#memory-efficient-dflash-loss)).
+The fused Triton implementation is the default. Use `--loss-implementation eager` for compatibility or numerical validation; eager losses may OOM with DFlash or DSpark. DFlash and DSpark can also use `--loss-implementation fused_linear`, which never materializes the draft logits (see [Memory-Efficient Loss for DFlash and DSpark](#memory-efficient-loss-for-dflash-and-dspark)).
 
 ```bash
 speculators train ... --loss-fn kl_div
@@ -38,9 +38,9 @@ Pass a JSON dict to train on a weighted sum of several losses. Weights are used 
 speculators train ... --loss-fn '{"ce": 0.1, "tv": 0.9}'
 ```
 
-## Memory-Efficient DFlash Loss
+## Memory-Efficient Loss for DFlash and DSpark
 
-`--loss-implementation fused_linear` computes the loss from DFlash's final hidden states and its frozen `lm_head` in row chunks, so no `[N, V]` tensor exists (`N` loss rows, `V` vocabulary): not the draft logits, not their gradient and not the target logits, which each chunk recomputes from the verifier hidden states. It supports every loss above with the same per-row semantics, including D-PACE and weighted combinations. With up to two differentiated loss terms (every single loss, `lk_hybrid`, or two weighted losses such as `{"ce": 0.1, "tv": 0.9}`) the gradient is contracted in the forward pass, so backward runs no GEMM; with more terms, backward projects each chunk again instead. At 16k rows and a 152k vocabulary (bf16, KL, MI350P) the loss head's peak memory drops from 13.9 GB to 2.2 GB at about the same forward + backward time as `fused`.
+`--loss-implementation fused_linear` computes the loss from the drafter's final hidden states and its frozen `lm_head` in row chunks, so no `[N, V]` tensor exists (`N` loss rows, `V` vocabulary): not the draft logits, not their gradient and not the target logits, which each chunk recomputes from the verifier hidden states. It supports every loss above with the same per-row semantics, including D-PACE and weighted combinations. With up to two differentiated loss terms (every single loss, `lk_hybrid`, or two weighted losses such as `{"ce": 0.1, "tv": 0.9}`) the gradient is contracted in the forward pass, so backward runs no GEMM; with more terms, backward projects each chunk again instead. At 16k rows and a 152k vocabulary (bf16, KL, MI350P) the loss head's peak memory drops from 13.9 GB to 2.2 GB at about the same forward + backward time as `fused`.
 
 `--fused-linear-logits` (default `input`) keeps the logit tiles in the training dtype, like materialized logits. `float32` takes them straight from the GEMM accumulator: more accurate gradients, notably for TV-based losses, at 7-10% more time.
 

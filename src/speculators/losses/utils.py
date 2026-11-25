@@ -3,6 +3,7 @@
 import json
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
+from functools import partial
 
 import torch
 
@@ -431,7 +432,15 @@ def compound_loss_reduced(
     from speculators.losses import fused_linear_reduced as flr  # noqa: PLC0415
 
     decay = None
-    if dpace_alpha is None and decay_fn is not None:
+    if dpace_alpha is not None:
+        # the per-term logging below reduces with the op's D-PACE weights
+        decay_fn = partial(
+            dpace_loss_decay,
+            loss_mask=loss_mask,
+            block_size=block_size,
+            dpace_alpha=dpace_alpha,
+        )
+    elif decay_fn is not None:
         decay = decay_fn(pos_idx.float())
     loss, out = flr.fused_linear_reduced(
         hidden,

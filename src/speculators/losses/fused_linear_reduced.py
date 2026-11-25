@@ -53,8 +53,9 @@ def _chunk_reduction(losses, names, weights, mask, decay, denom, alpha, block_si
             decay = dpace_loss_decay(
                 mask[None], mask[None], block_size, alpha, elementwise_loss=el[None]
             )[0]
+        # el is masked once, as _weighted_sum does; the mask stays in scale
+        total = total + (el * decay).sum() * (w / denom)
         scale = decay * mask * (w / denom)
-        total = total + (el * scale).sum()
         for t, d in _term_derivatives(name, terms).items():
             mult[t] = mult[t] + scale * d
     return total, mult
@@ -278,6 +279,8 @@ def fused_linear_reduced(
         raise ValueError(
             f"logits_dtype must be one of {fl.LOGITS_DTYPES}, got {logits_dtype!r}"
         )
+    if chunk_rows is not None and chunk_rows < 1:
+        raise ValueError(f"chunk_rows must be positive, got {chunk_rows}")
     if hidden.dim() != 3 or hidden.shape[0] != 1 or loss_mask.shape != hidden.shape[:2]:  # noqa: PLR2004
         raise ValueError("expected hidden [1, N, H] and loss_mask [1, N]")
     flat_hidden, weight, flat_targets, target_weight = fl._prepare_inputs(
@@ -288,6 +291,11 @@ def fused_linear_reduced(
     if torch.is_autocast_enabled(flat_hidden.device.type):
         flat_extra = flat_extra.to(flat_hidden.dtype)
         extra_weight = extra_weight.to(flat_hidden.dtype)
+    elif (flat_extra.dtype, extra_weight.dtype) != (flat_hidden.dtype, weight.dtype):
+        raise ValueError(
+            "extra / extra_weight dtypes differ from hidden / weight; cast them "
+            "or run under torch.autocast"
+        )
     if extra_weight.shape != (vocab, flat_extra.shape[1]):
         raise ValueError(
             f"extra {tuple(extra.shape)} and extra_weight "
