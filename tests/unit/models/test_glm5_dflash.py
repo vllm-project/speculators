@@ -392,8 +392,9 @@ def test_mla_attention_applies_yarn_mscale_from_upstream():
     assert attn.scaling == pytest.approx(cfg.qk_head_dim**-0.5 * mscale * mscale)
 
 
-def _make_dflash_glm5() -> DFlashDraftModel:
-    tl_config = _tiny_glm5_config()
+def _make_dflash_glm5(attn_impl: str | None = None) -> DFlashDraftModel:
+    overrides = {"_attn_implementation": attn_impl} if attn_impl else {}
+    tl_config = _tiny_glm5_config(**overrides)
     config = DFlashSpeculatorConfig(
         transformer_layer_config=tl_config,
         draft_vocab_size=64,
@@ -439,9 +440,7 @@ def test_glm5_dflash_uses_mla_projections():
     assert tl_config.head_dim == tl_config.qk_rope_head_dim
 
 
-def test_glm5_dflash_forward_finite_loss():
-    torch.manual_seed(0)
-    model = _make_dflash_glm5()
+def _forward_tiny_glm5(model):
     seq_len = 16
     hidden_size = 32
     hidden_states = torch.randn(1, seq_len, 2 * hidden_size)
@@ -449,17 +448,50 @@ def test_glm5_dflash_forward_finite_loss():
     input_ids = torch.randint(0, 64, (1, seq_len))
     loss_mask = torch.ones(1, seq_len)
     document_ids = torch.zeros(1, seq_len, dtype=torch.long)
+    return model(
+        hidden_states=hidden_states,
+        input_ids=input_ids,
+        loss_mask=loss_mask,
+        verifier_last_hidden_states=verifier_last,
+        document_ids=document_ids,
+        max_anchors=2,
+        # eager losses keep the test Triton-free (fused kernels need it).
+        loss_config=resolve_loss_config("kl_div", "eager"),
+    )
+
+
+@pytest.mark.parametrize("attn_impl", ["eager", "sdpa"])
+def test_glm5_dflash_forward_finite_loss(attn_impl):
+    torch.manual_seed(0)
+    model = _make_dflash_glm5(attn_impl)
     with torch.no_grad():
-        _, loss, metrics = model(
-            hidden_states=hidden_states,
-            input_ids=input_ids,
-            loss_mask=loss_mask,
-            verifier_last_hidden_states=verifier_last,
-            document_ids=document_ids,
-            max_anchors=2,
-            # eager losses keep the test Triton-free (fused kernels need it).
-            loss_config=resolve_loss_config("kl_div", "eager"),
-        )
+        _, loss, metrics = _forward_tiny_glm5(model)
+    assert torch.isfinite(loss)
+    assert metrics is not None
+
+
+def test_glm5_dflash_backward():
+    """Training path: backward reaches trainable draft weights only."""
+    torch.manual_seed(0)
+    model = _make_dflash_glm5("sdpa")
+    _, loss, _ = _forward_tiny_glm5(model)
+    loss.backward()
+    # Trainable draft-side weights get finite grads...
+    assert model.fc.weight.grad is not None
+    assert torch.isfinite(model.fc.weight.grad).all()
+    # ... while verifier-owned weights stay frozen.
+    assert model.verifier_norm.weight.grad is None
+    assert model.verifier_lm_head.weight.grad is None
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="flex attention needs CUDA")
+def test_glm5_dflash_flex_attention_forward_finite_loss():
+    # simple_flex_attention is the model default (core.py falls back to it
+    # when _attn_implementation is None); exercise its mask path on CUDA.
+    torch.manual_seed(0)
+    model = _make_dflash_glm5("simple_flex_attention")
+    with torch.no_grad():
+        _, loss, metrics = _forward_tiny_glm5(model)
     assert torch.isfinite(loss)
     assert metrics is not None
 

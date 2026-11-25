@@ -368,6 +368,7 @@ def load_draft_transformer_layer_config(
     draft_config: str,
     verifier_name_or_path: str,
     trust_remote_code: bool = False,
+    speculator_type: str | None = None,
 ) -> PretrainedConfig:
     """Load the draft decoder ``transformer_layer_config`` from a config source.
 
@@ -382,6 +383,10 @@ def load_draft_transformer_layer_config(
     (draft/verifier hidden-size mismatch is not yet supported) and ``vocab_size``
     is aligned to the verifier's target vocabulary. The pruned draft vocabulary
     is controlled separately via ``--draft-vocab-size``.
+
+    A glm5_dspark (MLA) decoder is only usable from dflash/dspark; passing
+    ``speculator_type`` guards against silent mismatch (e.g. dflash2 would
+    train GQA layers yet save them under model_type glm5_dspark).
     """
     config_dict, _ = PretrainedConfig.get_config_dict(draft_config)
     if "transformer_layer_config" in config_dict:
@@ -416,6 +421,16 @@ def load_draft_transformer_layer_config(
             verifier_config.vocab_size,
         )
         draft_config_obj.vocab_size = verifier_config.vocab_size
+    if (
+        speculator_type is not None
+        and isinstance(draft_config_obj, Glm5DSparkDecoderConfig)
+        and speculator_type not in ("dflash", "dspark")
+    ):
+        raise ValueError(
+            "--draft-config with model_type 'glm5_dspark' is only supported "
+            f"for --speculator-type dflash or dspark, not '{speculator_type}'; "
+            "the trained decoder layers would not match the saved model_type."
+        )
     return draft_config_obj
 
 
@@ -641,6 +656,7 @@ def build_draft_model(
                 args.draft_config,
                 args.verifier_name_or_path,
                 trust_remote_code=args.trust_remote_code,
+                speculator_type=args.speculator_type,
             )
         else:
             full_attention_indices = args.full_attention_indices
