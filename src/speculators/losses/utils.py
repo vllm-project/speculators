@@ -262,6 +262,43 @@ class CompoundLossOutput:
     fused pass, or the eager functions on a non-fused config."""
 
 
+@torch.no_grad()
+def _eager_metrics(
+    logits: torch.Tensor,
+    targets: torch.Tensor,
+    metric_terms: Sequence[str],
+    with_ids: bool,
+    chunk_rows: int,
+) -> tuple[dict[str, torch.Tensor], torch.Tensor, torch.Tensor]:
+    """Compute per-token metrics and IDs in one traversal of the token chunks."""
+    metrics: dict[str, torch.Tensor] = {}
+    pred_ids = target_ids = torch.empty(0, dtype=torch.long)
+    if not metric_terms and not with_ids:
+        return metrics, pred_ids, target_ids
+
+    metric_fns = {name: _EAGER_LOSS_FN_MAP[name] for name in metric_terms}
+    if with_ids:
+        pred_ids = logits.new_empty(logits.shape[:-1], dtype=torch.long)
+        target_ids = targets.new_empty(targets.shape[:-1], dtype=torch.long)
+
+    seq_len = logits.shape[-2]
+    # Run once for empty sequences to preserve each metric's output dtype.
+    for start in range(0, max(seq_len, 1), chunk_rows):
+        rows = slice(start, start + chunk_rows)
+        draft = logits[..., rows, :]
+        target = targets[..., rows, :]
+        for name, metric_fn in metric_fns.items():
+            values = metric_fn(draft, target)
+            if start == 0:
+                metrics[name] = values.new_empty(logits.shape[:-1])
+            metrics[name][..., rows] = values
+        if with_ids:
+            pred_ids[..., rows] = draft.argmax(dim=-1)
+            target_ids[..., rows] = target.argmax(dim=-1)
+
+    return metrics, pred_ids, target_ids
+
+
 def compound_loss(
     logits: torch.Tensor,
     targets: torch.Tensor,
@@ -271,6 +308,8 @@ def compound_loss(
     decay_fn: Callable[..., torch.Tensor] | None = None,
     metric_terms: Sequence[str] = (),
     with_ids: bool = False,
+    *,
+    chunk_rows: int = 1024,
 ) -> CompoundLossOutput:
     """Compute a weighted sum of loss terms.
 
@@ -285,14 +324,16 @@ def compound_loss(
     such as ``"tv"``, never differentiated), so no extra read of the
     ``[1, T, V]`` tensors happens. A config that mixes fused and eager terms
     runs each term on its own; there ``metric_terms`` come from the eager
-    functions and ``with_ids`` computes the argmaxes with ``torch.argmax``.
+    functions and share a traversal of up to ``chunk_rows`` token rows at a time
+    with the optional argmaxes.
 
     ``term_losses`` holds the per-term (unweighted) scalar losses keyed as
     ``"{name}_loss"``. When the config contains a single term it is empty
     (the overall loss already captures it).
     """
+    if chunk_rows < 1:
+        raise ValueError(f"chunk_rows must be positive, got {chunk_rows}")
     fused_names = [_fused_name(fn) for fn, _ in loss_config.values()]
-    metrics: dict[str, torch.Tensor] = {}
     if fused_names and all(name is not None for name in fused_names):
         fused = _fused_kernel("fused_compound")(
             logits, targets, fused_names, metric_terms
@@ -302,13 +343,9 @@ def compound_loss(
         metrics = fused.metrics
     else:
         elementwise = [fn(logits, targets) for fn, _ in loss_config.values()]
-        with torch.no_grad():
-            metrics = {t: _EAGER_LOSS_FN_MAP[t](logits, targets) for t in metric_terms}
-        if with_ids:
-            pred_ids = torch.argmax(logits, dim=-1)
-            target_ids = torch.argmax(targets, dim=-1)
-        else:
-            pred_ids = target_ids = torch.empty(0, dtype=torch.long)
+        metrics, pred_ids, target_ids = _eager_metrics(
+            logits, targets, metric_terms, with_ids, chunk_rows
+        )
     total, term_losses = _weighted_sum(
         loss_config, elementwise, loss_mask, pos_idx, decay_fn
     )

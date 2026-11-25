@@ -11,6 +11,7 @@ from speculators.models.dflash.core import DFlashDraftModel
 from speculators.models.dflash2.backbone import DFlash2Backbone
 from speculators.models.dflash2.config import DFlash2SpeculatorConfig
 from speculators.models.dflash2.metrics import (
+    SelectorTrainingOutput,
     compute_metrics,
     selector_training_candidates,
 )
@@ -172,11 +173,16 @@ class DFlash2DraftModel(DFlashDraftModel):
             predecessor_ids.reshape(1, -1),
             training_candidate_ids,
         )
-        return (
-            training_candidate_ids,
+        selected_token_ids = training_candidate_ids.gather(
+            -1, candidate_logits.detach().argmax(dim=-1, keepdim=True)
+        ).squeeze(-1)
+        return SelectorTrainingOutput(
+            candidate_ids,  # without injection
             candidate_logits,
             target_positions,
             contains_target,
+            selected_token_ids,
+            target_ids,
         )
 
     def compute_loss_and_metrics(
@@ -194,17 +200,10 @@ class DFlash2DraftModel(DFlashDraftModel):
         selector_miss_policy="replace",
         **_kwargs,
     ):
-        training_candidate_ids, candidate_logits, target_positions, contains_target = (
-            correction
-        )
-        unary_logits = logits
         return compute_metrics(
-            unary_logits=unary_logits,
+            unary_logits=logits,
             targets=targets,
-            training_candidate_ids=training_candidate_ids,
-            candidate_logits=candidate_logits,
-            target_positions=target_positions,
-            contains_target=contains_target,
+            correction=correction,
             loss_mask=layout.loss_mask,
             block_size=self.block_size,
             top_k=self.candidate_selector.top_k,

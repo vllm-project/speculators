@@ -1,6 +1,8 @@
 import pytest
 import torch
 
+from speculators.losses import resolve_loss_config
+from speculators.models.xpress.metrics import compute_metrics
 from speculators.models.xpress.model_definitions import XPressRefinerHead
 
 
@@ -97,3 +99,37 @@ def test_rank_must_be_positive():
             block_size=4,
             rank=0,
         )
+
+
+@pytest.mark.parametrize("sample_from_anchor", [False, True])
+def test_teacher_forced_metrics_compare_with_verifier(sample_from_anchor):
+    logits = torch.tensor([[[3.0, 0.0], [0.0, 3.0], [3.0, 0.0], [0.0, 3.0]]])
+    targets = torch.tensor([[[3.0, 0.0], [0.0, 3.0], [0.0, 3.0], [0.0, 3.0]]])
+    loss_mask = torch.tensor([[sample_from_anchor, True, True, True]])
+    base_logits = logits.flip(dims=(-1,))
+    _, metrics = compute_metrics(
+        logits,
+        [],
+        base_logits,
+        targets,
+        loss_mask,
+        block_size=4,
+        loss_config=resolve_loss_config("ce", "eager"),
+        sample_from_anchor=sample_from_anchor,
+    )
+
+    assert metrics["full_acc_sum"].item() == 2 + sample_from_anchor
+    assert metrics["full_acc_total"].item() == 3 + sample_from_anchor
+    assert metrics["position_1_acc_sum"].item() == 1
+    assert metrics["position_2_acc_sum"].item() == 0
+    assert metrics["eal_sum"].item() == 2 + sample_from_anchor
+    assert metrics["eal_total"].item() == 1
+    for name, prediction in (
+        ("accept_rate", logits),
+        ("base_accept_rate", base_logits),
+    ):
+        overlap = torch.minimum(
+            prediction.softmax(dim=-1), targets.softmax(dim=-1)
+        ).sum(dim=-1)
+        torch.testing.assert_close(metrics[f"{name}_sum"], (overlap * loss_mask).sum())
+        assert metrics[f"{name}_total"].item() == loss_mask.sum().item()
