@@ -66,3 +66,11 @@ def select_anchors(
 
     return anchors, anchor_valid
     # shape: [num_anchors], [num_anchors]
+
+
+def rename_checkpoint_key(key: str, prefixes: dict[str, str]) -> str:
+    for source, target in prefixes.items():
+        prefix = f"{source}."
+        if key.startswith(prefix):
+            return f"{target}.{key.removeprefix(prefix)}"
+    return key
