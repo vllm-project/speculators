@@ -29,7 +29,7 @@ __all__ = [
 
 
 class SelectorTrainingOutput(NamedTuple):
-    candidate_ids: torch.Tensor
+    unary_candidate_ids: torch.Tensor
     candidate_logits: torch.Tensor
     target_positions: torch.Tensor
     contains_target: torch.Tensor
@@ -157,24 +157,10 @@ def _compute_weighted_selector_loss(
     )
 
 
-def _compute_candidate_recall(
-    contains_target: torch.Tensor,
-    valid_float: torch.Tensor,
-    valid_total: torch.Tensor,
-    top_k: int,
-) -> dict[str, torch.Tensor]:
-    metrics: dict[str, torch.Tensor] = {}
-    metrics[f"unary_candidate_recall_at_{top_k}_sum"] = (
-        contains_target.to(valid_float.dtype) * valid_float
-    ).sum()
-    metrics[f"unary_candidate_recall_at_{top_k}_total"] = valid_total
-    return metrics
-
-
 def _compute_candidate_target_mass(
     targets: torch.Tensor,
     candidate_ids: torch.Tensor,
-    valid_float: torch.Tensor,
+    valid: torch.Tensor,
     valid_total: torch.Tensor,
     top_k: int,
 ) -> dict[str, torch.Tensor]:
@@ -195,24 +181,9 @@ def _compute_candidate_target_mass(
         torch.logsumexp(candidate_target_logits, dim=-1) - target_log_normalizer
     )
     metrics[f"unary_candidate_target_mass_at_{top_k}_sum"] = (
-        candidate_mass * valid_float
-    ).sum()
+        candidate_mass * valid
+    ).sum(dtype=torch.float32)
     metrics[f"unary_candidate_target_mass_at_{top_k}_total"] = valid_total.clone()
-    return metrics
-
-
-def _compute_conditional_selector_accuracy(
-    selected_matches_target: torch.Tensor,
-    contains_target: torch.Tensor,
-    valid_float: torch.Tensor,
-) -> dict[str, torch.Tensor]:
-    metrics: dict[str, torch.Tensor] = {}
-    serving_valid = valid_float * contains_target.to(valid_float.dtype)
-    serving_total = serving_valid.sum()
-    metrics["teacher_forced_selector_acc_sum"] = (
-        selected_matches_target.to(valid_float.dtype) * serving_valid
-    ).sum()
-    metrics["teacher_forced_selector_acc_total"] = serving_total
     return metrics
 
 
@@ -221,6 +192,7 @@ def _compute_top_k_oracle_accepted_length(
     valid: torch.Tensor,
     block_size: int,
     top_k: int,
+    sample_from_anchor: bool,
 ) -> dict[str, torch.Tensor]:
     metrics: dict[str, torch.Tensor] = {}
     num_blocks = valid.shape[1] // block_size
@@ -231,7 +203,8 @@ def _compute_top_k_oracle_accepted_length(
     oracle_accepted_length = torch.ones(
         num_blocks, dtype=torch.float32, device=valid.device
     )
-    for position in range(1, block_size):
+    start_pos = 0 if sample_from_anchor else 1
+    for position in range(start_pos, block_size):
         oracle_alive = (
             oracle_alive
             & valid_blocks[:, position]
@@ -239,7 +212,7 @@ def _compute_top_k_oracle_accepted_length(
         )
         oracle_accepted_length += oracle_alive.to(oracle_accepted_length.dtype)
 
-    block_valid = valid_blocks[:, 1:].any(dim=-1)
+    block_valid = valid_blocks[:, start_pos:].any(dim=-1)
     block_total = block_valid.sum().to(torch.float32)
     metrics[f"unary_top_{top_k}_oracle_accepted_length_sum"] = (
         oracle_accepted_length * block_valid
@@ -318,8 +291,7 @@ def compute_metrics(
 
     with torch.no_grad():
         valid = loss_mask.to(torch.bool)
-        valid_float = valid.to(unary_logits.dtype)
-        valid_total = valid_float.sum()
+        valid_total = valid.sum(dtype=torch.float32)
 
         selected_matches_target = correction.selected_token_ids.eq(
             correction.target_ids
@@ -338,24 +310,22 @@ def compute_metrics(
             )
         )
 
-        metrics.update(
-            _compute_candidate_recall(
-                correction.contains_target, valid_float, valid_total, top_k
-            )
-        )
+        recall_hits = valid & correction.contains_target
+        recall_sum = recall_hits.sum(dtype=torch.float32)
+        metrics[f"unary_candidate_recall_at_{top_k}_sum"] = recall_sum
+        metrics[f"unary_candidate_recall_at_{top_k}_total"] = valid_total
         metrics.update(
             _compute_candidate_target_mass(
-                targets, correction.candidate_ids, valid_float, valid_total, top_k
+                targets, correction.unary_candidate_ids, valid, valid_total, top_k
             )
         )
-        metrics.update(
-            _compute_conditional_selector_accuracy(
-                selected_matches_target, correction.contains_target, valid_float
-            )
+        metrics["teacher_forced_selector_acc_sum"] = (valid & selector_correct).sum(
+            dtype=torch.float32
         )
+        metrics["teacher_forced_selector_acc_total"] = recall_sum
         metrics.update(
             _compute_top_k_oracle_accepted_length(
-                correction.contains_target, valid, block_size, top_k
+                correction.contains_target, valid, block_size, top_k, sample_from_anchor
             )
         )
 

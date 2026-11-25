@@ -177,7 +177,7 @@ class DFlash2DraftModel(DFlashDraftModel):
             -1, candidate_logits.detach().argmax(dim=-1, keepdim=True)
         ).squeeze(-1)
         return SelectorTrainingOutput(
-            training_candidate_ids,
+            candidate_ids,  # without injection
             candidate_logits,
             target_positions,
             contains_target,
