@@ -26,8 +26,10 @@ Gradients, two modes:
 Logit tiles are in the input dtype by default (bf16 in training, like
 materialized logits); ``logits_dtype="float32"`` takes them in fp32 straight
 from the GEMM accumulator -- more accurate, ~20% slower GEMMs;
-``logits_dtype="float16"`` casts bf16 operands to fp16 (exact for
-magnitudes >= 2**-14) for fp16 tiles: 3 more mantissa bits, same bytes.
+``logits_dtype="float16"`` casts bf16 operands to fp16 for fp16 tiles: 3
+more mantissa bits, same bytes. The cast is exact for magnitudes in
+[2**-14, 65504]; operands or logits beyond 65504 overflow, so use
+``"input"`` or ``"float32"`` there.
 
 **Shared head** (``target_weight is weight``, as in full-vocab DFlash): with
 a distribution term the draft tile is the delta ``(hidden - verifier_hidden)
@@ -536,10 +538,10 @@ def fused_linear_compound(
             for at most two differentiated terms). Without a backward pass
             (no grad) only the losses are computed.
         logits_dtype: ``"input"`` (logit tiles in the input dtype, as
-        rows: optional 1-D index of distinct rows to compute; every other row is
             materialized logits), ``"float32"`` (fp32 from the GEMM
             accumulator: more accurate, slower GEMMs) or ``"float16"``
             (fp16 tiles for bf16 inputs: 8x finer rounding, same bytes).
+        rows: optional 1-D index of distinct rows to compute; every other row is
             treated as fully masked (zero loss, zero gradient, ids 0). Use it
             to skip rows that are masked by construction.
 
