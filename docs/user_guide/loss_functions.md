@@ -46,7 +46,7 @@ speculators train ... --loss-fn '{"ce": 0.1, "tv": 0.9}'
 
 With the full vocabulary, DFlash's `lm_head` is the verifier head, so with a distribution loss (KL, TV, ...) the draft logits are formed as the target logits plus `(h - h_verifier) @ W^T`. Their rounding then scales with the draft-target difference instead of the logits: at V = 152k and acceptance 0.88-0.98, the KL / TV gradient error vs fp64 drops from 16-87% to 2-9% with `input` tiles, and to 0.2-0.5% with `float32` tiles.
 
-Chunks are at most 2048 rows (the fastest size for both GEMMs on MI355X), smaller when their scratch would exceed `SPECULATORS_FUSED_LINEAR_BUDGET_MIB` (default 4096): the budget can only lower the chunk size. Only DFlash supports `fused_linear`; other models raise an error.
+Chunks are at most 2048 rows (the fastest size for both GEMMs on MI355X), smaller when their scratch would exceed `SPECULATORS_FUSED_LINEAR_BUDGET_MIB` (default 4096): the budget can only lower the chunk size. DFlash and DSpark (with a Markov head) support `fused_linear`; for DSpark the Markov bias `markov_w2(u)` is added inside the same GEMM and `markov_w2` trains as usual. Other models raise an error.
 
 ## References
 

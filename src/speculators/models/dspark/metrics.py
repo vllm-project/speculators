@@ -13,6 +13,7 @@ value comparable across the DFlash family).
 
 from collections.abc import Callable
 from functools import partial
+from typing import Any
 
 import torch
 from torch.nn.functional import binary_cross_entropy_with_logits
@@ -22,6 +23,7 @@ from speculators.losses import (
     compound_loss,
     dflash_loss_decay,
 )
+from speculators.losses.utils import CompoundLossOutput, compound_loss_reduced
 from speculators.models.dflash.utils import block_positions_and_loss_decay
 from speculators.models.metrics import (
     compute_analytical_block_acceptance,
@@ -30,6 +32,7 @@ from speculators.models.metrics import (
 
 __all__ = [
     "compute_metrics",
+    "compute_metrics_from_hidden",
 ]
 
 _EPS = 1e-8
@@ -117,6 +120,86 @@ def compute_metrics(
     sample_from_anchor: bool = True,
 ) -> tuple[torch.Tensor, dict]:
     """Compute the DSpark loss and a metrics dict (``*_sum``/``*_total`` pairs)."""
+    # With an all-fused config the TV behind accept_rate and both argmaxes
+    # come from the loss's own kernel pass (TV as a metric-only term when the
+    # loss does not use it); otherwise they are computed separately.
+    return _compute_metrics(
+        partial(compound_loss, logits, targets, metric_terms=("tv",), with_ids=True),
+        confidence_logits,
+        loss_mask,
+        block_size,
+        loss_config,
+        gamma=gamma,
+        confidence_head_alpha=confidence_head_alpha,
+        per_position_loss_weight=per_position_loss_weight,
+        dpace_alpha=dpace_alpha,
+        sample_from_anchor=sample_from_anchor,
+    )
+
+
+def compute_metrics_from_hidden(
+    hidden: torch.Tensor,  # [1, T, hidden_size] final draft hidden states
+    lm_head_weight: torch.Tensor,  # [draft_vocab_size, hidden_size], frozen
+    verifier_hidden: torch.Tensor,  # [1, T, H] post-norm, gathered
+    verifier_weight: torch.Tensor,  # [draft_vocab_size, H] verifier lm_head
+    markov_features: torch.Tensor,  # [1, T, r]: markov_w2's input
+    markov_weight: torch.Tensor,  # [draft_vocab_size, r], trainable
+    confidence_logits: torch.Tensor | None,  # [1, T] or None
+    loss_mask: torch.Tensor,  # [1, T]
+    block_size: int,
+    loss_config: LossConfig,
+    per_position_loss_weight: str = "fixed-exp-decay",
+    dpace_alpha: float = 0.5,
+    logits_dtype: str = "input",
+    **kwargs: Any,
+) -> tuple[torch.Tensor, dict]:
+    """``compute_metrics`` without the ``[1, T, V]`` draft logits.
+
+    The draft logits ``hidden @ lm_head.T + markov_features @ markov_w2.T`` and
+    the target logits ``verifier_hidden @ verifier_weight.T`` are formed per
+    chunk inside ``fused_linear_reduced``, which also reduces the loss;
+    ``loss_config`` must be resolved with the ``"fused"`` implementation. The
+    remaining keyword arguments are ``compute_metrics``'.
+    """
+    dpace = per_position_loss_weight == "dpace"
+    return _compute_metrics(
+        partial(
+            compound_loss_reduced,
+            hidden,
+            lm_head_weight,
+            markov_features,
+            markov_weight,
+            verifier_hidden,
+            verifier_weight,
+            dpace_alpha=dpace_alpha if dpace else None,
+            block_size=block_size,
+            metric_terms=("tv",),
+            logits_dtype=logits_dtype,
+        ),
+        confidence_logits,
+        loss_mask,
+        block_size,
+        loss_config,
+        per_position_loss_weight=per_position_loss_weight,
+        dpace_alpha=dpace_alpha,
+        **kwargs,
+    )
+
+
+def _compute_metrics(
+    loss_fn: Callable[..., CompoundLossOutput],
+    confidence_logits: torch.Tensor | None,
+    loss_mask: torch.Tensor,
+    block_size: int,
+    loss_config: LossConfig,
+    gamma: float = 4.0,
+    confidence_head_alpha: float = 1.0,
+    per_position_loss_weight: str = "fixed-exp-decay",
+    dpace_alpha: float = 0.5,
+    sample_from_anchor: bool = True,
+) -> tuple[torch.Tensor, dict]:
+    """Shared body: ``loss_fn(loss_mask, pos_idx, loss_config=, decay_fn=)``
+    gives the loss, both argmaxes and TV; the rest are metrics."""
 
     pos_idx, decay_fn = block_positions_and_loss_decay(
         loss_mask,
@@ -126,20 +209,7 @@ def compute_metrics(
         dpace_alpha=dpace_alpha,
         sample_from_anchor=sample_from_anchor,
     )
-
-    # With an all-fused config the TV behind accept_rate and both argmaxes
-    # come from the loss's own kernel pass (TV as a metric-only term when the
-    # loss does not use it); otherwise they are computed separately below.
-    out = compound_loss(
-        logits,
-        targets,
-        loss_mask,
-        pos_idx,
-        loss_config=loss_config,
-        decay_fn=decay_fn,
-        metric_terms=("tv",),
-        with_ids=True,
-    )
+    out = loss_fn(loss_mask, pos_idx, loss_config=loss_config, decay_fn=decay_fn)
     loss = out.loss
 
     # Analytical per-position acceptance rate = distributional overlap

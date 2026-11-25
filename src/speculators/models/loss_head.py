@@ -40,7 +40,7 @@ WEIGHTINGS = ("fixed-exp-decay", "dpace")
 DRAFT_NOISE = 0.5
 # Model defaults (models/{dflash,dspark}/config.py).
 SAMPLE_FROM_ANCHOR = {"dflash": False, "dspark": True}
-# DFlash-only implementations that never materialise the draft logits.
+# Implementations that never materialise the draft logits (DFlash, DSpark).
 FUSED_LINEAR_IMPLEMENTATIONS = (
     "fused_linear",
     "fused_linear_fp32",
@@ -126,11 +126,15 @@ def make_inputs(
     return inputs
 
 
+def _logits_dtype(cfg: HeadConfig) -> str:
+    return "float32" if cfg.implementation == "fused_linear_fp32" else "input"
+
+
 def loss_head(cfg: HeadConfig, inputs: HeadInputs) -> tuple[torch.Tensor, dict]:
     """Run the loss head with the model's own ``compute_metrics``.
 
     ``fused`` and ``eager`` project the draft logits with ``lm_head`` first.
-    The fused-linear implementations (DFlash only) never materialise the draft
+    The fused-linear implementations never materialise the draft
     or target logits: both are projected per chunk from the hidden states
     (bf16 tiles, deferred gradients, anchor rows skipped);
     ``fused_linear_fp32`` does the same with fp32 logit tiles.
@@ -159,17 +163,30 @@ def loss_head(cfg: HeadConfig, inputs: HeadInputs) -> tuple[torch.Tensor, dict]:
         "sample_from_anchor": SAMPLE_FROM_ANCHOR["dflash"],
     }
     if fused_linear:
-        if cfg.model != "dflash":
-            raise ValueError(f"{cfg.implementation} is only supported for dflash")
+        if cfg.model == "dspark":
+            # markov_w2(u) is added inside the loss's GEMMs (dspark/core.py)
+            return dspark_metrics.compute_metrics_from_hidden(
+                inputs.hidden.unsqueeze(0),
+                inputs.weight,
+                targets,
+                inputs.verifier_weight,
+                inputs.markov_input.unsqueeze(0),  # type: ignore[union-attr]
+                inputs.markov_weight,  # type: ignore[arg-type]
+                None,
+                inputs.loss_mask,
+                cfg.block_size,
+                loss_config,
+                per_position_loss_weight=cfg.weighting,
+                sample_from_anchor=SAMPLE_FROM_ANCHOR["dspark"],
+                logits_dtype=_logits_dtype(cfg),
+            )
         return dflash_metrics.compute_metrics_from_hidden(
             inputs.hidden.unsqueeze(0),
             inputs.weight,
             targets,
             inputs.loss_mask,
             target_weight=inputs.verifier_weight,
-            logits_dtype=(
-                "float32" if cfg.implementation == "fused_linear_fp32" else "input"
-            ),
+            logits_dtype=_logits_dtype(cfg),
             skip_anchor_rows=True,
             **dflash_kwargs,
         )
