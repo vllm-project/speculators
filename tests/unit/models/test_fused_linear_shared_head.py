@@ -1,4 +1,4 @@
-"""Shared-head delta form and fp16 tiles of the fused linear losses.
+"""Shared-head delta form of the fused linear losses.
 
 Passing ``target_weight=weight`` makes the kernels take the draft logits as
 the target tile plus ``(hidden - verifier_hidden) @ W.T``.
@@ -64,9 +64,9 @@ def test_shared_head_matches_separate_heads(names, metrics, grad_mode):
 
 
 @pytest.mark.parametrize("name", ["kl_div", "tv"])
-def test_shared_head_and_fp16_tiles_cut_bf16_gradient_error(name):
+def test_shared_head_cuts_bf16_gradient_error(name):
     """Near agreement (acceptance ~0.85) bf16 logit rounding dominates the
-    KL / TV gradient; the delta form and fp16 tiles remove most of it."""
+    KL / TV gradient; the delta form removes most of it."""
     h, w, vh = _inputs(64, 256, 8192, 0.1, torch.bfloat16, seed=1)
     x = h.double().requires_grad_(True)
     logp = torch.log_softmax(x @ w.double().T, -1)
@@ -77,7 +77,7 @@ def test_shared_head_and_fp16_tiles_cut_bf16_gradient_error(name):
         loss = (1 - torch.minimum(logp.exp(), logq.exp()).sum(-1)).sum()
     (ref,) = torch.autograd.grad(loss, x)
 
-    def error(target_weight, logits_dtype):
+    def error(target_weight):
         x = h.detach().clone().requires_grad_(True)
         out = fl.fused_linear_compound(
             x,
@@ -85,12 +85,9 @@ def test_shared_head_and_fp16_tiles_cut_bf16_gradient_error(name):
             vh,
             (name,),
             target_weight=target_weight,
-            logits_dtype=logits_dtype,
         )
         (grad,) = torch.autograd.grad(out.losses[name].sum(), x)
         return float((grad.double() - ref).norm() / ref.norm())
 
-    plain = error(w.clone(), "input")
-    assert error(w, "input") < plain / 2
-    assert error(w.clone(), "float16") < plain / 2
-    assert error(w, "float16") < plain / 8
+    plain = error(w.clone())
+    assert error(w) < plain / 4

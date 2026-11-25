@@ -216,7 +216,7 @@ def _opcheck_args(device, dtype, targets, deferred=False):
         target_weight = w
     delta = targets == "shared"
     _, _, stats, _ = torch.ops.speculators.fused_linear_loss_fwd(
-        h, w, t, target_weight, ALL_TERMS, ALL_TERMS, 5, False, "input", delta
+        h, w, t, target_weight, ALL_TERMS, ALL_TERMS, 5, False, False, delta
     )
     grad = torch.randn(5, 13, device=device, dtype=stats.dtype)
     fwd = (
@@ -228,10 +228,10 @@ def _opcheck_args(device, dtype, targets, deferred=False):
         DEFERRED_TERMS if deferred else ALL_TERMS,
         5,
         deferred,
-        "input",
+        False,
         delta,
     )
-    bwd = (grad, h, w, t, target_weight, stats, ALL_TERMS, 5, "input", delta)
+    bwd = (grad, h, w, t, target_weight, stats, ALL_TERMS, 5, False, delta)
     return fwd, bwd
 
 
