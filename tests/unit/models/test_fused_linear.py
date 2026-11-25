@@ -49,8 +49,9 @@ def test_rejects_invalid_arguments():
         fl.fused_linear_compound(h, w.requires_grad_(True), t, ("kl_div",))
     with pytest.raises(ValueError, match="do not match"):
         fl.fused_linear_compound(h, w.detach(), t[:-1], ("kl_div",))
-    with pytest.raises(ValueError, match="chunk_rows must be positive"):
-        fl.fused_linear_compound(h, w.detach(), t, ("kl_div",), chunk_rows=0)
+    for bad in (0, -1):
+        with pytest.raises(ValueError, match="chunk_rows must be positive"):
+            fl.fused_linear_compound(h, w.detach(), t, ("kl_div",), chunk_rows=bad)
     with pytest.raises(ValueError, match="needs a GPU"):
         fl.fused_linear_compound(h, w.detach(), t, ("kl_div",))
 
@@ -435,7 +436,8 @@ def test_mismatched_dtypes_without_autocast_raise():
 @pytest.mark.parametrize("logits_dtype", ["input", "float32"])
 def test_autocast_uses_one_operand_dtype_in_both_directions(compiled, logits_dtype):
     """The trainer runs under autocast(bf16) with fp32 params (DDP). Forward
-    and the backward recompute must see the same bf16 operands; result is
+    and the backward recompute (forced here: auto picks deferred for two
+    terms) must see the same bf16 operands; result is
     bitwise that of passing the bf16 operands explicitly."""
     h, w, t = _inputs(200, 64, 3000, torch.float32, DEVICE, seed=15)
     t = t.bfloat16()
@@ -444,7 +446,13 @@ def test_autocast_uses_one_operand_dtype_in_both_directions(compiled, logits_dty
     def under_autocast(x):
         with torch.autocast(str(DEVICE), dtype=torch.bfloat16):
             return fl.fused_linear_compound(
-                x, w, t, names, chunk_rows=64, logits_dtype=logits_dtype
+                x,
+                w,
+                t,
+                names,
+                chunk_rows=64,
+                grad_mode="recompute",
+                logits_dtype=logits_dtype,
             )
 
     fn = (
@@ -460,6 +468,7 @@ def test_autocast_uses_one_operand_dtype_in_both_directions(compiled, logits_dty
             t,
             names,
             chunk_rows=64,
+            grad_mode="recompute",
             logits_dtype=logits_dtype,
         ),
         h,

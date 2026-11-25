@@ -90,8 +90,7 @@ TERM_SETS = [("kl_div",), ("ce",), ("kl_div", "tv"), ("jsd", "rkl", "ce", "tv")]
 @pytest.mark.parametrize("logits_dtype", ["input", "float32"])
 def test_matches_materialized_targets(dtype, names, vocab, logits_dtype):
     """Recomputed target logits equal the same logits materialized (fp32 tiles:
-    fp32 logits; input tiles: logits in the input dtype). CE-only sets also
-    check that a recompute backward skips the target GEMM."""
+    fp32 logits; input tiles: logits in the input dtype)."""
     tol = {"rtol": 1e-5, "atol": 1e-5}
     if logits_dtype == "input" and dtype == torch.bfloat16:
         # chunked vs full bf16 GEMM may round a logit differently by one ulp

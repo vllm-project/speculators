@@ -17,8 +17,9 @@ Gradients, two modes:
   ``d hidden = sum_t grad_output_t[:, None] * jac_t``: no GEMM, nothing
   recomputed, and only ``jac`` (``[terms, N, H]``) is kept for backward. This
   is exact because every loss weight -- mask, decay, D-PACE, term weight --
-  is a per-row scalar applied after the loss. Same GEMM count as
-  materialized logits (draft, target, ``dz @ W``).
+  is a per-row scalar applied after the loss. One ``dz @ W`` per
+  differentiated term: with one term, the GEMM count of materialized logits
+  (draft, target, ``dz @ W``).
 - **recompute**: forward computes losses and per-row statistics only;
   backward recomputes each chunk's logits and writes ``dz @ W``.
 
@@ -470,7 +471,7 @@ def fused_linear_compound(
         logits_dtype: ``"input"`` (logit tiles in the input dtype, as
             materialized logits) or ``"float32"`` (fp32 from the GEMM
             accumulator: more accurate, slower GEMMs).
-        rows: optional 1-D index of the rows to compute; every other row is
+        rows: optional 1-D index of distinct rows to compute; every other row is
             treated as fully masked (zero loss, zero gradient, ids 0). Use it
             to skip rows that are masked by construction.
 
