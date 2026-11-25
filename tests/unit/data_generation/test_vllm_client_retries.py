@@ -20,11 +20,19 @@ def _no_retry_backoff(monkeypatch):
 
 # openai>=3 is built on httpx2 and openai 2.x on httpx; the error constructors
 # only read these attributes, so a stand-in keeps the tests version-agnostic.
-_REQUEST: Any = SimpleNamespace(method="POST", url="http://x/v1/completions")
+_REQUEST: Any = SimpleNamespace(
+    method="POST", url="http://x/v1/completions", headers={}
+)
 
 
 def _status_error(status: int) -> openai.APIStatusError:
-    response: Any = SimpleNamespace(status_code=status, request=_REQUEST, headers={})
+    response: Any = SimpleNamespace(
+        status_code=status,
+        request=_REQUEST,
+        headers={},
+        history=[],
+        next_request=None,
+    )
     cls = {
         400: openai.BadRequestError,
         404: openai.NotFoundError,
