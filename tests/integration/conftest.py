@@ -202,7 +202,9 @@ def make_dflash_glm5_model(
         transformer_layer_config=transformer_config,
         draft_vocab_size=draft_vocab_size,
         block_size=block_size,
-        aux_hidden_state_layer_ids=[0, 1],
+        # 3 target layers to match the shared make_batch/_make_samples fixtures
+        # (the GQA factory uses [0, 1, 2] for the same reason).
+        aux_hidden_state_layer_ids=[0, 1, 2],
         mask_token_id=0,
         speculators_config=SpeculatorsConfig(
             algorithm="dflash",
