@@ -7,7 +7,6 @@ rounding on GPU, including D-PACE, whose loss-dependent weights are what rule
 out finishing the gradient in forward.
 """
 
-
 import pytest
 import torch
 
@@ -158,6 +157,7 @@ def _kernel_reference(z, t, names):
         rows,
         vocab,
         TERMS=fused.terms_mask(names),
+        DELTA=False,
     )
     grads = {}
     for name in names:
@@ -165,7 +165,16 @@ def _kernel_reference(z, t, names):
         go[fused.TERM_SLOTS[name]] = 1.0
         grad = torch.empty_like(z)
         fused.loss_backward_kernel[(rows,)](
-            z, t, grad, go, rows, stats, rows, vocab, TERMS=fused.terms_mask((name,))
+            z,
+            t,
+            grad,
+            go,
+            rows,
+            stats,
+            rows,
+            vocab,
+            TERMS=fused.terms_mask((name,)),
+            DELTA=False,
         )
         grads[name] = grad
     return losses, grads
@@ -213,6 +222,7 @@ def test_loss_grad_kernel_matches_existing_kernels(dtype, vocab, names):
             DZ_JSD=slot.get("jsd", 0),
             DZ_CE=slot.get("ce", 0),
             DZ_TV=slot.get("tv", 0),
+            DELTA=False,
         )
         assert torch.equal(argmax[0], logits.argmax(-1))
         assert torch.equal(argmax[1], targets.argmax(-1))

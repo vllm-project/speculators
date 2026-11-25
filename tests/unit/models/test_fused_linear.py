@@ -204,15 +204,19 @@ def test_no_host_syncs():
         torch.cuda.set_sync_debug_mode("default")
 
 
-def _opcheck_args(device, dtype, recompute_targets, deferred=False):
+def _opcheck_args(device, dtype, targets, deferred=False):
     h, w, t = _inputs(13, 8, 40, dtype, device, seed=3)
     target_weight = None
-    if recompute_targets:
+    if targets == "recompute":
         # verifier hidden [N, H_t] and verifier lm_head [V, H_t]
         t = torch.randn(13, 6, device=device, dtype=dtype)
         target_weight = torch.randn(40, 6, device=device, dtype=dtype)
+    elif targets == "shared":  # one head: the delta form
+        t = torch.randn(13, 8, device=device, dtype=dtype)
+        target_weight = w
+    delta = targets == "shared"
     _, _, stats, _ = torch.ops.speculators.fused_linear_loss_fwd(
-        h, w, t, target_weight, ALL_TERMS, ALL_TERMS, 5, False, False
+        h, w, t, target_weight, ALL_TERMS, ALL_TERMS, 5, False, "input", delta
     )
     grad = torch.randn(5, 13, device=device, dtype=stats.dtype)
     fwd = (
@@ -224,17 +228,18 @@ def _opcheck_args(device, dtype, recompute_targets, deferred=False):
         DEFERRED_TERMS if deferred else ALL_TERMS,
         5,
         deferred,
-        False,
+        "input",
+        delta,
     )
-    bwd = (grad, h, w, t, target_weight, stats, ALL_TERMS, 5, False)
+    bwd = (grad, h, w, t, target_weight, stats, ALL_TERMS, 5, "input", delta)
     return fwd, bwd
 
 
 @requires_accelerator
 @pytest.mark.parametrize("deferred", [False, True])
-@pytest.mark.parametrize("recompute_targets", [False, True])
-def test_opcheck_gpu(recompute_targets, deferred):
-    fwd, bwd = _opcheck_args(DEVICE, torch.float32, recompute_targets, deferred)
+@pytest.mark.parametrize("targets", ["materialized", "recompute", "shared"])
+def test_opcheck_gpu(targets, deferred):
+    fwd, bwd = _opcheck_args(DEVICE, torch.float32, targets, deferred)
     opcheck(torch.ops.speculators.fused_linear_loss_fwd.default, fwd)
     opcheck(torch.ops.speculators.fused_linear_loss_bwd.default, bwd)
 

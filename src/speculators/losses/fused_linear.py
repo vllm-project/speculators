@@ -25,7 +25,16 @@ Gradients, two modes:
 
 Logit tiles are in the input dtype by default (bf16 in training, like
 materialized logits); ``logits_dtype="float32"`` takes them in fp32 straight
-from the GEMM accumulator -- more accurate, ~20% slower GEMMs.
+from the GEMM accumulator -- more accurate, ~20% slower GEMMs;
+``logits_dtype="float16"`` casts bf16 operands to fp16 (exact for
+magnitudes >= 2**-14) for fp16 tiles: 3 more mantissa bits, same bytes.
+
+**Shared head** (``target_weight is weight``, as in full-vocab DFlash): with
+a distribution term the draft tile is the delta ``(hidden - verifier_hidden)
+@ W.T`` and the kernels add the target tile in fp32. The delta's rounding
+scales with the small delta instead of the logits, so the draft-target
+difference that KL / TV gradients depend on is near-exact, at the GEMM
+count and tile bytes of the plain path.
 
 The per-row loss contract is unchanged: unreduced per-term losses, a per-row
 ``grad_output`` per term, so masking, decay, D-PACE and term weights stay in
@@ -55,7 +64,7 @@ _DEFAULT_BUDGET_MIB = 4096
 _MIN_CHUNK_ROWS = 64
 _MAX_CHUNK_ROWS = 2048
 GRAD_MODES = ("auto", "deferred", "recompute")
-LOGITS_DTYPES = ("input", "float32")
+LOGITS_DTYPES = ("input", "float32", "float16")
 # auto picks deferred up to this many differentiated terms: jac costs one
 # [N, H] tensor and one dz @ W GEMM per term in forward.
 _MAX_DEFERRED_TERMS = 2
@@ -85,17 +94,27 @@ def chunk_rows_for(
     return min(chunk, _MAX_CHUNK_ROWS, max(rows, 1))
 
 
-def _project(hidden: torch.Tensor, weight: torch.Tensor, fp32: bool) -> torch.Tensor:
-    """``hidden @ weight.T``; fp32 straight from the accumulator if ``fp32``.
+def _project(hidden: torch.Tensor, weight: torch.Tensor, tile: str) -> torch.Tensor:
+    """``hidden @ weight.T`` in ``weight``'s dtype (see ``_tile_weight``), or
+    fp32 straight from the accumulator for ``tile="float32"``.
 
     Autocast is disabled: forward and a backward recompute must produce
     bit-identical logits from the operands as given (the wrapper casts them
     for autocast), or saved statistics would not match recomputed logits.
     """
+    hidden = hidden.to(weight.dtype)
     with torch.autocast(hidden.device.type, enabled=False):
-        if fp32 and hidden.dtype in (torch.float16, torch.bfloat16):
+        if tile == "float32" and hidden.dtype in (torch.float16, torch.bfloat16):
             return torch.mm(hidden, weight.t(), out_dtype=torch.float32)
         return hidden @ weight.t()
+
+
+def _tile_weight(weight: torch.Tensor | None, tile: str) -> torch.Tensor | None:
+    """The projection operand: an fp16 copy of a bf16 weight for fp16 tiles,
+    otherwise the weight itself."""
+    if weight is not None and tile == "float16" and weight.dtype == torch.bfloat16:
+        return weight.to(torch.float16)
+    return weight
 
 
 def _contract(dz: torch.Tensor, weight: torch.Tensor) -> torch.Tensor:
@@ -120,15 +139,29 @@ def _grad_term_names(grad_terms: int) -> list[str]:
 # ---------------------------------------------------------------------------
 
 
-def _target_chunk(targets, target_weight, start, end, fp32):
-    """Target logits for rows ``start:end``: a slice of the materialized
-    logits, or computed from the verifier hidden states."""
+def _logit_tiles(
+    hidden, targets, weight, target_weight, start, end, tile, delta, need_targets
+):
+    """Draft and target logit tiles for rows ``start:end``.
+
+    Targets are a slice of the materialized logits or computed from the
+    verifier hidden states. With ``delta`` the draft tile is
+    ``(hidden - verifier_hidden) @ weight.T``, the difference taken exactly
+    and rounded once to the operand dtype.
+    """
+    rows = hidden[start:end]
+    if delta:
+        acc = torch.promote_types(torch.float32, rows.dtype)
+        rows = rows.to(acc) - targets[start:end].to(acc)
+    z = _project(rows, weight, tile)
+    if not (delta or need_targets):
+        return z, targets[:0]
     rows = targets[start:end]
-    return rows if target_weight is None else _project(rows, target_weight, fp32)
+    return z, rows if target_weight is None else _project(rows, target_weight, tile)
 
 
 def _forward_deferred_chunk(
-    z, chunk_targets, weight, terms, grad_terms, losses, argmax, jac, start, end
+    z, chunk_targets, weight, terms, grad_terms, losses, argmax, jac, start, end, delta
 ):
     """Losses, argmaxes and ``jac[:, start:end]`` for one chunk."""
     names = _grad_term_names(grad_terms)
@@ -154,6 +187,7 @@ def _forward_deferred_chunk(
         DZ_JSD=slot.get("jsd", 0),
         DZ_CE=slot.get("ce", 0),
         DZ_TV=slot.get("tv", 0),
+        DELTA=delta,
     )
     for k in range(len(names)):
         jac[k, start:end] = _contract(dz[k], weight)
@@ -169,7 +203,8 @@ def _fused_linear_fwd(
     grad_terms: int,
     chunk_rows: int,
     deferred: bool,
-    fp32_logits: bool,
+    tile: str,
+    delta: bool,
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
     """Losses ``[N_TERMS, N]``, argmax ``[2, N]``, stats ``[N_STATS, N]``, jac.
 
@@ -179,6 +214,7 @@ def _fused_linear_fwd(
     differentiated term, slot order) and stats are unused; otherwise ``jac``
     is empty and stats feed the recompute backward. Slots of terms outside
     ``terms`` are zero.
+    ``delta`` (shared head) requires ``target_weight is weight``.
     """
     rows, vocab = hidden.shape[0], weight.shape[0]
     dtype = torch.float32
@@ -187,9 +223,20 @@ def _fused_linear_fwd(
     stats = hidden.new_zeros((fused.N_STATS, rows), dtype=dtype)
     n_jac = len(_grad_term_names(grad_terms)) if deferred else 0
     jac = hidden.new_empty((n_jac, rows if n_jac else 0, hidden.shape[1]))
+    tile_w = _tile_weight(weight, tile)
+    tile_tw = tile_w if target_weight is weight else _tile_weight(target_weight, tile)
     for start, end in _chunks(rows, chunk_rows):
-        z = _project(hidden[start:end], weight, fp32_logits)
-        chunk_targets = _target_chunk(targets, target_weight, start, end, fp32_logits)
+        z, chunk_targets = _logit_tiles(
+            hidden,
+            targets,
+            tile_w,
+            tile_tw,
+            start,
+            end,
+            tile,
+            delta,
+            need_targets=True,
+        )
         if deferred:
             _forward_deferred_chunk(
                 z,
@@ -202,6 +249,7 @@ def _fused_linear_fwd(
                 jac,
                 start,
                 end,
+                delta,
             )
         else:
             fused.loss_forward_kernel[(end - start,)](
@@ -215,6 +263,7 @@ def _fused_linear_fwd(
                 stats.stride(0),
                 vocab,
                 TERMS=terms,
+                DELTA=delta,
             )
         # Release the tiles before the next chunk allocates its own.
         del z, chunk_targets
@@ -231,9 +280,10 @@ def _(
     grad_terms,
     chunk_rows,
     deferred,
-    fp32_logits,
+    tile,
+    delta,
 ):
-    del weight, targets, target_weight, terms, chunk_rows, fp32_logits
+    del weight, targets, target_weight, terms, chunk_rows, tile, delta
     rows = hidden.shape[0]
     dtype = torch.float32
     n_jac = len(_grad_term_names(grad_terms)) if deferred else 0
@@ -255,20 +305,29 @@ def _fused_linear_bwd(
     stats: torch.Tensor,
     grad_terms: int,
     chunk_rows: int,
-    fp32_logits: bool,
+    tile: str,
+    delta: bool,
 ) -> torch.Tensor:
     """Recompute backward: per chunk, recompute the logits, form ``dz``,
     write ``dz @ weight``. Target logits are only needed for distribution
-    terms; CE reads its cached target argmax from ``stats``."""
+    terms and the delta form; CE reads its cached target argmax from
+    ``stats``."""
     rows, vocab = hidden.shape[0], weight.shape[0]
     needs_targets = bool(grad_terms & fused.DIST_MASK)
     d_hidden = torch.empty_like(hidden)
+    tile_w = _tile_weight(weight, tile)
+    tile_tw = tile_w if target_weight is weight else _tile_weight(target_weight, tile)
     for start, end in _chunks(rows, chunk_rows):
-        z = _project(hidden[start:end], weight, fp32_logits)
-        chunk_targets = (
-            _target_chunk(targets, target_weight, start, end, fp32_logits)
-            if needs_targets
-            else targets[:0]
+        z, chunk_targets = _logit_tiles(
+            hidden,
+            targets,
+            tile_w,
+            tile_tw,
+            start,
+            end,
+            tile,
+            delta,
+            needs_targets,
         )
         dz = torch.empty((end - start, vocab), device=z.device, dtype=hidden.dtype)
         fused.loss_backward_kernel[(end - start,)](
@@ -281,6 +340,7 @@ def _fused_linear_bwd(
             stats.stride(0),
             vocab,
             TERMS=grad_terms,
+            DELTA=delta,
         )
         del z, chunk_targets
         with torch.autocast(hidden.device.type, enabled=False):
@@ -327,14 +387,16 @@ def _setup_context(ctx, inputs, output):
         grad_terms,
         chunk_rows,
         deferred,
-        fp32_logits,
+        tile,
+        delta,
     ) = inputs
     _, argmax, stats, jac = output
     ctx.mark_non_differentiable(argmax, stats, jac)
     ctx.grad_terms = grad_terms
     ctx.chunk_rows = chunk_rows
     ctx.deferred = deferred
-    ctx.fp32_logits = fp32_logits
+    ctx.tile = tile
+    ctx.delta = delta
     if deferred:
         # Everything backward needs is already contracted into jac.
         ctx.grad_slots = [fused.TERM_SLOTS[n] for n in _grad_term_names(grad_terms)]
@@ -342,8 +404,9 @@ def _setup_context(ctx, inputs, output):
         ctx.save_for_backward(jac)
         return
     # Backward reads the targets only for distribution terms; a CE-only loss
-    # releases them after forward (CE caches the target argmax in stats).
-    if not grad_terms & fused.DIST_MASK:
+    # releases them after forward (CE caches the target argmax in stats),
+    # unless the delta form rebuilds the draft logits from them.
+    if not delta and not grad_terms & fused.DIST_MASK:
         targets = targets.new_empty((0, targets.shape[-1]))
         target_weight = None
     ctx.save_for_backward(hidden, weight, targets, target_weight, stats)
@@ -367,9 +430,10 @@ def _backward(ctx, grad_losses, _grad_argmax, _grad_stats, _grad_jac):
             stats,
             ctx.grad_terms,
             ctx.chunk_rows,
-            ctx.fp32_logits,
+            ctx.tile,
+            ctx.delta,
         )
-    return d_hidden, None, None, None, None, None, None, None, None
+    return d_hidden, None, None, None, None, None, None, None, None, None
 
 
 _fused_linear_fwd.register_autograd(_backward, setup_context=_setup_context)
@@ -400,13 +464,14 @@ def _prepare_inputs(hidden, weight, targets, target_weight):
     if torch.is_autocast_enabled(device_type):
         # The operands autocast would give lm_head (the same bf16 weight copy);
         # the ops run with autocast off, so forward and a backward recompute
-        # see identical logits.
+        # see identical logits. A shared head is cast once.
         compute_dtype = torch.get_autocast_dtype(device_type)
+        shared = target_weight is weight
         flat_hidden = flat_hidden.to(compute_dtype)
         weight = weight.to(compute_dtype)
         if target_weight is not None:
             flat_targets = flat_targets.to(compute_dtype)
-            target_weight = target_weight.to(compute_dtype)
+            target_weight = weight if shared else target_weight.to(compute_dtype)
     elif weight.dtype != flat_hidden.dtype:
         raise ValueError(
             f"hidden ({flat_hidden.dtype}) and weight ({weight.dtype}) dtypes "
@@ -465,13 +530,16 @@ def fused_linear_compound(
             (default 4096).
         target_weight: ``[V, H_t]`` frozen verifier ``lm_head`` weight; the
             target logits are then computed per chunk, never materialized.
+            Pass ``weight`` itself when the heads are the same (shared head,
+            see the module docstring).
         grad_mode: ``"deferred"``, ``"recompute"`` or ``"auto"`` (deferred
             for at most two differentiated terms). Without a backward pass
             (no grad) only the losses are computed.
         logits_dtype: ``"input"`` (logit tiles in the input dtype, as
-            materialized logits) or ``"float32"`` (fp32 from the GEMM
-            accumulator: more accurate, slower GEMMs).
         rows: optional 1-D index of distinct rows to compute; every other row is
+            materialized logits), ``"float32"`` (fp32 from the GEMM
+            accumulator: more accurate, slower GEMMs) or ``"float16"``
+            (fp16 tiles for bf16 inputs: 8x finer rounding, same bytes).
             treated as fully masked (zero loss, zero gradient, ids 0). Use it
             to skip rows that are masked by construction.
 
@@ -505,14 +573,17 @@ def fused_linear_compound(
         grad_mode == "deferred"
         or (grad_mode == "auto" and len(loss_terms) <= _MAX_DEFERRED_TERMS)
     )
-    fp32_logits = logits_dtype == "float32"
+    all_terms = grad_mask | fused.terms_mask(metric_terms)
+    # The delta form pays off only against a target distribution: CE's
+    # gradient has no target probabilities to cancel the rounding.
+    delta = target_weight is weight and bool(all_terms & fused.DIST_MASK)
     if chunk_rows is None:
         chunk_rows = chunk_rows_for(
             vocab,
             flat_hidden.dtype,
             flat_hidden.shape[0],
             recompute_targets=target_weight is not None,
-            fp32_logits=fp32_logits,
+            fp32_logits=logits_dtype == "float32",
             dz_tiles=len(loss_terms) if deferred else 1,
         )
     losses, argmax, _, _ = _fused_linear_fwd(
@@ -520,11 +591,12 @@ def fused_linear_compound(
         weight,
         flat_targets,
         target_weight,
-        grad_mask | fused.terms_mask(metric_terms),
+        all_terms,
         grad_mask if needs_grad else 0,
         chunk_rows,
         deferred,
-        fp32_logits,
+        logits_dtype,
+        delta,
     )
     if rows is not None:
         losses = losses.new_zeros((losses.shape[0], total_rows)).index_copy(

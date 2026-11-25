@@ -611,9 +611,13 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
         }
         if fused_linear:
             # No [1, T, V] draft or target logits: both are projected per chunk.
+            # With the full vocab lm_head is the verifier head (loaded from it,
+            # frozen, never saved); passing that one weight for both enables
+            # fused_linear's shared-head delta form.
+            head = self.lm_head if self.use_draft_vocab else self.verifier_lm_head
             return compute_metrics_from_hidden(
                 logits,  # backbone hidden states in fused-linear mode
-                self.lm_head.weight,
+                head.weight,
                 targets,  # post-norm verifier hidden states (project=False)
                 layout.loss_mask,
                 self.block_size,

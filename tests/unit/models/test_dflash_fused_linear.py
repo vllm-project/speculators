@@ -62,11 +62,10 @@ def _model(sample_from_anchor: bool, dtype: torch.dtype) -> DFlashDraftModel:
         for parameter in model.parameters():
             if parameter.isnan().any():
                 torch.nn.init.normal_(parameter, std=0.02)
-        # lm_head / verifier_lm_head at a scale that gives non-trivial softmaxes
+        # a head scale that gives non-trivial softmaxes; with the full vocab
+        # lm_head is the verifier head, as after load_verifier_weights
         torch.nn.init.normal_(model.lm_head.weight, std=0.3)
-        model.verifier_lm_head.weight.copy_(
-            model.lm_head.weight + 0.1 * torch.randn_like(model.lm_head.weight)
-        )
+        model.verifier_lm_head.weight.copy_(model.lm_head.weight)
         torch.nn.init.ones_(model.verifier_norm.weight)
     return model.to(device="cuda", dtype=dtype).train()  # type: ignore[call-arg]
 
