@@ -102,7 +102,6 @@ CUDA_VISIBLE_DEVICES="$TRAIN_GPUS" torchrun \
     --consistency-weight "$CONSISTENCY_WEIGHT" \
     --consistency-passes "$CONSISTENCY_PASSES" \
     --base-anchor-weight "$BASE_ANCHOR_WEIGHT" \
-    --ce-from-data \
     --loss-fn '{"ce": 0.1, "tv": 1.8}' \
     --on-missing generate
 

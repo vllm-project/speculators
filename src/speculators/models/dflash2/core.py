@@ -1,28 +1,27 @@
-from typing import Any, ClassVar
+from typing import ClassVar
 
 import torch
 from transformers import PretrainedConfig
 
 from speculators.losses import LossConfig, kl_div_loss, resolve_loss_config
 from speculators.model import SpeculatorModel
+from speculators.models.components import BlockLayout
 from speculators.models.dflash.config import DFlashSpeculatorConfig
 from speculators.models.dflash.core import DFlashDraftModel
+from speculators.models.dflash2.backbone import DFlash2Backbone
 from speculators.models.dflash2.config import DFlash2SpeculatorConfig
 from speculators.models.dflash2.metrics import (
+    SelectorTrainingOutput,
     compute_metrics,
     selector_training_candidates,
 )
-from speculators.models.dflash2.model_definitions import (
-    CandidateSelector,
-    Qwen3DFlash2DecoderLayer,
-)
-from speculators.models.utils import conditional_torch_compile
+from speculators.models.dflash2.model_definitions import CandidateSelector
+
+_DEFAULT_LOSS_CONFIG: LossConfig = {"kl_div": (kl_div_loss, 1.0)}
 
 __all__ = [
     "DFlash2DraftModel",
 ]
-
-_DEFAULT_LOSS_CONFIG: LossConfig = {"kl_div": (kl_div_loss, 1.0)}
 
 
 @SpeculatorModel.register("dflash2")
@@ -31,6 +30,16 @@ class DFlash2DraftModel(DFlashDraftModel):
 
     config_class: ClassVar[type[DFlash2SpeculatorConfig]] = DFlash2SpeculatorConfig  # type: ignore[misc,assignment]
     _no_split_modules = ["Qwen3DFlash2DecoderLayer"]
+
+    def _make_backbone(self, config: DFlashSpeculatorConfig) -> DFlash2Backbone:
+        assert isinstance(config, DFlash2SpeculatorConfig)  # noqa: S101
+        return DFlash2Backbone(
+            config.transformer_layer_config,
+            len(self.target_layer_ids),
+            block_size=config.block_size,
+            conv_kernel_size=config.conv_kernel_size,
+            conv_group_size=config.conv_group_size,
+        )
 
     def __init__(self, config: DFlash2SpeculatorConfig) -> None:
         target_vocab_size = config.transformer_layer_config.vocab_size
@@ -47,16 +56,6 @@ class DFlash2DraftModel(DFlashDraftModel):
             )
         super().__init__(config=config)
 
-        for layer_ in self.layers:
-            # By capability, so a _make_decoder_layer override still works.
-            reset_convolutions = getattr(layer_, "reset_convolutions", None)
-            if not callable(reset_convolutions):
-                raise TypeError(
-                    f"{type(layer_).__name__} has no reset_convolutions(); a DFlash2 "
-                    "decoder layer must wrap its sublayers in resettable convolutions."
-                )
-            reset_convolutions()
-
         initializer_range = getattr(
             config.transformer_layer_config, "initializer_range", 0.02
         )
@@ -66,18 +65,6 @@ class DFlash2DraftModel(DFlashDraftModel):
             rank=config.selector_rank,
             top_k=config.selector_top_k,
             initializer_range=initializer_range,
-        )
-
-    def _make_decoder_layer(
-        self, config: DFlashSpeculatorConfig, layer_idx: int
-    ) -> Qwen3DFlash2DecoderLayer:
-        assert isinstance(config, DFlash2SpeculatorConfig)  # noqa: S101
-        return Qwen3DFlash2DecoderLayer(
-            config.transformer_layer_config,  # type: ignore[arg-type]
-            layer_idx,
-            block_size=config.block_size,
-            conv_kernel_size=config.conv_kernel_size,
-            conv_group_size=config.conv_group_size,
         )
 
     @classmethod
@@ -119,28 +106,15 @@ class DFlash2DraftModel(DFlashDraftModel):
         }
         return dict(shared), dict(shared)
 
-    def _predecessor_ids(
-        self,
-        input_ids: torch.Tensor,  # shape: [1, total_seq_len]
-        anchored_block_indices: torch.Tensor,  # shape: [num_anchors*block_size]
-    ) -> torch.Tensor:
-        block_tokens = input_ids[0, anchored_block_indices].view(
-            -1, self.block_size
-        )  # shape: [num_anchors, block_size]
-        if self.config.sample_from_anchor:
-            return block_tokens
-        # For token sequence 0 1 2 3 return previous token ids 0 0 1 2
-        return torch.cat([block_tokens[:, :1], block_tokens[:, :-1]], dim=1)
-
-    @conditional_torch_compile
     def forward(
         self,
-        hidden_states: torch.Tensor,  # shape: [1, total_seq_len,num_hidden*hidden_size]
-        input_ids: torch.Tensor,  # shape: [1, total_seq_len]
-        loss_mask: torch.Tensor,  # shape: [1, total_seq_len]
-        verifier_last_hidden_states: torch.Tensor,  # shape: [1, total_seq_len, hidden_size] # noqa: E501
-        document_ids: torch.Tensor,  # shape: [1, total_seq_len]
-        position_ids: torch.Tensor | None = None,  # shape: [1, total_seq_len]
+        # [1, total_seq_len, num_target_layers * hidden_size]
+        hidden_states: torch.Tensor,
+        input_ids: torch.Tensor,  # [1, total_seq_len]
+        loss_mask: torch.Tensor,  # [1, total_seq_len]
+        verifier_last_hidden_states: torch.Tensor,  # [1, total_seq_len, hidden_size]
+        document_ids: torch.Tensor,  # [1, total_seq_len]
+        position_ids: torch.Tensor | None = None,  # [1, total_seq_len]
         loss_config: LossConfig | None = None,
         gamma: float = 4.0,
         max_anchors: int = 512,
@@ -149,20 +123,40 @@ class DFlash2DraftModel(DFlashDraftModel):
         dpace_alpha: float = 0.5,
         selector_miss_policy: str = "replace",
         **kwargs,
-    ) -> tuple[None, torch.Tensor, dict[str, Any]]:
-        hidden, unary_logits, targets, aligned_loss_mask, block_indices = (
-            self._backbone_forward(
-                hidden_states,
-                input_ids,
-                loss_mask,
-                verifier_last_hidden_states,
-                document_ids,
-                position_ids,
-                max_anchors=max_anchors,
-                **kwargs,
-            )
+    ):
+        return super().forward(
+            hidden_states,
+            input_ids,
+            loss_mask,
+            verifier_last_hidden_states,
+            document_ids,
+            position_ids,
+            loss_config=loss_config,
+            gamma=gamma,
+            max_anchors=max_anchors,
+            per_position_loss_weight=per_position_loss_weight,
+            dpace_alpha=dpace_alpha,
+            correction_kwargs={"selector_miss_policy": selector_miss_policy},
+            loss_kwargs={
+                "selector_loss_alpha": selector_loss_alpha,
+                "selector_miss_policy": selector_miss_policy,
+            },
+            **kwargs,
         )
-        predecessor_ids = self._predecessor_ids(input_ids, block_indices)
+
+    def apply_training_correction(
+        self,
+        hidden,
+        logits,
+        targets,
+        layout,
+        input_ids,
+        _document_ids,
+        selector_miss_policy="replace",
+        **_kwargs,
+    ):
+        unary_logits = logits
+        predecessor_ids = layout.predecessor_ids(input_ids)
 
         target_ids = targets.argmax(dim=-1)
         # shape: [1, num_anchors*block_size]
@@ -179,15 +173,38 @@ class DFlash2DraftModel(DFlashDraftModel):
             predecessor_ids.reshape(1, -1),
             training_candidate_ids,
         )
+        selected_token_ids = training_candidate_ids.gather(
+            -1, candidate_logits.detach().argmax(dim=-1, keepdim=True)
+        ).squeeze(-1)
+        return SelectorTrainingOutput(
+            candidate_ids,  # without injection
+            candidate_logits,
+            target_positions,
+            contains_target,
+            selected_token_ids,
+            target_ids,
+        )
 
-        loss, metrics = compute_metrics(
-            unary_logits=unary_logits,
+    def compute_loss_and_metrics(
+        self,
+        logits,
+        targets,
+        layout: BlockLayout,
+        correction,
+        *,
+        loss_config: LossConfig | None,
+        gamma: float,
+        per_position_loss_weight: str,
+        dpace_alpha: float,
+        selector_loss_alpha=1.0,
+        selector_miss_policy="replace",
+        **_kwargs,
+    ):
+        return compute_metrics(
+            unary_logits=logits,
             targets=targets,
-            training_candidate_ids=training_candidate_ids,
-            candidate_logits=candidate_logits,
-            target_positions=target_positions,
-            contains_target=contains_target,
-            loss_mask=aligned_loss_mask,
+            correction=correction,
+            loss_mask=layout.loss_mask,
             block_size=self.block_size,
             top_k=self.candidate_selector.top_k,
             sample_from_anchor=self.config.sample_from_anchor,
@@ -198,4 +215,3 @@ class DFlash2DraftModel(DFlashDraftModel):
             dpace_alpha=dpace_alpha,
             selector_miss_policy=selector_miss_policy,
         )
-        return None, loss, metrics

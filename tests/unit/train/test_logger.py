@@ -256,6 +256,7 @@ def test_profiler_measures_complete_accumulation_windows(monkeypatch):
     assert len(logged) == 2
     for record, tokens in zip(logged, [10, 16], strict=True):
         profile = record["profile"]
+        assert not any(isinstance(value, str) for value in profile.values())
         assert profile["fetch_ms"] == pytest.approx(4_000)
         assert profile["fwd_ms"] == pytest.approx(8_000)
         assert profile["bwd_ms"] == pytest.approx(12_000)

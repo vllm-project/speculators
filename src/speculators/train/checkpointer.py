@@ -316,6 +316,9 @@ class SingleGPUCheckpointer(BaseCheckpointer):
         full_state_dict = convert_float_dtype(
             full_state_dict, float_dtype or model.dtype
         )
+        remap_keys = getattr(model, "remap_checkpoint_keys_for_load", None)
+        if callable(remap_keys):
+            full_state_dict = remap_keys(full_state_dict)
         # Note: `strict=False` because we don't load the verifier weights
         model.load_state_dict(full_state_dict, strict=False)
 
@@ -375,6 +378,10 @@ class DistributedCheckpointer(BaseCheckpointer):
         full_state_dict = convert_float_dtype(
             full_state_dict, float_dtype or model.dtype
         )
+
+        remap_keys = getattr(model, "remap_checkpoint_keys_for_load", None)
+        if callable(remap_keys):
+            full_state_dict = remap_keys(full_state_dict)
 
         # Note: `strict=False` because we don't load the verifier weights
         set_model_state_dict(
