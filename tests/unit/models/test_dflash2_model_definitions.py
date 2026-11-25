@@ -4,17 +4,20 @@ from typing import Any
 
 import pytest
 import torch
+from safetensors.torch import load_file
 from transformers.models.qwen3.modeling_qwen3 import Qwen3Config
 
 from speculators import SpeculatorModelConfig, SpeculatorsConfig, VerifierConfig
 from speculators.losses import resolve_loss_config
+from speculators.models.components import BlockLayout
 from speculators.models.dflash2 import DFlash2DraftModel, DFlash2SpeculatorConfig
 from speculators.models.dflash2.metrics import (
-    compute_metrics as compute_dflash2_metrics,
-)
-from speculators.models.dflash2.metrics import (
+    SelectorTrainingOutput,
     compute_selector_loss,
     selector_training_candidates,
+)
+from speculators.models.dflash2.metrics import (
+    compute_metrics as compute_dflash2_metrics,
 )
 from speculators.models.dflash2.model_definitions import (
     CandidateSelector,
@@ -262,11 +265,15 @@ def _tiny_config(**overrides) -> DFlash2SpeculatorConfig:
     return DFlash2SpeculatorConfig(**values)
 
 
-def test_model_uses_canonical_checkpoint_keys():
+def test_model_uses_canonical_checkpoint_keys(tmp_path):
     """Saved parameter names must load directly in the public vLLM implementation."""
     model = DFlash2DraftModel(_tiny_config())
-    state_keys = set(model.state_dict())
+    assert model.layers is model.backbone.layers
+    assert "layers" not in model._modules
+    assert "backbone.layers.0.attention_conv.base_kernel" in model.state_dict()
 
+    model.save_pretrained(tmp_path)
+    state_keys = load_file(tmp_path / "model.safetensors").keys()
     assert "layers.0.attention_conv.base_kernel" in state_keys
     assert "layers.0.attention_conv.kernel_projection.weight" in state_keys
     assert "layers.0.mlp_conv.base_kernel" in state_keys
@@ -309,32 +316,23 @@ def test_model_rejects_pruned_draft_vocabulary():
         DFlash2DraftModel(_tiny_config(draft_vocab_size=32))
 
 
-def test_predecessor_ids_shift_each_block_from_its_anchor():
-    model = DFlash2DraftModel(_tiny_config())
-    input_ids = torch.arange(16).unsqueeze(0)
-    anchored_block_indices = torch.tensor([2, 3, 4, 5, 8, 9, 10, 11])
-
-    predecessor_ids = model._predecessor_ids(
-        input_ids,
-        anchored_block_indices,
+@pytest.mark.parametrize(
+    ("sample_from_anchor", "expected"),
+    [
+        (False, [[2, 2, 3, 4], [8, 8, 9, 10]]),
+        (True, [[2, 3, 4, 5], [8, 9, 10, 11]]),
+    ],
+)
+def test_block_layout_predecessor_ids(sample_from_anchor, expected):
+    layout = BlockLayout(
+        anchor_positions=torch.tensor([2, 8]),
+        block_positions=torch.tensor([2, 3, 4, 5, 8, 9, 10, 11]),
+        loss_mask=torch.ones(1, 8),
+        block_size=4,
+        sample_from_anchor=sample_from_anchor,
     )
-
-    expected = torch.tensor([[2, 2, 3, 4], [8, 8, 9, 10]])
-    torch.testing.assert_close(predecessor_ids, expected)
-
-
-def test_predecessor_ids_sample_from_anchor():
-    model = DFlash2DraftModel(_tiny_config(sample_from_anchor=True))
-    input_ids = torch.arange(16).unsqueeze(0)
-    anchored_block_indices = torch.tensor([2, 3, 4, 5, 8, 9, 10, 11])
-
-    predecessor_ids = model._predecessor_ids(
-        input_ids,
-        anchored_block_indices,
-    )
-
-    expected = torch.tensor([[2, 3, 4, 5], [8, 9, 10, 11]])
-    torch.testing.assert_close(predecessor_ids, expected)
+    actual = layout.predecessor_ids(torch.arange(16).unsqueeze(0))
+    torch.testing.assert_close(actual, torch.tensor(expected))
 
 
 def test_selector_training_candidates_keep_strict_top_k_and_inject_missing_target():
@@ -459,10 +457,14 @@ def test_selector_loss_alpha_zero_preserves_unary_objective():
     actual, metrics = compute_dflash2_metrics(
         unary_logits=unary_logits,
         targets=targets,
-        training_candidate_ids=training_candidate_ids,
-        candidate_logits=candidate_logits,
-        target_positions=target_positions,
-        contains_target=contains_target,
+        correction=SelectorTrainingOutput(
+            unary_candidate_ids=candidate_ids,
+            candidate_logits=candidate_logits,
+            target_positions=target_positions,
+            contains_target=contains_target,
+            selected_token_ids=target_ids,
+            target_ids=target_ids,
+        ),
         loss_mask=loss_mask,
         block_size=4,
         top_k=selector.top_k,
@@ -478,29 +480,103 @@ def test_selector_loss_alpha_zero_preserves_unary_objective():
     assert metrics["eal_total"].item() == 1.0
     # The inherited unary EAL would stop at the first drafted position.
     assert unary_metrics["eal_sum"].item() == 1.0
-    torch.testing.assert_close(
-        metrics["accept_len_sum"], unary_metrics["accept_len_sum"]
+    assert metrics["full_acc_sum"].item() == 2.0
+    assert metrics["full_acc_total"].item() == 3.0
+    assert metrics["position_1_acc_sum"].item() == 1.0
+    assert metrics["position_2_acc_sum"].item() == 0.0
+    assert metrics["position_3_acc_sum"].item() == 1.0
+    for name in ("accept_rate", "accept_len"):
+        for suffix in ("sum", "total"):
+            key = f"{name}_{suffix}"
+            assert key not in metrics
+            torch.testing.assert_close(metrics[f"unary_{key}"], unary_metrics[key])
+
+
+@pytest.mark.parametrize(
+    ("sample_from_anchor", "expected_sum", "expected_total"),
+    [(False, 4, 2), (True, 6, 3)],
+)
+def test_top_k_oracle_accepted_length_respects_anchor_sampling(
+    sample_from_anchor, expected_sum, expected_total
+):
+    # All hits, a slot-zero miss followed by a hit, and only slot zero valid.
+    logits = torch.tensor([[[1.0, 0.0]] * 2 + [[0.0, 1.0]] + [[1.0, 0.0]] * 3])
+    targets = torch.tensor([[[1.0, 0.0]] * 6])
+    target_ids = targets.argmax(dim=-1)
+    candidate_ids = logits.topk(1, dim=-1).indices
+    _, target_positions, contains_target = selector_training_candidates(
+        candidate_ids, target_ids, miss_policy="strict"
+    )
+    loss_mask = torch.tensor(
+        [
+            [
+                sample_from_anchor,
+                True,
+                sample_from_anchor,
+                True,
+                sample_from_anchor,
+                False,
+            ]
+        ]
+    )
+    _, metrics = compute_dflash2_metrics(
+        unary_logits=logits,
+        targets=targets,
+        correction=SelectorTrainingOutput(
+            unary_candidate_ids=candidate_ids,
+            candidate_logits=logits.gather(-1, candidate_ids),
+            target_positions=target_positions,
+            contains_target=contains_target,
+            selected_token_ids=candidate_ids.squeeze(-1),
+            target_ids=target_ids,
+        ),
+        loss_mask=loss_mask,
+        block_size=2,
+        top_k=1,
+        sample_from_anchor=sample_from_anchor,
+        loss_config=resolve_loss_config("ce", "eager"),
+        selector_miss_policy="strict",
     )
 
+    assert metrics["unary_top_1_oracle_accepted_length_sum"].item() == expected_sum
+    assert metrics["unary_top_1_oracle_accepted_length_total"].item() == expected_total
 
-def test_candidate_target_mass_matches_dense_reference():
+
+@pytest.mark.parametrize("all_hits", [False, True])
+def test_candidate_target_mass_matches_dense_reference(all_hits):
     """Chunk boundaries and a partial final chunk preserve FP32 target mass."""
     num_rows = 2052
     generator = torch.Generator().manual_seed(7)
     targets = torch.randn(1, num_rows, 17, generator=generator, dtype=torch.bfloat16)
     unary_logits = torch.randn(targets.shape, generator=generator, dtype=torch.bfloat16)
-    candidate_ids, target_positions, contains_target = selector_training_candidates(
-        unary_logits.topk(2, dim=-1).indices, targets.argmax(dim=-1)
+    if all_hits:
+        targets[..., 0] = 10.0
+        unary_logits = targets
+    candidate_ids = unary_logits.topk(2, dim=-1).indices
+    training_candidate_ids, target_positions, contains_target = (
+        selector_training_candidates(candidate_ids, targets.argmax(dim=-1))
     )
     loss_mask = torch.ones(1, num_rows)
-    loss_mask[:, ::3] = 0
+    if all_hits:
+        loss_mask[:, 257:] = 0
+    else:
+        loss_mask[:, ::3] = 0
+        assert ((~contains_target) & loss_mask.bool()).any()
+    candidate_logits = unary_logits.gather(-1, training_candidate_ids)
+    selected_token_ids = training_candidate_ids.gather(
+        -1, candidate_logits.argmax(dim=-1, keepdim=True)
+    ).squeeze(-1)
     _, metrics = compute_dflash2_metrics(
         unary_logits=unary_logits,
         targets=targets,
-        training_candidate_ids=candidate_ids,
-        candidate_logits=unary_logits.gather(-1, candidate_ids),
-        target_positions=target_positions,
-        contains_target=contains_target,
+        correction=SelectorTrainingOutput(
+            unary_candidate_ids=candidate_ids,
+            candidate_logits=candidate_logits,
+            target_positions=target_positions,
+            contains_target=contains_target,
+            selected_token_ids=selected_token_ids,
+            target_ids=targets.argmax(dim=-1),
+        ),
         loss_mask=loss_mask,
         block_size=4,
         top_k=2,
@@ -519,8 +595,14 @@ def test_candidate_target_mass_matches_dense_reference():
     )
     torch.testing.assert_close(
         metrics["unary_candidate_target_mass_at_2_total"],
-        loss_mask.to(unary_logits.dtype).sum(),
+        loss_mask.sum(dtype=torch.float32),
     )
+    if all_hits:
+        for name in ("unary_candidate_recall_at_2", "teacher_forced_selector_acc"):
+            for suffix in ("sum", "total"):
+                torch.testing.assert_close(
+                    metrics[f"{name}_{suffix}"], torch.tensor(257.0)
+                )
 
 
 def test_selector_loss_reaches_every_selector_parameter():
@@ -606,14 +688,21 @@ def test_compute_metrics_rejects_unknown_selector_miss_policy():
         unary_logits, hidden_states, predecessor_ids, training_candidate_ids
     )
 
+    selected_token_ids = training_candidate_ids.gather(
+        -1, candidate_logits.argmax(dim=-1, keepdim=True)
+    ).squeeze(-1)
     with pytest.raises(ValueError, match="Unknown selector miss policy"):
         compute_dflash2_metrics(
             unary_logits=unary_logits,
             targets=targets,
-            training_candidate_ids=training_candidate_ids,
-            candidate_logits=candidate_logits,
-            target_positions=target_positions,
-            contains_target=contains_target,
+            correction=SelectorTrainingOutput(
+                unary_candidate_ids=candidate_ids,
+                candidate_logits=candidate_logits,
+                target_positions=target_positions,
+                contains_target=contains_target,
+                selected_token_ids=selected_token_ids,
+                target_ids=target_ids,
+            ),
             loss_mask=loss_mask,
             block_size=4,
             top_k=selector.top_k,

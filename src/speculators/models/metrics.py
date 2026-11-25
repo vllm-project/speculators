@@ -1,33 +1,99 @@
-"""Shared model accuracy metrics."""
+"""Shared model accuracy and acceptance metrics."""
 
 import torch
 
 
 @torch.no_grad()
-def compute_accepted_length_counts(
-    correct: torch.Tensor,  # shape: [num_blocks, num_draft_slots]
-    valid: torch.Tensor,  # shape: [num_blocks, num_draft_slots]
-) -> tuple[torch.Tensor, torch.Tensor]:
-    """Count accepted length per speculative block as raw sum/total counts.
+def compute_greedy_block_metrics(
+    correct: torch.Tensor,
+    loss_mask: torch.Tensor,
+    block_size: int,
+    sample_from_anchor: bool,
+) -> dict[str, torch.Tensor]:
+    """Pool greedy accuracy and accepted-length counts across draft blocks."""
+    start_pos = 0 if sample_from_anchor else 1
+    correct_slots = correct.reshape(-1, block_size)[:, start_pos:]
+    valid_slots = loss_mask.to(torch.bool).reshape(-1, block_size)[:, start_pos:]
+    correct_and_valid = correct_slots & valid_slots
+    correct_per_pos = correct_and_valid.sum(dim=0, dtype=torch.float32)
+    total_per_pos = valid_slots.sum(dim=0, dtype=torch.float32)
+    # Count only the leading run of correct slots, plus the verifier bonus token.
+    accepted_length = (
+        correct_and_valid.cumprod(dim=-1, dtype=torch.float32).sum(dim=-1) + 1.0
+    )
+    valid_blocks = valid_slots.any(dim=-1).to(torch.float32)
 
-    A block is accepted up to its first wrong draft slot, so its length is the
-    leading run of correct slots plus the verifier's always-emitted bonus token
-    (vLLM's convention). Forming the run inside the block preserves the
-    correlation between slots; a product of per-slot marginals discards it and
-    understates the result.
+    metrics = {
+        "full_acc_sum": correct_per_pos.sum(),
+        "full_acc_total": total_per_pos.sum(),
+        "eal_sum": (accepted_length * valid_blocks).sum(),
+        "eal_total": valid_blocks.sum(),
+    }
+    for offset, position in enumerate(range(start_pos, block_size)):
+        metrics[f"position_{position}_acc_sum"] = correct_per_pos[offset]
+        metrics[f"position_{position}_acc_total"] = total_per_pos[offset]
+    return metrics
 
-    Args:
-        correct: Whether each draft slot matched the target.
-        valid: Whether each draft slot is trained on (block-shaped loss mask).
 
-    Returns:
-        Tuple of (accepted_length_sum, valid_block_total) as raw counts suitable
-        for distributed reduction before computing the ratio.
-    """
-    accepted = torch.logical_and(correct, valid).to(torch.float32)
-    per_block_len = accepted.cumprod(dim=-1).sum(dim=-1) + 1.0
-    block_valid = valid.any(dim=-1).to(torch.float32)
-    return (per_block_len * block_valid).sum(), block_valid.sum()
+def compute_base_metrics(
+    loss: torch.Tensor,
+    term_losses: dict[str, torch.Tensor],
+    correct: torch.Tensor,
+    loss_mask: torch.Tensor,
+    block_size: int,
+    sample_from_anchor: bool,
+) -> dict[str, torch.Tensor]:
+    """Record the final training loss, its distillation terms, and greedy metrics."""
+    one = torch.ones((), device=loss.device)
+    metrics = {"loss_sum": loss.detach().clone(), "loss_total": one}
+    for name, term_loss in term_losses.items():
+        metrics[f"{name}_sum"] = term_loss
+        metrics[f"{name}_total"] = one.clone()
+    metrics.update(
+        compute_greedy_block_metrics(correct, loss_mask, block_size, sample_from_anchor)
+    )
+    return metrics
+
+
+@torch.no_grad()
+def compute_acceptance_rate_metrics(
+    probabilities: torch.Tensor,
+    loss_mask: torch.Tensor,
+    *,
+    name: str = "accept_rate",
+) -> dict[str, torch.Tensor]:
+    """Aggregate per-token acceptance probabilities over the loss mask."""
+    mask = loss_mask.to(probabilities.dtype)
+    return {
+        f"{name}_sum": (probabilities * mask).sum(),
+        f"{name}_total": mask.sum(),
+    }
+
+
+@torch.no_grad()
+def compute_analytical_block_acceptance(
+    probabilities: torch.Tensor,
+    loss_mask: torch.Tensor,
+    block_size: int,
+    sample_from_anchor: bool,
+    *,
+    prefix: str = "",
+) -> tuple[dict[str, torch.Tensor], torch.Tensor, torch.Tensor]:
+    """Report analytical acceptance and return the prefixes and mask for calibration."""
+    start_pos = 0 if sample_from_anchor else 1
+    draft_slots = probabilities.reshape(-1, block_size)[:, start_pos:]
+    draft_mask = loss_mask.to(probabilities.dtype).reshape(-1, block_size)[
+        :, start_pos:
+    ]
+    accept_prefix = (draft_slots * draft_mask).cumprod(dim=-1)
+    accepted_length = accept_prefix.sum(dim=-1) + 1.0  # Verifier bonus token.
+    valid_blocks = (draft_mask.sum(dim=-1) > 0).to(probabilities.dtype)
+    metrics = compute_acceptance_rate_metrics(
+        probabilities, loss_mask, name=f"{prefix}accept_rate"
+    )
+    metrics[f"{prefix}accept_len_sum"] = (accepted_length * valid_blocks).sum()
+    metrics[f"{prefix}accept_len_total"] = valid_blocks.sum()
+    return metrics, accept_prefix, draft_mask
 
 
 def compute_accuracy_single_step(
