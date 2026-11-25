@@ -1,11 +1,13 @@
-MDFILES := $(shell find . -name "*.md" -not -path "./.venv/*" -not -path "./build/*" -not -path "./.pytest_cache/*")
+# Include tracked and new Markdown files using Git's standard ignore rules.
+MDFILES = git ls-files -z --cached --others --exclude-standard -- '*.md'
 
 # run checks on all files for the repo
 quality:
 	@echo "Running quality checks"
 	ruff check
 	ruff format --check
-	python -m mdformat --check $(MDFILES)
+	@echo "mdformat --check"
+	@$(MDFILES) | xargs -0 -r python -m mdformat --check --
 	mypy --check-untyped-defs
 	python scripts/sync_provenance.py --check
 
@@ -17,7 +19,8 @@ style:
 	ruff format
 	ruff check --fix
 	ruff format --silent
-	python -m mdformat $(MDFILES)
+	@echo "mdformat"
+	@$(MDFILES) | xargs -0 -r python -m mdformat --
 	python scripts/sync_provenance.py
 
 # clean up
