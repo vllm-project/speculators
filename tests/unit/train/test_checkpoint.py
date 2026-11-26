@@ -122,7 +122,7 @@ def test_run_training_updates_checkpoint_best_among_saved_checkpoints_save_best_
         "expected_best_target",
     ),
     [
-        (False, 3, [0, 2], {"0", "2"}, "2"),
+        (False, 3, [0, 2, 3], {"0", "2", "3"}, "2"),
         (True, 3, [0, 1, 3], {"3"}, "3"),
     ],
 )
@@ -203,7 +203,7 @@ def test_checkpoint_freq_flag_controls_saves(
 
     trainer.run_training()
 
-    assert saved_epochs == [0, 2, 5]
+    assert saved_epochs == [0, 2, 5, 6]
 
     best_path = tmp_path / "checkpoint_best"
     assert best_path.exists()
