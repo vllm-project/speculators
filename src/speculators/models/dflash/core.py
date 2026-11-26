@@ -5,33 +5,35 @@ import torch
 from torch import nn
 from torch.nn.attention.flex_attention import create_block_mask, create_mask
 from transformers import PretrainedConfig
-from transformers.models.qwen3.modeling_qwen3 import (
-    Qwen3RMSNorm,
-    Qwen3RotaryEmbedding,
-)
 
 from speculators.losses import LossConfig, resolve_loss_config
 from speculators.model import DraftVocabMixin, SpeculatorModel
 from speculators.models.attention import create_float_mask
+from speculators.models.components import BackboneInputs, BlockLayout
 from speculators.models.dflash import DFlashSpeculatorConfig
 from speculators.models.dflash.attention import create_anchor_block_mask_mod
+from speculators.models.dflash.backbone import DFlashBackbone
 from speculators.models.dflash.metrics import (
     compute_metrics,
     compute_metrics_from_hidden,
 )
-from speculators.models.dflash.model_definitions import dflash_model_classes
 from speculators.models.dflash.utils import (
     get_base_indices_for_anchored_blocks,
+    rename_checkpoint_key,
     select_anchors,
 )
 from speculators.models.utils import (
     conditional_torch_compile,
-    flatten_rope_parameters,
     resolve_target_layer_ids,
     resolve_verifier_norm_class,
 )
 
 logger = logging.getLogger(__name__)
+
+_BACKBONE_CHECKPOINT_PREFIXES = {
+    name: f"backbone.{name}"
+    for name in ("layers", "fc", "hidden_norm", "norm", "rotary_emb")
+}
 
 # Compile so the mask builds block-sparse instead of materializing DFlash's huge
 # dense [Q, KV] grid every step. (No benefit for EAGLE3's small autoregressive mask.)
@@ -62,16 +64,9 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
     t2d: torch.Tensor | None
     d2t: torch.Tensor | None
 
-    def _make_decoder_layer(
-        self, config: DFlashSpeculatorConfig, layer_idx: int
-    ) -> nn.Module:
-        """Build one draft decoder layer.
-
-        DFlash-family variants override this factory when they wrap the shared
-        attention and MLP with additional modules.
-        """
-        return self._model_definitions.decoder_layer_class(
-            config.transformer_layer_config, layer_idx
+    def _make_backbone(self, config: DFlashSpeculatorConfig) -> DFlashBackbone:
+        return DFlashBackbone(
+            config.transformer_layer_config, len(self.target_layer_ids)
         )
 
     def __init__(
@@ -94,49 +89,13 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
         super().__init__(config=config)
         self._init_vocab(config)
 
-        # Unknown decoder types keep the historical Qwen3 GQA backbone.
-        self._model_definitions = dflash_model_classes.get(
-            config.transformer_layer_config.model_type, dflash_model_classes["qwen3"]
-        )
+        tl_config = config.transformer_layer_config
+        self.backbone = self._make_backbone(config)
+        self.sliding_window = getattr(tl_config, "sliding_window", None)
+        sliding_layers = self.backbone.sliding_window_indices
+        self.uses_sliding_window_attn = bool(sliding_layers)
+        self.uses_full_attn = len(sliding_layers) < len(self.layers)
 
-        # Number of draft layers is encoded in transformer_layer_config
-        num_draft_layers = config.transformer_layer_config.num_hidden_layers
-        self.layers = nn.ModuleList(
-            [
-                self._make_decoder_layer(config, layer_idx)
-                for layer_idx in range(num_draft_layers)
-            ]
-        )
-        # Both are optional: declared only for alternating/sliding attention.
-        self.sliding_window = getattr(
-            config.transformer_layer_config, "sliding_window", None
-        )
-        self.sliding_window_indices = [
-            i
-            for i, layer_type in enumerate(
-                getattr(config.transformer_layer_config, "layer_types", None) or []
-            )
-            if layer_type == "sliding_attention"
-        ]
-        self.uses_sliding_window_attn = bool(self.sliding_window_indices)
-        self.uses_full_attn = bool(num_draft_layers - len(self.sliding_window_indices))
-
-        self.norm = Qwen3RMSNorm(
-            config.transformer_layer_config.hidden_size,
-            eps=config.transformer_layer_config.rms_norm_eps,  # type: ignore[arg-type]
-        )
-        rotary_config = flatten_rope_parameters(config.transformer_layer_config)
-        self.rotary_emb = Qwen3RotaryEmbedding(rotary_config)  # type: ignore[arg-type]
-
-        self.fc = nn.Linear(
-            len(self.target_layer_ids) * config.transformer_layer_config.hidden_size,
-            config.transformer_layer_config.hidden_size,
-            bias=False,
-        )
-        self.hidden_norm = Qwen3RMSNorm(
-            config.transformer_layer_config.hidden_size,
-            eps=config.transformer_layer_config.rms_norm_eps,  # type: ignore[arg-type]
-        )
         self.verifier_norm = resolve_verifier_norm_class(config)(
             config.transformer_layer_config.hidden_size,
             eps=config.transformer_layer_config.rms_norm_eps,  # type: ignore[arg-type]
@@ -153,6 +112,7 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
             )
 
         self.post_init()
+        self.backbone.post_init()
         # Verifier-owned weights are reconstructed on load. Keep a reduced-vocab
         # lm_head serialized because current runtimes cannot derive it from the
         # full verifier head.
@@ -171,6 +131,64 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
         self.__dict__["_keys_to_ignore_on_load_missing"] = (
             keys_to_ignore_on_load_missing
         )
+
+    @classmethod
+    def from_pretrained(cls, *args, **kwargs):
+        mapping = {
+            rf"^{source}\.": f"{target}."
+            for source, target in _BACKBONE_CHECKPOINT_PREFIXES.items()
+        }
+        mapping.update(kwargs.pop("key_mapping", {}) or {})
+        return super().from_pretrained(*args, key_mapping=mapping, **kwargs)
+
+    def remap_checkpoint_keys_for_load(self, state_dict):
+        """Translate flat checkpoint names for direct training-state loads."""
+        return {
+            rename_checkpoint_key(name, _BACKBONE_CHECKPOINT_PREFIXES): tensor
+            for name, tensor in state_dict.items()
+        }
+
+    def save_pretrained(
+        self,
+        save_directory,
+        is_main_process=True,
+        state_dict=None,
+        push_to_hub=False,
+        max_shard_size="50GB",
+        variant=None,
+        token=None,
+        save_peft_format=True,
+        save_original_format=True,  # noqa: ARG002 - model type owns conversion
+        distributed_checkpoint=False,
+        **kwargs,
+    ):
+        """Save backbone weights under the existing flat checkpoint names."""
+        state_dict = self.state_dict() if state_dict is None else state_dict
+        save_prefixes = {
+            target: source for source, target in _BACKBONE_CHECKPOINT_PREFIXES.items()
+        }
+        exported = {
+            rename_checkpoint_key(name, save_prefixes): tensor
+            for name, tensor in state_dict.items()
+        }
+        return super().save_pretrained(
+            save_directory,
+            is_main_process=is_main_process,
+            state_dict=exported,
+            push_to_hub=push_to_hub,
+            max_shard_size=max_shard_size,
+            variant=variant,
+            token=token,
+            save_peft_format=save_peft_format,
+            save_original_format=False,
+            distributed_checkpoint=distributed_checkpoint,
+            **kwargs,
+        )
+
+    @property
+    def layers(self) -> nn.ModuleList:
+        """Expose decoder layers to the training infrastructure."""
+        return self.backbone.layers
 
     @property
     def target_layer_ids(self) -> list[int]:
@@ -394,28 +412,46 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
 
         return full_attn_mask, sliding_window_attn_mask, anchor_positions, anchor_valid
 
-    def _backbone_forward(
+    def _build_targets(
+        self,
+        verifier_last_hidden_states: torch.Tensor,  # [1, total_seq_len, hidden_size]
+        block_positions: torch.Tensor,  # [num_blocks * block_size]
+    ) -> torch.Tensor:  # [1, num_blocks * block_size, draft_vocab_size]
+        """Build verifier-logit targets for the selected draft block positions."""
+        total_seq_len = verifier_last_hidden_states.shape[1]
+
+        with torch.no_grad():
+            # If there are fewer block positions than base positions, compute
+            # the verifier head only for the positions used as targets.
+            if block_positions.numel() < total_seq_len:
+                target_indices = (
+                    block_positions
+                    if self.config.sample_from_anchor
+                    else (block_positions - 1) % total_seq_len
+                )
+                return self.verifier_lm_head(
+                    self.verifier_norm(verifier_last_hidden_states[:, target_indices])
+                )
+
+            verifier_logits = self.verifier_lm_head(
+                self.verifier_norm(verifier_last_hidden_states)
+            )
+            if not self.config.sample_from_anchor:
+                verifier_logits = torch.roll(verifier_logits, 1, dims=1)
+            return verifier_logits[:, block_positions]
+
+    def prepare_backbone_inputs(
         self,
         hidden_states: torch.Tensor,  # [1, total_seq_len, num_hidden*hidden_size]
         input_ids: torch.Tensor,  # [1, total_seq_len]
         loss_mask: torch.Tensor,  # [1, total_seq_len]
-        verifier_last_hidden_states: torch.Tensor,  # [1, total_seq_len, hidden_size]
         document_ids: torch.Tensor,  # [1, total_seq_len]
         position_ids: torch.Tensor | None = None,  # [1, total_seq_len]
-        materialize_logits: bool = True,
-        **kwargs,
-    ):
-        """Run the anchored-block draft transformer up to the draft logits.
-
-        Returns ``(hidden, logits, targets, aligned_loss_mask,
-        anchored_block_indices)``. DSpark reuses this and adds its Markov and
-        confidence heads before computing its own loss. With
-        ``materialize_logits=False`` the ``lm_head`` projection is skipped and
-        ``logits`` is None (the fused_linear loss projects ``hidden`` itself).
-        """
+        max_anchors: int = 512,
+    ) -> tuple[BackboneInputs, BlockLayout]:
+        """Prepare embeddings, positions, and masks for the backbone."""
         device = hidden_states.device
         total_seq_len = hidden_states.shape[1]
-        num_anchors = kwargs.pop("max_anchors", 512)
 
         if position_ids is None:
             position_ids = torch.arange(
@@ -423,10 +459,10 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
             ).unsqueeze(0)
 
         full_attn_mask, sliding_window_attn_mask, anchor_positions, anchor_valid = (
-            self._build_attention_mask(loss_mask, num_anchors, document_ids, device)
+            self._build_attention_mask(loss_mask, max_anchors, document_ids, device)
         )
 
-        mask_tokens_size = num_anchors * self.block_size
+        mask_tokens_size = max_anchors * self.block_size
 
         mask_token_ids = torch.full(
             (1, mask_tokens_size),
@@ -438,59 +474,15 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
         noise_embedding = self.embed_tokens(mask_token_ids)
         # shape: [1, num_anchors*block_size, hidden_size]
 
-        fc_output = self.fc(hidden_states)
-        fc_output = self.hidden_norm(fc_output)
-        # shape: [1, total_seq_len, hidden_size]
-
         mask_position_ids = get_base_indices_for_anchored_blocks(
             position_ids[0, anchor_positions], self.block_size
         )
         position_ids = torch.cat([position_ids, mask_position_ids.unsqueeze(0)], dim=1)
         # shape: [1, total_seq_len + num_anchors*block_size]
 
-        # the hidden_states shape doesn't match position_ids but doesn't need
-        # to, as hidden_states is only used to set dtype and device in rotary_emb
-        position_embeddings = self.rotary_emb(hidden_states, position_ids)
-
         anchored_block_indices = get_base_indices_for_anchored_blocks(
             anchor_positions, self.block_size
         )  # shape: [num_anchors*block_size]
-
-        with torch.no_grad():
-            if anchored_block_indices.numel() < total_seq_len:
-                target_indices = (
-                    anchored_block_indices
-                    if self.config.sample_from_anchor
-                    else (anchored_block_indices - 1) % total_seq_len
-                )
-                targets = self.verifier_lm_head(
-                    self.verifier_norm(verifier_last_hidden_states[:, target_indices])
-                )
-            else:
-                verifier_logits = self.verifier_lm_head(
-                    self.verifier_norm(verifier_last_hidden_states)
-                )
-                if not self.config.sample_from_anchor:
-                    verifier_logits = torch.roll(verifier_logits, 1, dims=1)
-                targets = verifier_logits[:, anchored_block_indices]
-            # shape: [1, num_anchors*block_size, draft_vocab_size]
-
-        for layer_idx, layer in enumerate(self.layers):
-            noise_embedding = layer(
-                hidden_states=noise_embedding,
-                target_hidden=fc_output,
-                attention_mask=sliding_window_attn_mask
-                if layer_idx in self.sliding_window_indices
-                else full_attn_mask,
-                position_ids=position_ids,
-                use_cache=False,
-                position_embeddings=position_embeddings,
-                **kwargs,
-            )
-
-        hidden = self.norm(noise_embedding)
-        logits = self.lm_head(hidden) if materialize_logits else None
-        # shape: [1, num_anchors*block_size, vocab_size]
 
         aligned_loss_mask = loss_mask.clone()[:, anchored_block_indices]
         # shape: [1, num_anchors*block_size]
@@ -506,36 +498,95 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
         if not self.config.sample_from_anchor:
             aligned_loss_mask[:, :: self.block_size] = 0
 
-        return hidden, logits, targets, aligned_loss_mask, anchored_block_indices
+        layout = BlockLayout(
+            anchor_positions,
+            anchored_block_indices,
+            aligned_loss_mask,
+            self.block_size,
+            self.config.sample_from_anchor,
+        )
+        inputs = BackboneInputs(
+            noise_embedding,
+            hidden_states,
+            position_ids,
+            sliding_window_attn_mask,
+            full_attn_mask,
+        )
+        return inputs, layout
 
     @conditional_torch_compile
     def forward(
         self,
-        hidden_states: torch.Tensor,  # shape: [1,total_seq_len,num_hidden*hidden_size]
-        input_ids: torch.Tensor,  # shape: [1, total_seq_len]
-        loss_mask: torch.Tensor,  # shape: [1, total_seq_len]
-        verifier_last_hidden_states: torch.Tensor,  # shape: [1, total_seq_len, hidden_size] # noqa: E501
-        document_ids: torch.Tensor,  # shape: [1, total_seq_len]
-        position_ids: torch.Tensor | None = None,  # shape: [1, total_seq_len]
+        # [1, total_seq_len, num_target_layers * hidden_size]
+        hidden_states: torch.Tensor,
+        input_ids: torch.Tensor,  # [1, total_seq_len]
+        loss_mask: torch.Tensor,  # [1, total_seq_len]
+        verifier_last_hidden_states: torch.Tensor,  # [1, total_seq_len, hidden_size]
+        document_ids: torch.Tensor,  # [1, total_seq_len]
+        position_ids: torch.Tensor | None = None,  # [1, total_seq_len]
         loss_config: LossConfig | None = None,
         gamma: float = 4.0,
         max_anchors: int = 512,
         per_position_loss_weight: str = "fixed-exp-decay",
         dpace_alpha: float = 0.5,
+        materialize_logits: bool = True,
+        *,
         fused_linear: bool = False,
-        **kwargs,
+        correction_kwargs=None,
+        loss_kwargs=None,
+        **backbone_kwargs,
     ):
-        hidden, logits, targets, aligned_loss_mask, _ = self._backbone_forward(
-            hidden_states,
-            input_ids,
-            loss_mask,
-            verifier_last_hidden_states,
-            document_ids,
-            position_ids,
-            materialize_logits=not fused_linear,
-            max_anchors=max_anchors,
-            **kwargs,
+        inputs, layout = self.prepare_backbone_inputs(
+            hidden_states, input_ids, loss_mask, document_ids, position_ids, max_anchors
         )
+        hidden = self.backbone(*inputs, **backbone_kwargs)
+        logits = (
+            self.lm_head(hidden) if materialize_logits and not fused_linear else hidden
+        )
+        targets = self._build_targets(
+            verifier_last_hidden_states, layout.block_positions
+        )
+        correction = self.apply_training_correction(
+            hidden,
+            logits,
+            targets,
+            layout,
+            input_ids,
+            document_ids,
+            **(correction_kwargs or {}),
+        )
+        loss, metrics = self.compute_loss_and_metrics(
+            logits,
+            targets,
+            layout,
+            correction,
+            fused_linear=fused_linear,
+            loss_config=loss_config,
+            gamma=gamma,
+            per_position_loss_weight=per_position_loss_weight,
+            dpace_alpha=dpace_alpha,
+            **(loss_kwargs or {}),
+        )
+        return None, loss, metrics
+
+    def apply_training_correction(self, *_args, **_kwargs):
+        """Prepare algorithm-specific outputs for the training loss."""
+        return None  # noqa: RET501 - plain DFlash has no correction output
+
+    def compute_loss_and_metrics(
+        self,
+        logits,
+        targets,
+        layout: BlockLayout,
+        correction,  # noqa: ARG002 - plain DFlash has no correction output
+        *,
+        fused_linear: bool = False,
+        loss_config: LossConfig | None,
+        gamma: float,
+        per_position_loss_weight: str,
+        dpace_alpha: float,
+        **_kwargs,
+    ):
         metric_kwargs = {
             "gamma": gamma,
             "loss_config": loss_config,
@@ -544,21 +595,15 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
             "sample_from_anchor": self.config.sample_from_anchor,
         }
         if fused_linear:
-            # loss_implementation="fused_linear": no [1, T, V] draft logits.
-            loss, metrics = compute_metrics_from_hidden(
-                hidden,
+            return compute_metrics_from_hidden(
+                logits,  # backbone hidden states in fused-linear mode
                 self.lm_head.weight,
                 targets,
-                aligned_loss_mask,
+                layout.loss_mask,
                 self.block_size,
                 **metric_kwargs,
             )
-            return None, loss, metrics
-        loss, metrics = compute_metrics(
-            logits,
-            targets,
-            aligned_loss_mask,
-            self.block_size,
-            **metric_kwargs,
+
+        return compute_metrics(
+            logits, targets, layout.loss_mask, self.block_size, **metric_kwargs
         )
-        return None, loss, metrics

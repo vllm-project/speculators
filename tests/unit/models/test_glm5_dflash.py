@@ -127,12 +127,12 @@ def test_qwen3_dflash_keeps_fc_and_hidden_norm():
         )
     )
     assert isinstance(model.layers[0].self_attn, Qwen3DFlashAttention)
-    assert hasattr(model, "fc")
-    assert hasattr(model, "hidden_norm")
-    assert model.rotary_emb.config.head_dim == 16
+    assert hasattr(model.backbone, "fc")
+    assert hasattr(model.backbone, "hidden_norm")
+    assert model.backbone.rotary_emb.config.head_dim == 16
     keys = model.state_dict()
-    assert "fc.weight" in keys
-    assert "hidden_norm.weight" in keys
+    assert "backbone.fc.weight" in keys
+    assert "backbone.hidden_norm.weight" in keys
 
 
 def test_glm5_config_defaults_lock_576d_page_spec():
@@ -424,18 +424,18 @@ def test_glm5_dflash_uses_mla_projections():
     # Upstream keeps a ``q_proj = None`` placeholder when Q LoRA is enabled.
     assert getattr(attn, "q_proj", None) is None
     assert not hasattr(attn, "k_proj")
-    assert hasattr(model, "fc")
-    assert hasattr(model, "hidden_norm")
+    assert hasattr(model.backbone, "fc")
+    assert hasattr(model.backbone, "hidden_norm")
     keys = model.state_dict()
-    assert "fc.weight" in keys
-    assert "hidden_norm.weight" in keys
+    assert "backbone.fc.weight" in keys
+    assert "backbone.hidden_norm.weight" in keys
     assert "context_proj.weight" not in keys
-    assert "layers.0.self_attn.q_a_proj.weight" in keys
-    assert "layers.0.self_attn.kv_a_proj_with_mqa.weight" in keys
-    assert "layers.0.self_attn.fused_qkv_a_proj.weight" not in keys
+    assert "backbone.layers.0.self_attn.q_a_proj.weight" in keys
+    assert "backbone.layers.0.self_attn.kv_a_proj_with_mqa.weight" in keys
+    assert "backbone.layers.0.self_attn.fused_qkv_a_proj.weight" not in keys
     # Rotary cache is built at qk_rope_head_dim, not the MLA v/nope dim;
     # the config points head_dim at the rope slice (upstream convention).
-    assert model.rotary_emb.config.head_dim == 4
+    assert model.backbone.rotary_emb.config.head_dim == 4
     tl_config = model.config.transformer_layer_config
     assert tl_config.head_dim == tl_config.qk_rope_head_dim
 
@@ -477,8 +477,8 @@ def test_glm5_dflash_backward():
     _, loss, _ = _forward_tiny_glm5(model)
     loss.backward()
     # Trainable draft-side weights get finite grads...
-    assert model.fc.weight.grad is not None
-    assert torch.isfinite(model.fc.weight.grad).all()
+    assert model.backbone.fc.weight.grad is not None
+    assert torch.isfinite(model.backbone.fc.weight.grad).all()
     # ... while verifier-owned weights stay frozen.
     assert model.verifier_norm.weight.grad is None
     assert model.verifier_lm_head.weight.grad is None
@@ -529,7 +529,7 @@ def test_glm5_dspark_builds_mla_layers():
     model = DSparkDraftModel(config)
     assert isinstance(model.layers[0].self_attn, DFlashMLAAttention)
     assert model.markov_head is not None
-    assert hasattr(model, "fc")
+    assert hasattr(model.backbone, "fc")
 
 
 def test_glm5_dspark_save_pretrained_export_contract(tmp_path):
