@@ -203,24 +203,35 @@ class Eagle3Converter:
         )
 
         # Remap midlayer.* to layers.0.*
-        remapped_weights = {}
+        remapped_weights: dict[str, torch.Tensor] = {}
         for key, value in weights.items():
             if key.startswith("midlayer."):
-                new_key = key.replace("midlayer.", "layers.0.")
-                remapped_weights[new_key] = value
-                logger.debug(f"Remapped weight key: {key} -> {new_key}")
+                target_key = f"layers.0.{key.removeprefix('midlayer.')}"
+                logger.debug(f"Remapped weight key: {key} -> {target_key}")
             else:
-                remapped_weights[key] = value
+                target_key = key
+            if target_key in remapped_weights:
+                raise ValueError(
+                    f"Key remapping collision: '{key}' maps to '{target_key}', "
+                    "which is already present in the checkpoint."
+                )
+            remapped_weights[target_key] = value
 
         missing_keys, unexpected_keys = model.load_state_dict(
             remapped_weights, strict=False
         )  # type: ignore[attr-defined]
 
-        if missing_keys:
-            logger.warning(f"Missing keys in checkpoint: {missing_keys}")
-
         if unexpected_keys:
             logger.warning(f"Unexpected keys in checkpoint: {unexpected_keys}")
+
+        if missing_keys:
+            msg = (
+                "Missing required keys in checkpoint; refusing to save "
+                f"uninitialized weights: {missing_keys}"
+            )
+            if unexpected_keys:
+                msg += f" (unexpected keys: {unexpected_keys})"
+            raise ValueError(msg)
 
         tl_config = config.transformer_layer_config
         # transformers 5 keeps ``torch_dtype`` only as a deprecated alias.
