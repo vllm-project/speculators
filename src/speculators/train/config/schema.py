@@ -622,6 +622,38 @@ class XPressArgs(_Group):
     )
 
 
+class DNeoArgs(_Group):
+    """DNeo-exclusive knobs (arXiv:2611.21925)."""
+
+    feature_encoder: Literal["mofa", "diagonal"] = Field(
+        default="mofa",
+        description="DNeo: target feature encoder. 'mofa': one softmax weight per "
+        "target layer; 'diagonal': one weight per target layer and coordinate. "
+        "Needs the draft hidden size to equal the target's.",
+    )
+    prefix_only_attention: bool = Field(
+        default=True,
+        description="DNeo: draft positions attend to the context features only, "
+        "not to each other.",
+    )
+    causal_head_rank: int = Field(
+        default=256,
+        description="DNeo: rank of the fused causal head (0 disables it).",
+    )
+    dneo_conv_kernel_size: int = Field(
+        default=2, description="DNeo: local convolution kernel size."
+    )
+    dneo_conv_group_size: int = Field(
+        default=16, description="DNeo: channel group size for local convolution."
+    )
+    num_target_layers: int = Field(
+        default=6,
+        description="DNeo: number of target layers the DNeo protocol selects when "
+        "--target-layer-ids is unset (the first layer plus the rest from the "
+        "second half of the target).",
+    )
+
+
 class PEagleArgs(_Group):
     num_depths: int = Field(
         default=8,
@@ -662,6 +694,7 @@ _GROUPS: dict[str, type[_Group]] = {
     "dflash2": DFlash2Args,
     "dspark": DSparkArgs,
     "xpress": XPressArgs,
+    "dneo": DNeoArgs,
     "peagle": PEagleArgs,
     "mtp": MTPArgs,
 }
@@ -759,7 +792,7 @@ class TrainConfig(BaseSettings):
     speculator_type: str = Field(
         default="eagle3",
         description="Type of speculator model to train "
-        "(eagle3, dflash, dflash2, dspark, xpress, peagle, mtp).",
+        "(eagle3, dflash, dflash2, dspark, xpress, dneo, peagle, mtp).",
     )
     dry_run: bool = Field(
         default=False,
@@ -787,6 +820,7 @@ class TrainConfig(BaseSettings):
     dflash2: DFlash2Args = Field(default_factory=DFlash2Args)
     dspark: DSparkArgs = Field(default_factory=DSparkArgs)
     xpress: XPressArgs = Field(default_factory=XPressArgs)
+    dneo: DNeoArgs = Field(default_factory=DNeoArgs)
     peagle: PEagleArgs = Field(default_factory=PEagleArgs)
     mtp: MTPArgs = Field(default_factory=MTPArgs)
 
@@ -828,6 +862,7 @@ class TrainConfig(BaseSettings):
             "dspark",
             "dflash2",
             "xpress",
+            "dneo",
         }
         if self.draft.draft_arch is None:
             self.draft.draft_arch = "llama" if is_eagle3 else "qwen3"

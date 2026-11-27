@@ -27,13 +27,15 @@ logger = logging.getLogger("speculators")
 # Names of parameters that are 2D but should still be optimized with AdamW rather than
 # Muon, following the convention from Keller Jordan's Muon (embeddings, embedding-like
 # codebooks, Markov vocabulary factors, and output heads are excluded from the
-# orthogonalized update).
+# orthogonalized update; so are DNeo's per-layer, per-coordinate encoder gains, which
+# are a stack of vectors rather than a linear map).
 _ADAMW_NAME_HINTS = (
     "embed_tokens",
     "lm_head",
     "codebook",
     "markov_w1",
     "markov_w2",
+    "layer_weights",
 )
 
 # Muon only orthogonalizes 2D weight matrices.
