@@ -6,11 +6,11 @@ A review is one `review.json` file. `scripts/review_payload.py` checks it and tu
 {
   "version": 1,
   "pr": 1234,
-  "summary": "Your verdict on the design in one or two short sentences.",
+  "summary": "Design looks good; two gaps below.",
   "findings": [
-    {"confidence": 90, "file": "src/speculators/x.py", "line": 42, "body": "What is wrong and why it matters, then the fix."},
-    {"confidence": 85, "file": "src/speculators/x.py", "start_line": 40, "line": 44, "body": "A finding about a range of lines."},
-    {"confidence": 80, "body": "A finding about the PR as a whole, such as a missing Tests section."}
+    {"confidence": 90, "file": "src/speculators/x.py", "line": 56, "body": "This recomputes the `argmax` the fused pass already returned; use `out.pred_ids` instead."},
+    {"confidence": 85, "file": "src/speculators/x.py", "start_line": 40, "line": 44, "body": "A NaN validation loss never compares lower, so `checkpoint_best` stays on the first epoch. Skip non-finite losses here."},
+    {"confidence": 80, "body": "The description has no Tests section, which [AGENTS.md › Pull requests](https://github.com/vllm-project/speculators/blob/{base.sha}/AGENTS.md#pull-requests) asks for."}
   ]
 }
 ```
