@@ -100,6 +100,23 @@ except ImportError:
     pass
 
 
+try:
+    from transformers.models.gemma2.modeling_gemma2 import (
+        Gemma2DecoderLayer,
+        Gemma2RMSNorm,
+        Gemma2RotaryEmbedding,
+    )
+
+    model_classes["gemma2"] = ModelComponents(
+        Gemma2DecoderLayer,
+        Gemma2DecoderLayer,
+        Gemma2RMSNorm,
+        Gemma2RotaryEmbedding,
+    )
+except ImportError:
+    pass
+
+
 def override_components(model_type: str, **overrides) -> ModelComponents:
     """Override specific components from a base model architecture.
 
