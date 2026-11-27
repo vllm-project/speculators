@@ -122,7 +122,7 @@ def test_run_training_updates_checkpoint_best_among_saved_checkpoints_save_best_
         "expected_best_target",
     ),
     [
-        (False, 3, [0, 2, 3], {"0", "2", "3"}, "2"),
+        (False, 3, [0, 2, 3], {"0", "2", "3"}, "3"),
         (True, 3, [0, 1, 3], {"3"}, "3"),
     ],
 )
@@ -208,7 +208,7 @@ def test_checkpoint_freq_flag_controls_saves(
     best_path = tmp_path / "checkpoint_best"
     assert best_path.exists()
     assert best_path.is_symlink()
-    assert best_path.resolve() == (tmp_path / "5").resolve()
+    assert best_path.resolve() == (tmp_path / "6").resolve()
 
 
 def test_save_and_load_val_metrics(tmp_path: Path):

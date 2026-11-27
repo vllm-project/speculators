@@ -634,6 +634,25 @@ class Trainer:
         for opt in self.optimizers:
             opt.zero_grad()
 
+    def _discard_window_gradients(self) -> None:
+        """Clear optimizer and FSDP2 no_sync gradients for a rejected window."""
+        self._optimizers_zero_grad()
+        if not isinstance(self.model, FSDPModule):
+            return
+        reset_iter_state = getattr(self.model, "reset_iter_state", None)
+        if callable(reset_iter_state):
+            reset_iter_state()
+            return
+        for module in self.model.modules():
+            if not isinstance(module, FSDPModule):
+                continue
+            state = module._get_fsdp_state()  # noqa: SLF001
+            for group in getattr(state, "_fsdp_param_groups", ()):
+                for fsdp_param in getattr(group, "fsdp_params", ()):
+                    fsdp_param.unsharded_accumulated_grad = None
+                    if hasattr(fsdp_param, "_unsharded_param"):
+                        fsdp_param.unsharded_param.grad = None
+
     def _optimizers_step(self):
         for opt in self.optimizers:
             opt.step()
@@ -854,7 +873,8 @@ class Trainer:
                             epoch,
                             loss_desc,
                         )
-                        self._optimizers_zero_grad()
+                        del _draft_tokens, loss, metrics
+                        self._discard_window_gradients()
                     else:
                         (loss / accum).backward()
 
@@ -1015,7 +1035,13 @@ class Trainer:
         root_logger.info(f"Checkpoint saved to {self.checkpointer.path / str(epoch)}")
         return True
 
-    def maybe_update_best(self, epoch: int, val_metrics: dict | None):
+    def maybe_update_best(
+        self,
+        epoch: int,
+        val_metrics: dict | None,
+        *,
+        checkpoint_saved: bool | None = None,
+    ):
         if val_metrics is None or "loss_epoch" not in val_metrics:
             return
         if val_metrics["loss_epoch"] >= self.best_val_loss:
@@ -1028,6 +1054,9 @@ class Trainer:
             # maybe_save_checkpoint returns early when save_best is set, so the
             # end-of-epoch cursor has to be written here or resume restarts at 0.
             self._save_training_state(epoch, local_step=0)
+        elif checkpoint_saved is not None:
+            if not checkpoint_saved:
+                return
         elif self.config.checkpoint_freq >= 1 and not (
             epoch == 0 or (epoch + 1) % int(self.config.checkpoint_freq) == 0
         ):
@@ -1045,8 +1074,6 @@ class Trainer:
     @with_graceful_shutdown()
     def run_training(self):
         n_epochs = self.config.num_epochs
-        last_epoch: int | None = None
-        last_epoch_saved = False
         for epoch in range(self.current_epoch, n_epochs):
             root_logger.info(f"Training epoch {epoch + 1}/{n_epochs} started")
             self.train_epoch(epoch)
@@ -1055,8 +1082,8 @@ class Trainer:
             if self.is_distributed:
                 dist.barrier()
 
-            last_epoch = epoch
-            last_epoch_saved = self.maybe_save_checkpoint(epoch)
+            force_final = epoch == n_epochs - 1 and not self.config.save_best
+            epoch_saved = self.maybe_save_checkpoint(epoch, force=force_final)
 
             if self.is_distributed:
                 dist.barrier()
@@ -1073,16 +1100,7 @@ class Trainer:
             if self.is_distributed:
                 dist.barrier()
 
-            self.maybe_update_best(epoch, val_metrics)
+            self.maybe_update_best(epoch, val_metrics, checkpoint_saved=epoch_saved)
 
-            if self.is_distributed:
-                dist.barrier()
-
-        if (
-            last_epoch is not None
-            and not last_epoch_saved
-            and not self.config.save_best
-        ):
-            self.maybe_save_checkpoint(last_epoch, force=True)
             if self.is_distributed:
                 dist.barrier()
