@@ -1,11 +1,18 @@
+import importlib
+import logging
 from pathlib import Path
 
 import pytest
+import typer
 from datasets import Dataset as HFDataset
 
-from speculators.cli.prepare_data import assert_safe_to_overwrite
+from speculators.cli.prepare_data import assert_safe_to_overwrite, prepare_data
 from speculators.data_generation import preprocessing as preprocessing_module
 from speculators.data_generation.preprocessing import load_and_preprocess_dataset
+
+# The CLI package binds the command function to this name, which shadows the
+# submodule. Patch the module object so the command sees the test double.
+_prepare_data_module = importlib.import_module("speculators.cli.prepare_data")
 
 
 def test_assert_safe_to_overwrite_allows_prepare_data_artifacts(tmp_path: Path):
@@ -36,6 +43,126 @@ def test_assert_safe_to_overwrite_honors_custom_token_freq_path(tmp_path: Path):
     token_freq_path.touch()
 
     assert_safe_to_overwrite(output, token_freq_path)
+
+
+def _forbid_dataset_load(monkeypatch: pytest.MonkeyPatch) -> None:
+    def fail_load(*_args, **_kwargs):
+        raise AssertionError("prepare-data must not rebuild this output directory")
+
+    monkeypatch.setattr(_prepare_data_module, "load_and_preprocess_dataset", fail_load)
+
+
+def _write_arrow_output(path: Path, metadata: list[str]) -> None:
+    path.mkdir()
+    (path / "data-00000-of-00001.arrow").write_text("shard")
+    for name in metadata:
+        (path / name).write_text("{}")
+
+
+@pytest.mark.parametrize(
+    "metadata",
+    [
+        [],
+        ["dataset_info.json"],
+        ["state.json"],
+    ],
+)
+def test_prepare_data_rejects_partial_directory(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+    metadata: list[str],
+):
+    output = tmp_path / "out"
+    _write_arrow_output(output, metadata)
+    _forbid_dataset_load(monkeypatch)
+
+    with (
+        caplog.at_level(logging.ERROR, logger="speculators.cli.prepare_data"),
+        pytest.raises(typer.Exit) as exc,
+    ):
+        prepare_data(
+            model="target-model",
+            data=["conversations.jsonl"],
+            output=str(output),
+        )
+
+    assert exc.value.exit_code == 1, (
+        f"partial dataset directory exited {exc.value.exit_code}; "
+        "an incomplete save must not be treated as finished"
+    )
+    assert "incomplete" in caplog.text.lower()
+    assert "--overwrite" in caplog.text
+    assert (output / "data-00000-of-00001.arrow").read_text() == "shard"
+
+
+def test_prepare_data_skips_complete_directory(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+):
+    output = tmp_path / "out"
+    _write_arrow_output(output, ["dataset_info.json", "state.json"])
+    _forbid_dataset_load(monkeypatch)
+
+    with (
+        caplog.at_level(logging.INFO, logger="speculators.cli.prepare_data"),
+        pytest.raises(typer.Exit) as exc,
+    ):
+        prepare_data(
+            model="target-model",
+            data=["conversations.jsonl"],
+            output=str(output),
+        )
+
+    assert exc.value.exit_code == 0
+    assert "skipping" in caplog.text.lower()
+    assert (output / "data-00000-of-00001.arrow").read_text() == "shard"
+
+
+@pytest.mark.parametrize(
+    "metadata",
+    [
+        [],
+        ["dataset_info.json", "state.json"],
+    ],
+)
+def test_prepare_data_overwrite_replaces_directory(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    metadata: list[str],
+):
+    output = tmp_path / "out"
+    _write_arrow_output(output, metadata)
+    calls = {"load": 0, "save": 0}
+
+    class _Dataset:
+        def save_to_disk(self, path: str) -> None:
+            calls["save"] += 1
+            assert Path(path) == output
+            (output / "data-00000-of-00001.arrow").write_text("fresh")
+            (output / "dataset_info.json").write_text("{}")
+            (output / "state.json").write_text("{}")
+
+    def fake_load(*_args, **_kwargs):
+        calls["load"] += 1
+        assert output.is_dir()
+        assert not (output / "data-00000-of-00001.arrow").exists()
+        return _Dataset(), None
+
+    monkeypatch.setattr(_prepare_data_module, "load_and_preprocess_dataset", fake_load)
+
+    prepare_data(
+        model="target-model",
+        data=["conversations.jsonl"],
+        output=str(output),
+        overwrite=True,
+    )
+
+    assert calls == {"load": 1, "save": 1}
+    assert (output / "data-00000-of-00001.arrow").read_text() == "fresh"
+    assert (output / "dataset_info.json").is_file()
+    assert (output / "state.json").is_file()
 
 
 class _FakeProcessor:
