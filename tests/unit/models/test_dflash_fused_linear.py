@@ -90,12 +90,19 @@ def _inputs(dtype: torch.dtype) -> dict[str, torch.Tensor]:
     }
 
 
-def _step(model, inputs, spec, implementation, weighting):
+def _step(
+    model,
+    inputs,
+    spec,
+    implementation,
+    weighting,
+    max_anchors=MAX_ANCHORS,
+):
     train_kwargs, _ = DFlashDraftModel.get_trainer_kwargs(
         loss_fn=spec,
         loss_implementation=implementation,
         per_position_loss_weight=weighting,
-        max_anchors=MAX_ANCHORS,
+        max_anchors=max_anchors,
     )
     model.zero_grad(set_to_none=True)
     torch.manual_seed(2)  # anchor sampling
@@ -109,10 +116,20 @@ def _step(model, inputs, spec, implementation, weighting):
     return loss.detach().float(), metrics, grads
 
 
-def _compare(model, inputs, spec, weighting, loss_rtol, grad_rtol):
-    loss, metrics, grads = _step(model, inputs, spec, "fused", weighting)
+def _compare(
+    model,
+    inputs,
+    spec,
+    weighting,
+    loss_rtol,
+    grad_rtol,
+    max_anchors=MAX_ANCHORS,
+):
+    loss, metrics, grads = _step(
+        model, inputs, spec, "fused", weighting, max_anchors=max_anchors
+    )
     loss_fl, metrics_fl, grads_fl = _step(
-        model, inputs, spec, "fused_linear", weighting
+        model, inputs, spec, "fused_linear", weighting, max_anchors=max_anchors
     )
 
     torch.testing.assert_close(loss_fl, loss, rtol=loss_rtol, atol=1e-6)
@@ -154,6 +171,24 @@ def test_training_step_matches_fused_eager(
     model = _model(sample_from_anchor, torch.float32)
     with torch.compiler.set_stance("force_eager"):
         _compare(model, _inputs(torch.float32), spec, weighting, 1e-5, 1e-3)
+
+
+@requires_gpu
+@pytest.mark.parametrize("sample_from_anchor", [False, True])
+def test_recomputed_targets_cover_the_full_sequence_branch(sample_from_anchor):
+    """max_anchors * block == seq_len takes DFlash's full-sequence target branch
+    (roll then gather); the recompute path gathers verifier rows first."""
+    model = _model(sample_from_anchor, torch.float32)
+    with torch.compiler.set_stance("force_eager"):
+        _compare(
+            model,
+            _inputs(torch.float32),
+            '{"kl_div": 0.5, "tv": 0.5}',
+            "fixed-exp-decay",
+            1e-5,
+            1e-3,
+            max_anchors=SEQ_LEN // BLOCK,
+        )
 
 
 @requires_gpu
