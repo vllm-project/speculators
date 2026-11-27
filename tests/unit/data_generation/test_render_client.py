@@ -23,7 +23,7 @@ def test_render_reports_context_limit_without_retry():
 
     with (
         patch.object(render_client, "_post", return_value=bad) as post,
-        pytest.raises(InvalidResponseError) as exc_info,
+        pytest.raises(render_client.RenderContextLimitError) as exc_info,
     ):
         render_client.render_conversation(
             "http://x",
@@ -39,3 +39,22 @@ def test_render_reports_context_limit_without_retry():
     assert "--seq-length" in message
     assert "8192" in message
     assert "max_tokens must be at least 1" in message
+
+
+def test_render_context_limit_text_without_truncation_is_not_a_server_limit():
+    bad = _resp(
+        HTTPStatus.BAD_REQUEST,
+        text="max_tokens must be at least 1, got 0",
+    )
+
+    with (
+        patch.object(render_client, "_post", return_value=bad),
+        pytest.raises(InvalidResponseError) as exc_info,
+    ):
+        render_client.render_conversation(
+            "http://x",
+            [{"role": "user", "content": "hi"}],
+            add_generation_prompt=False,
+        )
+
+    assert not isinstance(exc_info.value, render_client.RenderContextLimitError)
