@@ -19,6 +19,14 @@ DEFAULT_REQUEST_TIMEOUT = 120  # seconds
 DEFAULT_MAX_RETRIES = 3
 RETRY_BACKOFF_BASE = 2  # seconds
 
+# The writer (vLLM's hidden-states connector) holds an exclusive flock on
+# "<path>.lock" from request scheduling until its writer thread finishes
+# save_file, so a wait is mostly queueing delay on the server's writer pool,
+# not the write itself. Budget for backlog, not for a single file.
+DEFAULT_LOCK_TIMEOUT = 300.0  # seconds
+# Interval between "still waiting" progress logs while a lock is held.
+_LOCK_LOG_INTERVAL = 30.0  # seconds
+
 # Transient statuses worth retrying: request timeout, conflict, too-early, and
 # rate limiting, plus all 5xx. Other non-2xx replies (e.g. 400/401/404) are
 # permanent config/client errors and fail fast.
@@ -190,24 +198,77 @@ def validate_vllm_model(
         client.close()
 
 
-async def _poll_lock_async(fd, poll_interval):
-    while True:
-        try:
-            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-            return
-        except BlockingIOError:
-            await asyncio.sleep(poll_interval)
+def _data_file_state(lock_path: str) -> str:
+    """Best-effort state of the file the lock guards, for diagnostics."""
+    data_path = lock_path[: -len(".lock")] if lock_path.endswith(".lock") else lock_path
+    try:
+        size = os.path.getsize(data_path)
+    except OSError:
+        return "data file not yet created"
+    return f"data file size {size / 2**20:.1f} MiB"
+
+
+def _lock_wait_timed_out(
+    lock_path: str, start: float, timeout: float, context: str | None
+) -> TimeoutError:
+    where = f" for {context}" if context else ""
+    return TimeoutError(
+        f"Timed out after {time.monotonic() - start:.1f}s (limit {timeout:.1f}s) "
+        f"waiting for the vLLM server to finish writing{where}: {lock_path} "
+        f"({_data_file_state(lock_path)}). The writer holds the lock until the "
+        "file is fully written, so this is usually writer backlog rather than "
+        "deadlock; increase the lock-wait timeout if the file was still growing."
+    )
+
+
+def _log_lock_wait_progress(
+    lock_path: str, start: float, context: str | None, next_log: float
+) -> float:
+    """Log that the writer is still holding the lock; return the next log time."""
+    where = f" for {context}" if context else ""
+    logger.warning(
+        "Still waiting for hidden-states write%s after %.0fs: %s (%s)",
+        where,
+        time.monotonic() - start,
+        lock_path,
+        _data_file_state(lock_path),
+    )
+    return next_log + _LOCK_LOG_INTERVAL
 
 
 async def wait_for_lock_async(
-    lock_path,
-    timeout=10.0,  # noqa: ASYNC109
-    poll_interval=0.1,
+    lock_path: str,
+    timeout: float = DEFAULT_LOCK_TIMEOUT,  # noqa: ASYNC109
+    poll_interval: float = 0.1,
+    context: str | None = None,
 ):
+    """Wait until the writer releases the lock on ``lock_path``, then remove it.
+
+    Polls with a non-blocking flock on a monotonic deadline so a timeout raises
+    a ``TimeoutError`` that names the lock, the elapsed and configured wait, and
+    the state of the guarded file. ``context`` (e.g. "sample 2969") is included
+    in logs and the timeout message.
+    """
+    start = time.monotonic()
+    deadline = start + timeout
+    next_log = start + _LOCK_LOG_INTERVAL
     fd = os.open(lock_path, os.O_RDWR)
     try:
-        async with asyncio.timeout(timeout):
-            await _poll_lock_async(fd, poll_interval)
+        while True:
+            try:
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except BlockingIOError:
+                now = time.monotonic()
+                if now >= deadline:
+                    raise _lock_wait_timed_out(
+                        lock_path, start, timeout, context
+                    ) from None
+                if now >= next_log:
+                    next_log = _log_lock_wait_progress(
+                        lock_path, start, context, next_log
+                    )
+                await asyncio.sleep(poll_interval)
     except BaseException:
         os.close(fd)
         raise
@@ -215,19 +276,32 @@ async def wait_for_lock_async(
     os.remove(lock_path)
 
 
-def wait_for_lock(lock_path, timeout=10.0, poll_interval=0.1):
+def wait_for_lock(
+    lock_path: str,
+    timeout: float = DEFAULT_LOCK_TIMEOUT,
+    poll_interval: float = 0.1,
+    context: str | None = None,
+):
+    """Synchronous variant of :func:`wait_for_lock_async`."""
+    start = time.monotonic()
+    deadline = start + timeout
+    next_log = start + _LOCK_LOG_INTERVAL
     fd = os.open(lock_path, os.O_RDWR)
     try:
-        deadline = time.monotonic() + timeout
         while True:
             try:
                 fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
                 break
             except BlockingIOError:
-                if time.monotonic() >= deadline:
-                    raise TimeoutError(
-                        f"Timed out waiting for lock: {lock_path}"
+                now = time.monotonic()
+                if now >= deadline:
+                    raise _lock_wait_timed_out(
+                        lock_path, start, timeout, context
                     ) from None
+                if now >= next_log:
+                    next_log = _log_lock_wait_progress(
+                        lock_path, start, context, next_log
+                    )
                 time.sleep(poll_interval)
     except BaseException:
         os.close(fd)

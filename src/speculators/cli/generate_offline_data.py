@@ -34,6 +34,7 @@ from speculators.data_generation.offline import (
     get_indices_to_process,
 )
 from speculators.data_generation.vllm_client import (
+    DEFAULT_LOCK_TIMEOUT,
     DEFAULT_MAX_RETRIES,
     DEFAULT_REQUEST_TIMEOUT,
     generate_hidden_states_async,
@@ -143,6 +144,7 @@ async def _worker(  # noqa: C901
     hidden_states_output_dir: Path,
     validate_outputs: bool,
     request_timeout: float | None,
+    lock_timeout: float,
     max_retries: int,
     fail_on_error: bool,
     skipped_indices: list[int],
@@ -178,7 +180,9 @@ async def _worker(  # noqa: C901
                 vllm_s = time.perf_counter() - t_vllm
             lock_path = hidden_states_path + ".lock"
             if Path(lock_path).exists():  # noqa: ASYNC240
-                await wait_for_lock_async(lock_path)
+                await wait_for_lock_async(
+                    lock_path, timeout=lock_timeout, context=f"sample {idx}"
+                )
 
             async with write_semaphore:
                 write_s = await asyncio.to_thread(
@@ -274,6 +278,7 @@ async def _generate_and_save_hidden_states(
     concurrency: int,
     validate_outputs: bool,
     request_timeout: float,
+    lock_timeout: float,
     max_retries: int,
     fail_on_error: bool,
     max_consecutive_errors: int | None,
@@ -355,6 +360,7 @@ async def _generate_and_save_hidden_states(
                         hidden_states_dir,
                         validate_outputs,
                         request_timeout,
+                        lock_timeout,
                         max_retries,
                         fail_on_error,
                         skipped_indices,
@@ -453,6 +459,18 @@ def generate_offline_data(
             help="Timeout in seconds for each individual vLLM request",
         ),
     ] = DEFAULT_REQUEST_TIMEOUT,
+    lock_timeout: Annotated[
+        float,
+        typer.Option(
+            help=(
+                "Seconds to wait for the vLLM server to finish writing each "
+                "hidden-states file (signalled by its .lock file) before "
+                "giving up on the sample. The server holds the lock until the "
+                "write completes, so long waits usually mean writer backlog, "
+                "not deadlock. Independent of --request-timeout."
+            ),
+        ),
+    ] = DEFAULT_LOCK_TIMEOUT,
     max_retries: Annotated[
         int,
         typer.Option(
@@ -525,6 +543,7 @@ def generate_offline_data(
                 concurrency=concurrency,
                 validate_outputs=validate_outputs,
                 request_timeout=request_timeout,
+                lock_timeout=lock_timeout,
                 max_retries=max_retries,
                 fail_on_error=fail_on_error,
                 max_consecutive_errors=max_consecutive_errors,

@@ -45,6 +45,8 @@ speculators generate-offline-data \
 
 - **`--request-timeout`** (float) Timeout in seconds for each individual vLLM request.
 
+- **`--lock-timeout`** (float, default: `300.0`) Seconds to wait for the vLLM server to finish writing each hidden-states file (signalled by its `.lock` file) before giving up on the sample. The server holds the lock until the write completes, so long waits usually mean writer backlog on the server, not deadlock. Independent of `--request-timeout`.
+
 - **`--max-retries`** (int) Maximum number of retry attempts per request on failure.
 
 - **`--fail-on-error`** (flag) Abort when a request fails after all retries. By default, failed samples are skipped.
