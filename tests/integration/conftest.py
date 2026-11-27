@@ -10,6 +10,7 @@ from transformers.models.qwen3.configuration_qwen3 import Qwen3Config
 
 from speculators import SpeculatorsConfig, VerifierConfig
 from speculators.models.dflash import DFlashSpeculatorConfig
+from speculators.models.dflash.config import Glm5DSparkDecoderConfig
 from speculators.models.dflash.core import DFlashDraftModel
 from speculators.models.eagle3 import Eagle3SpeculatorConfig
 from speculators.models.eagle3.core import Eagle3DraftModel
@@ -155,6 +156,65 @@ def make_dflash_model(
             verifier=VerifierConfig(
                 name_or_path=None,
                 architectures=["Qwen3ForCausalLM"],
+            ),
+        ),
+    )
+    model = DFlashDraftModel(config)
+    _fill_nan_weights(model)
+    return model.to(device=device, dtype=dtype)  # type: ignore[call-arg]
+
+
+def make_dflash_glm5_model(
+    *,
+    draft_vocab_size: int = 64,
+    block_size: int = 4,
+    draft_attn_impl: str | None = None,
+    device: str = "cuda:0",
+    dtype: torch.dtype = torch.bfloat16,
+) -> DFlashDraftModel:
+    """Create a tiny DFlash model with a GLM-5 MLA draft decoder.
+
+    The tiny geometry keeps GLM-5's layout constraints (Q-LoRA, MLA latent,
+    rope on ``qk_rope_head_dim`` only) and exercises the padded-V path
+    (``v_head_dim != qk_head_dim``).
+    """
+    transformer_config = Glm5DSparkDecoderConfig(
+        vocab_size=128,
+        hidden_size=64,
+        intermediate_size=256,
+        num_hidden_layers=2,
+        num_attention_heads=4,
+        num_key_value_heads=4,
+        max_position_embeddings=256,
+        rms_norm_eps=1e-6,
+        tie_word_embeddings=False,
+        q_lora_rank=32,
+        kv_lora_rank=16,
+        qk_nope_head_dim=16,
+        qk_rope_head_dim=8,
+        v_head_dim=16,
+        rope_interleave=True,
+        layer_types=["full_attention", "full_attention"],
+    )
+    if draft_attn_impl is not None:
+        transformer_config._attn_implementation = draft_attn_impl
+    config = DFlashSpeculatorConfig(
+        transformer_layer_config=transformer_config,
+        draft_vocab_size=draft_vocab_size,
+        block_size=block_size,
+        # 3 target layers to match the shared make_batch/_make_samples fixtures
+        # (the GQA factory uses [0, 1, 2] for the same reason).
+        aux_hidden_state_layer_ids=[0, 1, 2],
+        mask_token_id=0,
+        speculators_config=SpeculatorsConfig(
+            algorithm="dflash",
+            proposal_methods=[
+                GreedyTokenProposalConfig(speculative_tokens=block_size - 1)
+            ],
+            default_proposal_method="greedy",
+            verifier=VerifierConfig(
+                name_or_path=None,
+                architectures=["GlmMoeDsaForCausalLM"],
             ),
         ),
     )

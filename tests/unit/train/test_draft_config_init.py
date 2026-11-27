@@ -27,6 +27,7 @@ from transformers.models.nemotron_h.configuration_nemotron_h import NemotronHCon
 from transformers.models.qwen3.configuration_qwen3 import Qwen3Config
 
 from speculators import SpeculatorsConfig, VerifierConfig
+from speculators.models.dflash.config import Glm5DSparkDecoderConfig
 from speculators.models.eagle3 import Eagle3DraftModel, Eagle3SpeculatorConfig
 from speculators.proposals.greedy import GreedyTokenProposalConfig
 from speculators.train.cli import (
@@ -433,6 +434,63 @@ def test_load_draft_config_missing_model_type_raises(tmp_path, monkeypatch):
         load_draft_transformer_layer_config(str(tmp_path), "dummy-verifier")
 
 
+TINY_GLM5_DSPARK_KWARGS: dict[str, Any] = {
+    "vocab_size": 100,
+    "hidden_size": 64,
+    "intermediate_size": 128,
+    "num_hidden_layers": 2,
+    "num_attention_heads": 2,
+    "num_key_value_heads": 2,
+    "head_dim": 4,
+    "max_position_embeddings": 64,
+    "rms_norm_eps": 1e-6,
+    "tie_word_embeddings": False,
+    "q_lora_rank": 16,
+    "kv_lora_rank": 8,
+    "qk_nope_head_dim": 8,
+    "qk_rope_head_dim": 4,
+    "v_head_dim": 8,
+    "rope_interleave": True,
+    "layer_types": ["full_attention", "full_attention"],
+}
+
+
+def _save_glm5_draft_config(tmp_path):
+    Glm5DSparkDecoderConfig(**TINY_GLM5_DSPARK_KWARGS).save_pretrained(tmp_path)
+
+
+@pytest.mark.parametrize("speculator_type", ["dflash", "dspark", None])
+def test_load_draft_config_glm5_accepted_for_dflash_family(
+    tmp_path, monkeypatch, speculator_type
+):
+    _save_glm5_draft_config(tmp_path)
+    _patch_verifier(monkeypatch, hidden_size=64, vocab_size=100)
+
+    out = load_draft_transformer_layer_config(
+        str(tmp_path), "dummy-verifier", speculator_type=speculator_type
+    )
+
+    assert isinstance(out, Glm5DSparkDecoderConfig)
+
+
+@pytest.mark.parametrize(
+    "speculator_type", ["dflash2", "xpress", "eagle3", "peagle", "mtp"]
+)
+def test_load_draft_config_glm5_with_wrong_speculator_type_raises(
+    tmp_path, monkeypatch, speculator_type
+):
+    """A glm5_dspark decoder with non-MLA speculators (e.g. dflash2) would
+    train GQA layers yet save them under model_type glm5_dspark; the
+    combination is rejected."""
+    _save_glm5_draft_config(tmp_path)
+    _patch_verifier(monkeypatch, hidden_size=64, vocab_size=100)
+
+    with pytest.raises(ValueError, match="glm5_dspark"):
+        load_draft_transformer_layer_config(
+            str(tmp_path), "dummy-verifier", speculator_type=speculator_type
+        )
+
+
 # ---------------------------------------------------------------------------
 # _build_from_config_only
 # ---------------------------------------------------------------------------
@@ -619,6 +677,10 @@ def _capture_full_attention_indices(
         mask_token_id=None,
         trust_remote_code=False,
         draft_mrope_full_head_hack=True,
+        # production args come from TrainConfig.flatten(), which always
+        # carries the glm5 LoRA-rank overrides (None when unset).
+        q_lora_rank=None,
+        kv_lora_rank=None,
     )
     build_draft_model(args, _FakeModel, None, None, 128)  # type: ignore[arg-type]
     return captured["full_attention_indices"]

@@ -21,6 +21,7 @@ from tests.integration.conftest import (
     TINY_QWEN3_5_KWARGS,
     VOCAB_SIZE,
     make_batch,
+    make_dflash_glm5_model,
     make_dflash_model,
     make_eagle3_model,
     make_mtp_model,
@@ -278,6 +279,49 @@ class TestDFlashParams:
         for backend in self.ATTN_BACKENDS:
             torch.manual_seed(0)
             model = make_dflash_model(draft_attn_impl=backend)
+            batch = make_batch(
+                max_len=MAX_LEN, samples=samples, hidden_size=HIDDEN_SIZE
+            )
+            _, loss, _ = model(**batch, max_anchors=8)
+            results[backend] = loss.detach().cpu()
+            del model
+            torch.cuda.empty_cache()
+
+        ref_backend = self.ATTN_BACKENDS[0]
+        for backend in self.ATTN_BACKENDS[1:]:
+            torch.testing.assert_close(
+                results[backend],
+                results[ref_backend],
+                atol=1e-3,
+                rtol=1e-3,
+                msg=f"{backend} loss diverges from {ref_backend}",
+            )
+
+
+@requires_cuda
+class TestDFlashMLAParams:
+    """GLM-5 MLA draft path: backward coverage and backend parity."""
+
+    ATTN_BACKENDS = ["simple_flex_attention", "sdpa", "eager"]
+
+    def test_forward_backward(self):
+        model = make_dflash_glm5_model()
+        samples = _make_samples([128])
+        batch = make_batch(max_len=MAX_LEN, samples=samples, hidden_size=HIDDEN_SIZE)
+        draft_tokens, loss, metrics = model(**batch, max_anchors=8)
+
+        assert loss.isfinite()
+        loss.backward()
+
+    @pytest.mark.parametrize("seq_lengths", SAMPLE_CONFIGS)
+    def test_attention_backends_match(self, seq_lengths):
+        """All attention backends produce equivalent outputs for the same input."""
+        samples = _make_samples(seq_lengths)
+
+        results = {}
+        for backend in self.ATTN_BACKENDS:
+            torch.manual_seed(0)
+            model = make_dflash_glm5_model(draft_attn_impl=backend)
             batch = make_batch(
                 max_len=MAX_LEN, samples=samples, hidden_size=HIDDEN_SIZE
             )

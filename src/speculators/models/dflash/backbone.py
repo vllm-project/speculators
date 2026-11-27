@@ -8,14 +8,17 @@ from torch.nn.attention.flex_attention import BlockMask
 from transformers import PretrainedConfig
 from transformers.models.qwen3.modeling_qwen3 import Qwen3RMSNorm, Qwen3RotaryEmbedding
 
-from speculators.models.dflash.model_definitions import Qwen3DFlashDecoderLayer
+from speculators.models.dflash.model_definitions import (
+    Qwen3DFlashDecoderLayer,
+    dflash_model_classes,
+)
 from speculators.models.utils import flatten_rope_parameters
 
 
 class DFlashBackbone(nn.Module):
-    decoder_layer_class: ClassVar[type[Qwen3DFlashDecoderLayer]] = (
-        Qwen3DFlashDecoderLayer
-    )
+    # Subclasses (e.g. DFlash2) override with their own decoder layer class;
+    # None resolves the layer class per ``model_type`` from the registry below.
+    decoder_layer_class: ClassVar[type[Qwen3DFlashDecoderLayer] | None] = None
 
     def __init__(
         self,
@@ -24,9 +27,15 @@ class DFlashBackbone(nn.Module):
         **decoder_layer_kwargs: int,
     ) -> None:
         super().__init__()
+        decoder_layer_class = self.decoder_layer_class
+        if decoder_layer_class is None:
+            # Unknown decoder types keep the historical Qwen3 GQA backbone.
+            decoder_layer_class = dflash_model_classes.get(
+                tl_config.model_type, dflash_model_classes["qwen3"]
+            ).decoder_layer_class
         self.layers = nn.ModuleList(
             [
-                self.decoder_layer_class(
+                decoder_layer_class(
                     tl_config,  # type: ignore[arg-type]
                     layer_idx,
                     **decoder_layer_kwargs,
