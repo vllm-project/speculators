@@ -68,7 +68,7 @@ Score each finding 0–100 for how sure you are that it is real and matters:
 - 80–89: verified, affects behaviour or breaks a documented project rule;
 - 90 and up: a confirmed bug with a concrete failure scenario.
 
-Only findings at 80 or above are posted; `scripts/review_payload.py` drops the rest.
+When a finding fits two bands, the lower one wins, unless the failure would go unnoticed, giving a wrong result instead of an error: post that even when rare. Only findings at 80 or above are posted; `scripts/review_payload.py` drops the rest.
 
 Below the bar, whatever their score would otherwise be:
 
