@@ -161,7 +161,7 @@ def _autotune_tile(kernel):
     """
     return triton.autotune(
         configs=_tile_configs(),
-        key=["n_cols", "TERMS"],
+        key=["n_cols", "TERMS", "DELTA"],
         prune_configs_by={"early_config_prune": _prune_oversized_tiles},
     )(kernel)
 
@@ -186,12 +186,16 @@ def loss_forward_kernel(  # noqa: C901 -- constexpr TERMS branches
     stats_row,
     n_cols,
     TERMS: tl.constexpr,
+    DELTA: tl.constexpr,
     BLOCK_SIZE: tl.constexpr,
 ):
     """One row per program: shared softmax stats, then every TERMS reduction.
 
     Masked tail lanes can hold inf/nan before ``tl.where`` selects; they
     never enter an accumulator.
+
+    With ``DELTA``, ``logits_ptr`` holds ``draft - target`` (shared-head
+    ``fused_linear``); the draft logits are formed here in fp32.
     """
     pid = tl.program_id(0).to(tl.int64)
     logits_ptr += pid * n_cols
@@ -226,6 +230,13 @@ def loss_forward_kernel(  # noqa: C901 -- constexpr TERMS branches
         x = tl.load(logits_ptr + offsets, mask=mask, other=float("-inf")).cast(
             tl.float32
         )
+        if DELTA:
+            y = tl.load(targets_ptr + offsets, mask=mask, other=float("-inf")).cast(
+                tl.float32
+            )
+            # KL / RKL use the delta as loaded, not recovered from the sum.
+            gap = x
+            x = x + y
         block_max_d, block_arg_d = tl.max(x, axis=0, return_indices=True)
         best_idx_d = tl.where(block_max_d > m_d, i + block_arg_d, best_idx_d)
         m_new = tl.maximum(m_d, block_max_d)
@@ -233,9 +244,11 @@ def loss_forward_kernel(  # noqa: C901 -- constexpr TERMS branches
         ex = tl.where(mask, tl.exp(x - m_new), 0.0)
         z_d = z_d * scale_d + tl.sum(ex)
         m_d = m_new
-        y = tl.load(targets_ptr + offsets, mask=mask, other=float("-inf")).cast(
-            tl.float32
-        )
+        if not DELTA:
+            y = tl.load(targets_ptr + offsets, mask=mask, other=float("-inf")).cast(
+                tl.float32
+            )
+            gap = x - y
         block_max_t, block_arg_t = tl.max(y, axis=0, return_indices=True)
         best_idx_t = tl.where(block_max_t > m_t, i + block_arg_t, best_idx_t)
         m_new_t = tl.maximum(m_t, block_max_t)
@@ -243,11 +256,11 @@ def loss_forward_kernel(  # noqa: C901 -- constexpr TERMS branches
             scale_t = tl.exp(m_t - m_new_t)
             ey = tl.where(mask, tl.exp(y - m_new_t), 0.0)
             z_t = z_t * scale_t + tl.sum(ey)
-            # Masked lanes: ey / ex are 0 but (y - x) is nan; where drops them.
+            # Masked lanes: ey / ex are 0 but gap is nan; where drops them.
             if TERMS & _KL:
-                s_kl = s_kl * scale_t + tl.sum(tl.where(mask, ey * (y - x), 0.0))
+                s_kl = s_kl * scale_t - tl.sum(tl.where(mask, ey * gap, 0.0))
             if TERMS & _RKL:
-                s_rkl = s_rkl * scale_d + tl.sum(tl.where(mask, ex * (x - y), 0.0))
+                s_rkl = s_rkl * scale_d + tl.sum(tl.where(mask, ex * gap, 0.0))
         m_t = m_new_t
 
     lse_d = m_d + tl.log(z_d)
@@ -259,6 +272,8 @@ def loss_forward_kernel(  # noqa: C901 -- constexpr TERMS branches
 
     if TERMS & _CE:
         logit_at_target = tl.load(logits_ptr + best_idx_t).cast(tl.float32)
+        if DELTA:
+            logit_at_target += tl.load(targets_ptr + best_idx_t).cast(tl.float32)
         tl.store(loss_ptr + 3 * loss_row + pid, lse_d - logit_at_target)
         tl.store(stats_ptr + 6 * stats_row + pid, best_idx_t.to(tl.float32))  # type: ignore[attr-defined]
 
@@ -283,6 +298,8 @@ def loss_forward_kernel(  # noqa: C901 -- constexpr TERMS branches
                 y = tl.load(targets_ptr + offsets, mask=mask, other=0.0).cast(
                     tl.float32
                 )
+                if DELTA:
+                    x = x + y
                 ldp = x - lse_d
                 ltp = y - lse_t
                 dp = tl.exp(ldp)
@@ -320,6 +337,7 @@ def loss_backward_kernel(  # noqa: C901 -- constexpr TERMS branches
     stats_row,
     n_cols,
     TERMS: tl.constexpr,
+    DELTA: tl.constexpr,
     BLOCK_SIZE: tl.constexpr,
 ):
     """Recompute probabilities from the saved stats; write the weighted sum of
@@ -356,9 +374,10 @@ def loss_backward_kernel(  # noqa: C901 -- constexpr TERMS branches
     m_d = tl.load(stats_ptr + 0 * stats_row + pid)
     z_d = tl.load(stats_ptr + 1 * stats_row + pid)
     lse_d = m_d + tl.log(z_d)
-    if TERMS & _DIST:
-        # targets_ptr is None for CE-only launches; only offset it when used.
+    if DELTA | (TERMS & _DIST):
+        # targets_ptr is None for CE-only plain launches; only offset it when used.
         targets_ptr += pid * n_cols
+    if TERMS & _DIST:
         m_t = tl.load(stats_ptr + 2 * stats_row + pid)
         z_t = tl.load(stats_ptr + 3 * stats_row + pid)
         lse_t = m_t + tl.log(z_t)
@@ -375,13 +394,16 @@ def loss_backward_kernel(  # noqa: C901 -- constexpr TERMS branches
         offsets = i + tl.arange(0, BLOCK_SIZE)
         mask = offsets < n_cols
         x = tl.load(logits_ptr + offsets, mask=mask, other=0.0).cast(tl.float32)
+        if DELTA | (TERMS & _DIST):
+            y = tl.load(targets_ptr + offsets, mask=mask, other=0.0).cast(tl.float32)
+        if DELTA:
+            x = x + y
         ldp = x - lse_d
         dp = tl.exp(ldp)
         grad = tl.zeros([BLOCK_SIZE], dtype=tl.float32)
         if TERMS & _CE:
             grad += go_ce * (dp - (offsets == target_idx).to(tl.float32))
         if TERMS & _DIST:
-            y = tl.load(targets_ptr + offsets, mask=mask, other=0.0).cast(tl.float32)
             ltp = y - lse_t
             tp = tl.exp(ltp)
             if TERMS & _KL:
@@ -393,6 +415,207 @@ def loss_backward_kernel(  # noqa: C901 -- constexpr TERMS branches
             if TERMS & _TV:
                 grad += go_tv * (-dp * ((dp <= tp).to(tl.float32) - tv_s))
         tl.store(grad_in_ptr + offsets, grad, mask=mask)
+
+
+def _autotune_grad_tile(kernel):
+    """``_autotune_tile`` for ``loss_grad_kernel``, also keyed on GRAD_TERMS."""
+    return triton.autotune(
+        configs=_tile_configs(),
+        key=["n_cols", "TERMS", "GRAD_TERMS", "DELTA"],
+        prune_configs_by={"early_config_prune": _prune_oversized_tiles},
+    )(kernel)
+
+
+@triton.jit
+def _lane_online_update(m, s, v, mask):
+    """Per-lane online max / sum-exp update; lanes still at -inf stay at 0."""
+    m_new = tl.maximum(m, v)
+    scale = tl.exp(tl.where(m_new == float("-inf"), 0.0, m - m_new))
+    # exp(-inf - -inf) is NaN: skip lanes whose running max is still -inf
+    live = mask & (m_new != float("-inf"))
+    s = s * scale + tl.where(live, tl.exp(v - m_new), 0.0)
+    return m_new, s
+
+
+@triton.jit
+def _lane_lse(m, s):
+    """log-sum-exp of a row from its per-lane (max, sum-exp) pairs."""
+    row_max = tl.max(m)
+    lanes = tl.where(m == float("-inf"), 0.0, s * tl.exp(m - row_max))
+    return row_max + tl.log(tl.sum(lanes))
+
+
+@triton.jit
+def _lane_argmax_update(best_val, best_idx, v, offsets):
+    """Strict > keeps each lane's first maximum (masked lanes load -inf)."""
+    update = v > best_val
+    return tl.where(update, v, best_val), tl.where(update, offsets, best_idx)
+
+
+@triton.jit
+def _lane_argmax(best_val, best_idx, n_cols):
+    """Row argmax with first-index ties: the smallest index among the lanes
+    holding the row maximum (each lane holds its own first occurrence)."""
+    row_max = tl.max(best_val)
+    return tl.min(tl.where(best_val == row_max, best_idx, n_cols))
+
+
+@_autotune_grad_tile
+@triton.jit
+def loss_grad_kernel(  # noqa: C901 -- constexpr TERMS branches
+    logits_ptr,
+    targets_ptr,
+    loss_ptr,
+    loss_row,
+    argmax_ptr,
+    argmax_row,
+    dz_ptr,
+    dz_term_stride,
+    n_cols,
+    TERMS: tl.constexpr,
+    GRAD_TERMS: tl.constexpr,
+    DZ_KL: tl.constexpr,
+    DZ_RKL: tl.constexpr,
+    DZ_JSD: tl.constexpr,
+    DZ_CE: tl.constexpr,
+    DZ_TV: tl.constexpr,
+    DELTA: tl.constexpr,
+    BLOCK_SIZE: tl.constexpr,
+):
+    """Forward losses plus each GRAD_TERMS term's unit-weight logits gradient.
+
+    For deferred gradients: ``dz_ptr`` holds one ``[rows, n_cols]`` slab per
+    differentiated term (slab index ``DZ_<term>``), the gradient of that
+    term's row loss with ``grad_output = 1``; the caller contracts each slab
+    with the weight right away and scales by the real per-row
+    ``grad_output`` in backward. Pass 1 streams both rows once for the
+    softmax statistics and both argmaxes; pass 2 computes every term and
+    writes the gradients that need only the statistics (KL, CE); a third
+    pass writes those that need a finished row total (RKL, JSD, TV).
+    Accumulators are per lane and reduced once per row.
+    ``DELTA`` as in ``loss_forward_kernel``.
+    """
+    pid = tl.program_id(0).to(tl.int64)
+    logits_ptr += pid * n_cols
+    targets_ptr += pid * n_cols
+    dz_ptr += pid * n_cols
+    lanes = tl.arange(0, BLOCK_SIZE)
+    neg = float("-inf")
+
+    # Pass 1: per-lane online softmax statistics and argmaxes.
+    m_d = tl.full([BLOCK_SIZE], neg, tl.float32)
+    s_d = tl.zeros([BLOCK_SIZE], tl.float32)
+    m_t = tl.full([BLOCK_SIZE], neg, tl.float32)
+    s_t = tl.zeros([BLOCK_SIZE], tl.float32)
+    best_d = tl.full([BLOCK_SIZE], neg, tl.float32)
+    best_t = tl.full([BLOCK_SIZE], neg, tl.float32)
+    idx_d = tl.zeros([BLOCK_SIZE], tl.int32)
+    idx_t = tl.zeros([BLOCK_SIZE], tl.int32)
+    for i in range(0, n_cols, BLOCK_SIZE):
+        offsets = i + lanes
+        mask = offsets < n_cols
+        x = tl.load(logits_ptr + offsets, mask=mask, other=neg).cast(tl.float32)
+        y = tl.load(targets_ptr + offsets, mask=mask, other=neg).cast(tl.float32)
+        if DELTA:
+            x = x + y
+        m_d, s_d = _lane_online_update(m_d, s_d, x, mask)
+        best_d, idx_d = _lane_argmax_update(best_d, idx_d, x, offsets)
+        best_t, idx_t = _lane_argmax_update(best_t, idx_t, y, offsets)
+        if TERMS & _DIST:
+            m_t, s_t = _lane_online_update(m_t, s_t, y, mask)
+
+    lse_d = _lane_lse(m_d, s_d)
+    target_idx = _lane_argmax(best_t, idx_t, n_cols)
+    tl.store(
+        argmax_ptr + 0 * argmax_row + pid,
+        _lane_argmax(best_d, idx_d, n_cols).to(tl.int64),
+    )
+    tl.store(argmax_ptr + 1 * argmax_row + pid, target_idx.to(tl.int64))
+    if TERMS & _CE:
+        logit_at_target = tl.load(logits_ptr + target_idx).cast(tl.float32)
+        if DELTA:
+            logit_at_target += tl.load(targets_ptr + target_idx).cast(tl.float32)
+        tl.store(loss_ptr + 3 * loss_row + pid, lse_d - logit_at_target)
+    lse_t = 0.0
+    if TERMS & _DIST:
+        lse_t = _lane_lse(m_t, s_t)
+
+    # Pass 2: every term, plus the gradients that need only the statistics.
+    kl = tl.zeros([BLOCK_SIZE], tl.float32)
+    rkl = tl.zeros([BLOCK_SIZE], tl.float32)
+    jsd_d = tl.zeros([BLOCK_SIZE], tl.float32)
+    jsd_t = tl.zeros([BLOCK_SIZE], tl.float32)
+    tv_min = tl.zeros([BLOCK_SIZE], tl.float32)
+    tv_s = tl.zeros([BLOCK_SIZE], tl.float32)
+    if (TERMS & _DIST) | (GRAD_TERMS & _CE):
+        for i in range(0, n_cols, BLOCK_SIZE):
+            offsets = i + lanes
+            mask = offsets < n_cols
+            x = tl.load(logits_ptr + offsets, mask=mask, other=0.0).cast(tl.float32)
+            if DELTA | (TERMS & _DIST):
+                y = tl.load(targets_ptr + offsets, mask=mask, other=0.0).cast(
+                    tl.float32
+                )
+            if DELTA:
+                x = x + y
+            ldp = x - lse_d
+            dp = tl.exp(ldp)
+            if GRAD_TERMS & _CE:
+                grad = dp - (offsets == target_idx).to(tl.float32)
+                tl.store(dz_ptr + DZ_CE * dz_term_stride + offsets, grad, mask=mask)
+            if TERMS & _DIST:
+                ltp = y - lse_t
+                tp = tl.exp(ltp)
+                if TERMS & _KL:
+                    kl += tl.where(mask, tp * (ltp - ldp), 0.0)
+                if TERMS & _RKL:
+                    rkl += tl.where(mask, dp * (ldp - ltp), 0.0)
+                if TERMS & _JSD:
+                    lmp = _log_mix(ldp, ltp)
+                    jsd_d += tl.where(mask, dp * (ldp - lmp), 0.0)
+                    jsd_t += tl.where(mask, tp * (ltp - lmp), 0.0)
+                if TERMS & _TV:
+                    tv_min += tl.where(mask, tl.minimum(dp, tp), 0.0)
+                    tv_s += tl.where(mask & (dp <= tp), dp, 0.0)
+                if GRAD_TERMS & _KL:
+                    tl.store(
+                        dz_ptr + DZ_KL * dz_term_stride + offsets, dp - tp, mask=mask
+                    )
+
+    rkl_loss = tl.sum(rkl)
+    jsd_kl_mix = tl.sum(jsd_d)
+    tv_ss = tl.sum(tv_s)
+    if TERMS & _KL:
+        tl.store(loss_ptr + 0 * loss_row + pid, tl.sum(kl))
+    if TERMS & _RKL:
+        tl.store(loss_ptr + 1 * loss_row + pid, rkl_loss)
+    if TERMS & _JSD:
+        tl.store(loss_ptr + 2 * loss_row + pid, 0.5 * (jsd_kl_mix + tl.sum(jsd_t)))
+    if TERMS & _TV:
+        tl.store(loss_ptr + 4 * loss_row + pid, 1.0 - tl.sum(tv_min))
+
+    # Pass 3: gradients that need a finished row total.
+    if GRAD_TERMS & (_RKL | _JSD | _TV):
+        for i in range(0, n_cols, BLOCK_SIZE):
+            offsets = i + lanes
+            mask = offsets < n_cols
+            x = tl.load(logits_ptr + offsets, mask=mask, other=0.0).cast(tl.float32)
+            y = tl.load(targets_ptr + offsets, mask=mask, other=0.0).cast(tl.float32)
+            if DELTA:
+                x = x + y
+            ldp = x - lse_d
+            ltp = y - lse_t
+            dp = tl.exp(ldp)
+            tp = tl.exp(ltp)
+            if GRAD_TERMS & _RKL:
+                grad = dp * (ldp - ltp - rkl_loss)
+                tl.store(dz_ptr + DZ_RKL * dz_term_stride + offsets, grad, mask=mask)
+            if GRAD_TERMS & _JSD:
+                grad = 0.5 * dp * (ldp - _log_mix(ldp, ltp) - jsd_kl_mix)
+                tl.store(dz_ptr + DZ_JSD * dz_term_stride + offsets, grad, mask=mask)
+            if GRAD_TERMS & _TV:
+                grad = -dp * ((dp <= tp).to(tl.float32) - tv_ss)
+                tl.store(dz_ptr + DZ_TV * dz_term_stride + offsets, grad, mask=mask)
 
 
 class _FusedLoss(torch.autograd.Function):
@@ -428,6 +651,7 @@ class _FusedLoss(torch.autograd.Function):
             stats.stride(0),
             V,
             TERMS=terms,
+            DELTA=False,
         )
         # CE backward only needs the target argmax cached in stats, so when CE
         # is the only differentiated term the targets are released after
@@ -458,6 +682,7 @@ class _FusedLoss(torch.autograd.Function):
             stats.stride(0),
             V,
             TERMS=ctx.grad_terms,
+            DELTA=False,
         )
         return grad_in.view(B, T, V), None, None, None
 

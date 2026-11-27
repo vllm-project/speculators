@@ -292,3 +292,18 @@ def test_gradient_accumulation_steps_explicit(monkeypatch):
 def test_gradient_accumulation_steps_rejects_zero(monkeypatch):
     with pytest.raises(SystemExit):
         _parse(monkeypatch, ["--gradient-accumulation-steps", "0"])
+
+
+def test_dflash_fused_linear_options(monkeypatch):
+    args = _parse(monkeypatch, ["--loss-implementation", "fused_linear"])
+    train_kw, val_kw = DFlashDraftModel.get_trainer_kwargs(**vars(args))
+    assert train_kw["fused_linear"]
+    assert val_kw["fused_linear"]
+    assert train_kw["fused_linear_logits"] == "input"
+
+    args = _parse(
+        monkeypatch,
+        ["--loss-implementation", "fused_linear", "--fused-linear-logits", "float32"],
+    )
+    train_kw, _ = DFlashDraftModel.get_trainer_kwargs(**vars(args))
+    assert train_kw["fused_linear_logits"] == "float32"
