@@ -1,0 +1,39 @@
+[build-system]
+requires = ["setuptools >= 82.0.1"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["dynamic_hidden_states*"]
+
+[project]
+name = "vllm-dynamic-hidden-states"
+version = "0.1.0"
+description = "vLLM plugin: runtime swapping of captured aux hidden-state layers for extract_hidden_states data generation."
+requires-python = ">=3.10"
+license = "Apache-2.0"
+
+# vLLM (and its fastapi dependency) is provided by the serving environment;
+# not pinned here so the plugin installs into an existing vLLM venv.
+dependencies = []
+
+# Discovered by the API-server front-end process. Strict opt-in: only loads
+# when named in VLLM_PLUGINS.
+[project.entry-points."vllm.endpoint_plugins"]
+dynamic_hidden_states = "dynamic_hidden_states.endpoint:AuxLayerEndpoint"
+
+# Loaded in every process (incl. workers) before model load. Applies the
+# masked-accumulate patch so layer swaps take effect without --enforce-eager.
+# Same name as above so a single VLLM_PLUGINS=dynamic_hidden_states enables both.
+[project.entry-points."vllm.general_plugins"]
+dynamic_hidden_states = "dynamic_hidden_states.graph_patch:install"
+
+[tool.ruff]
+line-length = 88
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP"]
+
+[tool.ruff.lint.per-file-ignores]
+# Manual integration script: prints results and uses asserts by design.
+"tests/*" = ["T201", "S101"]
