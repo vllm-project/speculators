@@ -19,9 +19,10 @@ class Eagle3SpeculatorConfig(SpeculatorModelConfig):
     EAGLE-3 features vocabulary mapping between draft (32K) and target (128K)
     vocabularies, enabling cross-tokenizer speculation.
 
-    :param transformer_layer_config: Configuration for the transformer decoder layer
-    :param draft_vocab_size: Size of draft model vocabulary for speculation
-    :param norm_before_residual: Apply hidden_norm before storing residual
+    Attributes:
+        transformer_layer_config: Configuration for the transformer decoder layer
+        draft_vocab_size: Size of draft model vocabulary for speculation
+        norm_before_residual: Apply hidden_norm before storing residual
     """
 
     speculators_model_type: Literal["eagle3"] = "eagle3"
