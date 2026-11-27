@@ -8,12 +8,15 @@ Tests cover:
 - Validation of the conversion process
 """
 
+from pathlib import Path
 from unittest.mock import patch
 
 import pytest
 import torch
+from safetensors.torch import load_file
 
 from speculators.convert.eagle.eagle3_converter import Eagle3Converter
+from speculators.convert.eagle.eagle3_legacy_model import Eagle3Speculator
 from speculators.convert.utils import load_checkpoint_config
 
 
@@ -292,3 +295,203 @@ class TestEagle3ConverterFixes:
 
         # Verify that num_hidden_layers is correctly set to 2
         assert config["transformer_layer_config"]["num_hidden_layers"] == 2
+
+
+class TestEagle3ConverterWeightValidation:
+    """Test missing and colliding weight key detection during Eagle3 saving."""
+
+    @staticmethod
+    def _build_tiny_config_and_weights(
+        *,
+        reduce_vocab_size: bool = True,
+        has_drafter_embedding: bool = True,
+        norm_before_residual: bool = False,
+        use_midlayer_prefix: bool = True,
+    ):
+        hidden_size = 32
+        vocab_size = 64
+        draft_vocab_size = 32
+        verifier_cfg = {
+            "architectures": ["LlamaForCausalLM"],
+            "max_position_embeddings": 128,
+            "rope_theta": 500000.0,
+            "vocab_size": vocab_size,
+        }
+        eagle_cfg = {
+            "target_vocab_size": vocab_size,
+            "hidden_size": hidden_size,
+            "intermediate_size": 64,
+            "num_attention_heads": 4,
+            "num_key_value_heads": 2,
+            "hidden_act": "silu",
+            "max_position_embeddings": 64,
+            "initializer_range": 0.02,
+            "rms_norm_eps": 1e-6,
+            "attention_bias": False,
+            "rope_theta": 10000.0,
+            "mlp_bias": False,
+            "draft_vocab_size": draft_vocab_size,
+        }
+        converter = Eagle3Converter()
+        with patch(
+            "speculators.convert.eagle.eagle3_converter.PretrainedConfig.get_config_dict",
+            return_value=(verifier_cfg, {}),
+        ):
+            config = converter._build_eagle3_speculator_config(
+                eagle_cfg,
+                "meta-llama/Llama-3.1-8B-Instruct",
+                norm_before_residual=norm_before_residual,
+            )
+
+        ref = Eagle3Speculator(  # type: ignore[abstract]
+            config=config,
+            verifier=None,
+            verifier_attachment_mode="detached",
+            reduce_vocab_size=reduce_vocab_size,
+            has_drafter_embedding=has_drafter_embedding,
+        )
+        source_weights: dict[str, torch.Tensor] = {}
+        for key, value in ref.state_dict().items():
+            if use_midlayer_prefix and key.startswith("layers.0."):
+                mapped_key = f"midlayer.{key.removeprefix('layers.0.')}"
+            else:
+                mapped_key = key
+            source_weights[mapped_key] = value.clone()
+        return converter, config, source_weights
+
+    @pytest.mark.sanity
+    def test_save_raises_on_renamed_weight_key_and_writes_no_files(
+        self, tmp_path: Path
+    ):
+        converter, config, weights = self._build_tiny_config_and_weights()
+        weights["midlayer.mlp.up_projection.weight"] = weights.pop(
+            "midlayer.mlp.up_proj.weight"
+        )
+        out_dir = tmp_path / "converted"
+
+        with pytest.raises(ValueError, match="Missing required keys") as exc_info:
+            converter._save_converted_checkpoint(
+                config,
+                weights,
+                out_dir,
+                reduce_vocab_size=True,
+                has_drafter_embedding=True,
+            )
+
+        message = str(exc_info.value)
+        assert "layers.0.mlp.up_proj.weight" in message
+        assert "layers.0.mlp.up_projection.weight" in message
+        assert not out_dir.exists()
+
+    @pytest.mark.sanity
+    @pytest.mark.parametrize("missing_key", ["fc.weight", "d2t"])
+    def test_save_raises_on_missing_required_key(
+        self, tmp_path: Path, missing_key: str
+    ):
+        converter, config, weights = self._build_tiny_config_and_weights(
+            reduce_vocab_size=True,
+            has_drafter_embedding=True,
+        )
+        del weights[missing_key]
+        out_dir = tmp_path / "converted"
+
+        with pytest.raises(ValueError, match="Missing required keys") as exc_info:
+            converter._save_converted_checkpoint(
+                config,
+                weights,
+                out_dir,
+                reduce_vocab_size=True,
+                has_drafter_embedding=True,
+            )
+
+        assert missing_key in str(exc_info.value)
+        assert not out_dir.exists()
+
+    @pytest.mark.sanity
+    @pytest.mark.parametrize("midlayer_first", [True, False])
+    def test_save_raises_on_midlayer_remapping_collision(
+        self, tmp_path: Path, midlayer_first: bool
+    ):
+        converter, config, base_weights = self._build_tiny_config_and_weights()
+        up_proj = base_weights["midlayer.mlp.up_proj.weight"]
+        weights: dict[str, torch.Tensor] = {}
+        for key, value in base_weights.items():
+            if key == "midlayer.mlp.up_proj.weight":
+                if midlayer_first:
+                    weights["midlayer.mlp.up_proj.weight"] = up_proj
+                    weights["layers.0.mlp.up_proj.weight"] = up_proj.clone()
+                else:
+                    weights["layers.0.mlp.up_proj.weight"] = up_proj.clone()
+                    weights["midlayer.mlp.up_proj.weight"] = up_proj
+            else:
+                weights[key] = value
+        out_dir = tmp_path / "converted"
+
+        with pytest.raises(ValueError, match="collision") as exc_info:
+            converter._save_converted_checkpoint(
+                config,
+                weights,
+                out_dir,
+                reduce_vocab_size=True,
+                has_drafter_embedding=True,
+            )
+
+        assert "layers.0.mlp.up_proj.weight" in str(exc_info.value)
+        assert not out_dir.exists()
+
+    @pytest.mark.sanity
+    def test_save_allows_unexpected_extra_keys_when_all_required_present(
+        self, tmp_path: Path
+    ):
+        converter, config, weights = self._build_tiny_config_and_weights()
+        expected_up_proj = weights["midlayer.mlp.up_proj.weight"].clone()
+        weights["layers.1.mlp.up_proj.weight"] = torch.randn_like(expected_up_proj)
+        weights["extra.unused.weight"] = torch.randn(4, 4)
+        out_dir = tmp_path / "converted"
+
+        saved_dir = converter._save_converted_checkpoint(
+            config,
+            weights,
+            out_dir,
+            reduce_vocab_size=True,
+            has_drafter_embedding=True,
+        )
+
+        saved_weights = load_file(str(saved_dir / "model.safetensors"))
+        assert torch.equal(
+            saved_weights["layers.0.mlp.up_proj.weight"].float(),
+            expected_up_proj.float(),
+        )
+
+    @pytest.mark.sanity
+    @pytest.mark.parametrize("reduce_vocab_size", [False, True])
+    @pytest.mark.parametrize("has_drafter_embedding", [False, True])
+    @pytest.mark.parametrize("norm_before_residual", [False, True])
+    def test_save_succeeds_across_optional_flag_combinations(
+        self,
+        tmp_path: Path,
+        reduce_vocab_size: bool,
+        has_drafter_embedding: bool,
+        norm_before_residual: bool,
+    ):
+        converter, config, weights = self._build_tiny_config_and_weights(
+            reduce_vocab_size=reduce_vocab_size,
+            has_drafter_embedding=has_drafter_embedding,
+            norm_before_residual=norm_before_residual,
+        )
+        expected_up_proj = weights["midlayer.mlp.up_proj.weight"].clone()
+        out_dir = tmp_path / "converted"
+
+        saved_dir = converter._save_converted_checkpoint(
+            config,
+            weights,
+            out_dir,
+            reduce_vocab_size=reduce_vocab_size,
+            has_drafter_embedding=has_drafter_embedding,
+        )
+
+        saved_weights = load_file(str(saved_dir / "model.safetensors"))
+        assert torch.equal(
+            saved_weights["layers.0.mlp.up_proj.weight"].float(),
+            expected_up_proj.float(),
+        )
