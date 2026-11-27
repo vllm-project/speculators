@@ -40,7 +40,7 @@ Run the commands below from the repository root. Note the time when you start.
 
 3. **Review.** Follow [references/rubric.md](references/rubric.md) against `$CTX`. If the rubric says the PR isn't ready, stop and tell the user. If nothing has changed since your last review, stop too, unless the user asked for another review: then review it, without repeating what your earlier review said.
 
-4. **Write `$CTX/review.json`** in the format of [references/output.md](references/output.md).
+4. **Write `$CTX/review.json`** in the format of [references/output.md](references/output.md). Run the check it describes and shorten what it reports.
 
 5. **Build the payload.**
 
