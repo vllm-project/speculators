@@ -8,7 +8,10 @@ from speculators.model import SpeculatorModel
 from speculators.models.components import BlockLayout
 from speculators.models.dflash.core import DFlashDraftModel
 from speculators.models.dspark.config import DSparkSpeculatorConfig
-from speculators.models.dspark.metrics import compute_metrics
+from speculators.models.dspark.metrics import (
+    compute_metrics,
+    compute_metrics_from_hidden,
+)
 from speculators.models.dspark.model_definitions import ConfidenceHead, MarkovHead
 
 _DEFAULT_LOSS_CONFIG: LossConfig = {"kl_div": (kl_div_loss, 1.0)}
@@ -91,7 +94,11 @@ class DSparkDraftModel(DFlashDraftModel):
     def get_trainer_kwargs(**kwargs) -> tuple[dict, dict]:
         """Resolve DSpark's compound loss from ``--loss-fn``."""
         implementation = kwargs.get("loss_implementation", "fused")
-        loss_config = resolve_loss_config(kwargs["loss_fn"], implementation)
+        # fused_linear computes the fused losses from hidden states.
+        fused_linear = implementation == "fused_linear"
+        loss_config = resolve_loss_config(
+            kwargs["loss_fn"], "fused" if fused_linear else implementation
+        )
         gamma = kwargs.get("dflash_decay_gamma", 4.0)
         max_anchors = kwargs.get("max_anchors", 3072)
         confidence_head_alpha = kwargs.get("confidence_head_alpha", 1.0)
@@ -106,6 +113,8 @@ class DSparkDraftModel(DFlashDraftModel):
             "confidence_head_alpha": confidence_head_alpha,
             "per_position_loss_weight": per_position_loss_weight,
             "dpace_alpha": dpace_alpha,
+            "fused_linear": fused_linear,
+            "fused_linear_logits": kwargs.get("fused_linear_logits", "input"),
         }
         return dict(shared), dict(shared)
 
@@ -124,8 +133,13 @@ class DSparkDraftModel(DFlashDraftModel):
         confidence_head_alpha: float = 1.0,
         per_position_loss_weight: str = "fixed-exp-decay",
         dpace_alpha: float = 0.5,
+        fused_linear: bool = False,
         **kwargs,
     ):
+        if fused_linear and self.markov_head is None:
+            raise ValueError(
+                "DSpark fused_linear needs a Markov head (markov_rank > 0)"
+            )
         return super().forward(
             hidden_states,
             input_ids,
@@ -138,28 +152,45 @@ class DSparkDraftModel(DFlashDraftModel):
             max_anchors=max_anchors,
             per_position_loss_weight=per_position_loss_weight,
             dpace_alpha=dpace_alpha,
+            fused_linear=fused_linear,
+            correction_kwargs={"fused_linear": fused_linear},
             loss_kwargs={"confidence_head_alpha": confidence_head_alpha},
             **kwargs,
         )
 
     def apply_training_correction(
-        self, hidden, logits, _targets, layout, input_ids, _document_ids, **_kwargs
+        self,
+        hidden,
+        logits,
+        _targets,
+        layout,
+        input_ids,
+        _document_ids,
+        fused_linear=False,
+        **_kwargs,
     ):
         # DSpark: add the Markov logit bias and predict per-position confidence.
+        # With fused_linear there are no logits: return markov_w2's input u,
+        # which the loss adds inside its GEMMs.
         num_blocks = layout.anchor_positions.numel()
         block = self.block_size
         mask_tokens_size = num_blocks * block
         prev_token_ids = layout.predecessor_ids(input_ids)
         hidden_blocks = hidden.view(num_blocks, block, -1)
         prev_emb = None
+        markov_features = None
         if self.markov_head is not None:
             prev_emb = self.markov_head.prev_embeddings(prev_token_ids)
-            bias = self.markov_head.block_bias(
+            features = self.markov_head.block_features(
                 prev_token_ids=prev_token_ids,
                 hidden_states=hidden_blocks,
                 prev_emb=prev_emb,
             )
-            logits = (logits.view(num_blocks, block, -1) + bias).reshape_as(logits)
+            if fused_linear:
+                markov_features = features.reshape(1, mask_tokens_size, -1)
+            else:
+                bias = self.markov_head.markov_w2(features)
+                logits = (logits.view(num_blocks, block, -1) + bias).reshape_as(logits)
 
         confidence_logits = None
 
@@ -176,7 +207,7 @@ class DSparkDraftModel(DFlashDraftModel):
             confidence_logits = self.confidence_head(conf_features).reshape(
                 1, mask_tokens_size
             )
-        return logits, confidence_logits
+        return logits, confidence_logits, markov_features
 
     def compute_loss_and_metrics(
         self,
@@ -185,6 +216,7 @@ class DSparkDraftModel(DFlashDraftModel):
         layout: BlockLayout,
         correction,
         *,
+        fused_linear_logits: str = "input",
         loss_config: LossConfig | None,
         gamma: float,
         per_position_loss_weight: str,
@@ -192,17 +224,34 @@ class DSparkDraftModel(DFlashDraftModel):
         confidence_head_alpha=1.0,
         **_kwargs,
     ):
-        logits, confidence_logits = correction
+        logits, confidence_logits, markov_features = correction
+        metric_kwargs = {
+            "loss_config": loss_config or _DEFAULT_LOSS_CONFIG,
+            "gamma": gamma,
+            "confidence_head_alpha": confidence_head_alpha,
+            "per_position_loss_weight": per_position_loss_weight,
+            "dpace_alpha": dpace_alpha,
+            "sample_from_anchor": self.config.sample_from_anchor,
+        }
+        if markov_features is not None and self.markov_head is not None:
+            # fused_linear: no [1, T, V] draft logits, Markov bias or target
+            # logits. With the full vocab lm_head is the verifier head, which
+            # enables the shared-head delta form.
+            head = self.lm_head if self.use_draft_vocab else self.verifier_lm_head
+            return compute_metrics_from_hidden(
+                logits,  # backbone hidden states in fused-linear mode
+                head.weight,
+                targets,  # post-norm verifier hidden states (project=False)
+                self.verifier_lm_head.weight,
+                markov_features,
+                self.markov_head.markov_w2.weight,
+                confidence_logits,
+                layout.loss_mask,
+                self.block_size,
+                logits_dtype=fused_linear_logits,
+                **metric_kwargs,
+            )
         return compute_metrics(
-            logits,
-            targets,
-            confidence_logits,
-            layout.loss_mask,
-            self.block_size,
-            loss_config=loss_config or _DEFAULT_LOSS_CONFIG,
-            gamma=gamma,
-            confidence_head_alpha=confidence_head_alpha,
-            per_position_loss_weight=per_position_loss_weight,
-            dpace_alpha=dpace_alpha,
-            sample_from_anchor=self.config.sample_from_anchor,
-        )
+            logits, targets, confidence_logits, layout.loss_mask, self.block_size,
+            **metric_kwargs,
+        )  # fmt: skip

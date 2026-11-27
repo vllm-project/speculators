@@ -45,27 +45,31 @@ class MarkovHead(nn.Module):
         """Look up W1 embeddings for the given previous-token ids."""
         return self.markov_w1(token_ids.long())
 
-    def block_bias(
+    def block_features(
         self,
         *,
         prev_token_ids: torch.Tensor,  # [N, block_size]
         hidden_states: torch.Tensor,  # [N, block_size, hidden]
         prev_emb: torch.Tensor | None = None,  # [N, block_size, r]
     ) -> torch.Tensor:
-        """Return the per-position logit bias, shape [N, block_size, draft_vocab]."""
+        """``markov_w2``'s input per position, shape [N, block_size, r].
+
+        The bias is linear in it (``block_bias = markov_w2(block_features)``),
+        which lets the fused-linear loss add the bias inside its GEMMs.
+        """
         if prev_emb is None:
             prev_emb = self.prev_embeddings(prev_token_ids)
         prev_emb = prev_emb.to(self.markov_w2.weight.dtype)
 
         if self.head_type == "vanilla":
-            return self.markov_w2(prev_emb)
+            return prev_emb
 
         if self.head_type == "gated":
             hidden_states = hidden_states.to(prev_emb.dtype)
             gate = torch.sigmoid(
                 self.gate_proj(torch.cat([hidden_states, prev_emb], dim=-1))
             )
-            return self.markov_w2(gate * prev_emb)
+            return gate * prev_emb
 
         # rnn: maintain a recurrent state across block positions.
         hidden_states = hidden_states.to(prev_emb.dtype)
@@ -77,8 +81,24 @@ class MarkovHead(nn.Module):
             gate_raw, cand_raw, out_raw = self.joint_proj(z).chunk(3, dim=-1)
             gate = torch.sigmoid(gate_raw)
             state = gate * state + (1.0 - gate) * torch.tanh(cand_raw)
-            outputs.append(self.markov_w2(torch.tanh(out_raw)))
+            outputs.append(torch.tanh(out_raw))
         return torch.stack(outputs, dim=1)
+
+    def block_bias(
+        self,
+        *,
+        prev_token_ids: torch.Tensor,  # [N, block_size]
+        hidden_states: torch.Tensor,  # [N, block_size, hidden]
+        prev_emb: torch.Tensor | None = None,  # [N, block_size, r]
+    ) -> torch.Tensor:
+        """Return the per-position logit bias, shape [N, block_size, draft_vocab]."""
+        return self.markov_w2(
+            self.block_features(
+                prev_token_ids=prev_token_ids,
+                hidden_states=hidden_states,
+                prev_emb=prev_emb,
+            )
+        )
 
 
 class ConfidenceHead(nn.Module):

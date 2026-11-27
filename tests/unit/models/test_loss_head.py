@@ -243,20 +243,21 @@ def _assert_head_close(cfg, dtype, loss_tol, grad_tol, implementation="fused"):
         )
 
 
-# fused_linear (no materialized draft logits) covers DFlash only.
-IMPLEMENTATIONS = ["fused", "fused_linear"]
-
-
-def _skip_unsupported(name: str, implementation: str) -> None:
-    if implementation == "fused_linear" and CASES[name].model != "dflash":
-        pytest.skip("fused_linear supports DFlash only")
+# fused_linear (no materialized draft logits) covers DFlash and DSpark.
+IMPLEMENTATIONS = [
+    "fused",
+    "fused_linear",
+    "fused_linear_fp32",
+]
 
 
 @requires_cuda
-@pytest.mark.parametrize("implementation", IMPLEMENTATIONS)
+# fp32 inputs give fp32 logit tiles either way: fused_linear_fp32 adds nothing here.
+@pytest.mark.parametrize(
+    "implementation", [i for i in IMPLEMENTATIONS if i != "fused_linear_fp32"]
+)
 @pytest.mark.parametrize("name", sorted(CASES))
 def test_fused_fp32_matches_eager_reference(name, implementation):
-    _skip_unsupported(name, implementation)
     _assert_head_close(
         CASES[name],
         torch.float32,
@@ -273,6 +274,7 @@ def test_fused_fp32_matches_eager_reference(name, implementation):
 # GPUs or CUDA builds may need them widened. TV-based terms are the least
 # accurate: their gradient switches on dp <= tp, which bf16 logits flip near
 # ties, so the 0.1-0.4 bounds there only catch gross breakage, not precision.
+# Every implementation must stay below these.
 BF16_LOSS_RTOL = 2e-3
 # Relative L2 error ||g - g_ref|| / ||g_ref||: unlike the max error below, it
 # is not driven by a few outliers, so its bounds can be tighter.
@@ -335,7 +337,6 @@ def _bf16_fused_and_reference(
 @pytest.mark.parametrize("name", sorted(CASES))
 def test_fused_bf16_error_vs_eager_reference(name, implementation):
     """fused_linear (fp32 logits) must stay within today's measured bounds."""
-    _skip_unsupported(name, implementation)
     loss, ref_loss, grads, ref_grads = _bf16_fused_and_reference(name, implementation)
     torch.testing.assert_close(loss, ref_loss, rtol=BF16_LOSS_RTOL, atol=0.0)
     bound = BF16_GRAD_ERR_BOUND[name]
@@ -350,7 +351,6 @@ def test_fused_bf16_error_vs_eager_reference(name, implementation):
 @pytest.mark.parametrize("implementation", IMPLEMENTATIONS)
 @pytest.mark.parametrize("name", sorted(CASES))
 def test_fused_bf16_l2_error_vs_eager_reference(name, implementation):
-    _skip_unsupported(name, implementation)
     _, _, grads, ref_grads = _bf16_fused_and_reference(name, implementation)
     bound = BF16_GRAD_L2_ERR_BOUND[name]
     for grad_name, ref in ref_grads.items():

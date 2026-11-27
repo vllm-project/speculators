@@ -2,7 +2,7 @@
 
 The training loss controls what the draft model is optimized for. Select it with `--loss-fn` in [`speculators train`](../cli/train.md), which accepts either a single loss name or a JSON dict for a weighted combination. It applies to Eagle-3, P-EAGLE, DFlash, and DSpark. MTP uses its own multi-step cross-entropy loss and ignores this flag.
 
-The fused Triton implementation is the default. Use `--loss-implementation eager` for compatibility or numerical validation; eager losses may OOM with DFlash or DSpark. DFlash can also use `--loss-implementation fused_linear`, which never materializes the draft logits (see [Memory-Efficient DFlash Loss](#memory-efficient-dflash-loss)).
+The fused Triton implementation is the default. Use `--loss-implementation eager` for compatibility or numerical validation; eager losses may OOM with DFlash or DSpark. DFlash and DSpark can also use `--loss-implementation fused_linear`, which never materializes the draft logits (see [Memory-Efficient Loss for DFlash and DSpark](#memory-efficient-loss-for-dflash-and-dspark)).
 
 ```bash
 speculators train ... --loss-fn kl_div
@@ -38,11 +38,15 @@ Pass a JSON dict to train on a weighted sum of several losses. Weights are used 
 speculators train ... --loss-fn '{"ce": 0.1, "tv": 0.9}'
 ```
 
-## Memory-Efficient DFlash Loss
+## Memory-Efficient Loss for DFlash and DSpark
 
-`--loss-implementation fused_linear` computes the loss from DFlash's final hidden states and its frozen `lm_head` in row chunks, so the `[N, V]` draft logits and their gradient never exist (`N` loss rows, `V` vocabulary). It supports every loss above with the same per-row semantics, including D-PACE and weighted combinations, and its logits are fp32 from the GEMM accumulator. Backward recomputes each chunk's logits: at 16k rows and a 152k vocabulary (bf16, KL, MI350P) the loss head's peak memory drops from 13.9 GB to 6.5 GB, at about 1.4x its forward + backward time. The target logits are still materialized.
+`--loss-implementation fused_linear` computes the loss from the drafter's final hidden states and its frozen `lm_head` in row chunks, so no `[N, V]` tensor exists (`N` loss rows, `V` vocabulary): not the draft logits, not their gradient and not the target logits, which each chunk recomputes from the verifier hidden states. It supports every loss above with the same per-row semantics, including D-PACE and weighted combinations. With up to two differentiated loss terms (every single loss, `lk_hybrid`, or two weighted losses such as `{"ce": 0.1, "tv": 0.9}`) the gradient is contracted in the forward pass, so backward runs no GEMM; with more terms, backward projects each chunk again instead. At 16k rows and a 152k vocabulary (bf16, KL, MI350P) the loss head's peak memory drops from 13.9 GB to 2.2 GB at about the same forward + backward time as `fused`.
 
-Chunks are sized from a scratch budget set by `SPECULATORS_FUSED_LINEAR_BUDGET_MIB` (default 2048). Only DFlash supports `fused_linear`; other models raise an error.
+`--fused-linear-logits` (default `input`) keeps the logit tiles in the training dtype, like materialized logits. `float32` takes them straight from the GEMM accumulator: more accurate gradients, notably for TV-based losses, at 7-10% more time.
+
+With the full vocabulary, DFlash's `lm_head` is the verifier head, so with a distribution loss (KL, TV, ...) the draft logits are formed as the target logits plus `(h - h_verifier) @ W^T`. Their rounding then scales with the draft-target difference instead of the logits: at V = 152k and acceptance 0.88-0.98, the KL / TV gradient error vs fp64 drops from 16-87% to 2-9% with `input` tiles, and to 0.2-0.5% with `float32` tiles.
+
+Chunks are at most 2048 rows (the fastest size for both GEMMs on MI355X), smaller when their scratch would exceed `SPECULATORS_FUSED_LINEAR_BUDGET_MIB` (default 4096): the budget can only lower the chunk size. DFlash and DSpark (with a Markov head) support `fused_linear`; for DSpark the Markov bias `markov_w2(u)` is added inside the same GEMM and `markov_w2` trains as usual. Other models raise an error.
 
 ## References
 

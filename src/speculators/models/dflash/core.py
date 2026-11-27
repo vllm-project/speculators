@@ -337,6 +337,7 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
             "per_position_loss_weight": per_position_loss_weight,
             "dpace_alpha": dpace_alpha,
             "fused_linear": fused_linear,
+            "fused_linear_logits": kwargs.get("fused_linear_logits", "input"),
         }
         return dict(shared), dict(shared)
 
@@ -416,22 +417,31 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
         self,
         verifier_last_hidden_states: torch.Tensor,  # [1, total_seq_len, hidden_size]
         block_positions: torch.Tensor,  # [num_blocks * block_size]
+        project: bool = True,
     ) -> torch.Tensor:  # [1, num_blocks * block_size, draft_vocab_size]
-        """Build verifier-logit targets for the selected draft block positions."""
+        """Build verifier-logit targets for the selected draft block positions.
+
+        With ``project=False`` the verifier head is not applied: the result is
+        the gathered post-norm verifier hidden states ``[1, N, H]``, which the
+        fused_linear loss projects per chunk.
+        """
         total_seq_len = verifier_last_hidden_states.shape[1]
 
         with torch.no_grad():
-            # If there are fewer block positions than base positions, compute
-            # the verifier head only for the positions used as targets.
-            if block_positions.numel() < total_seq_len:
+            # Gathering the rows first is the same as the full-sequence branch
+            # below: RMSNorm and the head are per-row, and
+            # roll(x, 1)[i] == x[(i - 1) % T]. Without the head, or with fewer
+            # block positions than base positions, gather first.
+            if not project or block_positions.numel() < total_seq_len:
                 target_indices = (
                     block_positions
                     if self.config.sample_from_anchor
                     else (block_positions - 1) % total_seq_len
                 )
-                return self.verifier_lm_head(
-                    self.verifier_norm(verifier_last_hidden_states[:, target_indices])
+                hidden = self.verifier_norm(
+                    verifier_last_hidden_states[:, target_indices]
                 )
+                return self.verifier_lm_head(hidden) if project else hidden
 
             verifier_logits = self.verifier_lm_head(
                 self.verifier_norm(verifier_last_hidden_states)
@@ -532,6 +542,7 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
         materialize_logits: bool = True,
         *,
         fused_linear: bool = False,
+        fused_linear_logits: str = "input",
         correction_kwargs=None,
         loss_kwargs=None,
         **backbone_kwargs,
@@ -544,7 +555,9 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
             self.lm_head(hidden) if materialize_logits and not fused_linear else hidden
         )
         targets = self._build_targets(
-            verifier_last_hidden_states, layout.block_positions
+            verifier_last_hidden_states,
+            layout.block_positions,
+            project=not fused_linear,
         )
         correction = self.apply_training_correction(
             hidden,
@@ -561,6 +574,7 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
             layout,
             correction,
             fused_linear=fused_linear,
+            fused_linear_logits=fused_linear_logits,
             loss_config=loss_config,
             gamma=gamma,
             per_position_loss_weight=per_position_loss_weight,
@@ -581,6 +595,7 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
         correction,  # noqa: ARG002 - plain DFlash has no correction output
         *,
         fused_linear: bool = False,
+        fused_linear_logits: str = "input",
         loss_config: LossConfig | None,
         gamma: float,
         per_position_loss_weight: str,
@@ -595,12 +610,22 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
             "sample_from_anchor": self.config.sample_from_anchor,
         }
         if fused_linear:
+            # No [1, T, V] draft or target logits: both are projected per chunk.
+            # With the full vocab lm_head is the verifier head (loaded from it,
+            # frozen, never saved); passing that one weight for both enables
+            # fused_linear's shared-head delta form.
+            head = self.lm_head if self.use_draft_vocab else self.verifier_lm_head
             return compute_metrics_from_hidden(
                 logits,  # backbone hidden states in fused-linear mode
-                self.lm_head.weight,
-                targets,
+                head.weight,
+                targets,  # post-norm verifier hidden states (project=False)
                 layout.loss_mask,
                 self.block_size,
+                target_weight=self.verifier_lm_head.weight,
+                logits_dtype=fused_linear_logits,
+                # layout.loss_mask masks slot 0 when not sampling from the
+                # anchor, so those rows need not be projected at all.
+                skip_anchor_rows=True,
                 **metric_kwargs,
             )
 

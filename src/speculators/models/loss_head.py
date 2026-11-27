@@ -23,6 +23,7 @@ from speculators.models.dflash import metrics as dflash_metrics
 from speculators.models.dspark import metrics as dspark_metrics
 
 __all__ = [
+    "FUSED_LINEAR_IMPLEMENTATIONS",
     "IMPLEMENTATIONS",
     "MODELS",
     "WEIGHTINGS",
@@ -35,11 +36,16 @@ __all__ = [
 
 MODELS = ("dflash", "dspark")
 WEIGHTINGS = ("fixed-exp-decay", "dpace")
-IMPLEMENTATIONS = ("fused", "eager", "fused_linear")
 # Relative noise between the draft and verifier sides in make_inputs.
 DRAFT_NOISE = 0.5
 # Model defaults (models/{dflash,dspark}/config.py).
 SAMPLE_FROM_ANCHOR = {"dflash": False, "dspark": True}
+# Implementations that never materialise the draft logits (DFlash, DSpark).
+FUSED_LINEAR_IMPLEMENTATIONS = (
+    "fused_linear",
+    "fused_linear_fp32",
+)
+IMPLEMENTATIONS = ("fused", "eager", *FUSED_LINEAR_IMPLEMENTATIONS)
 
 
 @dataclasses.dataclass(frozen=True)
@@ -120,26 +126,36 @@ def make_inputs(
     return inputs
 
 
+def _logits_dtype(cfg: HeadConfig) -> str:
+    return "float32" if cfg.implementation == "fused_linear_fp32" else "input"
+
+
 def loss_head(cfg: HeadConfig, inputs: HeadInputs) -> tuple[torch.Tensor, dict]:
     """Run the loss head with the model's own ``compute_metrics``.
 
-    ``fused`` and ``eager`` project the draft logits with ``lm_head`` first;
-    ``fused_linear`` (DFlash only) never materialises them.
+    ``fused`` and ``eager`` project the draft logits with ``lm_head`` first.
+    The fused-linear implementations never materialise the draft
+    or target logits: both are projected per chunk from the hidden states
+    (bf16 tiles, deferred gradients, anchor rows skipped);
+    ``fused_linear_fp32`` does the same with fp32 logit tiles.
 
     Eager, without ``torch.autocast`` or ``torch.compile``: inputs are created
     in ``cfg.dtype``, as the trainer precasts the frozen heads. DSpark runs
     without its confidence head (per-row work, not ``[N, V]``).
     """
-    fused_linear = cfg.implementation == "fused_linear"
+    fused_linear = cfg.implementation in FUSED_LINEAR_IMPLEMENTATIONS
     loss_config = cached_loss_config(
         cfg.loss, "fused" if fused_linear else cfg.implementation
     )
     n = cfg.num_rows
-    with torch.no_grad():
-        # verifier_lm_head(verifier_norm(h_v[:, idx])); the norm is outside the
-        # head and the rows are already gathered.
-        targets = F.linear(inputs.verifier_hidden, inputs.verifier_weight)
-        targets = targets.unsqueeze(0)
+    if fused_linear:
+        targets = inputs.verifier_hidden.unsqueeze(0)
+    else:
+        with torch.no_grad():
+            # verifier_lm_head(verifier_norm(h_v[:, idx])); the norm is outside
+            # the head and the rows are already gathered.
+            targets = F.linear(inputs.verifier_hidden, inputs.verifier_weight)
+            targets = targets.unsqueeze(0)
     dflash_kwargs: dict[str, Any] = {
         "block_size": cfg.block_size,
         "loss_config": loss_config,
@@ -147,13 +163,31 @@ def loss_head(cfg: HeadConfig, inputs: HeadInputs) -> tuple[torch.Tensor, dict]:
         "sample_from_anchor": SAMPLE_FROM_ANCHOR["dflash"],
     }
     if fused_linear:
-        if cfg.model != "dflash":
-            raise ValueError("fused_linear is only supported for dflash")
+        if cfg.model == "dspark":
+            # markov_w2(u) is added inside the loss's GEMMs (dspark/core.py)
+            return dspark_metrics.compute_metrics_from_hidden(
+                inputs.hidden.unsqueeze(0),
+                inputs.weight,
+                targets,
+                inputs.verifier_weight,
+                inputs.markov_input.unsqueeze(0),  # type: ignore[union-attr]
+                inputs.markov_weight,  # type: ignore[arg-type]
+                None,
+                inputs.loss_mask,
+                cfg.block_size,
+                loss_config,
+                per_position_loss_weight=cfg.weighting,
+                sample_from_anchor=SAMPLE_FROM_ANCHOR["dspark"],
+                logits_dtype=_logits_dtype(cfg),
+            )
         return dflash_metrics.compute_metrics_from_hidden(
             inputs.hidden.unsqueeze(0),
             inputs.weight,
             targets,
             inputs.loss_mask,
+            target_weight=inputs.verifier_weight,
+            logits_dtype=_logits_dtype(cfg),
+            skip_anchor_rows=True,
             **dflash_kwargs,
         )
     logits = F.linear(inputs.hidden, inputs.weight)

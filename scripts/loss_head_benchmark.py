@@ -217,12 +217,6 @@ def cmd_run(args: argparse.Namespace) -> dict:
             cached_loss_config(cfg.loss, loss_impl)
         except ValueError as err:
             sys.exit(f"invalid --loss {cfg.loss!r}: {err}")
-    # fused_linear covers DFlash only; skip the other models' combinations.
-    configs = [
-        cfg
-        for cfg in configs
-        if not (cfg.implementation == "fused_linear" and cfg.model != "dflash")
-    ]
     _device()
 
     results = []
@@ -288,7 +282,7 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument(
         "--implementation",
         default="fused",
-        help=f"comma list of {','.join(IMPLEMENTATIONS)} (fused_linear: dflash only)",
+        help=f"comma list of {','.join(IMPLEMENTATIONS)}",
     )
     run.add_argument(
         "--dtype", default="bfloat16", choices=("bfloat16", "float16", "float32")
