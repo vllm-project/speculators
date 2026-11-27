@@ -77,6 +77,9 @@ base = [
 ]
 
 [project.optional-dependencies]
+agentic = [
+    "docker>=7.1",
+]
 mooncake-cuda = [
     "mooncake-transfer-engine>=0.3.12",
 ]
