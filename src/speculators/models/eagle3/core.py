@@ -194,6 +194,15 @@ class Eagle3DraftModel(DraftVocabMixin, SpeculatorModel):
         loss_config: LossConfig | None = None,
         **kwargs,
     ):
+        is_grad_ckpt = getattr(self, "is_gradient_checkpointing", False) or getattr(
+            self, "gradient_checkpointing", False
+        )
+        if is_grad_ckpt and self.training and ttt_steps > 1:
+            raise ValueError(
+                f"Eagle3 gradient checkpointing is incompatible with ttt_steps > 1 "
+                f"(got {ttt_steps}). Set ttt_steps=1 to use gradient checkpointing."
+            )
+
         device = hidden_states.device
         total_seq_len = hidden_states.shape[1]
 
