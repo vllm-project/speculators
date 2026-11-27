@@ -391,6 +391,12 @@ def test_check_mode_fails_on_long_bodies_and_builds_nothing(
     assert out.out == ""
     assert "check passed" in out.err
 
+    draft.write_text(json.dumps(_review({"confidence": 50, "body": "Short."})))
+    with pytest.raises(SystemExit) as exit_info:
+        review_payload.main()
+    assert exit_info.value.code == review_payload.EXIT_NOTHING_TO_POST
+    assert "check passed" not in capsys.readouterr().err
+
 
 def test_footer_links_the_skill_at_its_commit():
     payload, _ = _build(_review({"confidence": 90, "body": "b"}), byline="by me")

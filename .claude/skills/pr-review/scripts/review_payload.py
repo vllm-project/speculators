@@ -316,11 +316,8 @@ def main() -> None:
     problems = length_problems(review)
     for problem in problems:
         sys.stderr.write(f"review_payload: {problem}\n")
-    if args.check:
-        if problems:
-            raise SystemExit(EXIT_TOO_LONG)
-        sys.stderr.write("review_payload: check passed\n")
-        return
+    if args.check and problems:
+        raise SystemExit(EXIT_TOO_LONG)
     sys.stderr.write(
         f"review_payload: {counts['inline']} inline, {counts['in_body']} in body, "
         f"{counts['dropped']} below confidence {MIN_CONFIDENCE}\n"
@@ -328,6 +325,9 @@ def main() -> None:
     if payload is None:
         sys.stderr.write("review_payload: no finding survives; nothing to post\n")
         raise SystemExit(EXIT_NOTHING_TO_POST)
+    if args.check:
+        sys.stderr.write("review_payload: check passed\n")
+        return
     sys.stdout.write(json.dumps(payload) + "\n")
 
 

@@ -31,6 +31,6 @@ Before you finish, check the draft and fix what it reports (`scripts/` is next t
 python3 scripts/review_payload.py review.json <context_dir> --check
 ```
 
-It validates the format and measures each body that would be posted: at most 50 words, and no sentence over 30. A body over that is carrying its reasoning, which belongs in `detail`.
+It validates the format and measures each body that would be posted: at most 50 words, and no sentence over 30. A body over that is carrying its reasoning, which belongs in `detail`. Exit status 3 means no finding reaches the confidence bar, so there is nothing to post.
 
 The review is always posted as a comment. It never approves and never requests changes; a maintainer makes that call.
