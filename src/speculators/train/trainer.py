@@ -634,6 +634,16 @@ class Trainer:
         for opt in self.optimizers:
             opt.zero_grad()
 
+    @staticmethod
+    def _collect_fsdp_param_groups(state: object) -> list[object]:
+        """Collect FSDP2 param groups across v2.9 singular and v2.14 plural states."""
+        groups = getattr(state, "_fsdp_param_groups", None)
+        collected = list(groups) if groups is not None else []
+        single_group = getattr(state, "_fsdp_param_group", None)
+        if single_group is not None:
+            collected.append(single_group)
+        return collected
+
     def _discard_window_gradients(self) -> None:
         """Clear optimizer and FSDP2 no_sync gradients for a rejected window."""
         self._optimizers_zero_grad()
@@ -642,16 +652,20 @@ class Trainer:
         reset_iter_state = getattr(self.model, "reset_iter_state", None)
         if callable(reset_iter_state):
             reset_iter_state()
-            return
+        seen_groups: set[int] = set()
         for module in self.model.modules():
             if not isinstance(module, FSDPModule):
                 continue
             state = module._get_fsdp_state()  # noqa: SLF001
-            for group in getattr(state, "_fsdp_param_groups", ()):
+            for group in self._collect_fsdp_param_groups(state):
+                if id(group) in seen_groups:
+                    continue
+                seen_groups.add(id(group))
                 for fsdp_param in getattr(group, "fsdp_params", ()):
                     fsdp_param.unsharded_accumulated_grad = None
-                    if hasattr(fsdp_param, "_unsharded_param"):
-                        fsdp_param.unsharded_param.grad = None
+                    unsharded_param = getattr(fsdp_param, "_unsharded_param", None)
+                    if unsharded_param is not None:
+                        unsharded_param.grad = None
 
     def _optimizers_step(self):
         for opt in self.optimizers:
@@ -1100,6 +1114,8 @@ class Trainer:
             if self.is_distributed:
                 dist.barrier()
 
+            if force_final and epoch_saved and val_metrics is not None:
+                self.checkpointer.save_val_metrics(epoch, val_metrics)
             self.maybe_update_best(epoch, val_metrics, checkpoint_saved=epoch_saved)
 
             if self.is_distributed:

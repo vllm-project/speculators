@@ -422,14 +422,20 @@ def test_final_checkpoint_not_forced_when_save_best_enabled(
     assert saved_epochs == []
 
 
+@pytest.mark.parametrize(
+    ("final_loss", "best_epoch"),
+    [(0.7, 3), (1.0, 2), (0.85, 2)],
+)
 def test_forced_final_checkpoint_eligible_for_checkpoint_best(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
+    final_loss: float,
+    best_epoch: int,
 ) -> None:
     trainer, saved_epochs = _make_checkpoint_test_trainer(
         monkeypatch, tmp_path, num_epochs=4, checkpoint_freq=3, save_best=False
     )
-    val_losses = [0.9, 0.8, 0.85, 0.7]
+    val_losses = [0.9, 0.8, 0.85, final_loss]
     trainer.val_loader = cast("DataLoader", [object()])
     monkeypatch.setattr(
         trainer,
@@ -442,14 +448,20 @@ def test_forced_final_checkpoint_eligible_for_checkpoint_best(
     assert saved_epochs == [0, 2, 3]
     best_link = tmp_path / "checkpoint_best"
     assert best_link.is_symlink()
-    assert best_link.resolve() == (tmp_path / "3").resolve()
+    assert best_link.resolve() == (tmp_path / str(best_epoch)).resolve()
     val_metrics = json.loads((tmp_path / "3" / "val_metrics.json").read_text())
-    assert val_metrics["loss_epoch"] == pytest.approx(0.7)
+    assert val_metrics["loss_epoch"] == pytest.approx(final_loss)
 
 
+@pytest.mark.parametrize(
+    ("clean_target", "expected_weight"),
+    [(2.0, 1.1), (1.25, 1.05)],
+)
 def test_mid_window_nonfinite_skips_remaining_microbatch_and_releases_outputs(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
+    clean_target: float,
+    expected_weight: float,
 ) -> None:
     _patch_cpu_timer(monkeypatch)
     logged: list[dict] = []
@@ -503,19 +515,19 @@ def test_mid_window_nonfinite_skips_remaining_microbatch_and_releases_outputs(
             "loss_override": "normal",
         },
         {
-            "target_scale": torch.tensor([[2.0]]),
+            "target_scale": torch.tensor([[clean_target]]),
             "document_ids": torch.tensor([0]),
             "error_records": 0,
             "loss_override": "normal",
         },
         {
-            "target_scale": torch.tensor([[2.0]]),
+            "target_scale": torch.tensor([[clean_target]]),
             "document_ids": torch.tensor([0]),
             "error_records": 0,
             "loss_override": "normal",
         },
         {
-            "target_scale": torch.tensor([[2.0]]),
+            "target_scale": torch.tensor([[clean_target]]),
             "document_ids": torch.tensor([0]),
             "error_records": 0,
             "loss_override": "normal",
@@ -525,66 +537,93 @@ def test_mid_window_nonfinite_skips_remaining_microbatch_and_releases_outputs(
     class _Loader:
         batch_sampler = None
 
+        def __init__(self, data: list[dict]) -> None:
+            self._data = data
+
         def __len__(self) -> int:
-            return len(items)
+            return len(self._data)
 
         def __iter__(self):
-            return iter(items)
+            return iter(self._data)
 
     model = _TrackingSpeculator(initial_weight=1.0)
-    trainer = _make_cpu_trainer(model, _Loader(), tmp_path, lr=0.1, accum=3)
+    trainer = _make_cpu_trainer(
+        model, _Loader(items), tmp_path / "run", lr=0.1, accum=3
+    )
     trainer.train_epoch(0)
+    run_logged = list(logged)
+    logged.clear()
+
+    ref_model = _TinyLinearSpeculator(initial_weight=1.0)
+    ref_trainer = _make_cpu_trainer(
+        ref_model, _Loader(items[3:]), tmp_path / "ref", lr=0.1, accum=3
+    )
+    ref_trainer.train_epoch(0)
 
     # Microbatch 3 in window 1 must be skipped without calling model.forward.
     assert model.calls == 5
     assert trainer.global_step == 2
     assert alive_at_next_forward == [False]
-    assert model.proj.weight.item() == pytest.approx(1.1)
-    assert len(logged) == 1
-    assert logged[0]["global_step"] == 1
+    assert model.proj.weight.item() == pytest.approx(expected_weight)
+    assert model.proj.weight.item() == pytest.approx(ref_model.proj.weight.item())
+    assert len(run_logged) == 1
+    assert run_logged[0]["global_step"] == 1
+    if clean_target == 1.25:
+        assert run_logged[0]["train"]["grad_norm"] == pytest.approx(0.5)
+        assert run_logged[0]["train"]["grad_norm"] == pytest.approx(
+            logged[0]["train"]["grad_norm"]
+        )
 
 
 def test_discard_window_gradients_clears_fsdp_state(tmp_path: Path) -> None:
-    class _FakeFSDPWithReset(FSDPModule, nn.Linear):
+    def _make_fake_param() -> SimpleNamespace:
+        return SimpleNamespace(
+            unsharded_accumulated_grad=torch.ones(1),
+            _unsharded_param=SimpleNamespace(grad=torch.ones(1)),
+        )
+
+    class _FakeFSDP214(FSDPModule, nn.Linear):
         def __new__(cls, *args, **kwargs):
             return nn.Module.__new__(cls)
 
         def __init__(self) -> None:
             super().__init__(1, 1, bias=False)
             self.reset_calls = 0
+            self.fake_param = _make_fake_param()
 
         def reset_iter_state(self) -> None:
             self.reset_calls += 1
 
-    model_reset = _FakeFSDPWithReset()
-    trainer_reset = _make_cpu_trainer(model_reset, [], tmp_path)
-    trainer_reset._discard_window_gradients()
-    assert model_reset.reset_calls == 1
+        def _get_fsdp_state(self):
+            group = SimpleNamespace(fsdp_params=[self.fake_param])
+            return SimpleNamespace(_fsdp_param_groups=[group])
 
-    class _FakeFSDPLegacy(FSDPModule, nn.Linear):
+    model_214 = _FakeFSDP214()
+    trainer_214 = _make_cpu_trainer(model_214, [], tmp_path)
+    trainer_214._discard_window_gradients()
+    assert model_214.reset_calls == 1
+    assert model_214.fake_param.unsharded_accumulated_grad is None
+    assert model_214.fake_param._unsharded_param.grad is None
+
+    class _FakeFSDP29(FSDPModule, nn.Linear):
         def __new__(cls, *args, **kwargs):
             return nn.Module.__new__(cls)
 
         def __init__(self) -> None:
             super().__init__(1, 1, bias=False)
-            self.fake_param = SimpleNamespace(
-                unsharded_accumulated_grad=torch.ones(1),
-                _unsharded_param=SimpleNamespace(grad=torch.ones(1)),
-                unsharded_param=None,
-            )
-            self.fake_param.unsharded_param = self.fake_param._unsharded_param
+            self.fake_param = _make_fake_param()
 
         def reset_iter_state(self) -> None:
             raise AssertionError("should not be called when absent")
 
         def _get_fsdp_state(self):
             group = SimpleNamespace(fsdp_params=[self.fake_param])
-            return SimpleNamespace(_fsdp_param_groups=[group])
+            return SimpleNamespace(_fsdp_param_group=group)
 
-    model_legacy = _FakeFSDPLegacy()
-    # Hide reset_iter_state on this instance's class so fallback path runs.
-    model_legacy.__dict__["reset_iter_state"] = None
-    trainer_legacy = _make_cpu_trainer(model_legacy, [], tmp_path)
-    trainer_legacy._discard_window_gradients()
-    assert model_legacy.fake_param.unsharded_accumulated_grad is None
-    assert model_legacy.fake_param.unsharded_param.grad is None
+    model_29 = _FakeFSDP29()
+    # Hide reset_iter_state on this instance's class so v2.9 fallback path runs.
+    model_29.__dict__["reset_iter_state"] = None
+    trainer_29 = _make_cpu_trainer(model_29, [], tmp_path)
+    trainer_29._discard_window_gradients()
+    assert model_29.fake_param.unsharded_accumulated_grad is None
+    assert model_29.fake_param._unsharded_param.grad is None
