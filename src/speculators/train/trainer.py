@@ -634,6 +634,39 @@ class Trainer:
         for opt in self.optimizers:
             opt.zero_grad()
 
+    @staticmethod
+    def _collect_fsdp_param_groups(state: object) -> list[object]:
+        """Collect FSDP2 param groups across v2.9 singular and v2.14 plural states."""
+        groups = getattr(state, "_fsdp_param_groups", None)
+        collected = list(groups) if groups is not None else []
+        single_group = getattr(state, "_fsdp_param_group", None)
+        if single_group is not None:
+            collected.append(single_group)
+        return collected
+
+    def _discard_window_gradients(self) -> None:
+        """Clear optimizer and FSDP2 no_sync gradients for a rejected window."""
+        self._optimizers_zero_grad()
+        if not isinstance(self.model, FSDPModule):
+            return
+        reset_iter_state = getattr(self.model, "reset_iter_state", None)
+        if callable(reset_iter_state):
+            reset_iter_state()
+        seen_groups: set[int] = set()
+        for module in self.model.modules():
+            if not isinstance(module, FSDPModule):
+                continue
+            state = module._get_fsdp_state()  # noqa: SLF001
+            for group in self._collect_fsdp_param_groups(state):
+                if id(group) in seen_groups:
+                    continue
+                seen_groups.add(id(group))
+                for fsdp_param in getattr(group, "fsdp_params", ()):
+                    fsdp_param.unsharded_accumulated_grad = None
+                    unsharded_param = getattr(fsdp_param, "_unsharded_param", None)
+                    if unsharded_param is not None:
+                        unsharded_param.grad = None
+
     def _optimizers_step(self):
         for opt in self.optimizers:
             opt.step()
@@ -641,6 +674,81 @@ class Trainer:
     def _schedulers_step(self):
         for scheduler in self.schedulers:
             scheduler.step()
+
+    def _any_rank_nonfinite(self, loss: torch.Tensor) -> bool:
+        """Return whether loss is non-finite on this or any rank."""
+        is_bad = not bool(torch.isfinite(loss).all().item())
+        if self.is_distributed:
+            flag = torch.tensor(
+                1 if is_bad else 0, dtype=torch.int64, device=loss.device
+            )
+            dist.all_reduce(flag, op=dist.ReduceOp.MAX)
+            return bool(flag.item() > 0)
+        return is_bad
+
+    def _log_step_metrics(
+        self,
+        timer: _StepTimer,
+        accumulated: dict[str, torch.Tensor],
+        accum: int,
+        grad_norm: torch.Tensor | None,
+        current_lrs: dict[str, float],
+        epoch: int,
+    ) -> dict[str, torch.Tensor]:
+        if not timer.enabled:
+            return accumulated
+        profile = timer.profile()
+        if self.is_distributed:
+            accumulated = _all_reduce_metrics(accumulated)
+        metrics = {k: v.item() / accum for k, v in accumulated.items()}
+        world_size = dist.get_world_size() if self.is_distributed else 1
+        metrics = normalize_counted_metrics(metrics, world_size)
+        if grad_norm is not None:
+            norm_tensor = (
+                grad_norm.full_tensor()
+                if hasattr(grad_norm, "full_tensor")
+                else grad_norm
+            )
+            metrics["grad_norm"] = float(norm_tensor.detach().item())
+        lr_info = (
+            current_lrs if len(current_lrs) > 1 else next(iter(current_lrs.values()))
+        )
+        metric_logger.info(
+            {
+                "train": metrics,
+                "profile": profile,
+                "epoch": epoch,
+                "lr": lr_info,
+                "global_step": self.global_step,
+            },
+            extra={"step": self.global_step},
+        )
+        return accumulated
+
+    def _finish_optimizer_boundary(
+        self,
+        epoch: int,
+        local_step: int,
+        opt_steps_per_epoch: int,
+        step_interval: int | None,
+        step_callback: Callable[[], None] | None,
+    ) -> bool:
+        """Advance step counter, run callback, enforce max_steps, and checkpoint."""
+        self.global_step += 1
+        if step_callback is not None:
+            step_callback()
+        if (
+            self.config.max_steps is not None
+            and self.global_step >= self.config.max_steps
+        ):
+            return True
+        self._maybe_save_step_checkpoint(
+            epoch,
+            local_step,
+            opt_steps_per_epoch,
+            step_interval,
+        )
+        return False
 
     def _prepare_resume_skip(self, epoch: int) -> tuple[int, int]:
         """Return completed microbatches and how many the loader must discard."""
@@ -714,6 +822,7 @@ class Trainer:
             total=remaining_steps, desc=f"Epoch {epoch}", disable=self.rank != 0
         )
         accumulated: dict[str, torch.Tensor] = {}
+        window_nonfinite = False
         batches = iter(
             islice(
                 train_loader, batches_to_discard, batches_to_discard + remaining_steps
@@ -728,6 +837,7 @@ class Trainer:
                 timer.reset(self.global_step % self.config.log_freq == 0)
                 timer.mark("start")
                 accumulated.clear()
+                window_nonfinite = False
                 self._optimizers_zero_grad()
             timer.mark("fetch_start")
             batch = next(batches)
@@ -745,25 +855,54 @@ class Trainer:
                     will_stop=will_stop,
                 ),
             )
-            timer.mark("pre_h2d")
-            gpu_batch = {
-                k: v.to(self.local_rank, non_blocking=True)
-                if isinstance(v, torch.Tensor)
-                else v
-                for k, v in batch.items()
-            }
+            if not window_nonfinite:
+                timer.mark("pre_h2d")
+                gpu_batch = {
+                    k: v.to(self.local_rank, non_blocking=True)
+                    if isinstance(v, torch.Tensor)
+                    else v
+                    for k, v in batch.items()
+                }
+                timer.mark("fetch")
+                # DDP requires both forward and backward inside no_sync.
+                with self._maybe_no_sync(is_boundary):
+                    with torch.autocast(
+                        self.device_type, dtype=self.config.hidden_states_dtype
+                    ):
+                        _draft_tokens, loss, metrics = self.model(
+                            **gpu_batch, **(self.config.train_call_kwargs or {})
+                        )
+                    timer.mark("fwd")
+                    nonfinite_step = self._any_rank_nonfinite(loss)
+                    if nonfinite_step:
+                        window_nonfinite = True
+                        loss_desc = (
+                            f"{loss.detach().item():.6g}"
+                            if loss.numel() == 1
+                            else f"shape={tuple(loss.shape)}"
+                        )
+                        root_logger.warning(
+                            "Skipping step %d (epoch %d): non-finite loss (%s)",
+                            self.global_step,
+                            epoch,
+                            loss_desc,
+                        )
+                        del _draft_tokens, loss, metrics
+                        self._discard_window_gradients()
+                    else:
+                        (loss / accum).backward()
 
-            timer.mark("fetch")
-            # DDP requires both forward and backward inside no_sync.
-            with self._maybe_no_sync(is_boundary):
-                with torch.autocast(
-                    self.device_type, dtype=self.config.hidden_states_dtype
+            if window_nonfinite:
+                progress.update(1)
+                if is_boundary and self._finish_optimizer_boundary(
+                    epoch,
+                    local_step,
+                    opt_steps_per_epoch,
+                    step_interval,
+                    step_callback,
                 ):
-                    _draft_tokens, loss, metrics = self.model(
-                        **gpu_batch, **(self.config.train_call_kwargs or {})
-                    )
-                timer.mark("fwd")
-                (loss / accum).backward()
+                    break
+                continue
 
             timer.mark("backward")
             # pre_clip remains separate so token counting and metric aggregation
@@ -785,7 +924,9 @@ class Trainer:
                 continue
 
             timer.mark("pre_clip")
-            torch.nn.utils.clip_grad_norm_(self.model.parameters(), 1.0)
+            grad_norm = torch.nn.utils.clip_grad_norm_(
+                self.model.parameters(), 1.0, error_if_nonfinite=True
+            )
             timer.mark("bwd")
             self._optimizers_step()
             current_lrs = {
@@ -794,46 +935,17 @@ class Trainer:
             self._schedulers_step()
             timer.mark("opt")
 
-            profile = None
-            if timer.enabled:
-                profile = timer.profile()
-                if self.is_distributed:
-                    accumulated = _all_reduce_metrics(accumulated)
-
-                metrics = {k: v.item() / accum for k, v in accumulated.items()}
-                world_size = dist.get_world_size() if self.is_distributed else 1
-                metrics = normalize_counted_metrics(metrics, world_size)
-                lr_info = (
-                    current_lrs
-                    if len(current_lrs) > 1
-                    else next(iter(current_lrs.values()))
-                )
-                metric_logger.info(
-                    {
-                        "train": metrics,
-                        "profile": profile,
-                        "epoch": epoch,
-                        "lr": lr_info,
-                        "global_step": self.global_step,
-                    },
-                    extra={"step": self.global_step},
-                )
-            self.global_step += 1
-            if step_callback is not None:
-                step_callback()
-
-            if (
-                self.config.max_steps is not None
-                and self.global_step >= self.config.max_steps
-            ):
-                break
-
-            self._maybe_save_step_checkpoint(
+            accumulated = self._log_step_metrics(
+                timer, accumulated, accum, grad_norm, current_lrs, epoch
+            )
+            if self._finish_optimizer_boundary(
                 epoch,
                 local_step,
                 opt_steps_per_epoch,
                 step_interval,
-            )
+                step_callback,
+            ):
+                break
 
         progress.close()
 
@@ -898,17 +1010,23 @@ class Trainer:
 
         return val_metrics
 
-    def maybe_save_checkpoint(self, epoch: int | str, local_step: int = 0):
-        if epoch != "interrupted" and (
-            self.config.save_best
-            or (
-                self.config.checkpoint_freq >= 1
-                and isinstance(epoch, int)
-                and epoch != 0
-                and (epoch + 1) % self.config.checkpoint_freq != 0
+    def maybe_save_checkpoint(
+        self, epoch: int | str, local_step: int = 0, *, force: bool = False
+    ) -> bool:
+        if (
+            not force
+            and epoch != "interrupted"
+            and (
+                self.config.save_best
+                or (
+                    self.config.checkpoint_freq >= 1
+                    and isinstance(epoch, int)
+                    and epoch != 0
+                    and (epoch + 1) % self.config.checkpoint_freq != 0
+                )
             )
         ):
-            return
+            return False
 
         root_logger.info(f"Saving checkpoint to {self.checkpointer.path / str(epoch)}")
         self.checkpointer.save_checkpoint(self.model, self.optimizers, epoch)
@@ -929,8 +1047,15 @@ class Trainer:
                         old.unlink()
                 link_name.symlink_to(target)
         root_logger.info(f"Checkpoint saved to {self.checkpointer.path / str(epoch)}")
+        return True
 
-    def maybe_update_best(self, epoch: int, val_metrics: dict | None):
+    def maybe_update_best(
+        self,
+        epoch: int,
+        val_metrics: dict | None,
+        *,
+        checkpoint_saved: bool | None = None,
+    ):
         if val_metrics is None or "loss_epoch" not in val_metrics:
             return
         if val_metrics["loss_epoch"] >= self.best_val_loss:
@@ -943,6 +1068,9 @@ class Trainer:
             # maybe_save_checkpoint returns early when save_best is set, so the
             # end-of-epoch cursor has to be written here or resume restarts at 0.
             self._save_training_state(epoch, local_step=0)
+        elif checkpoint_saved is not None:
+            if not checkpoint_saved:
+                return
         elif self.config.checkpoint_freq >= 1 and not (
             epoch == 0 or (epoch + 1) % int(self.config.checkpoint_freq) == 0
         ):
@@ -968,7 +1096,8 @@ class Trainer:
             if self.is_distributed:
                 dist.barrier()
 
-            self.maybe_save_checkpoint(epoch)
+            force_final = epoch == n_epochs - 1 and not self.config.save_best
+            epoch_saved = self.maybe_save_checkpoint(epoch, force=force_final)
 
             if self.is_distributed:
                 dist.barrier()
@@ -985,7 +1114,9 @@ class Trainer:
             if self.is_distributed:
                 dist.barrier()
 
-            self.maybe_update_best(epoch, val_metrics)
+            if force_final and epoch_saved and val_metrics is not None:
+                self.checkpointer.save_val_metrics(epoch, val_metrics)
+            self.maybe_update_best(epoch, val_metrics, checkpoint_saved=epoch_saved)
 
             if self.is_distributed:
                 dist.barrier()
