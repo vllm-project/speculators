@@ -30,6 +30,11 @@ speculators prepare-data \
 
 `--render-endpoint` is not needed when every input row already contains `input_ids` and `loss_mask`. For conversation inputs, launch the rendering vLLM server with `--max-model-len` greater than `prepare-data --seq-length` so the render endpoint has room for an output token. If the server reports `max_tokens must be at least 1`, increase `--max-model-len`, relaunch vLLM, and rerun `prepare-data`.
 
+### Replaying generation-time `reasoning_effort`
+
+Input rows that carry `metadata.sampling_params.reasoning_effort` (the field `regenerate-responses` records) have it replayed on every render request as the top-level `reasoning_effort` field. The server then applies the same effort-to-template mapping it used at generation time, so templates that encode effort in the prompt render the exact token stream the target model saw instead of the template default. Rows without the field render with the template default.
+
+
 ## Arguments
 
 ### Model Arguments

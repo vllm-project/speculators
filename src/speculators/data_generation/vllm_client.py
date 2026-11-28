@@ -144,6 +144,11 @@ class ClientItem(TypedDict):
     """If provided, pass `messages` to Chat Completions API
     instead of passing `token_ids` to Completions API."""
 
+    reasoning_effort: NotRequired[str]
+    """Generation-time effort to replay on the re-render so its tokens match
+    `input_ids` for templates that encode effort in the prompt."""
+
+
 
 def has_multimodal_content(messages: list[dict]) -> bool:
     """True when any turn carries non-text content (images, video, audio).
@@ -281,6 +286,9 @@ async def generate_hidden_states_async(
             timeout=timeout,
         )
     else:
+        # The re-render must replay the row's generation-time effort so its
+        # token stream matches the stored input_ids (effort-encoding templates).
+        effort = client_item.get("reasoning_effort")
         coro = client.chat.completions.create(
             model=model,
             messages=messages,
@@ -291,6 +299,7 @@ async def generate_hidden_states_async(
                 "continue_final_message": _continue_final_message_for(model),
                 "return_token_ids": True,
             },
+            **({"reasoning_effort": effort} if effort else {}),
             timeout=timeout,
         )
 
@@ -329,6 +338,9 @@ def generate_hidden_states(
             timeout=timeout,
         )
     else:
+        # The re-render must replay the row's generation-time effort so its
+        # token stream matches the stored input_ids (effort-encoding templates).
+        effort = client_item.get("reasoning_effort")
         res = client.chat.completions.create(
             model=model,
             messages=messages,
@@ -339,6 +351,7 @@ def generate_hidden_states(
                 "continue_final_message": _continue_final_message_for(model),
                 "return_token_ids": True,
             },
+            **({"reasoning_effort": effort} if effort else {}),
             timeout=timeout,
         )
 

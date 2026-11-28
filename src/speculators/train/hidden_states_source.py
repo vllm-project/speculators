@@ -47,12 +47,16 @@ def build_client_item(record: DatasetRecord) -> ClientItem:
 
     Text-only records use their preprocessed token IDs. Multimodal records
     also forward their messages so vLLM can resolve image, video, or audio
-    inputs through the Chat Completions API.
+    inputs through the Chat Completions API. Their generation-time
+    reasoning_effort rides along so the extraction re-render matches the
+    stored input_ids for effort-encoding templates.
     """
     out_dict: dict[str, Any] = {"input_ids": record.input_ids.tolist()}
 
     if record.messages is not None and has_multimodal_content(record.messages):
         out_dict["messages"] = record.messages
+        if record.reasoning_effort:
+            out_dict["reasoning_effort"] = record.reasoning_effort
 
     return cast("ClientItem", out_dict)
 

@@ -110,6 +110,7 @@ def test_render_boundary_rows_keeps_developer_turn_unsupervised(monkeypatch):
         add_generation_prompt,
         max_length=None,
         tools=None,
+        reasoning_effort=None,
     ):
         tokens = []
         for idx, turn in enumerate(conv_prefix):

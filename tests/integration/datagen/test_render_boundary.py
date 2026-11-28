@@ -50,6 +50,7 @@ def _patch_encode(monkeypatch, renders: dict[tuple[int, bool], list[int]]):
         add_generation_prompt,
         max_length=None,
         tools=None,
+        reasoning_effort=None,
     ):
         return renders[(len(conv_prefix), add_generation_prompt)]
 
@@ -67,6 +68,7 @@ def test_encode_render_sends_training_window(monkeypatch):
         tools=None,
         truncate_prompt_tokens=None,
         truncation_side=None,
+        reasoning_effort=None,
     ):
         request.update(
             truncate_prompt_tokens=truncate_prompt_tokens,
@@ -407,7 +409,11 @@ class _ProcessorMixinStub(ProcessorMixin):
         pass
 
 
-def _build_with_processor(monkeypatch, conversations: list[list[dict]]) -> HFDataset:
+def _build_with_processor(
+    monkeypatch,
+    conversations: list[list[dict]],
+    metadata: list | None = None,
+) -> HFDataset:
     # One row per conversation; the conv itself is what `messages` would store.
     monkeypatch.setattr(
         preprocessing,
@@ -416,8 +422,11 @@ def _build_with_processor(monkeypatch, conversations: list[list[dict]]) -> HFDat
             {"input_ids": [1, 2, 3], "loss_mask": [0, 1, 1], "conv": conv}
         ],
     )
+    columns = {"conversations": conversations}
+    if metadata is not None:
+        columns["metadata"] = metadata
     return build_speculator_training_dataset(
-        HFDataset.from_dict({"conversations": conversations}),
+        HFDataset.from_dict(columns),
         cast("ProcessorLike", _ProcessorMixinStub()),
         num_proc=1,
         render_endpoint="http://x",
@@ -446,6 +455,32 @@ def test_processor_multimodal_rows_keep_messages(monkeypatch):
     assert user_parts[0]["image_url"] == {"url": "http://x/a.png"}
     record = DatasetRecord.from_arrow_row(dataset[0], storage_index=0)
     assert build_client_item(record)["messages"] == record.messages
+
+
+def test_processor_multimodal_rows_carry_reasoning_effort(monkeypatch):
+    """Multimodal rows keep their row-level effort for the re-render."""
+
+    image = {"type": "image", "url": "http://x/a.png", "text": None}
+    text = {"type": "text", "url": None, "text": "what is this?"}
+    conv = [
+        {"role": "user", "content": [image, text]},
+        {"role": "assistant", "content": [{**text, "text": "a cat"}]},
+    ]
+    dataset = _build_with_processor(
+        monkeypatch,
+        [conv, conv],
+        metadata=[{"sampling_params": {"reasoning_effort": "high"}}, None],
+    )
+    dataset.set_format(type="torch")
+    items = [
+        build_client_item(DatasetRecord.from_arrow_row(dataset[i], storage_index=i))
+        for i in range(2)
+    ]
+    assert items[0]["reasoning_effort"] == "high"
+    assert items[0]["messages"] is not None
+    # A row without recorded effort sends no field and renders with the
+    # template default.
+    assert "reasoning_effort" not in items[1]
 
 
 def test_processor_text_part_lists_do_not_store_messages(monkeypatch):

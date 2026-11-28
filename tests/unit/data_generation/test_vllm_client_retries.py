@@ -100,3 +100,60 @@ def test_connection_error_is_still_retried():
         request(max_retries=2)
 
     assert calls["n"] == 3
+
+
+@pytest.mark.parametrize("effort", ["high", None])
+def test_generate_hidden_states_replays_reasoning_effort(monkeypatch, effort):
+    """The extraction re-render replays the row's generation-time effort."""
+
+    calls: list[dict[str, Any]] = []
+
+    def fake_create(**kwargs: Any) -> Any:
+        calls.append(kwargs)
+        return object()
+
+    client = SimpleNamespace(
+        chat=SimpleNamespace(completions=SimpleNamespace(create=fake_create))
+    )
+    monkeypatch.setattr(vllm_client, "extract_output", lambda res, ids: ("h", {}))
+    item: dict[str, Any] = {
+        "input_ids": [1, 2, 3],
+        "messages": [{"role": "user", "content": "hi"}],
+    }
+    if effort:
+        item["reasoning_effort"] = effort
+    vllm_client.generate_hidden_states(client, "m", item)
+
+    if effort:
+        assert calls[0]["reasoning_effort"] == "high"
+    else:
+        assert "reasoning_effort" not in calls[0]
+
+
+@pytest.mark.parametrize("effort", ["high", None])
+@pytest.mark.anyio
+async def test_generate_hidden_states_async_replays_reasoning_effort(
+    monkeypatch, effort
+):
+    """The async extraction re-render replays the row's effort too."""
+
+    calls: list[dict[str, Any]] = []
+
+    async def fake_create(**kwargs: Any) -> Any:
+        calls.append(kwargs)
+        return object()
+
+    client = SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(create=fake_create)))
+    monkeypatch.setattr(vllm_client, "extract_output", lambda res, ids: ("h", {}))
+    item: dict[str, Any] = {
+        "input_ids": [1, 2, 3],
+        "messages": [{"role": "user", "content": "hi"}],
+    }
+    if effort:
+        item["reasoning_effort"] = effort
+    await vllm_client.generate_hidden_states_async(client, "m", item)
+
+    if effort:
+        assert calls[0]["reasoning_effort"] == "high"
+    else:
+        assert "reasoning_effort" not in calls[0]

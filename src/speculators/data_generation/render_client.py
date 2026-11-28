@@ -63,6 +63,7 @@ def render_conversation(
     add_generation_prompt: bool,
     tools: list[dict] | None = None,
     chat_template_kwargs: dict | None = None,
+    reasoning_effort: str | None = None,
     truncate_prompt_tokens: int | None = None,
     truncation_side: Literal["left", "right"] | None = None,
     timeout: float = DEFAULT_RENDER_TIMEOUT,
@@ -72,6 +73,10 @@ def render_conversation(
     ``truncate_prompt_tokens`` and ``truncation_side`` are optional so callers
     that need the complete render can omit them. Preprocessing uses right-side
     truncation to keep the rendered prefix and assistant boundary in-window.
+    ``reasoning_effort`` is sent as a top-level request field so the server
+    maps it exactly as a generation request (effort-to-template mapping,
+    ``enable_thinking`` derivation) rather than the caller guessing the
+    template's variable names.
     """
     url = f"{endpoint.rstrip('/')}/v1/chat/completions/render"
 
@@ -83,6 +88,8 @@ def render_conversation(
         body["tools"] = tools
     if chat_template_kwargs is not None:
         body["chat_template_kwargs"] = chat_template_kwargs
+    if reasoning_effort is not None:
+        body["reasoning_effort"] = reasoning_effort
     if truncate_prompt_tokens is not None:
         body["truncate_prompt_tokens"] = truncate_prompt_tokens
     if truncation_side is not None:
